@@ -13,6 +13,9 @@ import argparse
 import json
 import csv
 
+import matplotlib
+matplotlib.use("Agg")   # headless backend for CLI — must be set before any pyplot import
+
 import numpy as np
 
 
