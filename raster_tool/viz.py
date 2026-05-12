@@ -311,6 +311,57 @@ def animate_trajectory(x_traj, y_traj, t_arr, aperture_rect=None, save_path=None
     return ani
 
 
+def plot_waveform_comparison(params, n_cycles=3):
+    """Side-by-side: time-domain (ideal triangle vs filtered) and magnitude spectrum.
+
+    Independent of the rest of the pipeline -- computes a short clean signal so
+    the FFT looks textbook. Useful for the Amplifier Optimizer tab.
+    """
+    from scipy.signal import sawtooth as _sawtooth
+    from amplifier import apply_amplifier
+
+    fx = params["fx_hz"]
+    ax = params["ax_mm"]
+    fs = max(20.0 * fx, 200000.0)   # at least 20 samples/cycle, min 200 kS/s
+    n  = int(np.ceil(n_cycles / fx * fs))
+    t  = np.arange(n) / fs
+
+    x_ideal = ax * _sawtooth(2 * np.pi * fx * t, width=0.5)
+    y_zero  = np.zeros_like(x_ideal)
+    x_real, _ = apply_amplifier(t, x_ideal, y_zero, params)
+
+    fig, (ax_t, ax_f) = plt.subplots(1, 2, figsize=(12, 4))
+    ax_t.plot(t * 1000, x_ideal, label="Ideal triangle (commanded)",
+              color="#7daed3", lw=2, ls="--")
+    ax_t.plot(t * 1000, x_real,  label="After EEL5000 amplifier",
+              color="#d35f5f", lw=2)
+    ax_t.set_xlabel("Time (ms)")
+    ax_t.set_ylabel("X deflection (mm)")
+    ax_t.set_title(f"Waveform comparison @ fx = {fx:.0f} Hz "
+                   f"(BW = {params.get('amplifier_bw_hz', 10000.0):.0f} Hz)")
+    ax_t.grid(alpha=0.3)
+    ax_t.legend(fontsize=9)
+
+    # Magnitude spectrum
+    freqs = np.fft.rfftfreq(n, 1.0 / fs)
+    Xi = np.abs(np.fft.rfft(x_ideal)); Xi /= Xi.max() if Xi.max() > 0 else 1
+    Xr = np.abs(np.fft.rfft(x_real));  Xr /= Xr.max() if Xr.max() > 0 else 1
+    ax_f.semilogy(freqs, Xi + 1e-6, label="Ideal", color="#7daed3", lw=2, ls="--")
+    ax_f.semilogy(freqs, Xr + 1e-6, label="Filtered", color="#d35f5f", lw=2)
+    ax_f.axvline(params.get("amplifier_bw_hz", 10000.0),
+                 color="orange", lw=1.5, ls=":", label="-3 dB BW")
+    ax_f.set_xlim(0, min(15 * fx, fs / 2))
+    ax_f.set_ylim(1e-4, 2.0)
+    ax_f.set_xlabel("Frequency (Hz)")
+    ax_f.set_ylabel("Normalised |X(f)|")
+    ax_f.set_title("Magnitude spectrum (odd harmonics)")
+    ax_f.grid(alpha=0.3, which="both")
+    ax_f.legend(fontsize=9)
+
+    fig.tight_layout()
+    return fig
+
+
 def plot_dwell_hist(rho, aperture_mask):
     """
     Histogram of dwell-time values inside aperture.

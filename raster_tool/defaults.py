@@ -37,6 +37,12 @@ DEFAULTS = {
     "fdrt_threshold_hz": 500.0,
     "amplifier_bw_hz": 10000.0,
 
+    # --- Amplifier model (EEL5000.20.100 large-signal mode) ---
+    "simulate_amplifier":         True,    # global toggle: include amplifier physics
+    "amplifier_slew_V_per_us":    300.0,   # EEL5000 slew rate, V/us
+    "amplifier_gain_V_per_V":     1000.0,  # 1 V input -> 1000 V output (display only)
+    "kV_per_mm":                  0.368,   # Hirst CSV: 9.5 kV -> 25.79 mm @ 3 MeV protons
+
     # ASTM flatness target
     "flatness_target_pct": 10.0,
 
@@ -46,4 +52,7 @@ DEFAULTS = {
     "w3": 0.1,
     "w4": 1.0,
     "w5": 0.1,
+
+    # --- Extra optimizer weight for triangularity (waveform-fidelity) ---
+    "w6": 0.5,    # penalty on (1 - triangularity_score); 0 disables
 }

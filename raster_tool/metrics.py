@@ -1,7 +1,9 @@
 import numpy as np
 from math import gcd
+from scipy.signal import sawtooth
 
 from dose import trajectory_density
+from amplifier import required_slew_rate_V_per_s
 
 
 def flatness_pct(dose_inside: np.ndarray) -> float:
@@ -158,6 +160,55 @@ def fwhm_spot_rule(fwhm_x_mm: float, fwhm_y_mm: float,
     return worst_pass, worst_spacing
 
 
+def triangularity_score(x_signal, t, fx_hz):
+    """Phase-invariant similarity between x_signal and an ideal triangle at fx_hz.
+
+    Compares the magnitude spectrum of x_signal to the spectrum of a unit-amplitude
+    ideal triangle at the same fundamental. 1.0 = perfect triangle, 0.0 = pure
+    fundamental sine (no odd harmonics -> amplifier has fully rounded the waveform).
+    Robust to phase shift, DC offset, and amplitude scaling.
+    """
+    x_signal = np.asarray(x_signal, dtype=float)
+    t        = np.asarray(t,        dtype=float)
+    if len(t) < 4 or fx_hz <= 0:
+        return 0.0
+
+    # Build ideal triangle of same length, normalized to peak amplitude of x_signal
+    amp = np.max(np.abs(x_signal - x_signal.mean()))
+    if amp == 0:
+        return 0.0
+    ideal = amp * sawtooth(2 * np.pi * fx_hz * t, width=0.5)
+
+    # Magnitude spectra (phase-invariant)
+    Xm = np.abs(np.fft.rfft(x_signal - x_signal.mean()))
+    Im = np.abs(np.fft.rfft(ideal    - ideal.mean()))
+    if Xm.sum() == 0 or Im.sum() == 0:
+        return 0.0
+    Xm /= Xm.sum()
+    Im /= Im.sum()
+
+    # Bhattacharyya-style overlap, mapped to [0, 1]
+    return float(np.sum(np.sqrt(Xm * Im)))
+
+
+def slew_margin_pct(x_mm, t, params):
+    """Margin between required slew rate and amplifier's SR_max, in %.
+
+    Positive = headroom; negative = slew-limited (amp can't follow the command).
+    """
+    kV_per_mm = params.get("kV_per_mm", 0.368)
+    slew_max  = params.get("amplifier_slew_V_per_us", 300.0) * 1.0e6  # V/s
+    required  = required_slew_rate_V_per_s(x_mm, t, kV_per_mm)
+    if slew_max == 0:
+        return 0.0
+    return float((slew_max - required) / slew_max * 100.0)
+
+
+def _build_t_arr(x_traj, dt):
+    """Reconstruct time array from trajectory length and dt."""
+    return np.arange(len(x_traj)) * dt
+
+
 def _aperture_mask_from_edges(x_edges, y_edges, xL, xR, yB, yT):
     x_centers = 0.5 * (x_edges[:-1] + x_edges[1:])
     y_centers = 0.5 * (y_edges[:-1] + y_edges[1:])
@@ -203,6 +254,9 @@ def compute_all_metrics(dose, rho, x_traj, y_traj, dt, x_edges, y_edges, params)
         params["fx_hz"],     params["fy_hz"],
     )
 
+    t_arr = _build_t_arr(x_traj, dt)
+    _slew_margin = slew_margin_pct(x_traj, t_arr, params)
+
     return {
         "flatness_pct":        flat,
         "rms_pct":             rms,
@@ -216,4 +270,7 @@ def compute_all_metrics(dose, rho, x_traj, y_traj, dt, x_edges, y_edges, params)
         "steady_state":        ss,
         "fwhm_spot_pass":      fwhm_pass,
         "spot_spacing_mm":     spot_spacing,
+        "triangularity":       triangularity_score(x_traj, t_arr, params["fx_hz"]),
+        "slew_margin_pct":     _slew_margin,
+        "slew_limited":        _slew_margin < 0.0,
     }

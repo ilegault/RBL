@@ -1,6 +1,8 @@
 import numpy as np
 from scipy.signal import sawtooth
 
+from amplifier import apply_amplifier
+
 
 def classic_raster(fx, fy, ax, ay, T_s, n_samples):
     """Triangle on X (fast), sawtooth/ramp on Y (slow). MIBL canonical pattern."""
@@ -85,3 +87,19 @@ def get_pattern(name, params):
         return wobbled_defocus(fx, fy, ax, ay, T_s, n)
     else:
         raise ValueError(f"Unknown pattern: {name}")
+
+
+def get_realistic_trajectory(params):
+    """Return (t, x, y) -- ideal trajectory, optionally amplifier-filtered.
+
+    Single chokepoint for trajectory generation. Every consumer in the codebase
+    should call THIS instead of get_pattern() directly, so the global
+    `simulate_amplifier` toggle takes effect everywhere consistently.
+
+    Reads params["simulate_amplifier"] (default True). When False, behaves
+    identically to get_pattern() -- used for ideal/reference plots.
+    """
+    t, x, y = get_pattern(params["pattern"], params)
+    if params.get("simulate_amplifier", True):
+        x, y = apply_amplifier(t, x, y, params)
+    return t, x, y

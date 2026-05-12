@@ -2,32 +2,45 @@ import numpy as np
 from scipy.optimize import differential_evolution
 
 from defaults import DEFAULTS
-from patterns import get_pattern
+from patterns import get_realistic_trajectory
 from dose import compute_dose
 from metrics import compute_all_metrics
 
 
 def objective(params_vec, fixed_params):
     """
-    Objective function for optimization.
+    Amplifier-aware optimizer objective.
+
     params_vec = [fx_hz, fy_hz, ax_overscan_factor, ay_overscan_factor]
-    Returns scalar cost J (lower is better).
+    Returns scalar cost J (lower = better).
+
+    Trajectory is generated via get_realistic_trajectory(), so flatness/pinch
+    metrics are computed on the trajectory the beam *actually* follows after
+    the EEL5000 amplifier filters/limits the function-generator output.
+
+    Weights (read from fixed_params, fall back to DEFAULTS):
+        w1 : flatness penalty (ASTM E521)
+        w2 : pinch (edge-cusp) penalty
+        w3 : sub-FDRT-threshold penalty
+        w4 : slew-rate violation penalty
+        w5 : dwell-mean degeneracy penalty
+        w6 : triangularity loss penalty
     """
     fx, fy, ax_factor, ay_factor = params_vec
 
     params = dict(fixed_params)
     params["fx_hz"] = fx
     params["fy_hz"] = fy
-    # ax/ay derived from aperture half-widths × overscan factor
     half_x = (params["aperture_xR_mm"] - params["aperture_xL_mm"]) / 2.0
     half_y = (params["aperture_yT_mm"] - params["aperture_yB_mm"]) / 2.0
     params["ax_mm"] = half_x * ax_factor
     params["ay_mm"] = half_y * ay_factor
 
     try:
-        t_arr, x_arr, y_arr = get_pattern(params["pattern"], params)
+        t_arr, x_arr, y_arr = get_realistic_trajectory(params)
         dose, rho, x_edges, y_edges = compute_dose(params, t_arr, x_arr, y_arr)
-        m = compute_all_metrics(dose, rho, x_arr, y_arr, t_arr[1] - t_arr[0], x_edges, y_edges, params)
+        m = compute_all_metrics(dose, rho, x_arr, y_arr,
+                                t_arr[1] - t_arr[0], x_edges, y_edges, params)
     except Exception:
         return 1e9
 
@@ -36,15 +49,23 @@ def objective(params_vec, fixed_params):
     w3 = params.get("w3", DEFAULTS["w3"])
     w4 = params.get("w4", DEFAULTS["w4"])
     w5 = params.get("w5", DEFAULTS["w5"])
-    bw = params.get("amplifier_bw_hz", DEFAULTS["amplifier_bw_hz"])
+    w6 = params.get("w6", DEFAULTS.get("w6", 0.5))
+
     fdrt_thresh = params.get("fdrt_threshold_hz", DEFAULTS["fdrt_threshold_hz"])
+
+    # Slew penalty: zero when slew_margin_pct >= 0, ramps up when negative
+    slew_violation = max(0.0, -m["slew_margin_pct"]) / 100.0   # 0..1+ scale
+
+    # Triangularity loss: 0 = perfect triangle, 1 = pure sine
+    triangularity_loss = max(0.0, 1.0 - m["triangularity"])
 
     J = (
         w1 * m["flatness_pct"]
-        + w2 * abs(m["pinch_pct"])
-        + w3 * max(0.0, fdrt_thresh - fx)
-        + w4 * max(0.0, fx - bw)
-        + w5 * max(0.0, 1.0 - m["dwell_mean"] / (m["dwell_mean"] + 1e-12))
+      + w2 * abs(m["pinch_pct"])
+      + w3 * max(0.0, fdrt_thresh - fx)
+      + w4 * slew_violation * 100.0       # scale comparable to flatness%
+      + w5 * max(0.0, 1.0 - m["dwell_mean"] / (m["dwell_mean"] + 1e-12))
+      + w6 * triangularity_loss * 100.0   # scale comparable to flatness%
     )
     return float(J)
 

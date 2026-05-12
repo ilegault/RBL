@@ -33,7 +33,7 @@ def run_config(config_path):
 
     import yaml
     from defaults import DEFAULTS
-    from patterns import get_pattern
+    from patterns import get_realistic_trajectory
     from dose import compute_dose
     from metrics import compute_all_metrics
     from viz import animate_trajectory
@@ -47,7 +47,7 @@ def run_config(config_path):
     print(f"Loaded config: {config_path}")
     print(f"Pattern: {params['pattern']}, fx={params['fx_hz']}, fy={params['fy_hz']}")
 
-    t_arr, x_arr, y_arr = get_pattern(params["pattern"], params)
+    t_arr, x_arr, y_arr = get_realistic_trajectory(params)
     dose, rho, xe, ye = compute_dose(params, t_arr, x_arr, y_arr)
     dt = t_arr[1] - t_arr[0] if len(t_arr) > 1 else 1.0
     metrics = compute_all_metrics(dose, rho, x_arr, y_arr, dt, xe, ye, params)

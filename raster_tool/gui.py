@@ -14,10 +14,10 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from defaults import DEFAULTS
-from patterns import get_pattern
+from patterns import get_realistic_trajectory
 from dose import compute_dose
 from metrics import compute_all_metrics, _aperture_mask_from_edges
-from viz import plot_heatmap, plot_dose_3d, plot_velocity_profile, animate_trajectory, plot_dwell_hist
+from viz import plot_heatmap, plot_dose_3d, plot_velocity_profile, animate_trajectory, plot_dwell_hist, plot_waveform_comparison
 from optimizer import run_optimizer, grid_search
 
 st.set_page_config(page_title="Raster Scan Tool", layout="wide")
@@ -56,6 +56,29 @@ with st.sidebar:
     fy_hz = st.slider("f₂ (Hz)", 1, 50000,
                       int(DEFAULTS["fy_hz"]), 1,
                       key="fy_slider")
+
+    st.divider()
+    st.header("Amplifier (EEL5000)")
+    simulate_amp = st.checkbox(
+        "Simulate amplifier (global)", value=DEFAULTS["simulate_amplifier"],
+        help="When ON, every tab uses the amplifier-filtered trajectory."
+    )
+    amp_bw = st.number_input(
+        "-3 dB bandwidth (Hz)", 100.0, 100000.0,
+        float(DEFAULTS["amplifier_bw_hz"]), step=500.0,
+        disabled=not simulate_amp
+    )
+    amp_slew = st.number_input(
+        "Slew rate (V/us)", 1.0, 5000.0,
+        float(DEFAULTS["amplifier_slew_V_per_us"]), step=10.0,
+        disabled=not simulate_amp
+    )
+    amp_kvmm = st.number_input(
+        "Calibration (kV/mm)", 0.001, 10.0,
+        float(DEFAULTS["kV_per_mm"]), step=0.01, format="%.3f",
+        disabled=not simulate_amp,
+        help="From your deflection CSV. Default 0.368 = 9.5 kV -> 25.79 mm @ 3 MeV protons."
+    )
 
     st.header("Pattern")
     pattern = st.selectbox("Scan pattern", ["classic", "alt_axes", "lissajous", "spiral", "sinusoidal", "wobble"],
@@ -105,16 +128,20 @@ params = {
     "tau_recomb_ms": tau_recomb,
     "D_interstitial_m2s": D_i,
     "fdrt_threshold_hz": float(fdrt_thresh),
-    "amplifier_bw_hz": DEFAULTS["amplifier_bw_hz"],
+    "amplifier_bw_hz":           amp_bw,
+    "simulate_amplifier":        simulate_amp,
+    "amplifier_slew_V_per_us":   amp_slew,
+    "kV_per_mm":                 amp_kvmm,
     "flatness_target_pct": DEFAULTS["flatness_target_pct"],
     "w1": w1, "w2": w2, "w3": w3, "w4": w4, "w5": w5,
+    "w6": DEFAULTS.get("w6", 0.5),
 }
 
 # ─── Cached pipeline ──────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def run_pipeline(params_tuple):
     p = dict(params_tuple)
-    t, x, y = get_pattern(p["pattern"], p)
+    t, x, y = get_realistic_trajectory(p)
     dose, rho, xe, ye = compute_dose(p, t, x, y)
     m = compute_all_metrics(dose, rho, x, y, t[1] - t[0], xe, ye, p)
     return dose, rho, xe, ye, t, x, y, m
@@ -264,6 +291,20 @@ with tab4:
 
 # ── Tab 5: Optimizer ─────────────────────────────────────────────────────────
 with tab5:
+    with st.expander("Waveform Comparison (ideal vs amplifier-filtered)", expanded=True):
+        fig_wf = plot_waveform_comparison(params, n_cycles=3)
+        st.pyplot(fig_wf)
+        plt.close(fig_wf)
+
+        cwc1, cwc2, cwc3 = st.columns(3)
+        cwc1.metric("Triangularity",   f"{metrics['triangularity']:.3f}",
+                    help="1.0 = perfect triangle; 0.0 = pure sine (amp fully rounded the wave).")
+        cwc2.metric("Slew margin",     f"{metrics['slew_margin_pct']:+.1f} %",
+                    help="Positive = headroom. Negative = amp can't follow the command.")
+        cwc3.metric("Slew limited?",   "YES -- reduce fx or amplitude"
+                                       if metrics["slew_limited"] else "no")
+
+    st.divider()
     st.subheader("Grid Search — Objective Landscape")
     n_grid = st.slider("Grid resolution", 5, 20, 10, 1)
     if st.button("Run Grid Search"):
@@ -286,7 +327,8 @@ with tab5:
     st.subheader("Differential Evolution Optimizer")
     st.caption("Optimizes [f_x, f_y, X-overscan, Y-overscan] jointly.")
     if st.button("Run Optimizer"):
-        bounds = [(500, 10000), (1, 500), (1.0, 1.5), (1.0, 1.5)]
+        # fx upper bound 30 kHz (well past BW) so the optimizer can DISCOVER the BW tradeoff
+        bounds = [(500, 30000), (1, 500), (1.0, 1.5), (1.0, 1.5)]
         with st.spinner("Running differential evolution (this may take 1–5 minutes)..."):
             result = run_optimizer(bounds, params)
         fx_opt, fy_opt, ax_f_opt, ay_f_opt = result.x

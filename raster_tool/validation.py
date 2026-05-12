@@ -14,7 +14,7 @@ import numpy as np
 
 from defaults import DEFAULTS
 from beam import fwhm_to_sigma, gaussian_kernel_2d
-from patterns import get_pattern, lissajous, classic_raster
+from patterns import get_realistic_trajectory, get_pattern, lissajous, classic_raster
 from dose import compute_dose, trajectory_density, apply_aperture
 from metrics import (
     flatness_pct, steady_state_flag, compute_all_metrics, pinch_metric,
@@ -27,7 +27,8 @@ def _run(params, pattern=None):
     p.update(params)
     if pattern is not None:
         p["pattern"] = pattern
-    t, x, y = get_pattern(p["pattern"], p)
+    p["simulate_amplifier"] = False  # existing tests assume ideal trajectory
+    t, x, y = get_realistic_trajectory(p)
     dose, rho, xe, ye = compute_dose(p, t, x, y)
     return dose, rho, xe, ye, t, x, y, p
 
@@ -252,6 +253,75 @@ def test8():
           f"dose_integral={dose_integral:.4g}")
 
 
+# --- Test 9: Amplifier -- low frequency passes through unchanged --------------
+def test9():
+    print("\nTest 9: Amplifier off vs on at LOW fx -- should be nearly identical")
+    from amplifier import apply_amplifier
+    p = dict(DEFAULTS)
+    p.update({
+        "fx_hz": 500.0,
+        "fy_hz": 50.0,
+        "T_total_ms": 100.0,
+        "n_time_samples": 50000,
+        "simulate_amplifier": False,
+    })
+    t, x_ideal, y = get_realistic_trajectory(p)
+    p["simulate_amplifier"] = True
+    _, x_real, _ = get_realistic_trajectory(p)
+    rel_err = np.max(np.abs(x_ideal - x_real)) / (np.max(np.abs(x_ideal)) + 1e-12)
+    check("At 500 Hz, filtered trajectory matches ideal within 5%", rel_err < 0.05,
+          f"rel_err={rel_err:.4f}")
+
+
+# --- Test 10: Amplifier -- high fx causes measurable rounding -----------------
+def test10():
+    print("\nTest 10: At fx = 15 kHz (above BW), waveform must be rounded")
+    from metrics import triangularity_score
+    p = dict(DEFAULTS)
+    p.update({
+        "fx_hz": 15000.0,
+        "fy_hz": 50.0,
+        "T_total_ms": 30.0,
+        "n_time_samples": 100000,
+        "simulate_amplifier": False,
+    })
+    t, x_ideal, _ = get_realistic_trajectory(p)
+    p["simulate_amplifier"] = True
+    _, x_real, _ = get_realistic_trajectory(p)
+    tri_ideal = triangularity_score(x_ideal, t, 15000.0)
+    tri_real  = triangularity_score(x_real,  t, 15000.0)
+    check("Triangularity drops at 15 kHz (BW=10 kHz)", tri_real < tri_ideal - 0.02,
+          f"ideal={tri_ideal:.3f}, real={tri_real:.3f}")
+
+
+# --- Test 11: Slew clamp respects the spec ------------------------------------
+def test11():
+    print("\nTest 11: Slew clamp enforces 300 V/us")
+    from amplifier import apply_slew_limit
+    n = 10000
+    dt = 1.0e-7   # 100 ns sampling
+    # 5 kV step
+    sig = np.concatenate([np.zeros(500), np.full(n - 500, 5000.0)])
+    out = apply_slew_limit(sig, dt, slew_max_V_per_s=300.0e6)
+    peak_slope = np.max(np.abs(np.diff(out)) / dt)
+    check("Peak |dV/dt| <= 300 V/us + 0.1% tolerance", peak_slope <= 300.0e6 * 1.001,
+          f"peak slope = {peak_slope:.3e} V/s")
+
+
+# --- Test 12: Regression -- toggle off reproduces pre-amplifier behavior ------
+def test12():
+    print("\nTest 12: simulate_amplifier=False is identical to legacy ideal trajectory")
+    p = dict(DEFAULTS)
+    p["simulate_amplifier"] = False
+    t_legacy, x_legacy, y_legacy = get_pattern(p["pattern"], p)
+    t_new,    x_new,    y_new    = get_realistic_trajectory(p)
+    same = (np.allclose(t_legacy, t_new) and
+            np.allclose(x_legacy, x_new) and
+            np.allclose(y_legacy, y_new))
+    check("Toggle off reproduces get_pattern() exactly", same,
+          f"max x diff = {np.max(np.abs(x_legacy - x_new)):.2e}")
+
+
 # --- Main -----------------------------------------------------------------------
 if __name__ == "__main__":
     print("=" * 60)
@@ -266,6 +336,10 @@ if __name__ == "__main__":
     test6()
     test7()
     test8()
+    test9()
+    test10()
+    test11()
+    test12()
 
     n_pass = sum(results)
     n_total = len(results)

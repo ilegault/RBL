@@ -27,10 +27,10 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolb
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
 from defaults import DEFAULTS
-from patterns import get_pattern
+from patterns import get_realistic_trajectory
 from dose import compute_dose
 from metrics import compute_all_metrics, _aperture_mask_from_edges
-from viz import plot_heatmap, plot_dose_3d, plot_velocity_profile, plot_dwell_hist
+from viz import plot_heatmap, plot_dose_3d, plot_velocity_profile, plot_dwell_hist, plot_waveform_comparison
 
 
 # ─── Worker threads ───────────────────────────────────────────────────────────
@@ -46,7 +46,7 @@ class ComputeWorker(QThread):
     def run(self):
         try:
             p = self.params
-            t, x, y = get_pattern(p["pattern"], p)
+            t, x, y = get_realistic_trajectory(p)
             dose, rho, xe, ye = compute_dose(p, t, x, y)
             dt = t[1] - t[0] if len(t) > 1 else 1.0
             m  = compute_all_metrics(dose, rho, x, y, dt, xe, ye, p)
@@ -75,7 +75,7 @@ class OptimizerWorker(QThread):
                 self.finished.emit(("grid", fx_vals, fy_vals, J_grid))
             else:
                 from optimizer import run_optimizer
-                bounds = [(500, 10000), (1, 500), (1.0, 1.5), (1.0, 1.5)]
+                bounds = [(500, 30000), (1, 500), (1.0, 1.5), (1.0, 1.5)]
                 result = run_optimizer(bounds, self.params)
                 self.finished.emit(("optimize", result))
         except Exception as e:
@@ -186,6 +186,27 @@ class ParamPanel(QScrollArea):
         f.addRow("f₁ (Hz)", self.fx)
         f.addRow("f₂ (Hz)", self.fy)
 
+        # ── Amplifier (EEL5000) ──────────────────────────────────────────────
+        f = group("Amplifier (EEL5000)")
+        from PySide6.QtWidgets import QCheckBox
+        self.simulate_amp = QCheckBox("Simulate amplifier (global)")
+        self.simulate_amp.setChecked(bool(DEFAULTS["simulate_amplifier"]))
+        f.addRow(self.simulate_amp)
+
+        self.amp_bw   = _dbl(100.0, 100000.0, DEFAULTS["amplifier_bw_hz"],        500.0, decimals=1)
+        self.amp_slew = _dbl(1.0,   5000.0,   DEFAULTS["amplifier_slew_V_per_us"], 10.0, decimals=1)
+        self.amp_kvmm = _dbl(0.001, 10.0,     DEFAULTS["kV_per_mm"],               0.01, decimals=3)
+        f.addRow("-3 dB BW (Hz)",        self.amp_bw)
+        f.addRow("Slew (V/us)",          self.amp_slew)
+        f.addRow("Calibration (kV/mm)",  self.amp_kvmm)
+
+        def _toggle_amp(state):
+            enabled = bool(state)
+            for w in (self.amp_bw, self.amp_slew, self.amp_kvmm):
+                w.setEnabled(enabled)
+        self.simulate_amp.stateChanged.connect(_toggle_amp)
+        _toggle_amp(self.simulate_amp.isChecked())
+
         # ── Pattern ───────────────────────────────────────────────────────────
         f = group("Pattern")
         self.pattern = QComboBox()
@@ -277,13 +298,17 @@ class ParamPanel(QScrollArea):
             "tau_recomb_ms":      self.tau_recomb.value(),
             "D_interstitial_m2s": DEFAULTS["D_interstitial_m2s"],
             "fdrt_threshold_hz":  self.fdrt_thresh.value(),
-            "amplifier_bw_hz":    DEFAULTS["amplifier_bw_hz"],
+            "amplifier_bw_hz":           self.amp_bw.value(),
+            "simulate_amplifier":        self.simulate_amp.isChecked(),
+            "amplifier_slew_V_per_us":   self.amp_slew.value(),
+            "kV_per_mm":                 self.amp_kvmm.value(),
             "flatness_target_pct": DEFAULTS["flatness_target_pct"],
             "w1": self.w1.value(),
             "w2": self.w2.value(),
             "w3": self.w3.value(),
             "w4": self.w4.value(),
             "w5": self.w5.value(),
+            "w6": DEFAULTS.get("w6", 0.5),
         }
 
     def set_fx(self, value: float):
@@ -347,6 +372,9 @@ class MetricsTab(QWidget):
             ("Steady state",            str(metrics['steady_state'])),
             ("FWHM/spot rule pass",     str(metrics['fwhm_spot_pass'])),
             ("Spot spacing (mm)",       f"{metrics['spot_spacing_mm']:.4f}"),
+            ("Triangularity (0..1)",    f"{metrics['triangularity']:.4f}"),
+            ("Slew margin (%)",         f"{metrics['slew_margin_pct']:+.2f}"),
+            ("Slew limited",            str(metrics['slew_limited'])),
         ]
         self.table.setRowCount(len(rows))
         for i, (k, v) in enumerate(rows):
@@ -447,6 +475,10 @@ class OptimizerTab(QWidget):
         )
         layout.addWidget(self.apply_btn)
 
+        # ── Waveform comparison area ───────────────────────────────────────────
+        self.wf_plot = PlotTab()
+        layout.addWidget(self.wf_plot)
+
         # ── Plot area ─────────────────────────────────────────────────────────
         self.plot_tab = PlotTab()
         layout.addWidget(self.plot_tab, stretch=1)
@@ -459,6 +491,10 @@ class OptimizerTab(QWidget):
         self.grid_btn.clicked.connect(self._run_grid)
         self.opt_btn.clicked.connect(self._run_opt)
         self.apply_btn.clicked.connect(self._apply)
+
+    def update_waveform_plot(self, params):
+        fig = plot_waveform_comparison(params, n_cycles=3)
+        self.wf_plot.set_figure(fig)
 
     def set_params_getter(self, getter):
         self._get_params = getter
@@ -670,6 +706,7 @@ class MainWindow(QMainWindow):
 
         self.tab_traj.set_figure(self._make_trajectory_fig(x_arr, y_arr, t_arr, aperture, params))
         self.tab_metrics.update(metrics)
+        self.tab_optimizer.update_waveform_plot(params)
 
         flat  = metrics["flatness_pct"]
         color = "#2ca02c" if flat <= 10 else ("#d62728" if flat > 30 else "#ff7f0e")
