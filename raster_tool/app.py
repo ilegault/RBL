@@ -196,6 +196,20 @@ class ParamPanel(QScrollArea):
         f.addRow("Pattern", self.pattern)
         f.addRow("Lissajous phase (°)", self.phase)
 
+        self.pattern_desc = QLabel()
+        self.pattern_desc.setWordWrap(True)
+        self.pattern_desc.setStyleSheet("color: #aab; font-size: 10px;")
+        f.addRow(self.pattern_desc)
+
+        self.spiral_warn = QLabel("⚠ f₁ is unused by spiral — only f₂ sets rotation rate.")
+        self.spiral_warn.setWordWrap(True)
+        self.spiral_warn.setStyleSheet("color: #e8a020; font-size: 10px;")
+        self.spiral_warn.setVisible(False)
+        f.addRow(self.spiral_warn)
+
+        self.pattern.currentTextChanged.connect(self._on_pattern_changed)
+        self._on_pattern_changed(self.pattern.currentText())
+
         # ── Simulation ────────────────────────────────────────────────────────
         f = group("Simulation")
         self.T_ms     = _dbl(1.0, 5000.0, DEFAULTS["T_total_ms"],     10.0, decimals=1)
@@ -228,6 +242,19 @@ class ParamPanel(QScrollArea):
         f.addRow("w5 (dose conserv.)", self.w5)
 
         root.addStretch()
+
+    _PATTERN_FORMULAS = {
+        "classic":    "x = triangle(f₁·t),  y = ramp(f₂·t)",
+        "alt_axes":   "x/y swap fast↔slow each frame at f₂",
+        "lissajous":  "x = sin(f₁·t),  y = sin(f₂·t + φ)",
+        "spiral":     "r = t·r_max/T,  θ = f₂·t  [f₁ unused]",
+        "sinusoidal": "x = sin(f₁·t),  y = ramp(f₂·t)",
+        "wobble":     "x = sin(f₁·t),  y = sin(f₂·t)",
+    }
+
+    def _on_pattern_changed(self, name: str):
+        self.pattern_desc.setText(self._PATTERN_FORMULAS.get(name, ""))
+        self.spiral_warn.setVisible(name == "spiral")
 
     def get_params(self) -> dict:
         return {
