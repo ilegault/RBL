@@ -31,6 +31,8 @@ from patterns import get_realistic_trajectory
 from dose import compute_dose
 from metrics import compute_all_metrics, _aperture_mask_from_edges
 from viz import plot_heatmap, plot_dose_3d, plot_velocity_profile, plot_dwell_hist, plot_waveform_comparison
+from deflection_physics import SPECIES_TABLE, DEFAULT_TRAVEL_MM, AMPLIFIER_MAX_KV, FG_MAX_VPP, calculate_drive_for_deflection
+from lab_presets import FREQUENCY_PRESETS
 
 
 # ─── Worker threads ───────────────────────────────────────────────────────────
@@ -187,6 +189,14 @@ class ParamPanel(QScrollArea):
         f.addRow("f₁ (Hz)", self.fx)
         f.addRow("f₂ (Hz)", self.fy)
 
+        # ── Lab frequency preset (added) ─────────────────────────────────────
+        self.freq_preset = QComboBox()
+        self.freq_preset.addItem("— Select preset —")
+        for _name in FREQUENCY_PRESETS:
+            self.freq_preset.addItem(_name)
+        self.freq_preset.currentTextChanged.connect(self._apply_freq_preset)
+        f.addRow("Lab preset", self.freq_preset)
+
         # ── Amplifier (EEL5000) ──────────────────────────────────────────────
         f = group("Amplifier (EEL5000)")
         from PySide6.QtWidgets import QCheckBox
@@ -325,6 +335,14 @@ class ParamPanel(QScrollArea):
 
     def set_fy(self, value: float):
         self.fy.setValue(value)
+
+    def _apply_freq_preset(self, name: str):
+        """Lab dropdown handler: copy preset frequencies to f₁/f₂ spin boxes."""
+        if name not in FREQUENCY_PRESETS:
+            return
+        p = FREQUENCY_PRESETS[name]
+        self.fx.setValue(p["f1_hz"])
+        self.fy.setValue(p["f2_hz"])
 
 
 # ─── Metrics tab ──────────────────────────────────────────────────────────────
@@ -600,6 +618,118 @@ class OptimizerTab(QWidget):
         self.plot_tab.set_figure(fig)
 
 
+# ─── Voltage Calculator tab ───────────────────────────────────────────────────
+
+class VoltageCalcTab(QWidget):
+    """Voltage calculator for EEL5000 / DG1000Z amplifier chain."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+
+        title = QLabel("Required Voltage Amplitude for a Given Deflection")
+        title.setStyleSheet("font-size: 14px; font-weight: bold;")
+        layout.addWidget(title)
+
+        sub = QLabel(
+            "Uses the deflection formula from the XY Steerer manual + Hirst spreadsheet.\n"
+            "Plate geometry: l = 12.5 cm, d = 3.8 cm.  Amplifier gain = 1000 V/V."
+        )
+        sub.setWordWrap(True)
+        sub.setStyleSheet("color: #aab; font-size: 11px;")
+        layout.addWidget(sub)
+
+        gb = QGroupBox("Inputs")
+        form = QFormLayout(gb)
+        form.setSpacing(6)
+
+        self.species = QComboBox()
+        for _n in SPECIES_TABLE:
+            self.species.addItem(_n)
+        form.addRow("Species", self.species)
+
+        self.mass = _dbl(0.1, 300.0, 1.0, 1.0, decimals=2)
+        self.mass.setEnabled(False)
+        form.addRow("Mass (amu, display only)", self.mass)
+
+        self.energy = _dbl(0.01, 50.0, 3.0, 0.1, decimals=3)
+        form.addRow("Energy (MeV)", self.energy)
+
+        self.charge = _int(1, 10, 1)
+        form.addRow("Charge state (q)", self.charge)
+
+        self.deflection = _dbl(0.1, 100.0, 25.79, 0.1, decimals=3)
+        form.addRow("Desired deflection at sample (mm)", self.deflection)
+
+        self.travel = _dbl(100.0, 10000.0, DEFAULT_TRAVEL_MM, 10.0, decimals=2)
+        form.addRow("Travel length (mm)", self.travel)
+
+        layout.addWidget(gb)
+
+        self.use_ax_btn = QPushButton("Use current ax_mm from parameter panel")
+        self.use_ax_btn.setStyleSheet(
+            "QPushButton { background:#3a4f6a; color:white; border-radius:4px;"
+            " padding:4px 10px; }"
+            "QPushButton:hover { background:#2c3e55; }"
+        )
+        layout.addWidget(self.use_ax_btn)
+
+        out = QGroupBox("Results")
+        outl = QFormLayout(out)
+        outl.setSpacing(6)
+        self.out_plate   = QLabel("—")
+        self.out_fg_peak = QLabel("—")
+        self.out_fg_vpp  = QLabel("—")
+        self.out_warn    = QLabel("")
+        self.out_warn.setStyleSheet("color: #ffa500; font-weight: bold;")
+        for _lbl in (self.out_plate, self.out_fg_peak, self.out_fg_vpp):
+            _lbl.setStyleSheet("font-family: monospace; font-size: 13px;")
+        outl.addRow("Plate voltage (per plate, peak):", self.out_plate)
+        outl.addRow("Function-gen amplitude (peak):",   self.out_fg_peak)
+        outl.addRow("Function-gen amplitude (Vpp):",    self.out_fg_vpp)
+        outl.addRow("Status:", self.out_warn)
+        layout.addWidget(out)
+
+        layout.addStretch()
+
+        self.species.currentTextChanged.connect(self._on_species_changed)
+        for _w in (self.energy, self.charge, self.deflection, self.travel, self.mass):
+            _w.valueChanged.connect(self._recompute)
+        self._on_species_changed(self.species.currentText())
+
+    def _on_species_changed(self, name):
+        if name in SPECIES_TABLE:
+            self.mass.setEnabled(name == "Custom")
+            if name != "Custom":
+                self.mass.setValue(SPECIES_TABLE[name]["mass"])
+        self._recompute()
+
+    def _recompute(self, *_):
+        r = calculate_drive_for_deflection(
+            deflection_mm=self.deflection.value(),
+            energy_MeV=self.energy.value(),
+            charge_state=self.charge.value(),
+            travel_mm=self.travel.value(),
+        )
+        self.out_plate.setText(f"+/- {r['plate_kV']:.3f}  kV")
+        self.out_fg_peak.setText(f"+/- {r['fg_peak_V']:.3f}  V")
+        self.out_fg_vpp.setText(f"{r['fg_vpp_V']:.3f}  V")
+        warns = []
+        if r["exceeds_amplifier"]:
+            warns.append(f"⚠ Plate voltage exceeds EEL5000 +/-{AMPLIFIER_MAX_KV} kV limit")
+        if r["exceeds_fg"]:
+            warns.append(f"⚠ Function-gen Vpp exceeds DG1000Z ~{FG_MAX_VPP} V limit")
+        self.out_warn.setText("   ".join(warns) if warns
+                               else "✓ within EEL5000 and DG1000Z limits")
+        self.out_warn.setStyleSheet(
+            "color: #ff6b6b; font-weight: bold;" if warns
+            else "color: #4caf50; font-weight: bold;"
+        )
+
+
 # ─── Main Window ──────────────────────────────────────────────────────────────
 
 class MainWindow(QMainWindow):
@@ -667,6 +797,7 @@ class MainWindow(QMainWindow):
         self.tab_traj     = PlotTab()
         self.tab_metrics  = MetricsTab()
         self.tab_optimizer = OptimizerTab()
+        self.tab_voltage   = VoltageCalcTab()
 
         self.tabs.addTab(self.tab_dose2d,    "Dose Map (2D)")
         self.tabs.addTab(self.tab_dose3d,    "Dose Surface (3D)")
@@ -675,6 +806,8 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.tab_traj,      "Trajectory")
         self.tabs.addTab(self.tab_metrics,   "Metrics")
         self.tabs.addTab(self.tab_optimizer, "Optimizer")
+        self.tabs.addTab(self.tab_voltage,   "Voltage Calculator")
+        self.tab_voltage.use_ax_btn.clicked.connect(self._copy_ax_to_voltage_calc)
 
         # Wire optimizer ↔ params panel
         self.tab_optimizer.set_params_getter(self.params_panel.get_params)
@@ -738,6 +871,9 @@ class MainWindow(QMainWindow):
     def _apply_optimal(self, fx: float, fy: float):
         self.params_panel.set_fx(fx)
         self.params_panel.set_fy(fy)
+
+    def _copy_ax_to_voltage_calc(self):
+        self.tab_voltage.deflection.setValue(self.params_panel.ax.value())
 
     @staticmethod
     def _make_trajectory_fig(x_arr, y_arr, t_arr, aperture, params):
