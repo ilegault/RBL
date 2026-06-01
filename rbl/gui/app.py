@@ -1,6 +1,6 @@
 """
 Raster Scan Analysis Tool — Native Desktop GUI
-Run: python app.py   (from inside the raster_tool/ directory)
+Run: python app.py   (from inside the rbl/ directory)
 
 PySide6 + embedded matplotlib figures. No browser, no server.
 """
@@ -26,13 +26,13 @@ matplotlib.use("QtAgg")
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
-from defaults import DEFAULTS
-from patterns import get_realistic_trajectory
-from dose import compute_dose
-from metrics import compute_all_metrics, _aperture_mask_from_edges
+from rbl.config.defaults import DEFAULTS
+from rbl.scan.patterns import get_realistic_trajectory
+from rbl.scan.dose import compute_dose
+from rbl.scan.metrics import compute_all_metrics, _aperture_mask_from_edges
 from viz import plot_heatmap, plot_dose_3d, plot_velocity_profile, plot_dwell_hist, plot_waveform_comparison
-from deflection_physics import SPECIES_TABLE, DEFAULT_TRAVEL_MM, AMPLIFIER_MAX_KV, FG_MAX_VPP, calculate_drive_for_deflection
-from lab_presets import FREQUENCY_PRESETS
+from rbl.physics.deflection_physics import SPECIES_TABLE, DEFAULT_TRAVEL_MM, AMPLIFIER_MAX_KV, FG_MAX_VPP, calculate_drive_for_deflection
+from rbl.config.lab_presets import FREQUENCY_PRESETS
 
 
 # ─── Worker threads ───────────────────────────────────────────────────────────
@@ -70,13 +70,13 @@ class OptimizerWorker(QThread):
     def run(self):
         try:
             if self.mode == "grid":
-                from optimizer import grid_search
+                from rbl.scan.optimizer import grid_search
                 fx_vals, fy_vals, J_grid = grid_search(
                     self.params, self.n_grid, self.n_grid
                 )
                 self.finished.emit(("grid", fx_vals, fy_vals, J_grid))
             else:
-                from optimizer import run_optimizer
+                from rbl.scan.optimizer import run_optimizer
                 fy_min = float(DEFAULTS.get("optimizer_fy_min_hz", 50.0))
                 bounds = [(500, 30000), (fy_min, 5000.0), (1.0, 1.5), (1.0, 1.5)]
                 result = run_optimizer(bounds, self.params)
@@ -741,9 +741,17 @@ class MainWindow(QMainWindow):
         self._worker      = None
         self._last_result = None
 
-        # ── Central widget ────────────────────────────────────────────────────
+        # ── NEW: outer 3-tab central widget ───────────────────────────────────
+        outer_central = QWidget()
+        self.setCentralWidget(outer_central)
+        outer_layout = QVBoxLayout(outer_central)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        self.outer_tabs = QTabWidget()
+        outer_layout.addWidget(self.outer_tabs)
+
+        # ── "Analysis" tab — wraps everything the app used to be ──────────────
         central = QWidget()
-        self.setCentralWidget(central)
+        self.outer_tabs.addTab(central, "Analysis")
         main_layout = QVBoxLayout(central)
         main_layout.setContentsMargins(6, 6, 6, 6)
         main_layout.setSpacing(4)
@@ -816,8 +824,29 @@ class MainWindow(QMainWindow):
         # Signals
         self.run_btn.clicked.connect(self.run)
 
+        # ── NEW: add Stepper Motors and Beam Current top-level tabs ───────────
+        from motor_tab import MotorTab
+        from current_tab import CurrentTab
+        self.motor_tab   = MotorTab(self)
+        self.current_tab = CurrentTab(self)
+        self.outer_tabs.addTab(self.motor_tab,   "Stepper Motors")
+        self.outer_tabs.addTab(self.current_tab, "Beam Current")
+
         # Auto-run on start
         QTimer.singleShot(200, self.run)
+
+    # ── Close ─────────────────────────────────────────────────────────────────
+
+    def closeEvent(self, event):
+        try:
+            self.motor_tab.abort_and_close()
+        except Exception:
+            pass
+        try:
+            self.current_tab.shutdown()
+        except Exception:
+            pass
+        super().closeEvent(event)
 
     # ── Compute ───────────────────────────────────────────────────────────────
 

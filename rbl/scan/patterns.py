@@ -1,7 +1,7 @@
 import numpy as np
 from scipy.signal import sawtooth
 
-from amplifier import apply_amplifier
+from rbl.physics.amplifier import apply_amplifier
 
 
 def classic_raster(fx, fy, ax, ay, T_s, n_samples):

@@ -13,13 +13,11 @@ else:
 import numpy as np
 
 from defaults import DEFAULTS
-from beam import fwhm_to_sigma, gaussian_kernel_2d
-from patterns import get_realistic_trajectory, get_pattern, lissajous, classic_raster
-from dose import compute_dose, trajectory_density, apply_aperture
-from metrics import (
-    flatness_pct, steady_state_flag, compute_all_metrics, pinch_metric,
-    _aperture_mask_from_edges, max_pixel_off_time_ms,
-)
+from rbl.scan.patterns import get_realistic_trajectory, get_pattern
+from rbl.scan.dose import compute_dose
+from rbl.scan.metrics import (
+    flatness_pct, steady_state_flag, pinch_metric,
+    _aperture_mask_from_edges, )
 
 
 def _run(params, pattern=None):
@@ -257,7 +255,6 @@ def test8():
 # --- Test 9: Amplifier -- low frequency passes through unchanged --------------
 def test9():
     print("\nTest 9: Amplifier off vs on at LOW fx -- should be nearly identical")
-    from amplifier import apply_amplifier
     p = dict(DEFAULTS)
     p.update({
         "fx_hz": 500.0,
@@ -277,7 +274,7 @@ def test9():
 # --- Test 10: Amplifier -- high fx causes measurable rounding -----------------
 def test10():
     print("\nTest 10: At fx = 15 kHz (above BW), waveform must be rounded")
-    from metrics import triangularity_score
+    from rbl.scan.metrics import triangularity_score
     p = dict(DEFAULTS)
     p.update({
         "fx_hz": 15000.0,
@@ -298,7 +295,7 @@ def test10():
 # --- Test 11: Slew clamp respects the spec ------------------------------------
 def test11():
     print("\nTest 11: Slew clamp enforces 300 V/us")
-    from amplifier import apply_slew_limit
+    from rbl.physics.amplifier import apply_slew_limit
     n = 10000
     dt = 1.0e-7   # 100 ns sampling
     # 5 kV step
@@ -326,7 +323,7 @@ def test12():
 # --- Test 13: FDRT penalty fires on slow fy --------------------------------
 def test13():
     print("\nTest 13: Objective punishes fy=14 (the bug from the screenshot)")
-    from optimizer import objective
+    from rbl.scan.optimizer import objective
     p = dict(DEFAULTS)
     p["simulate_amplifier"] = True
     # Reproduce the bad result from the user's screenshot
@@ -340,7 +337,7 @@ def test13():
 # --- Test 14: steady_state_flag uses the slow axis -------------------------
 def test14():
     print("\nTest 14: steady_state_flag uses min(fx, fy), not max")
-    from metrics import steady_state_flag
+    from rbl.scan.metrics import steady_state_flag
     # max(fx, fy) = 5000 Hz (would pass under the old buggy logic)
     # min(fx, fy) = 100 Hz (well below FDRT floor of 500)
     ss = steady_state_flag(fx_hz=5000.0, fy_hz=100.0,
@@ -352,7 +349,7 @@ def test14():
 # --- Test 15: max_pixel_off_time_ms reports the slow-axis period ----------
 def test15():
     print("\nTest 15: max_pixel_off_time_ms reports 1/min(fx,fy)")
-    from metrics import max_pixel_off_time_ms
+    from rbl.scan.metrics import max_pixel_off_time_ms
     off = max_pixel_off_time_ms(fx_hz=2000.0, fy_hz=50.0)
     expected = 1000.0 / 50.0
     check("max off-time matches 1/fy when fy<fx", abs(off - expected) < 1e-6,

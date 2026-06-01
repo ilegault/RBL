@@ -2,8 +2,8 @@ import numpy as np
 from math import gcd
 from scipy.signal import sawtooth
 
-from dose import trajectory_density
-from amplifier import required_slew_rate_V_per_s
+from rbl.scan.dose import trajectory_density
+from rbl.physics.amplifier import required_slew_rate_V_per_s
 
 
 def flatness_pct(dose_inside: np.ndarray) -> float:

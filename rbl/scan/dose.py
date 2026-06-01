@@ -1,8 +1,7 @@
 import numpy as np
 from scipy.signal import fftconvolve
 
-from beam import fwhm_to_sigma, gaussian_kernel_2d
-from patterns import get_pattern
+from rbl.physics.beam import fwhm_to_sigma, gaussian_kernel_2d
 
 
 def trajectory_density(x_traj, y_traj, dt, x_edges, y_edges):

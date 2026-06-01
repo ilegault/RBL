@@ -6,19 +6,18 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(__file__))
 
-import io
 import numpy as np
 import streamlit as st
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from defaults import DEFAULTS
-from patterns import get_realistic_trajectory
-from dose import compute_dose
-from metrics import compute_all_metrics, _aperture_mask_from_edges
+from rbl.config.defaults import DEFAULTS
+from rbl.scan.patterns import get_realistic_trajectory
+from rbl.scan.dose import compute_dose
+from rbl.scan.metrics import compute_all_metrics, _aperture_mask_from_edges
 from viz import plot_heatmap, plot_dose_3d, plot_velocity_profile, animate_trajectory, plot_dwell_hist, plot_waveform_comparison
-from optimizer import run_optimizer, grid_search
+from rbl.scan.optimizer import run_optimizer, grid_search
 
 st.set_page_config(page_title="Raster Scan Tool", layout="wide")
 st.title("Ion-Beam Raster Scan Analysis Tool")

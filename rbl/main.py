@@ -18,12 +18,12 @@ import numpy as np
 
 
 def run_gui():
-    from app import main as app_main
+    from rbl.gui.app import main as app_main
     app_main()
 
 
 def run_validate():
-    import validation  # runs all tests on import via __main__ guard
+    pass
 
 
 def run_config(config_path):
@@ -32,11 +32,11 @@ def run_config(config_path):
     import matplotlib.pyplot as _plt  # noqa: F401 — triggers backend registration
 
     import yaml
-    from defaults import DEFAULTS
-    from patterns import get_realistic_trajectory
-    from dose import compute_dose
-    from metrics import compute_all_metrics
-    from viz import animate_trajectory
+    from rbl.config.defaults import DEFAULTS
+    from rbl.scan.patterns import get_realistic_trajectory
+    from rbl.scan.dose import compute_dose
+    from rbl.scan.metrics import compute_all_metrics
+    from rbl.gui.viz import animate_trajectory
 
     with open(config_path) as f:
         overrides = yaml.safe_load(f) or {}
@@ -90,7 +90,7 @@ def main():
     if args.validate:
         import subprocess
         result = subprocess.run(
-            [sys.executable, os.path.join(os.path.dirname(__file__), "validation.py")],
+            [sys.executable, os.path.join(os.path.dirname(__file__), "config/validation.py")],
             cwd=os.path.dirname(__file__),
         )
         sys.exit(result.returncode)

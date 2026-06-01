@@ -318,7 +318,7 @@ def plot_waveform_comparison(params, n_cycles=3):
     the FFT looks textbook. Useful for the Amplifier Optimizer tab.
     """
     from scipy.signal import sawtooth as _sawtooth
-    from amplifier import apply_amplifier
+    from rbl.physics.amplifier import apply_amplifier
 
     fx = params["fx_hz"]
     ax = params["ax_mm"]
