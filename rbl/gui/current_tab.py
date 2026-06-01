@@ -91,7 +91,7 @@ class CurrentTab(QWidget):
         self.btn_conn.clicked.connect(self._toggle_connection)
         conn.addWidget(self.btn_conn)
         self.lbl_conn_status = QLabel("● Disconnected")
-        self.lbl_conn_status.setStyleSheet("color: #c44; font-weight: bold;")
+        self.lbl_conn_status.setStyleSheet("color: #888888; font-weight: bold;")
         conn.addWidget(self.lbl_conn_status)
         self.lbl_serial = QLabel("")
         self.lbl_serial.setStyleSheet("color: #888; font-style: italic;")
@@ -182,7 +182,7 @@ class CurrentTab(QWidget):
             self.lbl_serial.setText(f"T7 serial #{sn}")
             self.btn_conn.setText("Disconnect")
             self.lbl_conn_status.setText("● Connected")
-            self.lbl_conn_status.setStyleSheet("color: #4c4; font-weight: bold;")
+            self.lbl_conn_status.setStyleSheet("color: #00FF00; font-weight: bold;")
             self.worker = LabJackPollWorker(self.lj, period_s=0.1)
             self.worker.reading.connect(self._on_reading)
             self.worker.error.connect(self._on_error)
@@ -200,7 +200,7 @@ class CurrentTab(QWidget):
         self.lj.disconnect()
         self.btn_conn.setText("Connect")
         self.lbl_conn_status.setText("● Disconnected")
-        self.lbl_conn_status.setStyleSheet("color: #c44; font-weight: bold;")
+        self.lbl_conn_status.setStyleSheet("color: #888888; font-weight: bold;")
         self.lbl_serial.setText("")
 
     # ---- Slots ---------------------------------------------------------------
