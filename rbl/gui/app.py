@@ -358,8 +358,8 @@ class MetricsTab(QWidget):
         self.status_fwhm = QLabel("–")
         for lbl in (self.status_ss, self.status_fwhm):
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            lbl.setStyleSheet("padding: 6px; border-radius: 4px; font-weight: bold;")
-            lbl.setMinimumHeight(36)
+            lbl.setStyleSheet("padding:4px; border:1px solid #333; font-weight:bold;")
+            lbl.setMinimumHeight(28)
 
         status_row = QHBoxLayout()
         status_row.addWidget(self.status_ss)
@@ -410,30 +410,30 @@ class MetricsTab(QWidget):
             self.table.setItem(i, 1, QTableWidgetItem(v))
 
         if metrics["steady_state"]:
-            self.status_ss.setText("✓  STEADY STATE (FDRT regime)")
+            self.status_ss.setText("OK  STEADY STATE (FDRT regime)")
             self.status_ss.setStyleSheet(
-                "padding:6px; border-radius:4px; font-weight:bold;"
-                "background:#c8f7c5; color:#155724;"
+                "padding:4px; font-weight:bold;"
+                "background:#004d00; color:#00FF00; border:1px solid #00FF00;"
             )
         else:
-            self.status_ss.setText("✗  TRANSIENT — fast freq below FDRT threshold")
+            self.status_ss.setText("--  TRANSIENT — fast freq below FDRT threshold")
             self.status_ss.setStyleSheet(
-                "padding:6px; border-radius:4px; font-weight:bold;"
-                "background:#f8d7da; color:#721c24;"
+                "padding:4px; font-weight:bold;"
+                "background:#4d0000; color:#FF0000; border:1px solid #FF0000;"
             )
 
         spacing = metrics["spot_spacing_mm"]
         if metrics["fwhm_spot_pass"]:
-            self.status_fwhm.setText(f"✓  FWHM OK  (spot spacing {spacing:.3f} mm)")
+            self.status_fwhm.setText(f"OK  FWHM (spot spacing {spacing:.3f} mm)")
             self.status_fwhm.setStyleSheet(
-                "padding:6px; border-radius:4px; font-weight:bold;"
-                "background:#c8f7c5; color:#155724;"
+                "padding:4px; font-weight:bold;"
+                "background:#004d00; color:#00FF00; border:1px solid #00FF00;"
             )
         else:
-            self.status_fwhm.setText(f"⚠  FWHM < 3× spot spacing ({spacing:.3f} mm)")
+            self.status_fwhm.setText(f"!!  FWHM < 3x spot spacing ({spacing:.3f} mm)")
             self.status_fwhm.setStyleSheet(
-                "padding:6px; border-radius:4px; font-weight:bold;"
-                "background:#fff3cd; color:#856404;"
+                "padding:4px; font-weight:bold;"
+                "background:#4d3000; color:#FF8800; border:1px solid #FF8800;"
             )
 
 
@@ -459,17 +459,17 @@ class OptimizerTab(QWidget):
 
         self.grid_btn = QPushButton("Run Grid Search")
         self.grid_btn.setStyleSheet(
-            "QPushButton { background:#2176ae; color:white; border-radius:5px;"
-            " font-weight:bold; padding:4px 10px; }"
-            "QPushButton:hover { background:#1a5e8f; }"
-            "QPushButton:disabled { background:#aaa; }"
+            "QPushButton { background:#0078d4; color:#e0e0e0; border:1px solid #005fa3;"
+            " font-weight:bold; padding:3px 8px; }"
+            "QPushButton:hover { background:#106ebe; }"
+            "QPushButton:disabled { background:#1e1e1e; color:#555; border:1px solid #333; }"
         )
-        self.opt_btn = QPushButton("Run Optimizer (DE)  ⚠ slow")
+        self.opt_btn = QPushButton("Run Optimizer (DE)  [slow]")
         self.opt_btn.setStyleSheet(
-            "QPushButton { background:#6f4e9e; color:white; border-radius:5px;"
-            " font-weight:bold; padding:4px 10px; }"
-            "QPushButton:hover { background:#5a3d80; }"
-            "QPushButton:disabled { background:#aaa; }"
+            "QPushButton { background:#6b2fa0; color:#e0e0e0; border:1px solid #5a2888;"
+            " font-weight:bold; padding:3px 8px; }"
+            "QPushButton:hover { background:#7c3ab5; }"
+            "QPushButton:disabled { background:#1e1e1e; color:#555; border:1px solid #333; }"
         )
         ctrl.addWidget(self.grid_btn)
         ctrl.addWidget(self.opt_btn)
@@ -493,13 +493,13 @@ class OptimizerTab(QWidget):
         layout.addWidget(self.result_lbl)
 
         # ── Apply button ──────────────────────────────────────────────────────
-        self.apply_btn = QPushButton("Apply Optimal f₁ / f₂ to Parameters")
+        self.apply_btn = QPushButton("Apply Optimal f1 / f2 to Parameters")
         self.apply_btn.setEnabled(False)
         self.apply_btn.setStyleSheet(
-            "QPushButton { background:#2ca02c; color:white; border-radius:5px;"
-            " font-weight:bold; padding:4px 10px; }"
-            "QPushButton:hover { background:#228822; }"
-            "QPushButton:disabled { background:#ccc; color:#888; }"
+            "QPushButton { background:#107c10; color:#e0e0e0; border:1px solid #0a6b0a;"
+            " font-weight:bold; padding:3px 8px; }"
+            "QPushButton:hover { background:#1a8c1a; }"
+            "QPushButton:disabled { background:#1e1e1e; color:#555; border:1px solid #333; }"
         )
         layout.addWidget(self.apply_btn)
 
@@ -671,9 +671,9 @@ class VoltageCalcTab(QWidget):
 
         self.use_ax_btn = QPushButton("Use current ax_mm from parameter panel")
         self.use_ax_btn.setStyleSheet(
-            "QPushButton { background:#3a4f6a; color:white; border-radius:4px;"
-            " padding:4px 10px; }"
-            "QPushButton:hover { background:#2c3e55; }"
+            "QPushButton { background:#2a2a2a; color:#c0c0c0; border:1px solid #444;"
+            " padding:3px 8px; }"
+            "QPushButton:hover { background:#383838; }"
         )
         layout.addWidget(self.use_ax_btn)
 
@@ -761,15 +761,25 @@ class MainWindow(QMainWindow):
         title = QLabel("Ion-Beam Raster Scan Analysis Tool")
         title.setFont(QFont("", 14, QFont.Weight.Bold))
 
-        self.run_btn = QPushButton("▶  Run")
-        self.run_btn.setFixedHeight(36)
-        self.run_btn.setMinimumWidth(120)
+        self.run_btn = QPushButton("Run")
+        self.run_btn.setFixedHeight(30)
+        self.run_btn.setMinimumWidth(100)
         self.run_btn.setStyleSheet(
-            "QPushButton { background:#2176ae; color:white; border-radius:6px;"
+            "QPushButton { background:#0078d4; color:#e0e0e0; border:1px solid #005fa3;"
             " font-weight:bold; font-size:13px; }"
-            "QPushButton:hover { background:#1a5e8f; }"
-            "QPushButton:disabled { background:#aaa; }"
+            "QPushButton:hover { background:#106ebe; }"
+            "QPushButton:disabled { background:#1e1e1e; color:#555; border:1px solid #333; }"
         )
+        self.split_btn = QPushButton("[ Split ]")
+        self.split_btn.setFixedHeight(30)
+        self.split_btn.setCheckable(True)
+        self.split_btn.setStyleSheet(
+            "QPushButton { background:#1e1e1e; color:#c0c0c0; border:1px solid #444;"
+            " padding:2px 8px; }"
+            "QPushButton:checked { background:#005fa3; color:#e0e0e0; border:1px solid #0078d4; }"
+            "QPushButton:hover { background:#2a2a2a; }"
+        )
+        self.split_btn.toggled.connect(self._toggle_split)
 
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)
@@ -777,11 +787,12 @@ class MainWindow(QMainWindow):
         self.progress.setVisible(False)
 
         self.status_lbl = QLabel("Ready")
-        self.status_lbl.setStyleSheet("color: #ccd; font-size: 11px;")
+        self.status_lbl.setStyleSheet("color: #aaa; font-size: 11px;")
 
         top.addWidget(title)
         top.addStretch()
         top.addWidget(self.status_lbl)
+        top.addWidget(self.split_btn)
         top.addWidget(self.run_btn)
         main_layout.addLayout(top)
         main_layout.addWidget(self.progress)
@@ -793,8 +804,15 @@ class MainWindow(QMainWindow):
         self.params_panel = ParamPanel()
         splitter.addWidget(self.params_panel)
 
+        # Inner splitter holds left tabs (always visible) + right tabs (split view)
+        self._tab_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.tabs = QTabWidget()
-        splitter.addWidget(self.tabs)
+        self._tab_splitter.addWidget(self.tabs)
+
+        self.tabs_right = QTabWidget()
+        self.tabs_right.setVisible(False)
+        self._tab_splitter.addWidget(self.tabs_right)
+        splitter.addWidget(self._tab_splitter)
         splitter.setSizes([300, 1140])
 
         # Plot tabs
@@ -817,6 +835,19 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.tab_voltage,   "Voltage Calculator")
         self.tab_voltage.use_ax_btn.clicked.connect(self._copy_ax_to_voltage_calc)
 
+        # Right-panel plot tabs (split view — plot-only subset)
+        self.tab_dose2d_r   = PlotTab()
+        self.tab_dose3d_r   = PlotTab()
+        self.tab_velocity_r = PlotTab()
+        self.tab_dwell_r    = PlotTab()
+        self.tab_traj_r     = PlotTab()
+        self.tabs_right.addTab(self.tab_dose2d_r,   "Dose Map (2D)")
+        self.tabs_right.addTab(self.tab_dose3d_r,   "Dose Surface (3D)")
+        self.tabs_right.addTab(self.tab_velocity_r, "Velocity Profile")
+        self.tabs_right.addTab(self.tab_dwell_r,    "Dwell Distribution")
+        self.tabs_right.addTab(self.tab_traj_r,     "Trajectory")
+        self.tabs_right.currentChanged.connect(self._on_right_tab_changed)
+
         # Wire optimizer ↔ params panel
         self.tab_optimizer.set_params_getter(self.params_panel.get_params)
         self.tab_optimizer.apply_requested.connect(self._apply_optimal)
@@ -834,6 +865,41 @@ class MainWindow(QMainWindow):
 
         # Auto-run on start
         QTimer.singleShot(200, self.run)
+
+    # ── Split view ────────────────────────────────────────────────────────────
+
+    def _toggle_split(self, active: bool):
+        self.tabs_right.setVisible(active)
+        if active:
+            total = self._tab_splitter.width()
+            half = max(300, total // 2)
+            self._tab_splitter.setSizes([half, total - half])
+            self._render_right_tab(self.tabs_right.currentIndex())
+        self.split_btn.setText("[ Close Split ]" if active else "[ Split ]")
+
+    def _on_right_tab_changed(self, index: int):
+        if self.tabs_right.isVisible():
+            self._render_right_tab(index)
+
+    def _render_right_tab(self, index: int):
+        if self._last_result is None:
+            return
+        dose, rho, xe, ye, t_arr, x_arr, y_arr, metrics = self._last_result
+        params   = self.params_panel.get_params()
+        aperture = (params["aperture_xL_mm"], params["aperture_xR_mm"],
+                    params["aperture_yB_mm"], params["aperture_yT_mm"])
+        mask = _aperture_mask_from_edges(xe, ye, *aperture)
+        if index == 0:
+            self.tab_dose2d_r.set_figure(plot_heatmap(dose, xe, ye, aperture, metrics))
+        elif index == 1:
+            self.tab_dose3d_r.set_figure(plot_dose_3d(dose, xe, ye, aperture, metrics))
+        elif index == 2:
+            self.tab_velocity_r.set_figure(plot_velocity_profile(params, t_arr, x_arr, y_arr))
+        elif index == 3:
+            self.tab_dwell_r.set_figure(plot_dwell_hist(rho, mask))
+        elif index == 4:
+            self.tab_traj_r.set_figure(
+                self._make_trajectory_fig(x_arr, y_arr, t_arr, aperture, params))
 
     # ── Close ─────────────────────────────────────────────────────────────────
 
@@ -879,6 +945,10 @@ class MainWindow(QMainWindow):
         self.tab_traj.set_figure(self._make_trajectory_fig(x_arr, y_arr, t_arr, aperture, params))
         self.tab_metrics.update(metrics)
         self.tab_optimizer.update_waveform_plot(params)
+
+        # Refresh the visible right panel tab if split is open
+        if self.tabs_right.isVisible():
+            self._render_right_tab(self.tabs_right.currentIndex())
 
         flat  = metrics["flatness_pct"]
         color = "#2ca02c" if flat <= 10 else ("#d62728" if flat > 30 else "#ff7f0e")
@@ -942,19 +1012,20 @@ def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
 
+    # Flat near-black palette inspired by TDS-T8's no-frills functional style
     pal = QPalette()
-    pal.setColor(QPalette.ColorRole.Window,          QColor(38,  38,  48))
-    pal.setColor(QPalette.ColorRole.WindowText,      QColor(220, 220, 230))
-    pal.setColor(QPalette.ColorRole.Base,            QColor(26,  26,  34))
-    pal.setColor(QPalette.ColorRole.AlternateBase,   QColor(46,  46,  58))
-    pal.setColor(QPalette.ColorRole.ToolTipBase,     QColor(38,  38,  48))
-    pal.setColor(QPalette.ColorRole.ToolTipText,     QColor(220, 220, 230))
-    pal.setColor(QPalette.ColorRole.Text,            QColor(220, 220, 230))
-    pal.setColor(QPalette.ColorRole.Button,          QColor(55,  55,  70))
-    pal.setColor(QPalette.ColorRole.ButtonText,      QColor(220, 220, 230))
-    pal.setColor(QPalette.ColorRole.BrightText,      QColor(255, 120, 120))
-    pal.setColor(QPalette.ColorRole.Link,            QColor(100, 180, 255))
-    pal.setColor(QPalette.ColorRole.Highlight,       QColor(50,  120, 200))
+    pal.setColor(QPalette.ColorRole.Window,          QColor(12,  12,  12))
+    pal.setColor(QPalette.ColorRole.WindowText,      QColor(204, 204, 204))
+    pal.setColor(QPalette.ColorRole.Base,            QColor(6,   6,   6))
+    pal.setColor(QPalette.ColorRole.AlternateBase,   QColor(18,  18,  18))
+    pal.setColor(QPalette.ColorRole.ToolTipBase,     QColor(24,  24,  24))
+    pal.setColor(QPalette.ColorRole.ToolTipText,     QColor(204, 204, 204))
+    pal.setColor(QPalette.ColorRole.Text,            QColor(204, 204, 204))
+    pal.setColor(QPalette.ColorRole.Button,          QColor(28,  28,  28))
+    pal.setColor(QPalette.ColorRole.ButtonText,      QColor(204, 204, 204))
+    pal.setColor(QPalette.ColorRole.BrightText,      QColor(255, 80,  80))
+    pal.setColor(QPalette.ColorRole.Link,            QColor(80,  160, 255))
+    pal.setColor(QPalette.ColorRole.Highlight,       QColor(0,   120, 215))
     pal.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
     app.setPalette(pal)
 

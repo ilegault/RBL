@@ -195,10 +195,10 @@ class AxisControls(QGroupBox):
         self.lbl_mm.setText(f"{SC.counts_to_mm(self.axis, pos):+.4f} mm")
         if axis_state["moving"]:
             self.lbl_status.setText("Moving")
-            self.lbl_status.setStyleSheet("color: #4af; font-weight: bold;")
+            self.lbl_status.setStyleSheet("color: #FF8800; font-weight: bold;")
         else:
             self.lbl_status.setText("Idle")
-            self.lbl_status.setStyleSheet("color: #4c4;")
+            self.lbl_status.setStyleSheet("color: #00FF00;")
         sw = axis_state["switches"]
         def fmt(b): return "●" if b else "○"
         self.lbl_switches.setText(
@@ -236,7 +236,7 @@ class MotorTab(QWidget):
         self.btn_connect.clicked.connect(self._toggle_connection)
         conn.addWidget(self.btn_connect)
         self.lbl_conn_status = QLabel("● Disconnected")
-        self.lbl_conn_status.setStyleSheet("color: #c44; font-weight: bold;")
+        self.lbl_conn_status.setStyleSheet("color: #888888; font-weight: bold;")
         conn.addWidget(self.lbl_conn_status)
         self.lbl_model = QLabel("")
         self.lbl_model.setStyleSheet("color: #888; font-style: italic;")
@@ -245,12 +245,12 @@ class MotorTab(QWidget):
 
         # ── Emergency stop ──────────────────────────────────────────────────
         estop_row = QHBoxLayout()
-        self.btn_estop = QPushButton("⛔  EMERGENCY STOP (AB)")
-        self.btn_estop.setMinimumHeight(48)
+        self.btn_estop = QPushButton("EMERGENCY STOP (AB)")
+        self.btn_estop.setMinimumHeight(44)
         self.btn_estop.setStyleSheet(
-            "QPushButton { background:#a31; color:white; font-size:16px;"
-            " font-weight:bold; border-radius:6px; }"
-            "QPushButton:hover { background:#c44; }"
+            "QPushButton { background:#aa0000; color:white; font-size:15px;"
+            " font-weight:bold; border:2px solid #cc0000; }"
+            "QPushButton:hover { background:#cc0000; }"
         )
         self.btn_estop.clicked.connect(self._emergency_stop)
         estop_row.addWidget(self.btn_estop, stretch=3)
@@ -350,7 +350,7 @@ class MotorTab(QWidget):
         self.btn_connect.setText("Disconnect" if on else "Connect")
         self.lbl_conn_status.setText("● Connected" if on else "● Disconnected")
         self.lbl_conn_status.setStyleSheet(
-            "color: #4c4; font-weight: bold;" if on else "color: #c44; font-weight: bold;"
+            "color: #00FF00; font-weight: bold;" if on else "color: #888888; font-weight: bold;"
         )
         self.btn_estop.setEnabled(on)
         self.btn_enable.setEnabled(on)
