@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QComboBox, QTabWidget, QScrollArea,
     QTableWidget, QTableWidgetItem, QGroupBox,
     QProgressBar, QSizePolicy, QMessageBox, QAbstractItemView,
+    QTabBar, QStackedWidget,
 )
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
 from PySide6.QtGui import QFont, QColor, QPalette
@@ -730,28 +731,73 @@ class VoltageCalcTab(QWidget):
         )
 
 
+# ─── Hardware view (Motors + Current, switchable / splittable) ───────────────
+
+class HardwareView(QWidget):
+    """Holds MotorTab and CurrentTab in a splitter.
+    Call show_motors_only / show_current_only / show_both to configure layout."""
+
+    def __init__(self, motor_tab, current_tab, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self._splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._splitter.addWidget(motor_tab)
+        self._splitter.addWidget(current_tab)
+        layout.addWidget(self._splitter)
+        self.show_motors_only()
+
+    def show_motors_only(self):
+        self._splitter.widget(0).setVisible(True)
+        self._splitter.widget(1).setVisible(False)
+
+    def show_current_only(self):
+        self._splitter.widget(0).setVisible(False)
+        self._splitter.widget(1).setVisible(True)
+
+    def show_both(self):
+        self._splitter.widget(0).setVisible(True)
+        self._splitter.widget(1).setVisible(True)
+        w = self._splitter.width()
+        if w > 0:
+            self._splitter.setSizes([w // 2, w // 2])
+
+
 # ─── Main Window ──────────────────────────────────────────────────────────────
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Ion-Beam Raster Scan Analysis Tool  —  UW-IBL / MIBL")
+        self.setWindowTitle("Right Beam Line Analysis Tool")
         self.resize(1440, 920)
 
         self._worker      = None
         self._last_result = None
 
-        # ── NEW: outer 3-tab central widget ───────────────────────────────────
-        outer_central = QWidget()
-        self.setCentralWidget(outer_central)
-        outer_layout = QVBoxLayout(outer_central)
+        # ── Outer navigation: tab bar + stacked widget ────────────────────────
+        # Three tabs share one stacked widget.  Tabs 1 & 2 (hardware) map to
+        # the same HardwareView page so motors/current widgets are never
+        # duplicated.  Clicking from one hardware tab to the other → split view.
+        outer_widget = QWidget()
+        self.setCentralWidget(outer_widget)
+        outer_layout = QVBoxLayout(outer_widget)
         outer_layout.setContentsMargins(0, 0, 0, 0)
-        self.outer_tabs = QTabWidget()
-        outer_layout.addWidget(self.outer_tabs)
+        outer_layout.setSpacing(0)
 
-        # ── "Analysis" tab — wraps everything the app used to be ──────────────
+        self._outer_tabbar = QTabBar()
+        self._outer_tabbar.addTab("Analysis")
+        self._outer_tabbar.addTab("Stepper Motors")
+        self._outer_tabbar.addTab("Beam Current")
+        self._outer_tabbar.setExpanding(False)
+        self._outer_tabbar.setDocumentMode(True)
+        outer_layout.addWidget(self._outer_tabbar)
+
+        self._outer_stack = QStackedWidget()
+        outer_layout.addWidget(self._outer_stack, stretch=1)
+
+        # ── Analysis page (stack index 0) ─────────────────────────────────────
         central = QWidget()
-        self.outer_tabs.addTab(central, "Analysis")
+        self._outer_stack.addWidget(central)
         main_layout = QVBoxLayout(central)
         main_layout.setContentsMargins(6, 6, 6, 6)
         main_layout.setSpacing(4)
@@ -770,17 +816,6 @@ class MainWindow(QMainWindow):
             "QPushButton:hover { background:#106ebe; }"
             "QPushButton:disabled { background:#b0b0b0; color:#707070; border:1px solid #999; }"
         )
-        self.split_btn = QPushButton("[ Split ]")
-        self.split_btn.setFixedHeight(30)
-        self.split_btn.setCheckable(True)
-        self.split_btn.setStyleSheet(
-            "QPushButton { background:#d0d0d0; color:#202020; border:1px solid #aaa;"
-            " padding:2px 8px; }"
-            "QPushButton:checked { background:#0078d4; color:white; border:1px solid #005fa3; }"
-            "QPushButton:hover { background:#c0c0c0; }"
-        )
-        self.split_btn.toggled.connect(self._toggle_split)
-
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)
         self.progress.setFixedHeight(8)
@@ -792,7 +827,6 @@ class MainWindow(QMainWindow):
         top.addWidget(title)
         top.addStretch()
         top.addWidget(self.status_lbl)
-        top.addWidget(self.split_btn)
         top.addWidget(self.run_btn)
         main_layout.addLayout(top)
         main_layout.addWidget(self.progress)
@@ -804,15 +838,8 @@ class MainWindow(QMainWindow):
         self.params_panel = ParamPanel()
         splitter.addWidget(self.params_panel)
 
-        # Inner splitter holds left tabs (always visible) + right tabs (split view)
-        self._tab_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.tabs = QTabWidget()
-        self._tab_splitter.addWidget(self.tabs)
-
-        self.tabs_right = QTabWidget()
-        self.tabs_right.setVisible(False)
-        self._tab_splitter.addWidget(self.tabs_right)
-        splitter.addWidget(self._tab_splitter)
+        splitter.addWidget(self.tabs)
         splitter.setSizes([300, 1140])
 
         # Plot tabs
@@ -835,19 +862,6 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.tab_voltage,   "Voltage Calculator")
         self.tab_voltage.use_ax_btn.clicked.connect(self._copy_ax_to_voltage_calc)
 
-        # Right-panel plot tabs (split view — plot-only subset)
-        self.tab_dose2d_r   = PlotTab()
-        self.tab_dose3d_r   = PlotTab()
-        self.tab_velocity_r = PlotTab()
-        self.tab_dwell_r    = PlotTab()
-        self.tab_traj_r     = PlotTab()
-        self.tabs_right.addTab(self.tab_dose2d_r,   "Dose Map (2D)")
-        self.tabs_right.addTab(self.tab_dose3d_r,   "Dose Surface (3D)")
-        self.tabs_right.addTab(self.tab_velocity_r, "Velocity Profile")
-        self.tabs_right.addTab(self.tab_dwell_r,    "Dwell Distribution")
-        self.tabs_right.addTab(self.tab_traj_r,     "Trajectory")
-        self.tabs_right.currentChanged.connect(self._on_right_tab_changed)
-
         # Wire optimizer ↔ params panel
         self.tab_optimizer.set_params_getter(self.params_panel.get_params)
         self.tab_optimizer.apply_requested.connect(self._apply_optimal)
@@ -855,51 +869,21 @@ class MainWindow(QMainWindow):
         # Signals
         self.run_btn.clicked.connect(self.run)
 
-        # ── NEW: add Stepper Motors and Beam Current top-level tabs ───────────
+        # ── Hardware page (stack index 1) ─────────────────────────────────────
         from motor_tab import MotorTab
         from current_tab import CurrentTab
         self.motor_tab   = MotorTab(self)
         self.current_tab = CurrentTab(self)
-        self.outer_tabs.addTab(self.motor_tab,   "Stepper Motors")
-        self.outer_tabs.addTab(self.current_tab, "Beam Current")
+        self._hw_view = HardwareView(self.motor_tab, self.current_tab)
+        self._outer_stack.addWidget(self._hw_view)
+
+        # Outer tab switching + click-to-split logic
+        self._prev_outer_tab  = 0
+        self._hw_split_active = False
+        self._outer_tabbar.tabBarClicked.connect(self._on_outer_tab_clicked)
 
         # Auto-run on start
         QTimer.singleShot(200, self.run)
-
-    # ── Split view ────────────────────────────────────────────────────────────
-
-    def _toggle_split(self, active: bool):
-        self.tabs_right.setVisible(active)
-        if active:
-            total = self._tab_splitter.width()
-            half = max(300, total // 2)
-            self._tab_splitter.setSizes([half, total - half])
-            self._render_right_tab(self.tabs_right.currentIndex())
-        self.split_btn.setText("[ Close Split ]" if active else "[ Split ]")
-
-    def _on_right_tab_changed(self, index: int):
-        if self.tabs_right.isVisible():
-            self._render_right_tab(index)
-
-    def _render_right_tab(self, index: int):
-        if self._last_result is None:
-            return
-        dose, rho, xe, ye, t_arr, x_arr, y_arr, metrics = self._last_result
-        params   = self.params_panel.get_params()
-        aperture = (params["aperture_xL_mm"], params["aperture_xR_mm"],
-                    params["aperture_yB_mm"], params["aperture_yT_mm"])
-        mask = _aperture_mask_from_edges(xe, ye, *aperture)
-        if index == 0:
-            self.tab_dose2d_r.set_figure(plot_heatmap(dose, xe, ye, aperture, metrics))
-        elif index == 1:
-            self.tab_dose3d_r.set_figure(plot_dose_3d(dose, xe, ye, aperture, metrics))
-        elif index == 2:
-            self.tab_velocity_r.set_figure(plot_velocity_profile(params, t_arr, x_arr, y_arr))
-        elif index == 3:
-            self.tab_dwell_r.set_figure(plot_dwell_hist(rho, mask))
-        elif index == 4:
-            self.tab_traj_r.set_figure(
-                self._make_trajectory_fig(x_arr, y_arr, t_arr, aperture, params))
 
     # ── Close ─────────────────────────────────────────────────────────────────
 
@@ -913,6 +897,52 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         super().closeEvent(event)
+
+    # ── Outer tab / split logic ───────────────────────────────────────────────
+
+    def _on_outer_tab_clicked(self, index: int):
+        """Handle clicks on the outer Analysis / Stepper Motors / Beam Current tab bar.
+
+        Normal behaviour:  click any tab → navigate to it.
+        Click-to-split:    while viewing one hardware tab, clicking the OTHER
+                           hardware tab shows both panels side-by-side instead
+                           of switching away.
+        Exit split:        click either hardware tab while split is active,
+                           or click Analysis, to return to a single panel.
+        """
+        prev = self._prev_outer_tab
+        self._prev_outer_tab = index
+
+        if index == 0:                              # ── Analysis
+            self._outer_stack.setCurrentIndex(0)
+            self._hw_view.show_motors_only()        # reset hw view for next visit
+            self._hw_split_active = False
+
+        elif index == 1:                            # ── Stepper Motors
+            self._outer_stack.setCurrentIndex(1)
+            if self._hw_split_active:
+                # already in split → click exits split, shows motors only
+                self._hw_view.show_motors_only()
+                self._hw_split_active = False
+            elif prev == 2:
+                # crossing from Beam Current → activate split
+                self._hw_view.show_both()
+                self._hw_split_active = True
+            else:
+                self._hw_view.show_motors_only()
+
+        elif index == 2:                            # ── Beam Current
+            self._outer_stack.setCurrentIndex(1)
+            if self._hw_split_active:
+                # already in split → click exits split, shows current only
+                self._hw_view.show_current_only()
+                self._hw_split_active = False
+            elif prev == 1:
+                # crossing from Stepper Motors → activate split
+                self._hw_view.show_both()
+                self._hw_split_active = True
+            else:
+                self._hw_view.show_current_only()
 
     # ── Compute ───────────────────────────────────────────────────────────────
 
@@ -945,10 +975,6 @@ class MainWindow(QMainWindow):
         self.tab_traj.set_figure(self._make_trajectory_fig(x_arr, y_arr, t_arr, aperture, params))
         self.tab_metrics.update(metrics)
         self.tab_optimizer.update_waveform_plot(params)
-
-        # Refresh the visible right panel tab if split is open
-        if self.tabs_right.isVisible():
-            self._render_right_tab(self.tabs_right.currentIndex())
 
         flat  = metrics["flatness_pct"]
         color = "#2ca02c" if flat <= 10 else ("#d62728" if flat > 30 else "#ff7f0e")

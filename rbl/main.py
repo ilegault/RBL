@@ -2,7 +2,7 @@
 Entry point for the Raster Scan Analysis Tool.
 
 Usage:
-    python main.py              # launch PyQt5 GUI (default)
+    python main.py              # launch PySide6 GUI (default)
     python main.py --validate   # run validation suite
     python main.py --config config.yaml   # headless CLI pipeline
 """
