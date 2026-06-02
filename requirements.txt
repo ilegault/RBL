@@ -1,7 +1,9 @@
 numpy
 scipy
 matplotlib
-PyQt5
+PySide6
 streamlit
 pyyaml
 pillow
+labjack-ljm
+pytest
