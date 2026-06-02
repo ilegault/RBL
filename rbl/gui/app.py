@@ -15,8 +15,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QFormLayout,
     QLabel, QPushButton, QDoubleSpinBox, QSpinBox,
     QComboBox, QTabWidget, QScrollArea,
-    QTableWidget, QTableWidgetItem, QGroupBox,
-    QProgressBar, QSizePolicy, QMessageBox, QAbstractItemView,
+    QGroupBox, QProgressBar, QSizePolicy, QMessageBox,
     QTabBar, QStackedWidget,
 )
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
@@ -58,34 +57,6 @@ class ComputeWorker(QThread):
             self.error.emit(str(e))
 
 
-class OptimizerWorker(QThread):
-    finished = Signal(object)
-    error    = Signal(str)
-
-    def __init__(self, mode, params, n_grid=10):
-        super().__init__()
-        self.mode   = mode    # "grid" | "optimize"
-        self.params = params
-        self.n_grid = n_grid
-
-    def run(self):
-        try:
-            if self.mode == "grid":
-                from rbl.scan.optimizer import grid_search
-                fx_vals, fy_vals, J_grid = grid_search(
-                    self.params, self.n_grid, self.n_grid
-                )
-                self.finished.emit(("grid", fx_vals, fy_vals, J_grid))
-            else:
-                from rbl.scan.optimizer import run_optimizer
-                fy_min = float(DEFAULTS.get("optimizer_fy_min_hz", 50.0))
-                bounds = [(500, 30000), (fy_min, 5000.0), (1.0, 1.5), (1.0, 1.5)]
-                result = run_optimizer(bounds, self.params)
-                self.finished.emit(("optimize", result))
-        except Exception as e:
-            self.error.emit(str(e))
-
-
 # ─── Reusable matplotlib tab ──────────────────────────────────────────────────
 
 class PlotTab(QWidget):
@@ -109,6 +80,25 @@ class PlotTab(QWidget):
         self._layout.addWidget(self.canvas)
         self.canvas.draw()
         plt.close(fig)
+
+    def set_metrics(self, rows):
+        """Display a key: value summary bar above the figure."""
+        for i in range(self._layout.count()):
+            w = self._layout.itemAt(i)
+            if w and w.widget() and w.widget().objectName() == "_metrics_bar":
+                w.widget().deleteLater()
+                break
+        if not rows:
+            return
+        text = "   |   ".join(f"{k}: {v}" for k, v in rows)
+        lbl = QLabel(text)
+        lbl.setObjectName("_metrics_bar")
+        lbl.setStyleSheet(
+            "font-size: 14px; font-weight: bold; color: #1a1a3a; padding: 5px 8px;"
+            " background: #dde4f0; border-bottom: 2px solid #8899bb;"
+        )
+        lbl.setWordWrap(True)
+        self._layout.insertWidget(0, lbl)
 
 
 # ─── Spin-box helpers ─────────────────────────────────────────────────────────
@@ -140,7 +130,7 @@ class ParamPanel(QScrollArea):
         super().__init__(parent)
         self.setWidgetResizable(True)
         self.setMinimumWidth(280)
-        self.setMaximumWidth(340)
+        self.setMaximumWidth(400)
 
         container = QWidget()
         self.setWidget(container)
@@ -254,34 +244,6 @@ class ParamPanel(QScrollArea):
         f.addRow("Grid Nx", self.grid_nx)
         f.addRow("Grid Ny", self.grid_ny)
 
-        # ── Physics ───────────────────────────────────────────────────────────
-        f = group("Physics / FDRT")
-        self.tau_recomb  = _dbl(0.01, 100.0,   DEFAULTS["tau_recomb_ms"],    0.1)
-        self.tau_recomb.setToolTip(
-            "Defect recombination time. Wallace et al. 2017 (Sci. Rep. 39754) "
-            "report 0.2-10 ms for Si over -20 to 140 C."
-        )
-        self.fdrt_thresh = _dbl(10.0, 50000.0, DEFAULTS["fdrt_threshold_hz"], 50.0, decimals=0)
-        self.fdrt_thresh.setToolTip(
-            "FDRT floor. Gigax et al. 2015 (J. Nucl. Mater. 465, 343-348) "
-            "report ~500 Hz suppresses pulsing in Fe at 450 C."
-        )
-        f.addRow("τ_recomb (ms)",       self.tau_recomb)
-        f.addRow("FDRT threshold (Hz)", self.fdrt_thresh)
-
-        # ── Optimizer weights ─────────────────────────────────────────────────
-        f = group("Optimizer Weights")
-        self.w1 = _dbl(0.0, 5.0, DEFAULTS["w1"], 0.1)
-        self.w2 = _dbl(0.0, 5.0, DEFAULTS["w2"], 0.1)
-        self.w3 = _dbl(0.0, 5.0, DEFAULTS["w3"], 0.1)
-        self.w4 = _dbl(0.0, 5.0, DEFAULTS["w4"], 0.1)
-        self.w5 = _dbl(0.0, 5.0, DEFAULTS["w5"], 0.1)
-        f.addRow("w1 (flatness)",    self.w1)
-        f.addRow("w2 (pinch)",       self.w2)
-        f.addRow("w3 (FDRT penalty)", self.w3)
-        f.addRow("w4 (BW penalty)",  self.w4)
-        f.addRow("w5 (dose conserv.)", self.w5)
-
         root.addStretch()
 
     _PATTERN_FORMULAS = {
@@ -315,20 +277,11 @@ class ParamPanel(QScrollArea):
             "n_time_samples":     self.n_samples.value(),
             "grid_nx":            self.grid_nx.value(),
             "grid_ny":            self.grid_ny.value(),
-            "tau_recomb_ms":      self.tau_recomb.value(),
-            "D_interstitial_m2s": DEFAULTS["D_interstitial_m2s"],
-            "fdrt_threshold_hz":  self.fdrt_thresh.value(),
             "amplifier_bw_hz":           self.amp_bw.value(),
             "simulate_amplifier":        self.simulate_amp.isChecked(),
             "amplifier_slew_V_per_us":   self.amp_slew.value(),
             "kV_per_mm":                 self.amp_kvmm.value(),
             "flatness_target_pct": DEFAULTS["flatness_target_pct"],
-            "w1": self.w1.value(),
-            "w2": self.w2.value(),
-            "w3": self.w3.value(),
-            "w4": self.w4.value(),
-            "w5": self.w5.value(),
-            "w6": DEFAULTS.get("w6", 0.5),
         }
 
     def set_fx(self, value: float):
@@ -344,279 +297,6 @@ class ParamPanel(QScrollArea):
         p = FREQUENCY_PRESETS[name]
         self.fx.setValue(p["f1_hz"])
         self.fy.setValue(p["f2_hz"])
-
-
-# ─── Metrics tab ──────────────────────────────────────────────────────────────
-
-class MetricsTab(QWidget):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-
-        # Status badges
-        self.status_ss   = QLabel("–")
-        self.status_fwhm = QLabel("–")
-        for lbl in (self.status_ss, self.status_fwhm):
-            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            lbl.setStyleSheet("padding:4px; border:1px solid #333; font-weight:bold;")
-            lbl.setMinimumHeight(28)
-
-        status_row = QHBoxLayout()
-        status_row.addWidget(self.status_ss)
-        status_row.addWidget(self.status_fwhm)
-        layout.addLayout(status_row)
-
-        # Table
-        self.table = QTableWidget(0, 2)
-        self.table.setHorizontalHeaderLabels(["Metric", "Value"])
-        self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.verticalHeader().setVisible(False)
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.setAlternatingRowColors(True)
-        layout.addWidget(self.table)
-
-        # Help text
-        help_lbl = QLabel(
-            "Flatness ≤10% (ASTM E521) = good uniformity.\n"
-            "Pinch = edge hot-spot excess vs centre. "
-            "FDRT steady-state = beam revisit faster than recombination."
-        )
-        help_lbl.setWordWrap(True)
-        help_lbl.setStyleSheet("color: #505060; font-size: 10px; padding: 4px;")
-        layout.addWidget(help_lbl)
-
-    def update(self, metrics: dict):
-        rows = [
-            ("Flatness (%)",            f"{metrics['flatness_pct']:.3f}"),
-            ("RMS deviation (%)",       f"{metrics['rms_pct']:.3f}"),
-            ("Max/Min ratio",           f"{metrics['max_min_ratio']:.4f}"),
-            ("Pinch (%)",               f"{metrics['pinch_pct']:.3f}"),
-            ("Dwell mean (s/bin)",      f"{metrics['dwell_mean']:.4e}"),
-            ("Dwell std (s/bin)",       f"{metrics['dwell_std']:.4e}"),
-            ("Dwell peak/min ratio",    f"{metrics['dwell_peak_min_ratio']:.3f}"),
-            ("Characteristic τ (ms)",   f"{metrics['tau_ms']:.4f}"),
-            ("Diffusion length (μm)",   f"{metrics['diffusion_length_um']:.4f}"),
-            ("Steady state",            str(metrics['steady_state'])),
-            ("FWHM/spot rule pass",     str(metrics['fwhm_spot_pass'])),
-            ("Spot spacing (mm)",       f"{metrics['spot_spacing_mm']:.4f}"),
-            ("Triangularity (0..1)",    f"{metrics['triangularity']:.4f}"),
-            ("Slew margin (%)",         f"{metrics['slew_margin_pct']:+.2f}"),
-            ("Slew limited",            str(metrics['slew_limited'])),
-            ("Max pixel off-time (ms)", f"{metrics['max_pixel_off_time_ms']:.4f}"),
-        ]
-        self.table.setRowCount(len(rows))
-        for i, (k, v) in enumerate(rows):
-            self.table.setItem(i, 0, QTableWidgetItem(k))
-            self.table.setItem(i, 1, QTableWidgetItem(v))
-
-        if metrics["steady_state"]:
-            self.status_ss.setText("OK  STEADY STATE (FDRT regime)")
-            self.status_ss.setStyleSheet(
-                "padding:4px; font-weight:bold;"
-                "background:#004d00; color:#00FF00; border:1px solid #00FF00;"
-            )
-        else:
-            self.status_ss.setText("--  TRANSIENT — fast freq below FDRT threshold")
-            self.status_ss.setStyleSheet(
-                "padding:4px; font-weight:bold;"
-                "background:#4d0000; color:#FF0000; border:1px solid #FF0000;"
-            )
-
-        spacing = metrics["spot_spacing_mm"]
-        if metrics["fwhm_spot_pass"]:
-            self.status_fwhm.setText(f"OK  FWHM (spot spacing {spacing:.3f} mm)")
-            self.status_fwhm.setStyleSheet(
-                "padding:4px; font-weight:bold;"
-                "background:#004d00; color:#00FF00; border:1px solid #00FF00;"
-            )
-        else:
-            self.status_fwhm.setText(f"!!  FWHM < 3x spot spacing ({spacing:.3f} mm)")
-            self.status_fwhm.setStyleSheet(
-                "padding:4px; font-weight:bold;"
-                "background:#4d3000; color:#FF8800; border:1px solid #FF8800;"
-            )
-
-
-# ─── Optimizer tab ────────────────────────────────────────────────────────────
-
-class OptimizerTab(QWidget):
-    apply_requested = Signal(float, float)  # (fx_opt, fy_opt)
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(6)
-
-        # ── Controls row ──────────────────────────────────────────────────────
-        ctrl = QHBoxLayout()
-        ctrl.addWidget(QLabel("Grid N:"))
-        self.n_grid = QSpinBox()
-        self.n_grid.setRange(3, 25)
-        self.n_grid.setValue(10)
-        self.n_grid.setFixedWidth(60)
-        ctrl.addWidget(self.n_grid)
-
-        self.grid_btn = QPushButton("Run Grid Search")
-        self.grid_btn.setStyleSheet(
-            "QPushButton { background:#0078d4; color:white; border:1px solid #005fa3;"
-            " font-weight:bold; padding:3px 8px; }"
-            "QPushButton:hover { background:#106ebe; }"
-            "QPushButton:disabled { background:#b0b0b0; color:#707070; border:1px solid #999; }"
-        )
-        self.opt_btn = QPushButton("Run Optimizer (DE)  [slow]")
-        self.opt_btn.setStyleSheet(
-            "QPushButton { background:#6b2fa0; color:white; border:1px solid #5a2888;"
-            " font-weight:bold; padding:3px 8px; }"
-            "QPushButton:hover { background:#7c3ab5; }"
-            "QPushButton:disabled { background:#b0b0b0; color:#707070; border:1px solid #999; }"
-        )
-        ctrl.addWidget(self.grid_btn)
-        ctrl.addWidget(self.opt_btn)
-        ctrl.addStretch()
-        layout.addLayout(ctrl)
-
-        # ── Progress ──────────────────────────────────────────────────────────
-        self.progress = QProgressBar()
-        self.progress.setRange(0, 0)
-        self.progress.setFixedHeight(6)
-        self.progress.setVisible(False)
-        layout.addWidget(self.progress)
-
-        # ── Result label ──────────────────────────────────────────────────────
-        self.result_lbl = QLabel(
-            "Run Grid Search for a fast landscape view.\n"
-            "Run Optimizer (DE) for the best f₁/f₂ within the grid bounds (500–15000 Hz, 50–5000 Hz)."
-        )
-        self.result_lbl.setWordWrap(True)
-        self.result_lbl.setStyleSheet("color: #303050; padding: 4px;")
-        layout.addWidget(self.result_lbl)
-
-        # ── Apply button ──────────────────────────────────────────────────────
-        self.apply_btn = QPushButton("Apply Optimal f1 / f2 to Parameters")
-        self.apply_btn.setEnabled(False)
-        self.apply_btn.setStyleSheet(
-            "QPushButton { background:#107c10; color:white; border:1px solid #0a6b0a;"
-            " font-weight:bold; padding:3px 8px; }"
-            "QPushButton:hover { background:#1a8c1a; }"
-            "QPushButton:disabled { background:#b0b0b0; color:#707070; border:1px solid #999; }"
-        )
-        layout.addWidget(self.apply_btn)
-
-        # ── Waveform comparison area ───────────────────────────────────────────
-        self.wf_plot = PlotTab()
-        layout.addWidget(self.wf_plot)
-
-        # ── Plot area ─────────────────────────────────────────────────────────
-        self.plot_tab = PlotTab()
-        layout.addWidget(self.plot_tab, stretch=1)
-
-        self._optimal_fx = None
-        self._optimal_fy = None
-        self._worker     = None
-        self._get_params = lambda: {}
-
-        self.grid_btn.clicked.connect(self._run_grid)
-        self.opt_btn.clicked.connect(self._run_opt)
-        self.apply_btn.clicked.connect(self._apply)
-
-    def update_waveform_plot(self, params):
-        fig = plot_waveform_comparison(params, n_cycles=3)
-        self.wf_plot.set_figure(fig)
-
-    def set_params_getter(self, getter):
-        self._get_params = getter
-
-    def _run_grid(self):
-        if self._worker and self._worker.isRunning():
-            return
-        self._start_worker("grid", self.n_grid.value())
-
-    def _run_opt(self):
-        if self._worker and self._worker.isRunning():
-            return
-        reply = QMessageBox.question(
-            self, "Run Optimizer",
-            "Differential evolution can take 1–5 minutes.\nProceed?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
-        if reply != QMessageBox.StandardButton.Yes:
-            return
-        self._start_worker("optimize")
-
-    def _start_worker(self, mode, n_grid=10):
-        self.grid_btn.setEnabled(False)
-        self.opt_btn.setEnabled(False)
-        self.progress.setVisible(True)
-        self.result_lbl.setText(
-            "Running grid search…" if mode == "grid"
-            else "Running optimizer (differential evolution)… please wait."
-        )
-        self._worker = OptimizerWorker(mode, self._get_params(), n_grid)
-        self._worker.finished.connect(self._on_result)
-        self._worker.error.connect(self._on_error)
-        self._worker.start()
-
-    def _on_result(self, result):
-        self.grid_btn.setEnabled(True)
-        self.opt_btn.setEnabled(True)
-        self.progress.setVisible(False)
-
-        mode = result[0]
-        if mode == "grid":
-            _, fx_vals, fy_vals, J_grid = result
-            best_idx = np.unravel_index(np.argmin(J_grid), J_grid.shape)
-            self._optimal_fx = fx_vals[best_idx[0]]
-            self._optimal_fy = fy_vals[best_idx[1]]
-            best_J           = J_grid[best_idx]
-            self.apply_btn.setEnabled(True)
-            self.result_lbl.setText(
-                f"Grid best:  f₁ = {self._optimal_fx:.0f} Hz,  "
-                f"f₂ = {self._optimal_fy:.0f} Hz,  J = {best_J:.3f}\n"
-                "Press 'Apply' to copy these values to the parameter panel."
-            )
-            self._show_grid_plot(fx_vals, fy_vals, J_grid,
-                                 self._optimal_fx, self._optimal_fy)
-        else:
-            _, opt_result = result
-            fx_opt, fy_opt, ax_f, ay_f = opt_result.x
-            self._optimal_fx = fx_opt
-            self._optimal_fy = fy_opt
-            self.apply_btn.setEnabled(True)
-            self.result_lbl.setText(
-                f"Optimizer converged!  J = {opt_result.fun:.4f}\n"
-                f"f₁ = {fx_opt:.0f} Hz   f₂ = {fy_opt:.0f} Hz   "
-                f"X-overscan = {ax_f:.3f}×   Y-overscan = {ay_f:.3f}×\n"
-                "Press 'Apply' to copy f₁/f₂ to the parameter panel."
-            )
-
-    def _on_error(self, msg):
-        self.grid_btn.setEnabled(True)
-        self.opt_btn.setEnabled(True)
-        self.progress.setVisible(False)
-        self.result_lbl.setText(f"Error: {msg}")
-        QMessageBox.critical(self, "Optimizer Error", msg)
-
-    def _apply(self):
-        if self._optimal_fx is not None:
-            self.apply_requested.emit(self._optimal_fx, self._optimal_fy)
-
-    def _show_grid_plot(self, fx_vals, fy_vals, J_grid, best_fx, best_fy):
-        import matplotlib.pyplot as plt
-        fig, ax = plt.subplots(figsize=(7, 5))
-        pcm = ax.pcolormesh(fy_vals, fx_vals, J_grid, cmap="viridis_r", shading="auto")
-        fig.colorbar(pcm, ax=ax, label="Objective J  (lower = better)")
-        ax.scatter([best_fy], [best_fx], color="red", marker="*", s=250,
-                   zorder=5, label=f"Best  f₁={best_fx:.0f}, f₂={best_fy:.0f}")
-        ax.set_xlabel("f₂ (Hz)")
-        ax.set_ylabel("f₁ (Hz)")
-        ax.set_xscale("log")
-        ax.set_yscale("log")
-        ax.set_title("Objective Landscape (lower = better)")
-        ax.legend(fontsize=9)
-        fig.tight_layout()
-        self.plot_tab.set_figure(fig)
 
 
 # ─── Voltage Calculator tab ───────────────────────────────────────────────────
@@ -848,23 +528,17 @@ class MainWindow(QMainWindow):
         self.tab_velocity = PlotTab()
         self.tab_dwell    = PlotTab()
         self.tab_traj     = PlotTab()
-        self.tab_metrics  = MetricsTab()
-        self.tab_optimizer = OptimizerTab()
-        self.tab_voltage   = VoltageCalcTab()
+        self.tab_waveform = PlotTab()
+        self.tab_voltage  = VoltageCalcTab()
 
         self.tabs.addTab(self.tab_dose2d,    "Dose Map (2D)")
         self.tabs.addTab(self.tab_dose3d,    "Dose Surface (3D)")
         self.tabs.addTab(self.tab_velocity,  "Velocity Profile")
         self.tabs.addTab(self.tab_dwell,     "Dwell Distribution")
         self.tabs.addTab(self.tab_traj,      "Trajectory")
-        self.tabs.addTab(self.tab_metrics,   "Metrics")
-        self.tabs.addTab(self.tab_optimizer, "Optimizer")
+        self.tabs.addTab(self.tab_waveform,  "Waveform Comparison")
         self.tabs.addTab(self.tab_voltage,   "Voltage Calculator")
         self.tab_voltage.use_ax_btn.clicked.connect(self._copy_ax_to_voltage_calc)
-
-        # Wire optimizer ↔ params panel
-        self.tab_optimizer.set_params_getter(self.params_panel.get_params)
-        self.tab_optimizer.apply_requested.connect(self._apply_optimal)
 
         # Signals
         self.run_btn.clicked.connect(self.run)
@@ -966,15 +640,40 @@ class MainWindow(QMainWindow):
                     params["aperture_yB_mm"], params["aperture_yT_mm"])
 
         self.tab_dose2d.set_figure(plot_heatmap(dose, xe, ye, aperture, metrics))
+        self.tab_dose2d.set_metrics([
+            ("Flatness", f"{metrics['flatness_pct']:.2f}%"),
+            ("RMS dev", f"{metrics['rms_pct']:.2f}%"),
+            ("Max/Min", f"{metrics['max_min_ratio']:.3f}"),
+            ("Pinch", f"{metrics['pinch_pct']:.2f}%"),
+        ])
+
         self.tab_dose3d.set_figure(plot_dose_3d(dose, xe, ye, aperture, metrics))
+        self.tab_dose3d.set_metrics([
+            ("Flatness", f"{metrics['flatness_pct']:.2f}%"),
+            ("Pinch", f"{metrics['pinch_pct']:.2f}%"),
+            ("RMS dev", f"{metrics['rms_pct']:.2f}%"),
+        ])
+
         self.tab_velocity.set_figure(plot_velocity_profile(params, t_arr, x_arr, y_arr))
+        self.tab_velocity.set_metrics([
+            ("Slew margin", f"{metrics['slew_margin_pct']:+.1f}%"),
+            ("Slew limited", str(metrics['slew_limited'])),
+            ("FWHM/spot pass", str(metrics['fwhm_spot_pass'])),
+            ("Spot spacing", f"{metrics['spot_spacing_mm']:.3f} mm"),
+            ("Triangularity", f"{metrics['triangularity']:.3f}"),
+        ])
 
         mask = _aperture_mask_from_edges(xe, ye, *aperture)
         self.tab_dwell.set_figure(plot_dwell_hist(rho, mask))
+        self.tab_dwell.set_metrics([
+            ("Dwell mean", f"{metrics['dwell_mean']:.3e} s/bin"),
+            ("Dwell std", f"{metrics['dwell_std']:.3e} s/bin"),
+            ("Peak/min ratio", f"{metrics['dwell_peak_min_ratio']:.3f}"),
+            ("Max off-time", f"{metrics['max_pixel_off_time_ms']:.3f} ms"),
+        ])
 
         self.tab_traj.set_figure(self._make_trajectory_fig(x_arr, y_arr, t_arr, aperture, params))
-        self.tab_metrics.update(metrics)
-        self.tab_optimizer.update_waveform_plot(params)
+        self.tab_waveform.set_figure(plot_waveform_comparison(params, n_cycles=3))
 
         flat  = metrics["flatness_pct"]
         color = "#2ca02c" if flat <= 10 else ("#d62728" if flat > 30 else "#ff7f0e")
@@ -992,10 +691,6 @@ class MainWindow(QMainWindow):
         self.progress.setVisible(False)
         self.status_lbl.setText(f"Error: {msg}")
         QMessageBox.critical(self, "Compute Error", msg)
-
-    def _apply_optimal(self, fx: float, fy: float):
-        self.params_panel.set_fx(fx)
-        self.params_panel.set_fy(fy)
 
     def _copy_ax_to_voltage_calc(self):
         self.tab_voltage.deflection.setValue(self.params_panel.ax.value())
@@ -1034,7 +729,7 @@ def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
 
-    # Light grey palette matching TDS-T8's functional style
+    # Light gray palette matching TDS-T8's functional style
     pal = QPalette()
     pal.setColor(QPalette.ColorRole.Window,          QColor(220, 220, 220))
     pal.setColor(QPalette.ColorRole.WindowText,      QColor(20,  20,  20))

@@ -33,15 +33,12 @@ def plot_heatmap(dose, x_edges, y_edges, aperture_rect, metrics_dict=None):
         flat  = metrics_dict.get("flatness_pct", float("nan"))
         pinch = metrics_dict.get("pinch_pct",    float("nan"))
         rms   = metrics_dict.get("rms_pct",      float("nan"))
-        ss    = metrics_dict.get("steady_state",  None)
-
         title = f"Dose Map — Flatness: {flat:.1f}%"
         ok = flat <= 10
         annotation_lines = [
             f"Flatness: {flat:.1f}%  {'✓' if ok else '✗'}  (target ≤10%)",
             f"Pinch:    {pinch:.1f}%",
             f"RMS:      {rms:.1f}%",
-            "✓ STEADY STATE" if ss else "✗ TRANSIENT",
         ]
 
         # ── Deviation contours inside aperture ───────────────────────────────
@@ -214,7 +211,7 @@ def plot_velocity_profile(params, t_arr, x_arr, y_arr):
 
     ax1.set_xlabel("Time (ms)")
     ax1.set_ylabel("Speed (mm/s)")
-    ax1.set_title("Speed vs time  (low speed → high dose)")
+    ax1.set_title("Speed vs time")
     ax1.legend(fontsize=8)
     ax1.set_xlim(t_plot[0], min(t_plot[-1], t_plot[0] + 20))
 
@@ -235,7 +232,7 @@ def plot_velocity_profile(params, t_arr, x_arr, y_arr):
                 label=f"Mean = {speed.mean():.0f} mm/s")
     ax2.set_xlabel("Speed (mm/s)")
     ax2.set_ylabel("Probability density")
-    ax2.set_title("Speed distribution\nRed = slow = more dose  |  Green = fast = less dose")
+    ax2.set_title("Speed distribution")
     ax2.legend(fontsize=8)
 
     # Pattern-specific annotation
@@ -315,7 +312,7 @@ def plot_waveform_comparison(params, n_cycles=3):
     """Side-by-side: time-domain (ideal triangle vs filtered) and magnitude spectrum.
 
     Independent of the rest of the pipeline -- computes a short clean signal so
-    the FFT looks textbook. Useful for the Amplifier Optimizer tab.
+    the FFT looks textbook.
     """
     from scipy.signal import sawtooth as _sawtooth
     from rbl.physics.amplifier import apply_amplifier
@@ -405,7 +402,6 @@ def plot_dwell_hist(rho, aperture_mask):
 
     ax.set_xlabel("Dwell Time (s/bin)")
     ax.set_ylabel("Pixel Count")
-    ax.set_title("Dwell-Time Distribution (aperture pixels only)\n"
-                 "Narrow IQR = uniform dwell = good flatness")
+    ax.set_title("Dwell-Time Distribution (aperture pixels only)")
     fig.tight_layout()
     return fig

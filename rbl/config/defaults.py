@@ -14,8 +14,8 @@ DEFAULTS = {
     "ay_mm": 9.1,   # Y half-amplitude
 
     # Raster frequencies
-    "fx_hz": 2061.0,
-    "fy_hz": 255.0,
+    "fx_hz": 517.0,
+    "fy_hz": 64.0,
 
     # Scan pattern
     "pattern": "classic",  # classic | alt_axes | lissajous | spiral | sinusoidal | wobble
@@ -24,7 +24,7 @@ DEFAULTS = {
     "lissajous_phase_deg": 0.0,
 
     # Time
-    "T_total_ms": 100.0,
+    "T_total_ms": 1000.0,
     "n_time_samples": 50000,
 
     # Dose grid

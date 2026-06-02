@@ -256,19 +256,6 @@ def compute_all_metrics(dose, rho, x_traj, y_traj, dt, x_edges, y_edges, params)
     pinch = pinch_metric(dose, x_edges, y_edges, (xL, xR, yB, yT))
     dw    = dwell_stats(rho, mask)
 
-    tau = characteristic_tau(
-        params["fx_hz"],      params["fy_hz"],
-        params["ax_mm"],      params["ay_mm"],
-        params["fwhm_x_mm"], params["fwhm_y_mm"],
-    )
-    diff_len = diffusion_length(params["D_interstitial_m2s"], tau)
-
-    ss = steady_state_flag(
-        params["fx_hz"],
-        params["fy_hz"],
-        params["tau_recomb_ms"],
-        params["fdrt_threshold_hz"],
-    )
     fwhm_pass, spot_spacing = fwhm_spot_rule(
         params["fwhm_x_mm"], params["fwhm_y_mm"],
         params["ax_mm"],     params["ay_mm"],
@@ -286,9 +273,6 @@ def compute_all_metrics(dose, rho, x_traj, y_traj, dt, x_edges, y_edges, params)
         "dwell_mean":          dw["mean"],
         "dwell_std":           dw["std"],
         "dwell_peak_min_ratio": dw["peak_min_ratio"],
-        "tau_ms":              tau,
-        "diffusion_length_um": diff_len,
-        "steady_state":        ss,
         "fwhm_spot_pass":      fwhm_pass,
         "spot_spacing_mm":     spot_spacing,
         "triangularity":       triangularity_score(x_traj, t_arr, params["fx_hz"]),
