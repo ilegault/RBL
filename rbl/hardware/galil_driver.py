@@ -7,8 +7,7 @@ Galil ASCII protocol on port 23:
   - Receive: response terminated by ':' (success) or '?' (error)
   - On '?':  send 'TC1' to retrieve the human-readable error reason
 
-This wrapper is thread-safe via an internal lock — multiple poll threads can
-share one instance without colliding on the socket.
+Thread-safe via an internal lock.
 """
 import socket
 import threading
@@ -29,7 +28,7 @@ class GalilController:
     Lifecycle:
         g = GalilController()
         g.connect("192.168.1.10")
-        g.startup_sequence()          # CN 1, SH ABCD, safe SP/AC
+        g.startup_sequence()          # CN, MT, YA, SH ABCD, SP, AC
         g.get_position("A")           # -> int counts
         g.move_absolute("A", 5000)
         g.disconnect()
@@ -100,23 +99,35 @@ class GalilController:
     # ---- Startup ---------------------------------------------------------
 
     def startup_sequence(self, axes: str = "ABCD",
-                         speed: int = 5000, accel: int = 100000):
-        """Send the standard safety / default-motion-params block on connect.
+                         speed: int = 1800, accel: int = 25600):
+        """Full initialization sequence per the 2HA075520 spec email.
 
-        ALWAYS call once after connect(). CN 1 in particular is volatile — it
-        does not survive a power cycle, so it must be sent every time."""
-        self.cmd("CN 1")
+        Sends: CN, MT (step motor), YA (1/2 step), LC (low-current hold),
+        AC/DC, SP, ST, MO, AG, then SH to enable the specified axes.
+        Call once after connect().
+        """
+        from rbl.hardware import slit_config as SC
+        n = len(axes)
+
+        def rep(v):
+            return ",".join(str(v) for _ in range(n))
+
+        self.cmd(f"CN {SC.CN_CONFIG}")
+        self.cmd(f"MT {rep(SC.MOTOR_TYPE)}")
+        self.cmd(f"YA {rep(SC.STEP_RESOLUTION)}")
+        self.cmd(f"LC {rep(SC.LOW_CURRENT_ON)}")
+        self.cmd(f"AC {rep(accel)}")
+        self.cmd(f"DC {rep(accel)}")
+        self.cmd(f"SP {rep(speed)}")
+        self.cmd("ST")
+        self.cmd("MO")
+        self.cmd(f"AG {rep(SC.AMP_GAIN)}")
         self.cmd(f"SH {axes}")
-        sp_str = ",".join(str(speed) for _ in axes)
-        ac_str = ",".join(str(accel) for _ in axes)
-        self.cmd(f"SP {sp_str}")
-        self.cmd(f"AC {ac_str}")
-        self.cmd(f"DC {ac_str}")
 
     # ---- Reads -----------------------------------------------------------
 
     def get_position(self, axis: str) -> int:
-        """Current absolute position of axis, in counts."""
+        """Current reference position of axis, in counts (MG _RPx)."""
         return int(round(float(self.cmd(f"MG _RP{axis}"))))
 
     def is_moving(self, axis: str) -> bool:
@@ -167,14 +178,15 @@ class GalilController:
             pass
 
     def enable(self, axes: str = "ABCD"):
+        """SH — energise specified axes (e.g. 'A', 'AB', 'ABCD')."""
         self.cmd(f"SH {axes}")
 
     def disable(self, axes: str = "ABCD"):
+        """MO — de-energise specified axes."""
         self.cmd(f"MO {axes}")
 
     def define_zero(self, axis: str):
-        """DP axis=0 — define current position as zero (counts only; does NOT touch
-        slit_config zero offset)."""
+        """DP axis=0 — define current position as zero."""
         self.cmd(f"DP {axis}=0")
 
     def set_speed(self, axis: str, speed_counts_per_sec: int):
@@ -184,23 +196,30 @@ class GalilController:
         self.cmd(f"AC {axis}={accel_counts_per_sec2}")
         self.cmd(f"DC {axis}={accel_counts_per_sec2}")
 
+    def begin_home(self, axis: str, speed: int):
+        """Issue the Galil HM (home) command sequence at the given speed.
+
+        Returns immediately — motion runs asynchronously. Call is_moving() to
+        poll completion, then define_zero() once the home switch is confirmed.
+        """
+        self.cmd(f"SP {axis}={speed}")
+        self.cmd(f"HM {axis}")
+        self.cmd(f"BG {axis}")
+
 
 # --- Self-test (no hardware) -------------------------------------------------
 
 if __name__ == "__main__":
-    # GalilError code parsing
     e = GalilError("PA A=99999", "22 Soft limit hit", code=22)
     assert e.code == 22
     assert "Soft limit hit" in e.msg
     assert str(e).startswith("PA A=99999")
 
-    # Lifecycle without hardware
     g = GalilController()
     assert not g.connected
-    g.disconnect()  # safe when not connected
+    g.disconnect()
     assert not g.connected
 
-    # cmd() raises ConnectionError when not connected
     try:
         g.cmd("TH")
         raise AssertionError("Should have raised ConnectionError")
@@ -208,4 +227,3 @@ if __name__ == "__main__":
         pass
 
     print("[OK] galil_driver self-test passed")
-    print("    Live hardware test happens in Phase 5 via the GUI.")
