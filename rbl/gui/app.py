@@ -181,7 +181,7 @@ class ParamPanel(QScrollArea):
         # ── Frequencies ───────────────────────────────────────────────────────
         f = group("Frequencies (both axes free)")
         note = QLabel("No fast/slow restriction.\nEither axis can be higher.")
-        note.setStyleSheet("color: #aab; font-size: 10px;")
+        note.setStyleSheet("color: #555; font-size: 10px;")
         note.setWordWrap(True)
         f.addRow(note)
         self.fx = _dbl(0.5, 50000.0, DEFAULTS["fx_hz"], 10.0, decimals=1)
@@ -230,12 +230,12 @@ class ParamPanel(QScrollArea):
 
         self.pattern_desc = QLabel()
         self.pattern_desc.setWordWrap(True)
-        self.pattern_desc.setStyleSheet("color: #aab; font-size: 10px;")
+        self.pattern_desc.setStyleSheet("color: #555; font-size: 10px;")
         f.addRow(self.pattern_desc)
 
         self.spiral_warn = QLabel("⚠ f₁ is unused by spiral — only f₂ sets rotation rate.")
         self.spiral_warn.setWordWrap(True)
-        self.spiral_warn.setStyleSheet("color: #e8a020; font-size: 10px;")
+        self.spiral_warn.setStyleSheet("color: #a06000; font-size: 10px;")
         self.spiral_warn.setVisible(False)
         f.addRow(self.spiral_warn)
 
@@ -382,7 +382,7 @@ class MetricsTab(QWidget):
             "FDRT steady-state = beam revisit faster than recombination."
         )
         help_lbl.setWordWrap(True)
-        help_lbl.setStyleSheet("color: #aab; font-size: 10px; padding: 4px;")
+        help_lbl.setStyleSheet("color: #505060; font-size: 10px; padding: 4px;")
         layout.addWidget(help_lbl)
 
     def update(self, metrics: dict):
@@ -459,17 +459,17 @@ class OptimizerTab(QWidget):
 
         self.grid_btn = QPushButton("Run Grid Search")
         self.grid_btn.setStyleSheet(
-            "QPushButton { background:#0078d4; color:#e0e0e0; border:1px solid #005fa3;"
+            "QPushButton { background:#0078d4; color:white; border:1px solid #005fa3;"
             " font-weight:bold; padding:3px 8px; }"
             "QPushButton:hover { background:#106ebe; }"
-            "QPushButton:disabled { background:#1e1e1e; color:#555; border:1px solid #333; }"
+            "QPushButton:disabled { background:#b0b0b0; color:#707070; border:1px solid #999; }"
         )
         self.opt_btn = QPushButton("Run Optimizer (DE)  [slow]")
         self.opt_btn.setStyleSheet(
-            "QPushButton { background:#6b2fa0; color:#e0e0e0; border:1px solid #5a2888;"
+            "QPushButton { background:#6b2fa0; color:white; border:1px solid #5a2888;"
             " font-weight:bold; padding:3px 8px; }"
             "QPushButton:hover { background:#7c3ab5; }"
-            "QPushButton:disabled { background:#1e1e1e; color:#555; border:1px solid #333; }"
+            "QPushButton:disabled { background:#b0b0b0; color:#707070; border:1px solid #999; }"
         )
         ctrl.addWidget(self.grid_btn)
         ctrl.addWidget(self.opt_btn)
@@ -489,17 +489,17 @@ class OptimizerTab(QWidget):
             "Run Optimizer (DE) for the best f₁/f₂ within the grid bounds (500–15000 Hz, 50–5000 Hz)."
         )
         self.result_lbl.setWordWrap(True)
-        self.result_lbl.setStyleSheet("color: #ccd; padding: 4px;")
+        self.result_lbl.setStyleSheet("color: #303050; padding: 4px;")
         layout.addWidget(self.result_lbl)
 
         # ── Apply button ──────────────────────────────────────────────────────
         self.apply_btn = QPushButton("Apply Optimal f1 / f2 to Parameters")
         self.apply_btn.setEnabled(False)
         self.apply_btn.setStyleSheet(
-            "QPushButton { background:#107c10; color:#e0e0e0; border:1px solid #0a6b0a;"
+            "QPushButton { background:#107c10; color:white; border:1px solid #0a6b0a;"
             " font-weight:bold; padding:3px 8px; }"
             "QPushButton:hover { background:#1a8c1a; }"
-            "QPushButton:disabled { background:#1e1e1e; color:#555; border:1px solid #333; }"
+            "QPushButton:disabled { background:#b0b0b0; color:#707070; border:1px solid #999; }"
         )
         layout.addWidget(self.apply_btn)
 
@@ -639,7 +639,7 @@ class VoltageCalcTab(QWidget):
             "Plate geometry: l = 12.5 cm, d = 3.8 cm.  Amplifier gain = 1000 V/V."
         )
         sub.setWordWrap(True)
-        sub.setStyleSheet("color: #aab; font-size: 11px;")
+        sub.setStyleSheet("color: #505060; font-size: 11px;")
         layout.addWidget(sub)
 
         gb = QGroupBox("Inputs")
@@ -671,9 +671,9 @@ class VoltageCalcTab(QWidget):
 
         self.use_ax_btn = QPushButton("Use current ax_mm from parameter panel")
         self.use_ax_btn.setStyleSheet(
-            "QPushButton { background:#2a2a2a; color:#c0c0c0; border:1px solid #444;"
+            "QPushButton { background:#d0d0d0; color:#202020; border:1px solid #aaa;"
             " padding:3px 8px; }"
-            "QPushButton:hover { background:#383838; }"
+            "QPushButton:hover { background:#c0c0c0; }"
         )
         layout.addWidget(self.use_ax_btn)
 
@@ -765,19 +765,19 @@ class MainWindow(QMainWindow):
         self.run_btn.setFixedHeight(30)
         self.run_btn.setMinimumWidth(100)
         self.run_btn.setStyleSheet(
-            "QPushButton { background:#0078d4; color:#e0e0e0; border:1px solid #005fa3;"
+            "QPushButton { background:#0078d4; color:white; border:1px solid #005fa3;"
             " font-weight:bold; font-size:13px; }"
             "QPushButton:hover { background:#106ebe; }"
-            "QPushButton:disabled { background:#1e1e1e; color:#555; border:1px solid #333; }"
+            "QPushButton:disabled { background:#b0b0b0; color:#707070; border:1px solid #999; }"
         )
         self.split_btn = QPushButton("[ Split ]")
         self.split_btn.setFixedHeight(30)
         self.split_btn.setCheckable(True)
         self.split_btn.setStyleSheet(
-            "QPushButton { background:#1e1e1e; color:#c0c0c0; border:1px solid #444;"
+            "QPushButton { background:#d0d0d0; color:#202020; border:1px solid #aaa;"
             " padding:2px 8px; }"
-            "QPushButton:checked { background:#005fa3; color:#e0e0e0; border:1px solid #0078d4; }"
-            "QPushButton:hover { background:#2a2a2a; }"
+            "QPushButton:checked { background:#0078d4; color:white; border:1px solid #005fa3; }"
+            "QPushButton:hover { background:#c0c0c0; }"
         )
         self.split_btn.toggled.connect(self._toggle_split)
 
@@ -787,7 +787,7 @@ class MainWindow(QMainWindow):
         self.progress.setVisible(False)
 
         self.status_lbl = QLabel("Ready")
-        self.status_lbl.setStyleSheet("color: #aaa; font-size: 11px;")
+        self.status_lbl.setStyleSheet("color: #444; font-size: 11px;")
 
         top.addWidget(title)
         top.addStretch()
@@ -996,12 +996,8 @@ class MainWindow(QMainWindow):
         fx      = params.get("fx_hz", 0)
         fy      = params.get("fy_hz", 0)
         ax.set_title(f"{pattern}  f₁={fx:.0f} Hz  f₂={fy:.0f} Hz")
-        ax.set_facecolor("#111")
-        fig.patch.set_facecolor("#111")
-        ax.tick_params(colors="white")
-        ax.xaxis.label.set_color("white")
-        ax.yaxis.label.set_color("white")
-        ax.title.set_color("white")
+        ax.set_facecolor("#f0f0f0")
+        fig.patch.set_facecolor("#e0e0e0")
         fig.tight_layout()
         return fig
 
@@ -1012,19 +1008,19 @@ def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
 
-    # Flat near-black palette inspired by TDS-T8's no-frills functional style
+    # Light grey palette matching TDS-T8's functional style
     pal = QPalette()
-    pal.setColor(QPalette.ColorRole.Window,          QColor(12,  12,  12))
-    pal.setColor(QPalette.ColorRole.WindowText,      QColor(204, 204, 204))
-    pal.setColor(QPalette.ColorRole.Base,            QColor(6,   6,   6))
-    pal.setColor(QPalette.ColorRole.AlternateBase,   QColor(18,  18,  18))
-    pal.setColor(QPalette.ColorRole.ToolTipBase,     QColor(24,  24,  24))
-    pal.setColor(QPalette.ColorRole.ToolTipText,     QColor(204, 204, 204))
-    pal.setColor(QPalette.ColorRole.Text,            QColor(204, 204, 204))
-    pal.setColor(QPalette.ColorRole.Button,          QColor(28,  28,  28))
-    pal.setColor(QPalette.ColorRole.ButtonText,      QColor(204, 204, 204))
-    pal.setColor(QPalette.ColorRole.BrightText,      QColor(255, 80,  80))
-    pal.setColor(QPalette.ColorRole.Link,            QColor(80,  160, 255))
+    pal.setColor(QPalette.ColorRole.Window,          QColor(220, 220, 220))
+    pal.setColor(QPalette.ColorRole.WindowText,      QColor(20,  20,  20))
+    pal.setColor(QPalette.ColorRole.Base,            QColor(245, 245, 245))
+    pal.setColor(QPalette.ColorRole.AlternateBase,   QColor(210, 210, 210))
+    pal.setColor(QPalette.ColorRole.ToolTipBase,     QColor(255, 255, 220))
+    pal.setColor(QPalette.ColorRole.ToolTipText,     QColor(20,  20,  20))
+    pal.setColor(QPalette.ColorRole.Text,            QColor(20,  20,  20))
+    pal.setColor(QPalette.ColorRole.Button,          QColor(200, 200, 200))
+    pal.setColor(QPalette.ColorRole.ButtonText,      QColor(20,  20,  20))
+    pal.setColor(QPalette.ColorRole.BrightText,      QColor(180, 0,   0))
+    pal.setColor(QPalette.ColorRole.Link,            QColor(0,   80,  180))
     pal.setColor(QPalette.ColorRole.Highlight,       QColor(0,   120, 215))
     pal.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
     app.setPalette(pal)
