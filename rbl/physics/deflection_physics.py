@@ -19,7 +19,7 @@ PLATE_GAP_MM    = 38.0    # d = 3.8  cm
 
 # -- Amplifier chain limits ----------------------------------------------------
 AMPLIFIER_GAIN   = 1000.0  # V/V  (EEL5000)
-AMPLIFIER_MAX_KV = 10.0    # +/- kV  peak plate voltage before saturation
+AMPLIFIER_MAX_KV = 5.0     # +/- kV  peak plate voltage before saturation
 FG_MAX_VPP       = 20.0    # Vpp  DG1000Z max output (into 50 ohm)
 
 # -- Default travel (steerer midpoint -> sample, mm) ---------------------------

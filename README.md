@@ -1,6 +1,6 @@
 # RBL
 
-Desktop application for planning, simulating, and evaluating the right beam line in IBL at UW-Madison NEEP
+Desktop application for planning, simulating, controlling, and evaluating the right beam line in IBL at UW-Madison NEEP
 
 ---
 

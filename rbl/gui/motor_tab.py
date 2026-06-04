@@ -12,11 +12,11 @@ Features:
 import time
 
 from PySide6.QtCore import QThread, Signal, Qt
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QKeyEvent
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel,
     QPushButton, QDoubleSpinBox, QTextEdit, QFormLayout, QComboBox,
-    QMessageBox,
+    QMessageBox, QLineEdit,
 )
 
 from rbl.hardware.galil_driver import GalilController, GalilError
@@ -48,6 +48,7 @@ class GalilPollWorker(QThread):
                         "pos":      self.galil.get_position(axis),
                         "moving":   self.galil.is_moving(axis),
                         "switches": self.galil.get_switch_states(axis),
+                        "enabled":  not self.galil.is_motor_off(axis),
                     }
                 self.state.emit(snapshot)
             except Exception as e:
@@ -61,12 +62,17 @@ class GalilPollWorker(QThread):
 # ─── Auto-homing worker ───────────────────────────────────────────────────────
 
 class HomingWorker(QThread):
-    """Progressive-speed homing: 900 → 450 → 225 cps, backing up between tries."""
+    """Multi-pass homing for accuracy: coarse → medium → fine speed, always all passes.
+
+    Each pass backs off a small amount then re-homes at a slower speed.
+    define_zero is only called after the final (slowest) pass.
+    """
     progress = Signal(str)
     done     = Signal(bool, str)   # success, message
 
-    _SPEEDS  = [900, 450, 225]
-    _BACKUPS = [2000, 4000, 6000]  # counts to back up before each retry
+    # Speeds and matching back-off distances for each successive pass (coarse → fine)
+    _SPEEDS   = [225, 112, 58]
+    _BACKOFFS = [1000, 500, 250]   # counts to back off before each pass
 
     def __init__(self, galil: GalilController, axis: str, parent=None):
         super().__init__(parent)
@@ -80,61 +86,58 @@ class HomingWorker(QThread):
     def run(self):
         g    = self.galil
         axis = self.axis
+        n    = len(self._SPEEDS)
         try:
-            # If already on home switch, back off first
+            # If already on home switch, back off using the coarse distance first
             sw = g.get_switch_states(axis)
             if sw["home_switch"]:
-                self.progress.emit(f"{axis}: on home switch — backing off 2000 counts…")
-                g.move_relative(axis, 2000)
-                if not self._wait_idle(timeout=10.0):
+                self.progress.emit(f"{axis}: on home switch — backing off {self._BACKOFFS[0]} counts…")
+                g.move_relative(axis, self._BACKOFFS[0])
+                if not self._wait_idle(timeout=15.0):
                     self.done.emit(False, "Timeout while backing off home switch")
                     return
 
-            for attempt, speed in enumerate(self._SPEEDS):
+            for pass_num, (speed, backoff) in enumerate(zip(self._SPEEDS, self._BACKOFFS)):
                 if self._cancelled:
                     self.done.emit(False, "Homing cancelled by user")
                     return
 
-                if attempt > 0:
-                    backup = self._BACKUPS[attempt - 1]
-                    self.progress.emit(f"{axis}: backing up {backup} counts before retry…")
-                    g.move_relative(axis, backup)
+                # Back off before every pass using this pass's distance
+                if pass_num > 0:
+                    self.progress.emit(
+                        f"{axis}: pass {pass_num+1}/{n} — backing off {backoff} counts…"
+                    )
+                    g.move_relative(axis, backoff)
                     if not self._wait_idle(timeout=15.0):
-                        self.done.emit(False, f"Timeout on backup move (attempt {attempt+1})")
+                        self.done.emit(False, f"Timeout on back-off before pass {pass_num+1}")
                         return
 
                 self.progress.emit(
-                    f"{axis}: attempt {attempt+1}/{len(self._SPEEDS)} — "
+                    f"{axis}: pass {pass_num+1}/{n} — "
                     f"HM at {speed} cps "
                     f"({SC.cps_to_mm_per_sec(axis, speed):.2f} mm/s)…"
                 )
                 g.begin_home(axis, speed)
                 time.sleep(0.5)   # let motion start
 
-                if not self._wait_idle(timeout=30.0):
-                    self.progress.emit(f"{axis}: HM timeout on attempt {attempt+1}")
+                if not self._wait_idle(timeout=60.0):
+                    self.progress.emit(f"{axis}: HM timeout on pass {pass_num+1}")
                     g.stop(axis)
                     time.sleep(0.3)
-                    continue
-
-                sw = g.get_switch_states(axis)
-                if sw["home_switch"]:
-                    g.define_zero(axis)
-                    g.set_speed(axis, SC.DEFAULT_SPEED_COUNTS_PER_SEC)
-                    self.done.emit(True, f"{axis}: homed at {speed} cps, DP=0, SP restored")
+                    # Restore speed and report failure — don't continue further passes
+                    try:
+                        g.set_speed(axis, SC.DEFAULT_SPEED_COUNTS_PER_SEC)
+                    except Exception:
+                        pass
+                    self.done.emit(False, f"{axis}: homing timed out on pass {pass_num+1}/{n}")
                     return
-                else:
-                    self.progress.emit(f"{axis}: home switch not found on attempt {attempt+1}")
 
-            # Restore speed even on failure
-            try:
-                g.set_speed(axis, SC.DEFAULT_SPEED_COUNTS_PER_SEC)
-            except Exception:
-                pass
-            self.done.emit(
-                False,
-                f"{axis}: failed to home after {len(self._SPEEDS)} attempts"
-            )
+                self.progress.emit(f"{axis}: pass {pass_num+1}/{n} complete")
+
+            # All passes done — define zero on the final fine-speed position
+            g.define_zero(axis)
+            g.set_speed(axis, SC.DEFAULT_SPEED_COUNTS_PER_SEC)
+            self.done.emit(True, f"{axis}: homed ({n} passes), DP=0, SP restored")
 
         except Exception as e:
             self.done.emit(False, f"{axis}: homing error — {e}")
@@ -165,35 +168,41 @@ class AxisControls(QGroupBox):
         self.log       = log_fn
         self._homing_worker: HomingWorker | None = None
 
-        layout = QFormLayout(self)
-        layout.setSpacing(4)
+        main_layout = QVBoxLayout(self)
+        main_layout.setSpacing(2)
+        main_layout.setContentsMargins(4, 4, 4, 4)
 
-        # --- Live readouts -----------------------------------------------
-        self.lbl_counts  = QLabel("—")
-        self.lbl_mm      = QLabel("—")
-        self.lbl_status  = QLabel("Disconnected")
+        # --- Live readouts (always visible) ------------------------------
+        status_form = QFormLayout()
+        status_form.setSpacing(2)
+        self.lbl_pos    = QLabel("— cts  /  — mm")
+        self.lbl_status = QLabel("Disconnected")
         self.lbl_status.setStyleSheet("color: #888;")
-        self.lbl_switches = QLabel("F:— R:— H:—")
-        self.lbl_softlim  = QLabel("BL:— FL:—")
-        layout.addRow("Position (counts):", self.lbl_counts)
-        layout.addRow("Position (mm):",     self.lbl_mm)
-        layout.addRow("Status:",            self.lbl_status)
-        layout.addRow("Switches:",          self.lbl_switches)
-        layout.addRow("Soft limits:",       self.lbl_softlim)
+        self.lbl_info   = QLabel("F:— R:— H:—  |  BL:— FL:—")
+        status_form.addRow("Position:", self.lbl_pos)
+        status_form.addRow("Status:",   self.lbl_status)
+        status_form.addRow("Sw/Lim:",   self.lbl_info)
+        main_layout.addLayout(status_form)
 
-        # --- Jog row -----------------------------------------------------
+        # --- Full-mode-only controls (hidden in simple mode) -------------
+        self._full_widget = QWidget()
+        full_form = QFormLayout(self._full_widget)
+        full_form.setSpacing(2)
+        full_form.setContentsMargins(0, 0, 0, 0)
+
+        # Jog row
         jog_row = QHBoxLayout()
-        self.btn_jog_neg = QPushButton("◀ Jog −")
-        self.btn_jog_pos = QPushButton("Jog + ▶")
+        self.btn_jog_neg = QPushButton("Jog −")
+        self.btn_jog_pos = QPushButton("Jog +")
         self.btn_jog_neg.pressed.connect(lambda: self._jog(-1))
         self.btn_jog_neg.released.connect(self._stop)
         self.btn_jog_pos.pressed.connect(lambda: self._jog(+1))
         self.btn_jog_pos.released.connect(self._stop)
         jog_row.addWidget(self.btn_jog_neg)
         jog_row.addWidget(self.btn_jog_pos)
-        layout.addRow("Jog:", jog_row)
+        full_form.addRow("Jog:", jog_row)
 
-        # --- Jog speed with unit toggle ----------------------------------
+        # Jog speed with unit toggle
         speed_row = QHBoxLayout()
         self.spn_speed = QDoubleSpinBox()
         self.spn_speed.setDecimals(2)
@@ -202,11 +211,45 @@ class AxisControls(QGroupBox):
         self.cbo_speed_unit.currentIndexChanged.connect(self._on_speed_unit_changed)
         speed_row.addWidget(self.spn_speed, stretch=1)
         speed_row.addWidget(self.cbo_speed_unit)
-        layout.addRow("Jog speed:", speed_row)
+        full_form.addRow("Speed:", speed_row)
         self._set_speed_unit_range("cps")
         self.spn_speed.setValue(SC.DEFAULT_JOG_SPEED)
 
-        # --- Target move with unit toggle --------------------------------
+        # Stop / Zero row
+        ctrl_row1 = QHBoxLayout()
+        self.btn_stop = QPushButton("Stop")
+        self.btn_stop.clicked.connect(self._stop)
+        self.btn_zero = QPushButton("Zero here")
+        self.btn_zero.clicked.connect(self._define_zero)
+        ctrl_row1.addWidget(self.btn_stop)
+        ctrl_row1.addWidget(self.btn_zero)
+        full_form.addRow(ctrl_row1)
+
+        # Enable / Disable per-axis row
+        ctrl_row2 = QHBoxLayout()
+        self.btn_enable_axis  = QPushButton(f"Enable {axis_letter}")
+        self.btn_disable_axis = QPushButton(f"Disable {axis_letter}")
+        self.btn_enable_axis.setStyleSheet(
+            "QPushButton { background:#1a7000; color:white; font-weight:bold; }"
+            "QPushButton:hover { background:#228a00; }"
+            "QPushButton:disabled { background:#c0c0c0; color:#888; }"
+        )
+        self.btn_disable_axis.setStyleSheet(
+            "QPushButton { background:#8c5800; color:white; }"
+            "QPushButton:hover { background:#a06600; }"
+            "QPushButton:disabled { background:#c0c0c0; color:#888; }"
+        )
+        self.btn_enable_axis.clicked.connect(self._enable_axis)
+        self.btn_disable_axis.clicked.connect(self._disable_axis)
+        ctrl_row2.addWidget(self.btn_enable_axis)
+        ctrl_row2.addWidget(self.btn_disable_axis)
+        full_form.addRow(ctrl_row2)
+
+        main_layout.addWidget(self._full_widget)
+
+        # --- Target move (always visible) --------------------------------
+        target_form = QFormLayout()
+        target_form.setSpacing(2)
         move_row = QHBoxLayout()
         self.spn_target = QDoubleSpinBox()
         self.spn_target.setDecimals(3)
@@ -218,47 +261,22 @@ class AxisControls(QGroupBox):
         move_row.addWidget(self.spn_target, stretch=1)
         move_row.addWidget(self.cbo_target_unit)
         move_row.addWidget(self.btn_move)
-        layout.addRow("Target:", move_row)
+        target_form.addRow("Target:", move_row)
+        main_layout.addLayout(target_form)
         self._set_target_unit_range("counts")
 
-        # --- Stop / Zero / Enable / Disable / Home -----------------------
-        ctrl_row1 = QHBoxLayout()
-        self.btn_stop = QPushButton("Stop")
-        self.btn_stop.clicked.connect(self._stop)
-        self.btn_zero = QPushButton("Define here as 0")
-        self.btn_zero.clicked.connect(self._define_zero)
-        ctrl_row1.addWidget(self.btn_stop)
-        ctrl_row1.addWidget(self.btn_zero)
-        layout.addRow(ctrl_row1)
-
-        ctrl_row2 = QHBoxLayout()
-        self.btn_enable_axis  = QPushButton(f"Enable {axis_letter}")
-        self.btn_disable_axis = QPushButton(f"Disable {axis_letter}")
-        self.btn_home         = QPushButton(f"Home {axis_letter}")
-        self.btn_enable_axis.setStyleSheet(
-            "QPushButton { background:#1a7000; color:white; font-weight:bold; }"
-            "QPushButton:hover { background:#228a00; }"
-            "QPushButton:disabled { background:#c0c0c0; color:#888; }"
-        )
-        self.btn_disable_axis.setStyleSheet(
-            "QPushButton { background:#8c5800; color:white; }"
-            "QPushButton:hover { background:#a06600; }"
-            "QPushButton:disabled { background:#c0c0c0; color:#888; }"
-        )
+        # --- Home button (always visible) --------------------------------
+        self.btn_home = QPushButton(f"Home {axis_letter}")
         self.btn_home.setStyleSheet(
             "QPushButton { background:#004e8c; color:white; font-weight:bold; }"
             "QPushButton:hover { background:#0063b1; }"
             "QPushButton:disabled { background:#c0c0c0; color:#888; }"
         )
-        self.btn_enable_axis.clicked.connect(self._enable_axis)
-        self.btn_disable_axis.clicked.connect(self._disable_axis)
         self.btn_home.clicked.connect(self._start_homing)
-        ctrl_row2.addWidget(self.btn_enable_axis)
-        ctrl_row2.addWidget(self.btn_disable_axis)
-        ctrl_row2.addWidget(self.btn_home)
-        layout.addRow(ctrl_row2)
+        main_layout.addWidget(self.btn_home)
 
         self.set_enabled(False)
+        self.setMaximumHeight(220)
 
     # ---- Unit helpers -------------------------------------------------------
 
@@ -331,13 +349,51 @@ class AxisControls(QGroupBox):
 
     # ---- GUI -> Galil action handlers ----------------------------------------
 
+    def set_simple_mode(self, simple: bool):
+        """Toggle between full and simple (compact) mode."""
+        self._full_widget.setVisible(not simple)
+
+        if simple:
+            label_font  = QFont(); label_font.setPointSize(13)
+            status_font = QFont(); status_font.setPointSize(13); status_font.setBold(True)
+            btn_font    = QFont(); btn_font.setPointSize(13);    btn_font.setBold(True)
+            spn_font    = QFont(); spn_font.setPointSize(13)
+            btn_h       = 52
+            spn_h       = 44
+        else:
+            label_font  = QFont()
+            status_font = QFont()
+            btn_font    = QFont()
+            spn_font    = QFont()
+            btn_h       = 0
+            spn_h       = 0
+
+        for lbl in (self.lbl_pos, self.lbl_info):
+            lbl.setFont(label_font)
+        self.lbl_status.setFont(status_font)
+
+        for btn in (self.btn_move, self.btn_home):
+            btn.setFont(btn_font)
+            btn.setMinimumHeight(btn_h)
+
+        self.spn_target.setFont(spn_font)
+        self.cbo_target_unit.setFont(spn_font)
+        self.spn_target.setMinimumHeight(spn_h)
+        self.cbo_target_unit.setMinimumHeight(spn_h)
+
+        if simple:
+            self.setMaximumHeight(16777215)
+        else:
+            self.setMaximumHeight(220)
+
     def _jog(self, direction: int):
         g = self.get_galil()
         if g is None or not g.connected:
             return
         try:
             speed = self._speed_in_cps() * (1 if direction > 0 else -1)
-            self.log(f"> JG {self.axis}={speed} ; BG {self.axis}")
+            prefix = "," * "ABCD".index(self.axis)
+            self.log(f"> JG {prefix}{speed} ; BG {self.axis}")
             g.jog_start(self.axis, speed)
         except (GalilError, ConnectionError) as e:
             self.log(f"! {e}")
@@ -429,28 +485,86 @@ class AxisControls(QGroupBox):
 
     def update_state(self, axis_state: dict):
         pos = axis_state["pos"]
-        self.lbl_counts.setText(f"{pos:,}")
-        self.lbl_mm.setText(f"{SC.counts_to_mm(self.axis, pos):+.4f} mm")
+        self.lbl_pos.setText(f"{pos:,} cts  /  {SC.counts_to_mm(self.axis, pos):+.4f} mm")
 
         # Don't overwrite "Homing…" while worker is running
         if self._homing_worker is None or not self._homing_worker.isRunning():
+            enabled = axis_state.get("enabled", True)
+            sw      = axis_state["switches"]
             if axis_state["moving"]:
-                self.lbl_status.setText("Moving")
+                self.lbl_status.setText("Moving  [enabled]")
                 self.lbl_status.setStyleSheet("color: #c05000; font-weight: bold;")
+            elif not enabled:
+                self.lbl_status.setText("Disabled")
+                self.lbl_status.setStyleSheet("color: #888888; font-weight: bold;")
+            elif sw["forward_switch"]:
+                self.lbl_status.setText("FWD LIMIT active")
+                self.lbl_status.setStyleSheet("color: #cc0000; font-weight: bold;")
+            elif sw["reverse_switch"] or sw["home_switch"]:
+                self.lbl_status.setText("REV/HOME LIMIT active")
+                self.lbl_status.setStyleSheet("color: #cc6600; font-weight: bold;")
             else:
-                self.lbl_status.setText("Idle")
+                self.lbl_status.setText("Idle  [enabled]")
                 self.lbl_status.setStyleSheet("color: #1a7a1a; font-weight: bold;")
 
         sw = axis_state["switches"]
         def fmt(b): return "●" if b else "○"
-        self.lbl_switches.setText(
-            f"F:{fmt(sw['forward_switch'])} "
-            f"R:{fmt(sw['reverse_switch'])} "
-            f"H:{fmt(sw['home_switch'])}"
-        )
+        sw_text = (f"F:{fmt(sw['forward_switch'])} "
+                   f"R:{fmt(sw['reverse_switch'])} "
+                   f"H:{fmt(sw['home_switch'])}")
+        current = self.lbl_info.text()
+        lim_part = current.split("|", 1)[1].strip() if "|" in current else "BL:— FL:—"
+        self.lbl_info.setText(f"{sw_text}  |  {lim_part}")
 
     def update_soft_limits(self, fl_counts: int, bl_counts: int):
-        self.lbl_softlim.setText(f"BL:{bl_counts:,}   FL:{fl_counts:,}")
+        current = self.lbl_info.text()
+        sw_part = current.split("|", 1)[0].strip() if "|" in current else "F:— R:— H:—"
+        self.lbl_info.setText(f"{sw_part}  |  BL:{bl_counts:,}   FL:{fl_counts:,}")
+
+
+# ─── History-aware command line edit ─────────────────────────────────────────
+
+class HistoryLineEdit(QLineEdit):
+    """QLineEdit with Up/Down arrow key command history."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._history: list[str] = []
+        self._history_idx: int = -1   # -1 = not browsing history
+        self._current_draft: str = ""
+
+    def add_to_history(self, cmd: str):
+        if cmd and (not self._history or self._history[-1] != cmd):
+            self._history.append(cmd)
+        self._history_idx = -1
+        self._current_draft = ""
+
+    def keyPressEvent(self, event: QKeyEvent):
+        if event.key() == Qt.Key.Key_Up:
+            if not self._history:
+                return
+            if self._history_idx == -1:
+                self._current_draft = self.text()
+                self._history_idx = len(self._history) - 1
+            elif self._history_idx > 0:
+                self._history_idx -= 1
+            self.setText(self._history[self._history_idx])
+            self.end(False)
+        elif event.key() == Qt.Key.Key_Down:
+            if self._history_idx == -1:
+                return
+            if self._history_idx < len(self._history) - 1:
+                self._history_idx += 1
+                self.setText(self._history[self._history_idx])
+            else:
+                self._history_idx = -1
+                self.setText(self._current_draft)
+            self.end(False)
+        else:
+            if self._history_idx != -1:
+                # any other key resets browsing
+                self._history_idx = -1
+            super().keyPressEvent(event)
 
 
 # ─── Top-level tab widget ─────────────────────────────────────────────────────
@@ -471,8 +585,7 @@ class MotorTab(QWidget):
         conn_box = QGroupBox("Galil DMC-4103 Connection")
         conn = QHBoxLayout(conn_box)
         conn.addWidget(QLabel("IP:"))
-        from PySide6.QtWidgets import QLineEdit
-        self.ip_edit = QLineEdit("192.168.1.10")
+        self.ip_edit = QLineEdit("192.168.42.1")
         self.ip_edit.setMaximumWidth(140)
         conn.addWidget(self.ip_edit)
         self.btn_connect = QPushButton("Connect")
@@ -514,25 +627,18 @@ class MotorTab(QWidget):
         self.btn_disable_all.clicked.connect(lambda: self._do(lambda g: g.disable("ABCD")))
         estop_row.addWidget(self.btn_enable_all,  stretch=1)
         estop_row.addWidget(self.btn_disable_all, stretch=1)
-        layout.addLayout(estop_row)
 
-        # ── Single-axis enable row ───────────────────────────────────────────
-        single_box = QGroupBox("Enable single axis (SH)")
-        single_row = QHBoxLayout(single_box)
-        single_row.addWidget(QLabel("Enable:"))
-        self._btn_enable_single: dict[str, QPushButton] = {}
-        for axis in SC.AXIS_LETTERS:
-            btn = QPushButton(f"SH {axis}  ({SC.AXIS_NAMES[axis]})")
-            btn.setEnabled(False)
-            btn.setStyleSheet(
-                "QPushButton { background:#004e8c; color:white; font-weight:bold; }"
-                "QPushButton:hover { background:#0063b1; }"
-                "QPushButton:disabled { background:#c0c0c0; color:#888; }"
-            )
-            btn.clicked.connect(lambda checked=False, a=axis: self._do(lambda g, _a=a: g.enable(_a)))
-            single_row.addWidget(btn)
-            self._btn_enable_single[axis] = btn
-        layout.addWidget(single_box)
+        self.btn_simple_mode = QPushButton("Simple Mode")
+        self.btn_simple_mode.setCheckable(True)
+        self.btn_simple_mode.setMinimumHeight(44)
+        self.btn_simple_mode.setStyleSheet(
+            "QPushButton { background:#2b2b6e; color:white; font-weight:bold; }"
+            "QPushButton:hover { background:#38388a; }"
+            "QPushButton:checked { background:#5a5aaa; color:white; font-weight:bold; }"
+        )
+        self.btn_simple_mode.toggled.connect(self._toggle_simple_mode)
+        estop_row.addWidget(self.btn_simple_mode, stretch=1)
+        layout.addLayout(estop_row)
 
         # ── 4 axis panels in 2×2 grid ────────────────────────────────────────
         grid = QGridLayout()
@@ -550,11 +656,10 @@ class MotorTab(QWidget):
         self.console = QTextEdit()
         self.console.setReadOnly(True)
         self.console.setFont(QFont("Menlo", 9))
-        self.console.setMaximumHeight(140)
+        self.console.setMaximumHeight(300)
         cons.addWidget(self.console)
         manual_row = QHBoxLayout()
-        from PySide6.QtWidgets import QLineEdit
-        self.manual_cmd = QLineEdit()
+        self.manual_cmd = HistoryLineEdit()
         self.manual_cmd.setPlaceholderText("Manual DMC command (e.g. MG _RPA, TH, LS)")
         self.manual_cmd.returnPressed.connect(self._send_manual)
         self.btn_send = QPushButton("Send")
@@ -582,7 +687,11 @@ class MotorTab(QWidget):
             self._log_line("# Connected.")
             try:
                 model = self.galil.model_info()
-                self.lbl_model.setText(model)
+                # TH returns multi-line; collapse to one horizontal line for the label
+                model_oneline = "  ·  ".join(
+                    l.strip() for l in model.splitlines() if l.strip()
+                )
+                self.lbl_model.setText(model_oneline)
                 self._log_line(f"> TH\n< {model}")
             except Exception as e:
                 self._log_line(f"! TH failed: {e}")
@@ -629,8 +738,6 @@ class MotorTab(QWidget):
         self.btn_disable_all.setEnabled(on)
         self.btn_send.setEnabled(on)
         self.manual_cmd.setEnabled(on)
-        for btn in self._btn_enable_single.values():
-            btn.setEnabled(on)
         for panel in self.axes.values():
             panel.set_enabled(on)
 
@@ -644,6 +751,11 @@ class MotorTab(QWidget):
         except Exception as e:
             self._log_line(f"! {e}")
 
+    def _toggle_simple_mode(self, simple: bool):
+        for panel in self.axes.values():
+            panel.set_simple_mode(simple)
+        self.btn_simple_mode.setText("Full Mode" if simple else "Simple Mode")
+
     def _emergency_stop(self):
         if not self.galil.connected:
             return
@@ -651,9 +763,10 @@ class MotorTab(QWidget):
         self.galil.abort()
 
     def _send_manual(self):
-        cmd = self.manual_cmd.text().strip()
+        cmd = self.manual_cmd.text().strip().upper()
         if not cmd or not self.galil.connected:
             return
+        self.manual_cmd.add_to_history(cmd)
         try:
             resp = self.galil.cmd(cmd)
             self._log_line(f"> {cmd}\n< {resp if resp else ':'}")

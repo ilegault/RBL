@@ -27,7 +27,7 @@ class GalilController:
 
     Lifecycle:
         g = GalilController()
-        g.connect("192.168.1.10")
+        g.connect("192.168.42.1")
         g.startup_sequence()          # CN, MT, YA, SH ABCD, SP, AC
         g.get_position("A")           # -> int counts
         g.move_absolute("A", 5000)
@@ -141,12 +141,20 @@ class GalilController:
         }
 
     def get_switch_states(self, axis: str) -> dict:
-        """Hardware limit + home switch states (True = active)."""
+        """Hardware limit + home switch states (True = active/tripped).
+
+        All three inputs are active-low: the Galil reports 0 when a switch
+        is triggered and 1 when it is open, so active = value < 0.5.
+        """
         return {
-            "forward_switch": float(self.cmd(f"MG _LF{axis}")) > 0.5,
-            "reverse_switch": float(self.cmd(f"MG _LR{axis}")) > 0.5,
-            "home_switch":    float(self.cmd(f"MG _HM{axis}")) > 0.5,
+            "forward_switch": float(self.cmd(f"MG _LF{axis}")) < 0.5,
+            "reverse_switch": float(self.cmd(f"MG _LR{axis}")) < 0.5,
+            "home_switch":    float(self.cmd(f"MG _HM{axis}")) < 0.5,
         }
+
+    def is_motor_off(self, axis: str) -> bool:
+        """Returns True if the axis is de-energised (MO state, _MO=1)."""
+        return float(self.cmd(f"MG _MO{axis}")) > 0.5
 
     def model_info(self) -> str:
         return self.cmd("TH")
@@ -154,16 +162,20 @@ class GalilController:
     # ---- Motion ----------------------------------------------------------
 
     def move_absolute(self, axis: str, position_counts: int):
-        self.cmd(f"PA {axis}={position_counts}")
+        prefix = "," * "ABCD".index(axis)
+        self.cmd(f"PA {prefix}{position_counts}")
         self.cmd(f"BG {axis}")
 
     def move_relative(self, axis: str, delta_counts: int):
-        self.cmd(f"PR {axis}={delta_counts}")
+        prefix = "," * "ABCD".index(axis)
+        self.cmd(f"PR {prefix}{delta_counts}")
         self.cmd(f"BG {axis}")
 
     def jog_start(self, axis: str, signed_speed: int):
         """Begin continuous jog at signed counts/sec. Stop with .stop(axis)."""
-        self.cmd(f"JG {axis}={signed_speed}")
+        # Galil positional syntax: A→"JG 500", B→"JG ,500", C→"JG ,,500", D→"JG ,,,500"
+        prefix = "," * "ABCD".index(axis)
+        self.cmd(f"JG {prefix}{signed_speed}")
         self.cmd(f"BG {axis}")
 
     def stop(self, axis: str):
@@ -186,23 +198,30 @@ class GalilController:
         self.cmd(f"MO {axes}")
 
     def define_zero(self, axis: str):
-        """DP axis=0 — define current position as zero."""
-        self.cmd(f"DP {axis}=0")
+        """DP — define current position as zero."""
+        prefix = "," * "ABCD".index(axis)
+        self.cmd(f"DP {prefix}0")
 
     def set_speed(self, axis: str, speed_counts_per_sec: int):
-        self.cmd(f"SP {axis}={speed_counts_per_sec}")
+        prefix = "," * "ABCD".index(axis)
+        self.cmd(f"SP {prefix}{speed_counts_per_sec}")
 
     def set_accel(self, axis: str, accel_counts_per_sec2: int):
-        self.cmd(f"AC {axis}={accel_counts_per_sec2}")
-        self.cmd(f"DC {axis}={accel_counts_per_sec2}")
+        prefix = "," * "ABCD".index(axis)
+        self.cmd(f"AC {prefix}{accel_counts_per_sec2}")
+        self.cmd(f"DC {prefix}{accel_counts_per_sec2}")
 
     def begin_home(self, axis: str, speed: int):
         """Issue the Galil HM (home) command sequence at the given speed.
 
         Returns immediately — motion runs asynchronously. Call is_moving() to
         poll completion, then define_zero() once the home switch is confirmed.
+
+        Direction is negative (toward 0) — set via JG before HM.
         """
-        self.cmd(f"SP {axis}={speed}")
+        prefix = "," * "ABCD".index(axis)
+        self.cmd(f"SP {prefix}{speed}")
+        self.cmd(f"JG {prefix}{-speed}")   # set homing direction: negative
         self.cmd(f"HM {axis}")
         self.cmd(f"BG {axis}")
 

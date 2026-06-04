@@ -42,10 +42,9 @@ ZERO_OFFSET_COUNTS: dict[str, int] = {
 }
 
 # --- Motion parameters (per spec email) --------------------------------------
-DEFAULT_SPEED_COUNTS_PER_SEC   = 1800
+DEFAULT_SPEED_COUNTS_PER_SEC   = 1000
 DEFAULT_ACCEL_COUNTS_PER_SEC2  = 25600
-DEFAULT_JOG_SPEED              = 1800    # cps
-HOMING_SPEED                   = 900     # cps (half normal)
+DEFAULT_JOG_SPEED              = 500   # cps
 
 # --- Amplifier / motor configuration (2HA075520 amplifier) -------------------
 MOTOR_TYPE      = -2.5  # MT: step motor, active-high step pulse
