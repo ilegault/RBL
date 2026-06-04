@@ -127,11 +127,16 @@ class TestSlitConfig:
         assert len(LABJACK_CHANNEL_MAP) > 0
 
     def test_counts_to_mm_round_trip(self):
+        # mm_to_counts rounds to whole motor steps, so the round-trip can only be
+        # exact to within one step (~1/630 mm). Assert that physical precision,
+        # not an impossible 1e-9.
+        from rbl.hardware.slit_config import STEPS_PER_MM
         for axis in AXIS_LETTERS:
             mm = 5.0
             counts = mm_to_counts(axis, mm)
             mm_back = counts_to_mm(axis, counts)
-            assert abs(mm_back - mm) < 1e-9, f"Round-trip failed for axis {axis}"
+            one_step_mm = 1.0 / STEPS_PER_MM[axis]
+            assert abs(mm_back - mm) < one_step_mm, f"Round-trip failed for axis {axis}"
 
     def test_zero_counts_is_zero_mm(self):
         for axis in AXIS_LETTERS:

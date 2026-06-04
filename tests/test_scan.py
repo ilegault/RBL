@@ -332,10 +332,13 @@ class TestComputeAllMetrics:
         dt = t[1] - t[0]
         m = compute_all_metrics(dose, rho, x, y, dt, xe, ye, params)
 
+        # tau_ms / diffusion_length_um / steady_state were intentionally removed
+        # from compute_all_metrics (commit ae4f1b8). They remain available as
+        # standalone helpers (characteristic_tau / diffusion_length /
+        # steady_state_flag) and are tested directly elsewhere.
         expected_keys = [
             "flatness_pct", "rms_pct", "max_min_ratio", "pinch_pct",
-            "dwell_mean", "dwell_std", "dwell_peak_min_ratio",
-            "tau_ms", "diffusion_length_um", "steady_state", "fwhm_spot_pass",
+            "dwell_mean", "dwell_std", "dwell_peak_min_ratio", "fwhm_spot_pass",
             "spot_spacing_mm", "triangularity", "slew_margin_pct", "slew_limited",
             "max_pixel_off_time_ms",
         ]
@@ -351,13 +354,15 @@ class TestComputeAllMetrics:
         assert m["flatness_pct"] >= 0.0
 
     def test_steady_state_false_at_low_freq(self, params):
-        params["fx_hz"] = 50.0
-        params["fy_hz"] = 5.0
-        t, x, y = get_realistic_trajectory(params)
-        dose, rho, xe, ye = compute_dose(params, t, x, y)
-        dt = t[1] - t[0]
-        m = compute_all_metrics(dose, rho, x, y, dt, xe, ye, params)
-        assert not m["steady_state"]
+        # steady_state is no longer part of compute_all_metrics; verify the
+        # underlying physics helper instead. Both axes well below the FDRT floor
+        # must report a transient (non steady-state) regime.
+        ss = steady_state_flag(
+            fx_hz=50.0, fy_hz=5.0,
+            tau_recomb_ms=params["tau_recomb_ms"],
+            fdrt_threshold_hz=params["fdrt_threshold_hz"],
+        )
+        assert ss is False
 
     @pytest.mark.parametrize("pattern", ["classic", "lissajous", "sinusoidal", "wobble"])
     def test_all_patterns_produce_finite_flatness(self, params, pattern):

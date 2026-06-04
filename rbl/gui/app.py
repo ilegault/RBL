@@ -415,32 +415,74 @@ class VoltageCalcTab(QWidget):
 
 class HardwareView(QWidget):
     """Holds MotorTab and CurrentTab in a splitter.
-    Call show_motors_only / show_current_only / show_both to configure layout."""
+    Call show_motors_only / show_current_only / show_both to configure layout.
+
+    Each panel is wrapped in a QScrollArea so that, in split view, it can shrink
+    below its natural width and grow an internal scrollbar instead of forcing the
+    splitter wider than the window (which previously pushed the handle off-centre
+    and shoved content off-screen). With the panels free to shrink, the splitter
+    can always honour an exact 50/50 division that stays inside the viewport.
+    """
 
     def __init__(self, motor_tab, current_tab, parent=None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+
         self._splitter = QSplitter(Qt.Orientation.Horizontal)
-        self._splitter.addWidget(motor_tab)
-        self._splitter.addWidget(current_tab)
+        self._splitter.setChildrenCollapsible(False)
+
+        self._motor_scroll   = self._wrap(motor_tab)
+        self._current_scroll = self._wrap(current_tab)
+        self._splitter.addWidget(self._motor_scroll)
+        self._splitter.addWidget(self._current_scroll)
+        # Equal stretch so any leftover space is shared evenly between panels.
+        self._splitter.setStretchFactor(0, 1)
+        self._splitter.setStretchFactor(1, 1)
         layout.addWidget(self._splitter)
+
+        self._split_mode = False
         self.show_motors_only()
 
+    @staticmethod
+    def _wrap(widget):
+        sa = QScrollArea()
+        sa.setWidgetResizable(True)
+        sa.setFrameShape(QScrollArea.Shape.NoFrame)
+        sa.setWidget(widget)
+        return sa
+
     def show_motors_only(self):
+        self._split_mode = False
         self._splitter.widget(0).setVisible(True)
         self._splitter.widget(1).setVisible(False)
 
     def show_current_only(self):
+        self._split_mode = False
         self._splitter.widget(0).setVisible(False)
         self._splitter.widget(1).setVisible(True)
 
     def show_both(self):
+        self._split_mode = True
         self._splitter.widget(0).setVisible(True)
         self._splitter.widget(1).setVisible(True)
+        self._apply_even_split()
+        # Re-apply once the event loop has finalised the splitter geometry, in
+        # case width() was not yet up to date at click time.
+        QTimer.singleShot(0, self._apply_even_split)
+
+    def _apply_even_split(self):
+        """Divide the splitter exactly 50/50 within the current width."""
+        if not self._split_mode:
+            return
         w = self._splitter.width()
         if w > 0:
             self._splitter.setSizes([w // 2, w // 2])
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # Keep the divider centred as the window is resized while split.
+        self._apply_even_split()
 
 
 # ─── Main Window ──────────────────────────────────────────────────────────────
