@@ -1,10 +1,10 @@
 import numpy as np
 from scipy.optimize import differential_evolution
 
-from defaults import DEFAULTS
-from patterns import get_realistic_trajectory
-from dose import compute_dose
-from metrics import compute_all_metrics
+from rbl.config.defaults import DEFAULTS
+from rbl.scan.patterns import get_realistic_trajectory
+from rbl.scan.dose import compute_dose
+from rbl.scan.metrics import compute_all_metrics
 
 
 def objective(params_vec, fixed_params):
