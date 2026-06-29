@@ -33,14 +33,14 @@ def discover() -> list:
     if not PYVISA_AVAILABLE:
         return []
     try:
-        rm = pyvisa.ResourceManager()
+        rm = pyvisa.ResourceManager('@py')
         resources = rm.list_resources()
     except Exception:
         return []
 
     found = []
     for res in resources:
-        if _RIGOL_VENDOR_ID.lower() not in res.lower():
+        if not res.upper().startswith("USB"):
             continue
         try:
             inst = rm.open_resource(res)
@@ -49,7 +49,9 @@ def discover() -> list:
             inst.write_termination = "\n"
             idn = inst.query("*IDN?").strip()
             inst.close()
-            # Serial is the 4th field in USB0::0x1AB1::0x0642::<SERIAL>::INSTR
+            if "DG1022Z" not in idn:
+                continue
+            # Serial is the 4th field in USB0::6833::1602::<SERIAL>::INSTR
             m = re.search(r"USB\d+::[^:]+::[^:]+::([^:]+)::INSTR", res, re.IGNORECASE)
             serial = m.group(1) if m else res
             found.append({"resource": res, "idn": idn, "serial": serial})
@@ -77,7 +79,7 @@ class DG1022Z:
     def __init__(self, resource: str):
         if not PYVISA_AVAILABLE:
             raise ImportError("pyvisa is not installed; install it with: pip install pyvisa")
-        rm = pyvisa.ResourceManager()
+        rm = pyvisa.ResourceManager('@py')
         self._inst = rm.open_resource(resource)
         self._inst.timeout = 5000
         self._inst.read_termination = "\n"

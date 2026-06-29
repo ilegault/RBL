@@ -94,7 +94,8 @@ class ChannelPanel(QGroupBox):
         self.spn_freq.setDecimals(4)
         self.spn_freq.setSuffix(" Hz")
         self.spn_freq.setMinimumWidth(120)
-        form.addRow("Frequency:", self.spn_freq)
+        self.lbl_freq = QLabel("Frequency:")
+        form.addRow(self.lbl_freq, self.spn_freq)
 
         # Amplitude
         self.spn_amp = QDoubleSpinBox()
@@ -127,7 +128,8 @@ class ChannelPanel(QGroupBox):
         self.spn_phase.setValue(0.0)
         self.spn_phase.setDecimals(2)
         self.spn_phase.setSuffix(" °")
-        form.addRow("Phase:", self.spn_phase)
+        self.lbl_phase = QLabel("Phase:")
+        form.addRow(self.lbl_phase, self.spn_phase)
 
         # Load
         self.le_load = QLineEdit("INFinity")
@@ -185,10 +187,11 @@ class ChannelPanel(QGroupBox):
 
     def _on_shape_changed(self, shape: str):
         dc = (shape == "DC")
-        # In DC mode: freq and amp don't apply; offset becomes the hold voltage
-        self.spn_freq.setEnabled(not dc)
-        self.spn_amp.setEnabled(not dc)
-        self.lbl_amp.setText("Amplitude:" if not dc else "Amplitude: (N/A)")
+        # In DC mode: freq, amp, and phase don't apply; offset becomes the hold voltage
+        for w in (self.lbl_freq, self.spn_freq,
+                  self.lbl_amp, self.spn_amp,
+                  self.lbl_phase, self.spn_phase):
+            w.setVisible(not dc)
         self.lbl_offset.setText("Hold voltage (V):" if dc else "Offset:")
         self._update_hv_label()
 
