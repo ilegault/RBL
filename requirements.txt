@@ -6,4 +6,5 @@ streamlit
 pyyaml
 pillow
 labjack-ljm
+pyvisa
 pytest
