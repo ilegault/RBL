@@ -510,6 +510,7 @@ class MainWindow(QMainWindow):
         self._outer_tabbar.addTab("Analysis")
         self._outer_tabbar.addTab("Stepper Motors")
         self._outer_tabbar.addTab("Beam Current")
+        self._outer_tabbar.addTab("Function Generators")
         self._outer_tabbar.setExpanding(False)
         self._outer_tabbar.setDocumentMode(True)
         outer_layout.addWidget(self._outer_tabbar)
@@ -588,10 +589,15 @@ class MainWindow(QMainWindow):
         # ── Hardware page (stack index 1) ─────────────────────────────────────
         from motor_tab import MotorTab
         from current_tab import CurrentTab
+        from funcgen_tab import FuncGenTab
         self.motor_tab   = MotorTab(self)
         self.current_tab = CurrentTab(self)
         self._hw_view = HardwareView(self.motor_tab, self.current_tab)
         self._outer_stack.addWidget(self._hw_view)
+
+        # ── Function Generators page (stack index 2) ──────────────────────────
+        self.funcgen_tab = FuncGenTab(self)
+        self._outer_stack.addWidget(self.funcgen_tab)
 
         # Outer tab switching + click-to-split logic
         self._prev_outer_tab  = 0
@@ -610,6 +616,10 @@ class MainWindow(QMainWindow):
             pass
         try:
             self.current_tab.shutdown()
+        except Exception:
+            pass
+        try:
+            self.funcgen_tab.close_session()
         except Exception:
             pass
         super().closeEvent(event)
@@ -659,6 +669,11 @@ class MainWindow(QMainWindow):
                 self._hw_split_active = True
             else:
                 self._hw_view.show_current_only()
+
+        elif index == 3:                            # ── Function Generators
+            self._outer_stack.setCurrentIndex(2)
+            self._hw_view.show_motors_only()        # reset hw view for next visit
+            self._hw_split_active = False
 
     # ── Compute ───────────────────────────────────────────────────────────────
 
