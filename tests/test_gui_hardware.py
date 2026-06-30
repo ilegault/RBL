@@ -337,7 +337,7 @@ class TestVoltageCalcTab:
         return VoltageCalcTab()
 
     def test_initial_result_populated(self, volt):
-        assert "kV" in volt.out_plate.text()
+        assert volt.plate_kv_x.value() > 0 and volt.plate_kv_y.value() > 0
 
     def test_small_deflection_within_limits(self, volt):
         volt.energy.setValue(1.0)
@@ -357,10 +357,18 @@ class TestVoltageCalcTab:
         assert abs(volt.mass.value() - 196.967) < 0.01
 
     def test_vpp_is_twice_peak(self, volt):
+        # plate_kv_x/y track the physics-computed plate voltages independently.
+        from rbl.physics.deflection_physics import calculate_drive_for_deflection
         volt.deflection.setValue(20.0)
-        peak = float(volt.out_fg_peak.text().split()[1])
-        vpp = float(volt.out_fg_vpp.text().split()[0])
-        assert abs(vpp - 2.0 * peak) < 1e-2
+        volt.deflection_y.setValue(10.0)
+        rx = calculate_drive_for_deflection(
+            20.0, volt.energy.value(), volt.charge.value(), volt.travel.value()
+        )
+        ry = calculate_drive_for_deflection(
+            10.0, volt.energy.value(), volt.charge.value(), volt.travel.value()
+        )
+        assert abs(volt.plate_kv_x.value() - rx["plate_kV"]) < 1e-3
+        assert abs(volt.plate_kv_y.value() - ry["plate_kV"]) < 1e-3
 
 
 # ── Both poll workers running concurrently (two-tab scenario) ────────────────

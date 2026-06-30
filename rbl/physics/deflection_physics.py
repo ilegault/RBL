@@ -41,6 +41,24 @@ SPECIES_TABLE = {
     "Custom":         {"mass":   1.000},
 }
 
+# -- Beamline points of interest (starter list; editable in the GUI) -----------
+# distance_mm = distance from steerer plate midpoint to that point on the beamline.
+# These are PLACEHOLDERS — replace with surveyed values. The sample anchor
+# (2476 mm) is included so the new tab reproduces the old single-point result.
+BEAMLINE_POIS = [
+    # All coordinates are absolute image pixels (origin = top-left of image).
+    # tip_x/tip_y : where the arrowhead lands on the photo.
+    # label_x/label_y : where the text box sits (negative y = above image top edge).
+    {"name": "Slit aperture",        "distance_mm": 1450.85,
+     "tip_x": 757,  "tip_y": 45,  "label_x": 755,  "label_y": 0},
+    {"name": "Beam Profile Monitor", "distance_mm": 1634.24,
+     "tip_x": 819,  "tip_y": 80,  "label_x": 818,  "label_y": 35},
+    {"name": "Faraday cup",          "distance_mm": 1818.39,
+     "tip_x": 888,  "tip_y": 10,  "label_x": 888,  "label_y": -30},
+    {"name": "Sample",               "distance_mm": 2475.99,
+     "tip_x": 1127, "tip_y": 40,  "label_x": 1127, "label_y": -5},
+]
+
 
 def calculate_drive_for_deflection(
     deflection_mm: float,
@@ -96,6 +114,26 @@ def calculate_drive_for_deflection(
     }
 
 
+def calculate_deflection_for_voltage(
+    plate_kV:     float,
+    energy_MeV:   float,
+    charge_state: int,
+    travel_mm:    float,
+) -> float:
+    """
+    Forward direction: given a per-plate peak voltage, return the resulting
+    one-sided deflection (mm) at distance *travel_mm* from the plate midpoint.
+
+    Inverse of calculate_drive_for_deflection's plate_kV solve:
+        x = q * V_plate * l * travel_mm / (E_eV * d)
+    """
+    E_eV      = energy_MeV * 1e6
+    V_plate_V = plate_kV * 1000.0
+    return (charge_state * V_plate_V * PLATE_LENGTH_MM * travel_mm) / (
+        E_eV * PLATE_GAP_MM
+    )
+
+
 # -- Self-test -----------------------------------------------------------------
 
 def _check(label, got, expected, tol=0.02):
@@ -137,7 +175,22 @@ if __name__ == "__main__":
           f"{list(SPECIES_TABLE)}")
     ok8 = len(SPECIES_TABLE) >= 4
 
-    n_fail = sum(not x for x in [ok1, ok2, ok3, ok4, ok5, ok6, ok7, ok8])
+    # Forward/inverse round-trip: voltage -> deflection -> voltage
+    _v_in = 3.0  # kV
+    _x = calculate_deflection_for_voltage(_v_in, 3.0, 1, 2476.0)
+    _r = calculate_drive_for_deflection(_x, 3.0, 1, 2476.0)
+    ok9 = _check("round-trip plate_kV", _r["plate_kV"], _v_in)
+
+    # Linearity in distance: 2x distance -> 2x deflection
+    _x1 = calculate_deflection_for_voltage(3.0, 3.0, 1, 1000.0)
+    _x2 = calculate_deflection_for_voltage(3.0, 3.0, 1, 2000.0)
+    ok10 = _check("deflection linear in distance", _x2 / _x1, 2.0)
+
+    ok11 = len(BEAMLINE_POIS) >= 2
+    print(f"[OK ]  BEAMLINE_POIS has {len(BEAMLINE_POIS)} entries")
+
+    n_fail = sum(not x for x in [ok1, ok2, ok3, ok4, ok5, ok6, ok7, ok8,
+                                 ok9, ok10, ok11])
     if n_fail:
         print(f"\n{n_fail} check(s) FAILED")
         sys.exit(1)

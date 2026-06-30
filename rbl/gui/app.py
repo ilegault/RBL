@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QComboBox, QTabWidget, QScrollArea,
     QGroupBox, QProgressBar, QSizePolicy, QMessageBox,
     QTabBar, QStackedWidget,
+    QTableWidget, QTableWidgetItem, QHeaderView,
 )
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
 from PySide6.QtGui import QFont, QColor, QPalette
@@ -31,7 +32,11 @@ from rbl.scan.patterns import get_realistic_trajectory
 from rbl.scan.dose import compute_dose
 from rbl.scan.metrics import compute_all_metrics, _aperture_mask_from_edges
 from viz import plot_heatmap, plot_dose_3d, plot_velocity_profile, plot_dwell_hist, plot_waveform_comparison
-from rbl.physics.deflection_physics import SPECIES_TABLE, DEFAULT_TRAVEL_MM, AMPLIFIER_MAX_KV, FG_MAX_VPP, calculate_drive_for_deflection
+from rbl.physics.deflection_physics import (
+    SPECIES_TABLE, DEFAULT_TRAVEL_MM, AMPLIFIER_MAX_KV, FG_MAX_VPP,
+    BEAMLINE_POIS, calculate_drive_for_deflection,
+    calculate_deflection_for_voltage,
+)
 from rbl.config.lab_presets import FREQUENCY_PRESETS
 
 
@@ -308,78 +313,119 @@ class VoltageCalcTab(QWidget):
         super().__init__(parent)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(10)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
 
-        title = QLabel("Required Voltage Amplitude for a Given Deflection")
-        title.setStyleSheet("font-size: 14px; font-weight: bold;")
+        title = QLabel("Voltage / Deflection Calculator")
+        title.setStyleSheet("font-size: 13px; font-weight: bold;")
         layout.addWidget(title)
 
-        sub = QLabel(
-            "Uses the deflection formula from the XY Steerer manual + Hirst spreadsheet.\n"
-            "Plate geometry: l = 12.5 cm, d = 3.8 cm.  Amplifier gain = 1000 V/V."
-        )
-        sub.setWordWrap(True)
-        sub.setStyleSheet("color: #505060; font-size: 11px;")
-        layout.addWidget(sub)
+        # ── Compact 2-column inputs ───────────────────────────────────────────
+        inp_box = QGroupBox("Beam parameters")
+        inp_h = QHBoxLayout(inp_box)
+        inp_h.setSpacing(16)
+        inp_h.setContentsMargins(8, 4, 8, 4)
 
-        gb = QGroupBox("Inputs")
-        form = QFormLayout(gb)
-        form.setSpacing(6)
-
+        left_form = QFormLayout()
+        left_form.setSpacing(4)
         self.species = QComboBox()
         for _n in SPECIES_TABLE:
             self.species.addItem(_n)
-        form.addRow("Species", self.species)
-
+        left_form.addRow("Species", self.species)
         self.mass = _dbl(0.1, 300.0, 1.0, 1.0, decimals=2)
         self.mass.setEnabled(False)
-        form.addRow("Mass (amu, display only)", self.mass)
-
+        left_form.addRow("Mass (amu)", self.mass)
         self.energy = _dbl(0.01, 50.0, 3.0, 0.1, decimals=3)
-        form.addRow("Energy (MeV)", self.energy)
-
+        left_form.addRow("Energy (MeV)", self.energy)
         self.charge = _int(1, 10, 1)
-        form.addRow("Charge state (q)", self.charge)
+        left_form.addRow("Charge state (q)", self.charge)
 
-        self.deflection = _dbl(0.1, 100.0, 25.79, 0.1, decimals=3)
-        form.addRow("Desired deflection at sample (mm)", self.deflection)
-
+        right_form = QFormLayout()
+        right_form.setSpacing(4)
+        self.deflection = _dbl(0.1, 100.0, 10, 0.1, decimals=3)
+        right_form.addRow("X deflection at sample (mm)", self.deflection)
+        self.deflection_y = _dbl(0.1, 100.0, 10, 0.1, decimals=3)
+        right_form.addRow("Y deflection at sample (mm)", self.deflection_y)
         self.travel = _dbl(100.0, 10000.0, DEFAULT_TRAVEL_MM, 10.0, decimals=2)
-        form.addRow("Travel length (mm)", self.travel)
+        right_form.addRow("Travel length (mm)", self.travel)
 
-        layout.addWidget(gb)
+        inp_h.addLayout(left_form)
+        inp_h.addLayout(right_form)
+        layout.addWidget(inp_box)
 
-        self.use_ax_btn = QPushButton("Use current ax_mm from parameter panel")
-        self.use_ax_btn.setStyleSheet(
-            "QPushButton { background:#d0d0d0; color:#202020; border:1px solid #aaa;"
-            " padding:3px 8px; }"
-            "QPushButton:hover { background:#c0c0c0; }"
-        )
-        layout.addWidget(self.use_ax_btn)
+        # ── Drive & Results (merged) ──────────────────────────────────────────
+        self._updating = False  # re-entrancy guard
 
-        out = QGroupBox("Results")
-        outl = QFormLayout(out)
-        outl.setSpacing(6)
-        self.out_plate   = QLabel("—")
-        self.out_fg_peak = QLabel("—")
-        self.out_fg_vpp  = QLabel("—")
-        self.out_warn    = QLabel("")
+        dr_box = QGroupBox("Drive & Results")
+        dr_form = QFormLayout(dr_box)
+        dr_form.setSpacing(4)
+        dr_form.setContentsMargins(8, 4, 8, 4)
+        self.plate_kv_x = _dbl(0.0, 10.0, 0.0, 0.001, decimals=4)
+        self.plate_kv_x.setSuffix(" kV")
+        dr_form.addRow("X plate voltage (peak):", self.plate_kv_x)
+        self.plate_kv_y = _dbl(0.0, 10.0, 0.0, 0.001, decimals=4)
+        self.plate_kv_y.setSuffix(" kV")
+        dr_form.addRow("Y plate voltage (peak):", self.plate_kv_y)
+        self.out_warn = QLabel("")
         self.out_warn.setStyleSheet("color: #ffa500; font-weight: bold;")
-        for _lbl in (self.out_plate, self.out_fg_peak, self.out_fg_vpp):
-            _lbl.setStyleSheet("font-family: monospace; font-size: 13px;")
-        outl.addRow("Plate voltage (per plate, peak):", self.out_plate)
-        outl.addRow("Function-gen amplitude (peak):",   self.out_fg_peak)
-        outl.addRow("Function-gen amplitude (Vpp):",    self.out_fg_vpp)
-        outl.addRow("Status:", self.out_warn)
-        layout.addWidget(out)
+        self.out_warn.setWordWrap(True)
+        dr_form.addRow("Status:", self.out_warn)
+        layout.addWidget(dr_box)
 
-        layout.addStretch()
+        # ── Points-of-interest table ──────────────────────────────────────────
+        poi_box = QGroupBox("Beamline points of interest")
+        poi_layout = QVBoxLayout(poi_box)
+        poi_layout.setContentsMargins(4, 4, 4, 4)
+        self.poi_table = QTableWidget(0, 4)
+        self.poi_table.setHorizontalHeaderLabels(
+            ["Point", "Distance (mm)", "X defl (mm)", "Y defl (mm)"]
+        )
+        self.poi_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+        self.poi_table.verticalHeader().setVisible(False)
+        self.poi_table.setMaximumHeight(140)
+        for _poi in BEAMLINE_POIS:
+            self._append_poi_row(_poi["name"], _poi["distance_mm"],
+                                 _poi.get("tip_x"), _poi.get("tip_y"),
+                                 _poi.get("label_x"), _poi.get("label_y"))
+        poi_layout.addWidget(self.poi_table)
+        layout.addWidget(poi_box)
 
+        # ── Beamline image with live overlay ──────────────────────────────────
+        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+        from matplotlib.figure import Figure
+        self._beam_fig = Figure(figsize=(7, 3))
+        self._beam_ax = self._beam_fig.add_subplot(111)
+        self._beam_canvas = FigureCanvasQTAgg(self._beam_fig)
+        self._beam_canvas.setMinimumHeight(200)
+        self._beam_canvas.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
+        self._beam_bg_loaded = self._load_beamline_image()
+        layout.addWidget(self._beam_canvas, stretch=1)
+
+        # ── Signals ───────────────────────────────────────────────────────────
         self.species.currentTextChanged.connect(self._on_species_changed)
-        for _w in (self.energy, self.charge, self.deflection, self.travel, self.mass):
+        for _w in (self.energy, self.charge, self.deflection, self.deflection_y,
+                   self.travel, self.mass):
             _w.valueChanged.connect(self._recompute)
         self._on_species_changed(self.species.currentText())
+
+        self.plate_kv_x.valueChanged.connect(lambda *_: self._sync_from_voltage())
+        self.plate_kv_y.valueChanged.connect(lambda *_: self._sync_from_voltage())
+        self.poi_table.cellChanged.connect(self._on_poi_cell_changed)
+        _sx = calculate_drive_for_deflection(
+            self.deflection.value(), self.energy.value(),
+            self.charge.value(), self.travel.value(),
+        )
+        _sy = calculate_drive_for_deflection(
+            self.deflection_y.value(), self.energy.value(),
+            self.charge.value(), self.travel.value(),
+        )
+        self.plate_kv_x.setValue(_sx["plate_kV"])
+        self.plate_kv_y.setValue(_sy["plate_kV"])
+        self._sync_from_voltage()
 
     def _on_species_changed(self, name):
         if name in SPECIES_TABLE:
@@ -389,26 +435,156 @@ class VoltageCalcTab(QWidget):
         self._recompute()
 
     def _recompute(self, *_):
-        r = calculate_drive_for_deflection(
-            deflection_mm=self.deflection.value(),
-            energy_MeV=self.energy.value(),
-            charge_state=self.charge.value(),
-            travel_mm=self.travel.value(),
+        rx = calculate_drive_for_deflection(
+            self.deflection.value(), self.energy.value(),
+            self.charge.value(), self.travel.value(),
         )
-        self.out_plate.setText(f"+/- {r['plate_kV']:.3f}  kV")
-        self.out_fg_peak.setText(f"+/- {r['fg_peak_V']:.3f}  V")
-        self.out_fg_vpp.setText(f"{r['fg_vpp_V']:.3f}  V")
-        warns = []
-        if r["exceeds_amplifier"]:
-            warns.append(f"⚠ Plate voltage exceeds EEL5000 +/-{AMPLIFIER_MAX_KV} kV limit")
-        if r["exceeds_fg"]:
-            warns.append(f"⚠ Function-gen Vpp exceeds DG1000Z ~{FG_MAX_VPP} V limit")
-        self.out_warn.setText("   ".join(warns) if warns
-                               else "✓ within EEL5000 and DG1000Z limits")
-        self.out_warn.setStyleSheet(
-            "color: #ff6b6b; font-weight: bold;" if warns
-            else "color: #4caf50; font-weight: bold;"
+        ry = calculate_drive_for_deflection(
+            self.deflection_y.value(), self.energy.value(),
+            self.charge.value(), self.travel.value(),
         )
+        if not self._updating:
+            self._updating = True
+            self.plate_kv_x.setValue(rx["plate_kV"])
+            self.plate_kv_y.setValue(ry["plate_kV"])
+            self._updating = False
+        self._sync_from_voltage()
+
+    # ── Multi-point overlay machinery ─────────────────────────────────────────
+
+    def _append_poi_row(self, name: str, distance_mm: float,
+                        tip_x=None, tip_y=None,
+                        label_x=None, label_y=None):
+        """Add one POI row. Overlay geometry is stored as item user data."""
+        r = self.poi_table.rowCount()
+        self.poi_table.insertRow(r)
+        name_item = QTableWidgetItem(name)
+        name_item.setData(256, {"tip_x": tip_x, "tip_y": tip_y,
+                                "label_x": label_x, "label_y": label_y})
+        self.poi_table.setItem(r, 0, name_item)
+        self.poi_table.setItem(r, 1, QTableWidgetItem(f"{distance_mm:.1f}"))
+        self.poi_table.setItem(r, 2, QTableWidgetItem("—"))
+        self.poi_table.setItem(r, 3, QTableWidgetItem("—"))
+
+    def _load_beamline_image(self) -> bool:
+        """Load the PNG once as a static background. Returns True on success."""
+        import os
+        path = os.path.join(os.path.dirname(__file__), "..", "assets", "beamline.png")
+        path = os.path.normpath(path)
+        try:
+            import matplotlib.image as mpimg
+            self._beam_img = mpimg.imread(path)
+            return True
+        except Exception:
+            self._beam_img = None
+            return False
+
+    def _sync_from_voltage(self):
+        """MASTER recompute. Reads both plate kV spinboxes → updates POI table + image.
+        X and Y axes are independent; editing one never touches the other."""
+        if self._updating:
+            return
+        self._updating = True
+        try:
+            kv_x   = self.plate_kv_x.value()
+            kv_y   = self.plate_kv_y.value()
+            energy = self.energy.value()
+            charge = self.charge.value()
+
+            warns = []
+            for axis, kv in (("X", kv_x), ("Y", kv_y)):
+                if kv > AMPLIFIER_MAX_KV:
+                    warns.append(f"⚠ {axis} plate exceeds EEL5000 +/-{AMPLIFIER_MAX_KV} kV")
+                if kv * 2.0 > FG_MAX_VPP:
+                    warns.append(f"⚠ {axis} FG Vpp exceeds DG1000Z ~{FG_MAX_VPP} V")
+            self.out_warn.setText("   ".join(warns) if warns
+                                   else "✓ within EEL5000 and DG1000Z limits")
+            self.out_warn.setStyleSheet(
+                "color: #ff6b6b; font-weight: bold;" if warns
+                else "color: #4caf50; font-weight: bold;"
+            )
+
+            labels = []
+            for r in range(self.poi_table.rowCount()):
+                try:
+                    dist = float(self.poi_table.item(r, 1).text())
+                except (ValueError, AttributeError):
+                    continue
+                x_defl = calculate_deflection_for_voltage(kv_x, energy, charge, dist)
+                y_defl = calculate_deflection_for_voltage(kv_y, energy, charge, dist)
+                self.poi_table.item(r, 2).setText(f"{x_defl:.3f}")
+                self.poi_table.item(r, 3).setText(f"{y_defl:.3f}")
+                name = self.poi_table.item(r, 0).text()
+                geo  = (self.poi_table.item(r, 0).data(256) or {})
+                labels.append((name, x_defl, y_defl,
+                               geo.get("tip_x"), geo.get("tip_y"),
+                               geo.get("label_x"), geo.get("label_y")))
+            self._redraw_overlay(labels)
+        finally:
+            self._updating = False
+
+    def _redraw_overlay(self, labels):
+        """Redraw image + annotations. All coordinates are absolute image pixels."""
+        ax = self._beam_ax
+        ax.clear()
+        ax.axis("off")
+        if getattr(self, "_beam_img", None) is not None:
+            ax.imshow(self._beam_img, aspect="auto")
+            w = self._beam_img.shape[1]
+        else:
+            ax.text(0.5, 0.5, "beamline.png not found",
+                    ha="center", va="center", transform=ax.transAxes)
+            self._beam_canvas.draw_idle()
+            return
+        for name, x_defl, y_defl, tip_x, tip_y, label_x, label_y in labels:
+            ax.annotate(
+                f"{name}\nX: {x_defl:.2f} mm\nY: {y_defl:.2f} mm",
+                xy=(tip_x, tip_y),
+                xytext=(label_x, label_y),
+                ha="center", va="top", fontsize=7,
+                arrowprops=dict(arrowstyle="-", lw=0.6),
+            )
+        self._beam_fig.tight_layout()
+        self._beam_canvas.draw_idle()
+
+    def _on_poi_cell_changed(self, row: int, col: int):
+        """Edit entry point #2: a POI cell changed.
+        - distance/name edited  -> just recompute (col 1 or 0)
+        - DEFLECTION edited (col 2) -> solve voltage from THIS row,
+          push to FG field, which triggers the master recompute of all rows."""
+        if self._updating:
+            return
+        try:
+            dist = float(self.poi_table.item(row, 1).text())
+        except (ValueError, AttributeError):
+            return
+        if col == 2:
+            # X deflection edited → solve X voltage only.
+            try:
+                val = float(self.poi_table.item(row, 2).text())
+            except (ValueError, AttributeError):
+                return
+            r = calculate_drive_for_deflection(
+                val, self.energy.value(), self.charge.value(), dist)
+            self._updating = True
+            self.plate_kv_x.setValue(r["plate_kV"])
+            self._updating = False
+            self._sync_from_voltage()
+        elif col == 3:
+            # Y deflection edited → solve Y voltage only.
+            try:
+                val = float(self.poi_table.item(row, 3).text())
+            except (ValueError, AttributeError):
+                return
+            r = calculate_drive_for_deflection(
+                val, self.energy.value(), self.charge.value(), dist)
+            self._updating = True
+            self.plate_kv_y.setValue(r["plate_kV"])
+            self._updating = False
+            self._sync_from_voltage()
+        else:
+            # Name or distance edited → full recompute.
+            self._sync_from_voltage()
 
 
 # ─── Hardware view (Motors + Current, switchable / splittable) ───────────────
@@ -581,7 +757,6 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.tab_traj,      "Trajectory")
         self.tabs.addTab(self.tab_waveform,  "Waveform Comparison")
         self.tabs.addTab(self.tab_voltage,   "Voltage Calculator")
-        self.tab_voltage.use_ax_btn.clicked.connect(self._copy_ax_to_voltage_calc)
 
         # Signals
         self.run_btn.clicked.connect(self.run)
@@ -748,9 +923,6 @@ class MainWindow(QMainWindow):
         self.progress.setVisible(False)
         self.status_lbl.setText(f"Error: {msg}")
         QMessageBox.critical(self, "Compute Error", msg)
-
-    def _copy_ax_to_voltage_calc(self):
-        self.tab_voltage.deflection.setValue(self.params_panel.ax.value())
 
     @staticmethod
     def _make_trajectory_fig(x_arr, y_arr, t_arr, aperture, params):
