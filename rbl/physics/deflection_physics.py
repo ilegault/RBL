@@ -114,9 +114,9 @@ if __name__ == "__main__":
     ok2 = _check("fg_peak_V (3 MeV H, 25.79 mm)",  r["fg_peak_V"], 9.5)
     ok3 = _check("fg_vpp_V  (3 MeV H, 25.79 mm)",  r["fg_vpp_V"],  19.0)
 
-    # exceeds_amplifier: 9.5 kV < 10 kV limit -> False
-    ok4 = _check("exceeds_amplifier flag (False)",
-                 float(r["exceeds_amplifier"]), 0.0, tol=0.5)
+    # exceeds_amplifier: 9.5 kV > AMPLIFIER_MAX_KV (5 kV) limit -> True
+    ok4 = _check("exceeds_amplifier flag (True)",
+                 float(r["exceeds_amplifier"]), 1.0, tol=0.5)
 
     # exceeds_fg: 19 Vpp < 20 Vpp limit -> False
     ok5 = _check("exceeds_fg flag (False)",

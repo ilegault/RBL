@@ -58,8 +58,11 @@ def pinch_metric(dose, x_edges, y_edges, aperture) -> float:
 
     d_edge   = 0.5 * (row_slice[:n_edge].mean() + row_slice[-n_edge:].mean())
     half_c   = n_center // 2
-    c_start  = n // 2 - half_c
-    c_end    = n // 2 + half_c
+    # Window of exactly n_center elements, centered at n//2. Computing c_end
+    # as n//2 + half_c (rather than c_start + n_center) leaves an empty slice
+    # whenever half_c == 0 (n_center == 1, i.e. n < 10), producing a NaN mean.
+    c_start  = max(0, n // 2 - half_c)
+    c_end    = min(n, c_start + n_center)
     d_center = row_slice[c_start:c_end].mean()
     d_mean   = row_slice.mean()
 

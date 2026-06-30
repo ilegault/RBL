@@ -17,6 +17,7 @@ from rbl.scan.metrics import (
     flatness_pct,
     rms_deviation_pct,
     max_min_ratio,
+    pinch_metric,
     steady_state_flag,
     max_pixel_off_time_ms,
     fwhm_spot_rule,
@@ -241,6 +242,61 @@ class TestMaxMinRatio:
 
     def test_zero_min_is_inf(self):
         assert max_min_ratio(np.array([0.0, 1.0])) == float("inf")
+
+
+class TestPinchMetric:
+    """Regression coverage for the empty-slice NaN bug in pinch_metric.
+
+    row_slice[c_start:c_end] used to be computed as
+    [n//2 - half_c : n//2 + half_c], which is empty whenever half_c == 0
+    (i.e. n_center == 1, which happens whenever the aperture spans fewer
+    than 10 grid columns). An empty slice's .mean() is NaN, silently
+    corrupting compute_all_metrics()["pinch_pct"] and the optimizer's
+    cost function without raising an exception.
+    """
+
+    @staticmethod
+    def _edges(n, lo, hi):
+        return np.linspace(lo, hi, n + 1)
+
+    def test_small_aperture_does_not_produce_nan(self):
+        # Aperture narrower than 10 grid columns -> n_center used to be 1,
+        # half_c == 0, and the old center-window slice was empty.
+        rng = np.random.default_rng(0)
+        x_edges = self._edges(20, -10, 10)
+        y_edges = self._edges(20, -10, 10)
+        dose = rng.random((20, 20)) + 1.0
+        pinch = pinch_metric(dose, x_edges, y_edges, (-3, 3, -8, 8))
+        assert np.isfinite(pinch)
+
+    def test_uniform_row_has_zero_pinch(self):
+        x_edges = self._edges(40, -20, 20)
+        y_edges = self._edges(40, -20, 20)
+        dose = np.ones((40, 40))
+        pinch = pinch_metric(dose, x_edges, y_edges, (-10, 10, -10, 10))
+        assert np.isfinite(pinch)
+        assert abs(pinch) < 1e-9
+
+    def test_edge_cusps_detected_as_positive_pinch(self):
+        # Aperture spans the full grid so x_in/y_in select every column/row;
+        # elevating the first/last few X columns (the turnaround edges)
+        # should register as a positive pinch percentage relative to center.
+        x_edges = self._edges(40, -10, 10)
+        y_edges = self._edges(40, -10, 10)
+        dose = np.ones((40, 40))
+        dose[:4, :] = 5.0
+        dose[-4:, :] = 5.0
+        pinch = pinch_metric(dose, x_edges, y_edges, (-10, 10, -10, 10))
+        assert np.isfinite(pinch)
+        assert pinch > 0.0
+
+    def test_empty_aperture_returns_zero(self):
+        x_edges = self._edges(20, -10, 10)
+        y_edges = self._edges(20, -10, 10)
+        dose = np.ones((20, 20))
+        # Aperture entirely outside the grid -> no rows/cols selected.
+        pinch = pinch_metric(dose, x_edges, y_edges, (100, 200, 100, 200))
+        assert pinch == 0.0
 
 
 class TestSteadyStateFlag:
