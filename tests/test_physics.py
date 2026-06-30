@@ -10,7 +10,12 @@ from rbl.physics.amplifier import (
     apply_amplifier,
     required_slew_rate_V_per_s,
 )
-from rbl.physics.deflection_physics import calculate_drive_for_deflection
+from rbl.physics.deflection_physics import (
+    calculate_drive_for_deflection,
+    AMPLIFIER_MAX_KV,
+    DEFAULT_TRAVEL_MM,
+)
+from rbl.physics.beam import fwhm_to_sigma, gaussian_kernel_2d
 
 
 # ── Unit-conversion helpers ───────────────────────────────────────────────────
@@ -229,3 +234,64 @@ class TestDeflectionPhysics:
     def test_small_deflection_within_limits(self):
         r = calculate_drive_for_deflection(1.0, 1.0, 1, 3000.0)
         assert not r["exceeds_amplifier"]
+
+    def test_calibration_anchor_exceeds_amplifier_flag_matches_constant(self):
+        # Calibration anchor: 3 MeV proton, 25.79 mm -> ~9.5 kV plate.
+        # AMPLIFIER_MAX_KV was lowered from 10.0 to 5.0 kV in a later commit;
+        # the anchor's required plate voltage now exceeds that ceiling, so
+        # exceeds_amplifier must report True. (Guards against the module's
+        # own __main__ self-test going stale relative to this constant again.)
+        r = calculate_drive_for_deflection(25.79, 3.0, 1, DEFAULT_TRAVEL_MM)
+        assert r["plate_kV"] > AMPLIFIER_MAX_KV
+        assert r["exceeds_amplifier"] is True
+
+    def test_zero_charge_state_raises(self):
+        with pytest.raises(ZeroDivisionError):
+            calculate_drive_for_deflection(25.0, 3.0, 0, 3000.0)
+
+    def test_zero_travel_raises(self):
+        with pytest.raises(ZeroDivisionError):
+            calculate_drive_for_deflection(25.0, 3.0, 1, 0.0)
+
+
+# ── beam.py — gaussian kernel / FWHM helpers ─────────────────────────────────
+
+class TestFwhmToSigma:
+    def test_known_conversion(self):
+        # sigma = fwhm / (2*sqrt(2*ln2)) ~ fwhm / 2.3548
+        fwhm = 10.0
+        sigma = fwhm_to_sigma(fwhm)
+        assert abs(sigma - fwhm / 2.3548200450309493) < 1e-9
+
+    def test_zero_fwhm_is_zero_sigma(self):
+        assert fwhm_to_sigma(0.0) == 0.0
+
+
+class TestGaussianKernel2D:
+    def test_kernel_is_normalized(self):
+        k = gaussian_kernel_2d(3.0, 3.0)
+        assert abs(k.sum() - 1.0) < 1e-9
+
+    def test_symmetric_axes_produce_square_kernel(self):
+        k = gaussian_kernel_2d(2.0, 5.0)
+        assert k.shape[0] == k.shape[1]
+
+    def test_zero_width_on_one_axis_does_not_produce_nan(self):
+        # scipy.signal.windows.gaussian(M, std=0) divides by zero at the
+        # center tap, which previously made the ENTIRE normalized kernel
+        # NaN (kernel.sum() was NaN, so dividing by it poisoned every tap).
+        # This is reachable from real scan params: fwhm_x_mm=0 with a
+        # nonzero fwhm_y_mm.
+        k = gaussian_kernel_2d(0.0, 5.0)
+        assert not np.isnan(k).any()
+        assert abs(k.sum() - 1.0) < 1e-9
+
+    def test_zero_width_on_both_axes_does_not_produce_nan(self):
+        k = gaussian_kernel_2d(0.0, 0.0)
+        assert not np.isnan(k).any()
+        assert abs(k.sum() - 1.0) < 1e-9
+
+    def test_peak_is_at_center(self):
+        k = gaussian_kernel_2d(3.0, 3.0)
+        center = k.shape[0] // 2
+        assert k[center, center] == k.max()

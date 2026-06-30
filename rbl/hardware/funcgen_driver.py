@@ -166,6 +166,8 @@ class DG1022Z:
             # arguments are required by SCPI syntax but are ignored by the
             # instrument in DC mode.
             self._inst.write(f":SOURce{ch}:APPLy:DC 1,1,{offset_v}")
+        else:
+            raise ValueError(f"Unknown waveform shape: {shape!r}")
 
         return ", ".join(warnings)
 
