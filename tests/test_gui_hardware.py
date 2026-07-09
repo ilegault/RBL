@@ -5,12 +5,12 @@ tab/split-screen state machine.
 Covers, in particular:
   * the split-screen regression — Stepper Motors + Beam Current must divide the
     window exactly 50/50 and never overshoot the viewport;
-  * every transition of the Analysis / Stepper / Current click state machine,
-    including entering split, isolating a panel, and re-entering split;
+  * every transition of the Stepper Motors / Beam Current / Function Generators
+    click state machine, including entering split, isolating a panel, and
+    re-entering split;
   * MotorTab unit conversions (cps <-> mm/s, counts <-> mm);
   * the command-history line edit;
   * CurrentTab live/frozen plot navigation and voltage->current readout;
-  * the Voltage Calculator;
   * both background poll workers (Galil + LabJack) running at the same time.
 
 The whole module is skipped automatically if a Qt platform plugin cannot be
@@ -62,10 +62,8 @@ def _visible_to_view(view, idx):
 # ── MainWindow + split-screen state machine ──────────────────────────────────
 
 @pytest.fixture
-def win(qapp, monkeypatch):
-    # Neutralise the auto-run timer so no heavy compute thread starts mid-test.
+def win(qapp):
     from rbl.gui.app import MainWindow
-    monkeypatch.setattr(MainWindow, "run", lambda self: None)
     w = MainWindow()
     w.resize(1440, 920)
     w.show()
@@ -82,78 +80,84 @@ class TestHardwareViewWrapping:
         assert isinstance(spl.widget(0), QScrollArea)
         assert isinstance(spl.widget(1), QScrollArea)
 
-    def test_starts_on_analysis(self, win):
+    def test_starts_on_motors(self, win):
         assert win._outer_stack.currentIndex() == 0
         assert win._hw_split_active is False
 
 
 class TestSplitStateMachine:
-    """Drive _on_outer_tab_clicked through every meaningful transition."""
+    """Drive _on_outer_tab_clicked through every meaningful transition.
+
+    Tab indices after removing the Analysis tab:
+        0 = Stepper Motors
+        1 = Beam Current
+        2 = Function Generators
+    """
 
     def test_click_motors_shows_motors_only(self, win):
-        win._on_outer_tab_clicked(1)
-        assert win._outer_stack.currentIndex() == 1
+        win._on_outer_tab_clicked(0)
+        assert win._outer_stack.currentIndex() == 0
         assert win._hw_split_active is False
         assert _visible_to_view(win._hw_view, 0) is True
         assert _visible_to_view(win._hw_view, 1) is False
 
     def test_motors_then_current_enters_split(self, win):
-        win._on_outer_tab_clicked(1)        # motors
-        win._on_outer_tab_clicked(2)        # cross to current -> SPLIT
+        win._on_outer_tab_clicked(0)        # motors
+        win._on_outer_tab_clicked(1)        # cross to current -> SPLIT
         assert win._hw_split_active is True
         assert _visible_to_view(win._hw_view, 0) is True
         assert _visible_to_view(win._hw_view, 1) is True
 
     def test_current_then_motors_enters_split(self, win):
-        win._on_outer_tab_clicked(2)        # current
-        win._on_outer_tab_clicked(1)        # cross to motors -> SPLIT
+        win._on_outer_tab_clicked(1)        # current
+        win._on_outer_tab_clicked(0)        # cross to motors -> SPLIT
         assert win._hw_split_active is True
         assert _visible_to_view(win._hw_view, 0) is True
         assert _visible_to_view(win._hw_view, 1) is True
 
     def test_click_in_split_isolates_motors(self, win):
-        win._on_outer_tab_clicked(1)
-        win._on_outer_tab_clicked(2)        # split
-        win._on_outer_tab_clicked(1)        # click motors -> isolate motors
+        win._on_outer_tab_clicked(0)
+        win._on_outer_tab_clicked(1)        # split
+        win._on_outer_tab_clicked(0)        # click motors -> isolate motors
         assert win._hw_split_active is False
         assert _visible_to_view(win._hw_view, 0) is True
         assert _visible_to_view(win._hw_view, 1) is False
 
     def test_click_in_split_isolates_current(self, win):
-        win._on_outer_tab_clicked(2)
-        win._on_outer_tab_clicked(1)        # split
-        win._on_outer_tab_clicked(2)        # click current -> isolate current
+        win._on_outer_tab_clicked(1)
+        win._on_outer_tab_clicked(0)        # split
+        win._on_outer_tab_clicked(1)        # click current -> isolate current
         assert win._hw_split_active is False
         assert _visible_to_view(win._hw_view, 0) is False
         assert _visible_to_view(win._hw_view, 1) is True
 
-    def test_analysis_resets_split(self, win):
-        win._on_outer_tab_clicked(1)
-        win._on_outer_tab_clicked(2)        # split
-        win._on_outer_tab_clicked(0)        # back to analysis
-        assert win._outer_stack.currentIndex() == 0
+    def test_funcgen_resets_split(self, win):
+        win._on_outer_tab_clicked(0)
+        win._on_outer_tab_clicked(1)        # split
+        win._on_outer_tab_clicked(2)        # function generators -> reset
+        assert win._outer_stack.currentIndex() == 1
         assert win._hw_split_active is False
 
     def test_can_re_enter_split_after_isolating(self, win):
-        win._on_outer_tab_clicked(1)
-        win._on_outer_tab_clicked(2)        # split
-        win._on_outer_tab_clicked(1)        # isolate motors
-        win._on_outer_tab_clicked(2)        # cross again -> split again
+        win._on_outer_tab_clicked(0)
+        win._on_outer_tab_clicked(1)        # split
+        win._on_outer_tab_clicked(0)        # isolate motors
+        win._on_outer_tab_clicked(1)        # cross again -> split again
         assert win._hw_split_active is True
         assert _visible_to_view(win._hw_view, 0) is True
         assert _visible_to_view(win._hw_view, 1) is True
 
-    def test_analysis_to_current_does_not_split(self, win):
-        win._on_outer_tab_clicked(1)
-        win._on_outer_tab_clicked(0)        # analysis (prev becomes 0)
-        win._on_outer_tab_clicked(2)        # current straight from analysis
+    def test_funcgen_to_current_does_not_split(self, win):
+        win._on_outer_tab_clicked(0)
+        win._on_outer_tab_clicked(2)        # funcgen (prev becomes 2)
+        win._on_outer_tab_clicked(1)        # current straight from funcgen
         assert win._hw_split_active is False
         assert _visible_to_view(win._hw_view, 0) is False
         assert _visible_to_view(win._hw_view, 1) is True
 
     def test_clicking_same_motors_tab_twice_stays_motors(self, win):
-        win._on_outer_tab_clicked(1)
-        win._on_outer_tab_clicked(1)        # same tab again
+        win._on_outer_tab_clicked(0)
+        win._on_outer_tab_clicked(0)        # same tab again
         assert win._hw_split_active is False
         assert _visible_to_view(win._hw_view, 0) is True
         assert _visible_to_view(win._hw_view, 1) is False
@@ -163,23 +167,23 @@ class TestSplitSizing:
     """The actual regression: split must be 50/50 and inside the viewport."""
 
     def test_split_is_even(self, qapp, win):
-        win._on_outer_tab_clicked(1)
-        win._on_outer_tab_clicked(2)        # split
+        win._on_outer_tab_clicked(0)
+        win._on_outer_tab_clicked(1)        # split
         qapp.processEvents()
         spl = win._hw_view._splitter
         a, b = spl.sizes()
         assert abs(a - b) <= 2, f"panels not 50/50: {a} vs {b}"
 
     def test_split_does_not_overshoot_window(self, qapp, win):
+        win._on_outer_tab_clicked(0)
         win._on_outer_tab_clicked(1)
-        win._on_outer_tab_clicked(2)
         qapp.processEvents()
         spl = win._hw_view._splitter
         assert sum(spl.sizes()) <= spl.width() + 2, "split overflows the viewport"
 
     def test_split_stays_even_after_resize(self, qapp, win):
+        win._on_outer_tab_clicked(0)
         win._on_outer_tab_clicked(1)
-        win._on_outer_tab_clicked(2)
         qapp.processEvents()
         win.resize(1000, 800)
         qapp.processEvents()
@@ -187,9 +191,9 @@ class TestSplitSizing:
         assert abs(a - b) <= 2, f"not 50/50 after resize: {a} vs {b}"
 
     def test_isolating_gives_full_width_to_one_panel(self, qapp, win):
-        win._on_outer_tab_clicked(1)
-        win._on_outer_tab_clicked(2)        # split
-        win._on_outer_tab_clicked(1)        # isolate motors
+        win._on_outer_tab_clicked(0)
+        win._on_outer_tab_clicked(1)        # split
+        win._on_outer_tab_clicked(0)        # isolate motors
         qapp.processEvents()
         spl = win._hw_view._splitter
         # widget 1 hidden -> its size collapses to 0, motors takes the rest
@@ -326,49 +330,6 @@ class TestCurrentTab:
 
     def test_redraw_does_not_raise_when_empty(self, current):
         current._redraw_plot()   # no data yet -> must be a safe no-op
-
-
-# ── Voltage Calculator ───────────────────────────────────────────────────────
-
-class TestVoltageCalcTab:
-    @pytest.fixture
-    def volt(self, qapp):
-        from rbl.gui.app import VoltageCalcTab
-        return VoltageCalcTab()
-
-    def test_initial_result_populated(self, volt):
-        assert volt.plate_kv_x.value() > 0 and volt.plate_kv_y.value() > 0
-
-    def test_small_deflection_within_limits(self, volt):
-        volt.energy.setValue(1.0)
-        volt.charge.setValue(1)
-        volt.deflection.setValue(1.0)
-        assert "within" in volt.out_warn.text()
-
-    def test_huge_deflection_exceeds_amplifier(self, volt):
-        volt.energy.setValue(10.0)
-        volt.deflection.setValue(90.0)
-        volt.charge.setValue(1)
-        assert "exceeds" in volt.out_warn.text().lower() or "⚠" in volt.out_warn.text()
-
-    def test_species_change_updates_mass(self, volt):
-        volt.species.setCurrentText("Gold (Au)")
-        # mass spinbox displays 2 decimals -> 196.967 stored as 196.97
-        assert abs(volt.mass.value() - 196.967) < 0.01
-
-    def test_vpp_is_twice_peak(self, volt):
-        # plate_kv_x/y track the physics-computed plate voltages independently.
-        from rbl.physics.deflection_physics import calculate_drive_for_deflection
-        volt.deflection.setValue(20.0)
-        volt.deflection_y.setValue(10.0)
-        rx = calculate_drive_for_deflection(
-            20.0, volt.energy.value(), volt.charge.value(), volt.travel.value()
-        )
-        ry = calculate_drive_for_deflection(
-            10.0, volt.energy.value(), volt.charge.value(), volt.travel.value()
-        )
-        assert abs(volt.plate_kv_x.value() - rx["plate_kV"]) < 1e-3
-        assert abs(volt.plate_kv_y.value() - ry["plate_kV"]) < 1e-3
 
 
 # ── Both poll workers running concurrently (two-tab scenario) ────────────────

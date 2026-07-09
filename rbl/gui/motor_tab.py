@@ -276,7 +276,6 @@ class AxisControls(QGroupBox):
         main_layout.addWidget(self.btn_home)
 
         self.set_enabled(False)
-        self.setMaximumHeight(220)
 
     # ---- Unit helpers -------------------------------------------------------
 
@@ -381,10 +380,6 @@ class AxisControls(QGroupBox):
         self.spn_target.setMinimumHeight(spn_h)
         self.cbo_target_unit.setMinimumHeight(spn_h)
 
-        if simple:
-            self.setMaximumHeight(16777215)
-        else:
-            self.setMaximumHeight(220)
 
     def _jog(self, direction: int):
         g = self.get_galil()

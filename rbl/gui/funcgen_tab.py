@@ -173,6 +173,7 @@ class ChannelPanel(QGroupBox):
             "font-family: Menlo, monospace; font-size: 10px; color: #444;"
         )
         layout.addWidget(self.lbl_readback)
+        layout.addStretch()
 
         # Wire shape change
         self.cbo_shape.currentTextChanged.connect(self._on_shape_changed)
