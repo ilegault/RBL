@@ -41,6 +41,16 @@ ZERO_OFFSET_COUNTS: dict[str, int] = {
     "D": 0,
 }
 
+# Physical gap offset in mm per jaw: the slits have a ~0.4 mm gap between them
+# when both jaws are at their homed/zeroed position, so each jaw sits 0.2 mm
+# from true centre. After the user zeros (DP=0), counts=0 displays as 0.2 mm.
+MM_ZERO_OFFSET: dict[str, float] = {
+    "A": 0.2,
+    "B": 0.2,
+    "C": 0.2,
+    "D": 0.2,
+}
+
 # --- Motion parameters (per spec email) --------------------------------------
 DEFAULT_SPEED_COUNTS_PER_SEC   = 1000
 DEFAULT_ACCEL_COUNTS_PER_SEC2  = 25600
@@ -62,17 +72,21 @@ CN_CONFIG = "1,1,-1,0,0"
 # --- Unit helpers -------------------------------------------------------------
 
 def counts_to_mm(axis_letter: str, counts: float) -> float:
-    """Step counts -> physical position in mm for the given axis."""
+    """Step counts -> physical position in mm for the given axis.
+
+    counts=0 (after user zeros) returns MM_ZERO_OFFSET (0.2 mm) because the
+    jaw sits 0.2 mm from true centre when homed.
+    """
     sps    = STEPS_PER_MM[axis_letter]
     offset = ZERO_OFFSET_COUNTS[axis_letter]
-    return (counts - offset) / sps
+    return (counts - offset) / sps + MM_ZERO_OFFSET[axis_letter]
 
 
 def mm_to_counts(axis_letter: str, mm: float) -> int:
     """Physical position (mm) -> step counts for the given axis."""
     sps    = STEPS_PER_MM[axis_letter]
     offset = ZERO_OFFSET_COUNTS[axis_letter]
-    return int(round(mm * sps + offset))
+    return int(round((mm - MM_ZERO_OFFSET[axis_letter]) * sps + offset))
 
 
 def cps_to_mm_per_sec(axis_letter: str, cps: float) -> float:
@@ -109,12 +123,18 @@ if __name__ == "__main__":
     assert AXIS_LETTERS == ["A", "B", "C", "D"]
     assert AXIS_LABELS  == ["X+", "X-", "Y+", "Y-"]
 
-    # 1 mm = 629.92126 counts (round-trip)
+    # 1 mm = 629.92126 counts (round-trip), accounting for MM_ZERO_OFFSET
     for axis in AXIS_LETTERS:
         c = mm_to_counts(axis, 1.0)
-        assert abs(c - 630) < 1, f"1 mm should be ~630 counts, got {c}"
+        # 1.0 mm -> (1.0 - 0.2) * 629.92126 = 504 counts approx
+        assert abs(c - round((1.0 - MM_ZERO_OFFSET[axis]) * STEPS_PER_MM[axis])) <= 1, \
+            f"1 mm counts mismatch, got {c}"
         mm = counts_to_mm(axis, c)
         assert abs(mm - 1.0) < 0.002, f"Round-trip failed: {mm}"
+    # counts=0 should display as MM_ZERO_OFFSET
+    for axis in AXIS_LETTERS:
+        assert abs(counts_to_mm(axis, 0) - MM_ZERO_OFFSET[axis]) < 0.001, \
+            f"Zero offset check failed for {axis}"
 
     # mm/s ↔ cps
     for axis in AXIS_LETTERS:

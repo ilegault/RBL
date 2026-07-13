@@ -33,7 +33,7 @@ def discover() -> list:
     if not PYVISA_AVAILABLE:
         return []
     try:
-        rm = pyvisa.ResourceManager('@py')
+        rm = pyvisa.ResourceManager()
         resources = rm.list_resources()
     except Exception:
         return []
@@ -79,7 +79,7 @@ class DG1022Z:
     def __init__(self, resource: str):
         if not PYVISA_AVAILABLE:
             raise ImportError("pyvisa is not installed; install it with: pip install pyvisa")
-        rm = pyvisa.ResourceManager('@py')
+        rm = pyvisa.ResourceManager()
         self._inst = rm.open_resource(resource)
         self._inst.timeout = 5000
         self._inst.read_termination = "\n"

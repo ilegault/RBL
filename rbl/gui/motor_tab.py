@@ -255,6 +255,7 @@ class AxisControls(QGroupBox):
         self.spn_target.setDecimals(3)
         self.cbo_target_unit = QComboBox()
         self.cbo_target_unit.addItems(["counts", "mm"])
+        self.cbo_target_unit.setCurrentIndex(1)          # default to mm
         self.cbo_target_unit.currentIndexChanged.connect(self._on_target_unit_changed)
         self.btn_move = QPushButton("Move to")
         self.btn_move.clicked.connect(self._move_absolute)
@@ -263,7 +264,7 @@ class AxisControls(QGroupBox):
         move_row.addWidget(self.btn_move)
         target_form.addRow("Target:", move_row)
         main_layout.addLayout(target_form)
-        self._set_target_unit_range("counts")
+        self._set_target_unit_range("mm")
 
         # --- Home button (always visible) --------------------------------
         self.btn_home = QPushButton(f"Home {axis_letter}")
