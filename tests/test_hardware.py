@@ -138,9 +138,12 @@ class TestSlitConfig:
             one_step_mm = 1.0 / STEPS_PER_MM[axis]
             assert abs(mm_back - mm) < one_step_mm, f"Round-trip failed for axis {axis}"
 
-    def test_zero_counts_is_zero_mm(self):
+    def test_zero_counts_is_physical_gap_offset(self):
+        # counts=0 (after homing) maps to MM_ZERO_OFFSET (0.2 mm), not 0.0.
+        # The jaws sit 0.2 mm from true centre when homed, by design.
+        from rbl.hardware.slit_config import MM_ZERO_OFFSET
         for axis in AXIS_LETTERS:
-            assert counts_to_mm(axis, 0) == 0.0
+            assert counts_to_mm(axis, 0) == pytest.approx(MM_ZERO_OFFSET[axis])
 
     def test_positive_counts_positive_mm(self):
         for axis in AXIS_LETTERS:

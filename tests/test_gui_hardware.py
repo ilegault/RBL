@@ -1,13 +1,12 @@
 """
 Headless GUI tests (offscreen Qt) for the hardware tabs and the outer
-tab/split-screen state machine.
+tab navigation.
 
 Covers, in particular:
-  * the split-screen regression — Stepper Motors + Beam Current must divide the
-    window exactly 50/50 and never overshoot the viewport;
-  * every transition of the Stepper Motors / Beam Current / Function Generators
-    click state machine, including entering split, isolating a panel, and
-    re-entering split;
+  * tab switching — all four tabs (Motors, Current, Amplifiers, FuncGen)
+    navigate correctly and the stacked widget lands on the right page;
+  * tab state persistence — widget state (spinbox values, live/frozen mode)
+    is preserved after navigating away and returning to a tab;
   * MotorTab unit conversions (cps <-> mm/s, counts <-> mm);
   * the command-history line edit;
   * CurrentTab live/frozen plot navigation and voltage->current readout;
@@ -25,7 +24,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtWidgets import QApplication, QScrollArea, QMessageBox
+from PySide6.QtWidgets import QApplication, QMessageBox
 from PySide6.QtCore import Qt, QEvent, QObject
 from PySide6.QtGui import QKeyEvent
 
@@ -55,11 +54,7 @@ def _press(widget, key):
     )
 
 
-def _visible_to_view(view, idx):
-    return view._splitter.widget(idx).isVisibleTo(view)
-
-
-# ── MainWindow + split-screen state machine ──────────────────────────────────
+# ── MainWindow tab navigation ─────────────────────────────────────────────────
 
 @pytest.fixture
 def win(qapp):
@@ -73,131 +68,88 @@ def win(qapp):
     qapp.processEvents()
 
 
-class TestHardwareViewWrapping:
-    def test_panels_are_scroll_wrapped(self, win):
-        # Scroll-wrapping is what lets each panel shrink so the split fits.
-        spl = win._hw_view._splitter
-        assert isinstance(spl.widget(0), QScrollArea)
-        assert isinstance(spl.widget(1), QScrollArea)
+class TestTabNavigation:
+    """Verify the four-tab stack switches correctly.
+
+    Tab indices:
+        0 = Stepper Motors
+        1 = Beam Current
+        2 = HV Amplifiers
+        3 = Function Generators
+    """
 
     def test_starts_on_motors(self, win):
         assert win._outer_stack.currentIndex() == 0
-        assert win._hw_split_active is False
 
-
-class TestSplitStateMachine:
-    """Drive _on_outer_tab_clicked through every meaningful transition.
-
-    Tab indices after removing the Analysis tab:
-        0 = Stepper Motors
-        1 = Beam Current
-        2 = Function Generators
-    """
-
-    def test_click_motors_shows_motors_only(self, win):
+    def test_click_motors_shows_motors(self, win):
         win._on_outer_tab_clicked(0)
         assert win._outer_stack.currentIndex() == 0
-        assert win._hw_split_active is False
-        assert _visible_to_view(win._hw_view, 0) is True
-        assert _visible_to_view(win._hw_view, 1) is False
 
-    def test_motors_then_current_enters_split(self, win):
-        win._on_outer_tab_clicked(0)        # motors
-        win._on_outer_tab_clicked(1)        # cross to current -> SPLIT
-        assert win._hw_split_active is True
-        assert _visible_to_view(win._hw_view, 0) is True
-        assert _visible_to_view(win._hw_view, 1) is True
-
-    def test_current_then_motors_enters_split(self, win):
-        win._on_outer_tab_clicked(1)        # current
-        win._on_outer_tab_clicked(0)        # cross to motors -> SPLIT
-        assert win._hw_split_active is True
-        assert _visible_to_view(win._hw_view, 0) is True
-        assert _visible_to_view(win._hw_view, 1) is True
-
-    def test_click_in_split_isolates_motors(self, win):
-        win._on_outer_tab_clicked(0)
-        win._on_outer_tab_clicked(1)        # split
-        win._on_outer_tab_clicked(0)        # click motors -> isolate motors
-        assert win._hw_split_active is False
-        assert _visible_to_view(win._hw_view, 0) is True
-        assert _visible_to_view(win._hw_view, 1) is False
-
-    def test_click_in_split_isolates_current(self, win):
+    def test_click_current_shows_current(self, win):
         win._on_outer_tab_clicked(1)
-        win._on_outer_tab_clicked(0)        # split
-        win._on_outer_tab_clicked(1)        # click current -> isolate current
-        assert win._hw_split_active is False
-        assert _visible_to_view(win._hw_view, 0) is False
-        assert _visible_to_view(win._hw_view, 1) is True
-
-    def test_funcgen_resets_split(self, win):
-        win._on_outer_tab_clicked(0)
-        win._on_outer_tab_clicked(1)        # split
-        win._on_outer_tab_clicked(2)        # function generators -> reset
         assert win._outer_stack.currentIndex() == 1
-        assert win._hw_split_active is False
 
-    def test_can_re_enter_split_after_isolating(self, win):
-        win._on_outer_tab_clicked(0)
-        win._on_outer_tab_clicked(1)        # split
-        win._on_outer_tab_clicked(0)        # isolate motors
-        win._on_outer_tab_clicked(1)        # cross again -> split again
-        assert win._hw_split_active is True
-        assert _visible_to_view(win._hw_view, 0) is True
-        assert _visible_to_view(win._hw_view, 1) is True
+    def test_click_amplifiers_shows_amplifiers(self, win):
+        win._on_outer_tab_clicked(2)
+        assert win._outer_stack.currentIndex() == 2
 
-    def test_funcgen_to_current_does_not_split(self, win):
-        win._on_outer_tab_clicked(0)
-        win._on_outer_tab_clicked(2)        # funcgen (prev becomes 2)
-        win._on_outer_tab_clicked(1)        # current straight from funcgen
-        assert win._hw_split_active is False
-        assert _visible_to_view(win._hw_view, 0) is False
-        assert _visible_to_view(win._hw_view, 1) is True
+    def test_click_funcgen_shows_funcgen(self, win):
+        win._on_outer_tab_clicked(3)
+        assert win._outer_stack.currentIndex() == 3
 
-    def test_clicking_same_motors_tab_twice_stays_motors(self, win):
-        win._on_outer_tab_clicked(0)
-        win._on_outer_tab_clicked(0)        # same tab again
-        assert win._hw_split_active is False
-        assert _visible_to_view(win._hw_view, 0) is True
-        assert _visible_to_view(win._hw_view, 1) is False
-
-
-class TestSplitSizing:
-    """The actual regression: split must be 50/50 and inside the viewport."""
-
-    def test_split_is_even(self, qapp, win):
-        win._on_outer_tab_clicked(0)
-        win._on_outer_tab_clicked(1)        # split
-        qapp.processEvents()
-        spl = win._hw_view._splitter
-        a, b = spl.sizes()
-        assert abs(a - b) <= 2, f"panels not 50/50: {a} vs {b}"
-
-    def test_split_does_not_overshoot_window(self, qapp, win):
+    def test_switch_away_and_back_lands_correctly(self, win):
         win._on_outer_tab_clicked(0)
         win._on_outer_tab_clicked(1)
-        qapp.processEvents()
-        spl = win._hw_view._splitter
-        assert sum(spl.sizes()) <= spl.width() + 2, "split overflows the viewport"
+        win._on_outer_tab_clicked(0)
+        assert win._outer_stack.currentIndex() == 0
 
-    def test_split_stays_even_after_resize(self, qapp, win):
+    def test_multiple_rapid_switches_land_correctly(self, win):
+        for idx in (0, 1, 2, 3, 1, 0, 3):
+            win._on_outer_tab_clicked(idx)
+        assert win._outer_stack.currentIndex() == 3
+
+    def test_clicking_same_tab_twice_stays_put(self, win):
+        win._on_outer_tab_clicked(0)
+        win._on_outer_tab_clicked(0)
+        assert win._outer_stack.currentIndex() == 0
+
+    def test_funcgen_reachable_from_any_tab(self, win):
+        for start in (0, 1, 2):
+            win._on_outer_tab_clicked(start)
+            win._on_outer_tab_clicked(3)
+            assert win._outer_stack.currentIndex() == 3
+
+
+class TestTabStatePersistence:
+    """Tab widgets must retain their internal state after navigating away and back."""
+
+    def test_motor_spinbox_preserved_after_leaving(self, win, qapp):
+        win._on_outer_tab_clicked(0)
+        panel = win.motor_tab.axes["A"]
+        panel.spn_speed.setValue(500.0)
+        win._on_outer_tab_clicked(1)        # leave
+        qapp.processEvents()
+        win._on_outer_tab_clicked(0)        # come back
+        assert panel.spn_speed.value() == 500.0
+
+    def test_current_tab_live_mode_preserved_after_leaving(self, win, qapp):
+        win._on_outer_tab_clicked(1)
+        ct = win.current_tab
+        assert ct._is_live is True
         win._on_outer_tab_clicked(0)
         win._on_outer_tab_clicked(1)
-        qapp.processEvents()
-        win.resize(1000, 800)
-        qapp.processEvents()
-        a, b = win._hw_view._splitter.sizes()
-        assert abs(a - b) <= 2, f"not 50/50 after resize: {a} vs {b}"
+        assert ct._is_live is True
 
-    def test_isolating_gives_full_width_to_one_panel(self, qapp, win):
-        win._on_outer_tab_clicked(0)
-        win._on_outer_tab_clicked(1)        # split
-        win._on_outer_tab_clicked(0)        # isolate motors
-        qapp.processEvents()
-        spl = win._hw_view._splitter
-        # widget 1 hidden -> its size collapses to 0, motors takes the rest
-        assert spl.sizes()[1] == 0
+    def test_frozen_current_tab_stays_frozen_after_navigation(self, win, qapp):
+        ct = win.current_tab
+        for i in range(5):
+            ct._on_reading(float(i), {"AIN0": 3.0, "AIN1": 3.0,
+                                      "AIN2": 3.0, "AIN3": 3.0})
+        ct._on_slider_changed(4000)         # enter frozen mode
+        assert ct._is_live is False
+        win._on_outer_tab_clicked(0)        # leave current tab
+        win._on_outer_tab_clicked(1)        # come back
+        assert ct._is_live is False         # still frozen
 
 
 # ── MotorTab unit conversions + history ──────────────────────────────────────
@@ -231,6 +183,7 @@ class TestMotorTabUnits:
 
     def test_target_default_counts(self, motor):
         panel = motor.axes["B"]
+        panel.cbo_target_unit.setCurrentText("counts")   # default unit is mm; switch to counts
         panel.spn_target.setValue(6300)
         assert panel._target_in_counts() == 6300
 
@@ -449,7 +402,7 @@ class TestConcurrentPollWorkers:
     def test_galil_and_labjack_workers_run_simultaneously(self, qapp):
         from unittest.mock import MagicMock
         from motor_tab import GalilPollWorker
-        from current_tab import LabJackPollWorker
+        from rbl.hardware.labjack_poller import LabJackPollWorker
         from rbl.hardware.galil_driver import GalilController
         from rbl.hardware.labjack_driver import LabJackT7
 

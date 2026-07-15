@@ -12,13 +12,11 @@ Plot navigation (from TDS-T8 live_plot mechanism):
   - Drag slider left → FROZEN mode: window locked to historical position.
   - Buffer holds ~1 hour of history (BUFFER_CAPACITY = 36 000 @ 10 Hz).
 """
-import time
-
-from PySide6.QtCore import QThread, Signal, QTimer, Qt
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel,
-    QPushButton, QLineEdit, QComboBox, QMessageBox, QSizePolicy,
+    QPushButton, QMessageBox, QSizePolicy,
     QSlider,
 )
 
@@ -27,41 +25,12 @@ matplotlib.use("QtAgg")
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 
-from rbl.hardware.labjack_driver import LabJackT7, LJM_AVAILABLE
+from rbl.hardware.labjack_driver import LJM_AVAILABLE
 from rbl.hardware.current_monitor import (
     voltage_to_current, format_current, beam_centering, RollingBuffer,
 )
 from rbl.hardware import slit_config as SC
-
-
-# ─── Background poll thread ───────────────────────────────────────────────────
-
-class LabJackPollWorker(QThread):
-    reading = Signal(float, dict)   # t_seconds, {AIN0: V, AIN1: V, ...}
-    error   = Signal(str)
-
-    def __init__(self, lj: LabJackT7, period_s: float = 0.1):
-        super().__init__()
-        self.lj       = lj
-        self.period   = period_s
-        self._running = True
-
-    def stop(self):
-        self._running = False
-
-    def run(self):
-        t0 = time.time()
-        while self._running and self.lj.connected:
-            tloop = time.time()
-            try:
-                values = self.lj.read_channels()
-                self.reading.emit(tloop - t0, values)
-            except Exception as e:
-                self.error.emit(str(e))
-                break
-            elapsed   = time.time() - tloop
-            remaining = max(0.0, self.period - elapsed)
-            self.msleep(int(remaining * 1000))
+from labjack_panel import LabJackPanel
 
 
 # ─── The tab widget ───────────────────────────────────────────────────────────
@@ -74,8 +43,9 @@ class CurrentTab(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.lj      = LabJackT7()
-        self.worker  = None
+        # NOTE: this tab no longer owns a LabJackT7 or a poll thread. MainWindow
+        # owns the single shared instance and feeds us readings via _on_reading().
+        # See rbl/hardware/labjack_poller.py for why.
         self.buffers = {name: RollingBuffer(self.BUFFER_CAPACITY)
                         for name in SC.LABJACK_CHANNEL_MAP.keys()}
 
@@ -87,27 +57,9 @@ class CurrentTab(QWidget):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
 
-        # ── Connection ────────────────────────────────────────────────────
-        conn_box = QGroupBox("LabJack T7 Connection")
-        conn = QHBoxLayout(conn_box)
-        conn.addWidget(QLabel("Connection:"))
-        self.cbo_conn = QComboBox()
-        self.cbo_conn.addItems(["USB", "ETHERNET", "ANY"])
-        conn.addWidget(self.cbo_conn)
-        conn.addWidget(QLabel("Identifier:"))
-        self.le_ident = QLineEdit("ANY")
-        self.le_ident.setMaximumWidth(140)
-        conn.addWidget(self.le_ident)
-        self.btn_conn = QPushButton("Connect")
-        self.btn_conn.clicked.connect(self._toggle_connection)
-        conn.addWidget(self.btn_conn)
-        self.lbl_conn_status = QLabel("● Disconnected")
-        self.lbl_conn_status.setStyleSheet("color: #666666; font-weight: bold;")
-        conn.addWidget(self.lbl_conn_status)
-        self.lbl_serial = QLabel("")
-        self.lbl_serial.setStyleSheet("color: #555; font-style: italic;")
-        conn.addWidget(self.lbl_serial, stretch=1)
-        layout.addWidget(conn_box)
+        # ── Connection (shared panel; MainWindow does the actual connecting) ──
+        self.lj_panel = LabJackPanel()
+        layout.addWidget(self.lj_panel)
 
         # ── Per-channel numeric readouts ──────────────────────────────────
         ro_box = QGroupBox("Live Readings")
@@ -209,51 +161,19 @@ class CurrentTab(QWidget):
         self._redraw_timer.timeout.connect(self._redraw_plot)
 
         if not LJM_AVAILABLE:
-            self.btn_conn.setEnabled(False)
-            QMessageBox.information(
-                self, "LabJack library missing",
-                "labjack-ljm is not installed. Run:\n\n"
-                "    pip install labjack-ljm\n\n"
-                "Plus install the LJM system library from labjack.com.\n"
-                "The Beam Current tab will be disabled until then."
-            )
+            self.lj_panel.set_enabled(False)
 
-    # ---- Connection lifecycle ------------------------------------------------
+    # ---- Connection lifecycle (driven by MainWindow) --------------------------
 
-    def _toggle_connection(self):
-        if self.lj.connected:
-            self._do_disconnect()
-        else:
-            self._do_connect()
+    def on_labjack_connected(self, serial: str):
+        """MainWindow calls this after the shared T7 opens."""
+        self.lj_panel.set_connected(True, serial)
+        self._redraw_timer.start()
 
-    def _do_connect(self):
-        try:
-            self.lj.connect(self.cbo_conn.currentText(),
-                            self.le_ident.text().strip() or "ANY")
-            sn = self.lj.serial_number()
-            self.lbl_serial.setText(f"T7 serial #{sn}")
-            self.btn_conn.setText("Disconnect")
-            self.lbl_conn_status.setText("● Connected")
-            self.lbl_conn_status.setStyleSheet("color: #1a7a1a; font-weight: bold;")
-            self.worker = LabJackPollWorker(self.lj, period_s=0.1)
-            self.worker.reading.connect(self._on_reading)
-            self.worker.error.connect(self._on_error)
-            self.worker.start()
-            self._redraw_timer.start()
-        except Exception as e:
-            QMessageBox.critical(self, "LabJack connect failed", str(e))
-
-    def _do_disconnect(self):
+    def on_labjack_disconnected(self):
+        """MainWindow calls this after the shared T7 closes."""
         self._redraw_timer.stop()
-        if self.worker is not None:
-            self.worker.stop()
-            self.worker.wait(2000)
-            self.worker = None
-        self.lj.disconnect()
-        self.btn_conn.setText("Connect")
-        self.lbl_conn_status.setText("● Disconnected")
-        self.lbl_conn_status.setStyleSheet("color: #666666; font-weight: bold;")
-        self.lbl_serial.setText("")
+        self.lj_panel.set_connected(False)
 
     # ---- Slots ---------------------------------------------------------------
 
@@ -263,7 +183,12 @@ class CurrentTab(QWidget):
         v1mA   = spec["v_at_1mA"]
 
         currents = {}
-        for ain, V in values.items():
+        # The shared worker emits all 12 AINs. Take ONLY the log-amp channels;
+        # AIN4-AIN11 belong to the HV amplifier tab and must be ignored here.
+        for ain in SC.LABJACK_CHANNEL_MAP.keys():
+            V = values.get(ain)
+            if V is None:
+                continue
             I = voltage_to_current(V, v1nA, v1mA)
             currents[ain] = I
             self.lbl_v[ain].setText(f"{V:6.3f} V")
@@ -288,8 +213,8 @@ class CurrentTab(QWidget):
             self.slider.blockSignals(False)
 
     def _on_error(self, msg: str):
+        # MainWindow owns teardown; we only surface the message.
         QMessageBox.warning(self, "LabJack poll error", msg)
-        self._do_disconnect()
 
     # ---- Slider / navigation -------------------------------------------------
 
@@ -393,7 +318,8 @@ class CurrentTab(QWidget):
     # ---- Owner-callable cleanup ----------------------------------------------
 
     def shutdown(self):
-        self._do_disconnect()
+        """MainWindow closes the LabJack itself; we just stop redrawing."""
+        self._redraw_timer.stop()
 
 
 # Standalone smoke test

@@ -116,6 +116,55 @@ LABJACK_CHANNEL_MAP = {
     "AIN3": "Y-",
 }
 
+# --- EEL5000.20.100 HV amplifier monitors ------------------------------------
+# Each amplifier exposes two front-panel BNC monitors:
+#   VOLTAGE MONITOR : 1000:1  -> 1 V at the BNC == 1 kV at the HV output
+#   CURRENT MONITOR : 1 V     == 10 mA drawn from the amplifier
+#
+# Wired to the CB37 terminal board on AIN4..AIN11. AIN0..AIN3 are reserved for
+# the log amps on the T7 body terminals and MUST NOT be duplicated on the CB37.
+#
+# Range must be +/-10 V on all eight: the current monitor reaches +/-10 V during
+# the 100 mA / 4 ms transient the amplifier is rated for. A narrower range clips.
+
+AMP_LABELS = ["X+", "X-", "Y+", "Y-"]
+
+# amp label -> {"voltage": AIN name, "current": AIN name}
+AMP_CHANNEL_MAP = {
+    "X+": {"voltage": "AIN4",  "current": "AIN5"},
+    "X-": {"voltage": "AIN6",  "current": "AIN7"},
+    "Y+": {"voltage": "AIN8",  "current": "AIN9"},
+    "Y-": {"voltage": "AIN10", "current": "AIN11"},
+}
+
+# Flat, ordered list of every AIN the amplifier tab needs.
+AMP_AIN_NAMES = [
+    AMP_CHANNEL_MAP[lbl][kind]
+    for lbl in AMP_LABELS
+    for kind in ("voltage", "current")
+]
+
+# Scale factors (see EEL5000 manual, Specifications, p. 1-3)
+VOLTAGE_MONITOR_KV_PER_VOLT = 1.0    # 1000:1 divider -> 1 V == 1 kV
+CURRENT_MONITOR_MA_PER_VOLT = 10.0   # 1 V == 10 mA
+
+# Display / sanity limits
+AMP_MAX_KV     = 5.0    # amplifier rated +/-5 kV
+AMP_MAX_MA_DC  = 20.0   # continuous DC rating
+AMP_MAX_MA_PK  = 100.0  # 4 ms peak rating
+
+# Plot colors, matched to the log-amp tab's palette for visual consistency.
+AMP_COLORS = {
+    "X+": "#e74c3c",   # red
+    "X-": "#3498db",   # blue
+    "Y+": "#c47a00",   # amber
+    "Y-": "#1a7a1a",   # green
+}
+
+# The complete channel set the shared poll worker must read every cycle:
+# 4 log amps + 8 amplifier monitors = 12 channels, ONE eReadNames round trip.
+ALL_AIN_NAMES = list(LABJACK_CHANNEL_MAP.keys()) + AMP_AIN_NAMES
+
 
 # --- Self-test ---------------------------------------------------------------
 
@@ -146,6 +195,19 @@ if __name__ == "__main__":
     # Log-amp models
     for name, spec in LOG_AMP_MODELS.items():
         assert "polarity" in spec and "v_at_1nA" in spec and "v_at_1mA" in spec
+
+    # Amplifier monitor map
+    assert AMP_LABELS == ["X+", "X-", "Y+", "Y-"]
+    assert len(AMP_AIN_NAMES) == 8
+    assert AMP_AIN_NAMES == ["AIN4", "AIN5", "AIN6", "AIN7",
+                             "AIN8", "AIN9", "AIN10", "AIN11"]
+    # No overlap with the log amps — this is the whole safety point.
+    assert not (set(AMP_AIN_NAMES) & set(LABJACK_CHANNEL_MAP.keys())), \
+        "Amplifier AINs collide with log-amp AINs!"
+    assert len(ALL_AIN_NAMES) == 12
+    assert len(set(ALL_AIN_NAMES)) == 12, "Duplicate AIN in ALL_AIN_NAMES"
+    for lbl in AMP_LABELS:
+        assert lbl in AMP_COLORS
 
     print("[OK] slit_config self-test passed")
     print(f"    STEPS_PER_MM = {STEPS_PER_MM['A']}")

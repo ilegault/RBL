@@ -16,7 +16,9 @@ def mock_ljm(monkeypatch):
     m = MagicMock()
     m.openS.return_value = 42                       # fake device handle
     m.eReadName.return_value = 470012345.0          # serial number
-    m.eReadNames.return_value = [0.10, 0.20, 0.30, 0.40]
+    m.eReadNames.return_value = [0.10, 0.20, 0.30, 0.40,   # log amps
+                                 1.0, 0.5, 1.1, 0.6,       # amp X+, X-
+                                 1.2, 0.7, 1.3, 0.8]       # amp Y+, Y-
     monkeypatch.setattr(ljd, "ljm", m)
     monkeypatch.setattr(ljd, "LJM_AVAILABLE", True)
     return m
@@ -30,16 +32,16 @@ class TestConnect:
         assert lj.connected
         assert lj.connection_type == "USB"
 
-    def test_connect_configures_four_ains(self, mock_ljm):
+    def test_connect_configures_twelve_ains(self, mock_ljm):
         lj = LabJackT7()
         lj.connect("ETHERNET", "192.168.1.5")
-        # Each of AIN0..AIN3 gets range, single-ended negative-ch, and resolution.
+        # AIN0..AIN11 each get range, single-ended negative-ch, and resolution.
         names_written = [call.args[1] for call in mock_ljm.eWriteName.call_args_list]
-        for ch in range(4):
+        for ch in range(12):
             assert f"AIN{ch}_RANGE" in names_written
             assert f"AIN{ch}_NEGATIVE_CH" in names_written
             assert f"AIN{ch}_RESOLUTION_INDEX" in names_written
-        assert len(mock_ljm.eWriteName.call_args_list) == 12
+        assert len(mock_ljm.eWriteName.call_args_list) == 36   # 12 x 3
 
     def test_connect_sets_pm10v_range(self, mock_ljm):
         lj = LabJackT7()
@@ -77,18 +79,23 @@ class TestRead:
         lj = LabJackT7()
         lj.connect()
         readings = lj.read_channels()
-        assert readings == {"AIN0": 0.10, "AIN1": 0.20,
-                            "AIN2": 0.30, "AIN3": 0.40}
+        assert len(readings) == 12
+        assert readings["AIN0"] == 0.10
+        assert readings["AIN3"] == 0.40
+        assert readings["AIN4"] == 1.0     # amp X+ voltage monitor
+        assert readings["AIN11"] == 0.8    # amp Y- current monitor
 
     def test_read_channels_is_single_batched_call(self, mock_ljm):
+        """All 12 channels in ONE round trip — the whole no-interference design
+        rests on this. Two eReadNames calls from two threads would collide."""
         lj = LabJackT7()
         lj.connect()
         lj.read_channels()
         mock_ljm.eReadNames.assert_called_once()
         args = mock_ljm.eReadNames.call_args.args
         assert args[0] == 42                # handle
-        assert args[1] == 4                 # count
-        assert args[2] == ["AIN0", "AIN1", "AIN2", "AIN3"]
+        assert args[1] == 12                # count
+        assert args[2] == [f"AIN{i}" for i in range(12)]
 
     def test_read_custom_channel_subset(self, mock_ljm):
         mock_ljm.eReadNames.return_value = [1.0, 2.0]
