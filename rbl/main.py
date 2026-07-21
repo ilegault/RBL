@@ -32,7 +32,6 @@ def run_config(config_path):
     import matplotlib.pyplot as _plt  # noqa: F401 — triggers backend registration
 
     import yaml
-    from rbl.config.defaults import DEFAULTS
     from rbl.scan.patterns import get_realistic_trajectory
     from rbl.scan.dose import compute_dose
     from rbl.scan.metrics import compute_all_metrics

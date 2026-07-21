@@ -1,5 +1,5 @@
 """
-current_tab.py
+logamp_tab.py
 PySide6 widget for the "Beam Current" outer tab.
 
 Reads 4 analog inputs from a LabJack T7 at ~10 Hz, converts each log-amp
@@ -29,7 +29,7 @@ from rbl.hardware.labjack_driver import LJM_AVAILABLE
 from rbl.hardware.current_monitor import (
     voltage_to_current, format_current, beam_centering, RollingBuffer,
 )
-from rbl.hardware import slit_config as SC
+from rbl.config import hardware_config as SC
 from labjack_panel import LabJackPanel
 
 
@@ -184,7 +184,7 @@ class CurrentTab(QWidget):
 
         currents = {}
         # The shared worker emits all 12 AINs. Take ONLY the log-amp channels;
-        # AIN4-AIN11 belong to the HV amplifier tab and must be ignored here.
+        # AIN6-AIN13 belong to the HV amplifier tab and must be ignored here.
         for ain in SC.LABJACK_CHANNEL_MAP.keys():
             V = values.get(ain)
             if V is None:

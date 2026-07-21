@@ -7,7 +7,7 @@ from rbl.hardware.amp_monitor import (
     monitor_to_kv, monitor_to_ma, format_kv, format_ma,
     voltage_status, current_status,
 )
-from rbl.hardware import slit_config as SC
+from rbl.config import hardware_config as SC
 
 
 class TestVoltageMonitor:

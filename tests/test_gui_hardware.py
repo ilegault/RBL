@@ -163,7 +163,7 @@ class TestMotorTabUnits:
         mt.abort_and_close()
 
     def test_default_speed_is_cps(self, motor):
-        import rbl.hardware.slit_config as SC
+        import rbl.config.hardware_config as SC
         panel = motor.axes["A"]
         assert panel._speed_in_cps() == SC.DEFAULT_JOG_SPEED
 
@@ -178,7 +178,7 @@ class TestMotorTabUnits:
         panel = motor.axes["A"]
         panel.cbo_target_unit.setCurrentText("mm")
         panel.spn_target.setValue(10.0)
-        import rbl.hardware.slit_config as SC
+        import rbl.config.hardware_config as SC
         assert panel._target_in_counts() == SC.mm_to_counts("A", 10.0)
 
     def test_target_default_counts(self, motor):
@@ -365,7 +365,7 @@ class TestHomingWorker:
     def test_restores_default_speed_after_homing(self, qapp, monkeypatch):
         import motor_tab
         from motor_tab import HomingWorker
-        import rbl.hardware.slit_config as SC
+        import rbl.config.hardware_config as SC
         monkeypatch.setattr(motor_tab.time, "sleep", lambda *a, **k: None)
         g = self._mock_galil(home_switch=False)
         hw = HomingWorker(g, "A")

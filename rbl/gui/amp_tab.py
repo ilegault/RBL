@@ -4,14 +4,14 @@ PySide6 widget for the "HV Amplifiers" outer tab.
 
 Displays the VOLTAGE MONITOR and CURRENT MONITOR readings of four
 EEL5000.20.100 high-voltage amplifiers (X+, X-, Y+, Y-), wired to a LabJack T7
-via a CB37 terminal board on AIN4..AIN11.
+via a CB37 terminal board on AIN6..AIN13.
 
 This tab does NOT own a LabJack connection. MainWindow owns the single shared
-LabJackT7 + poll worker and feeds every tab the same 12-channel reading dict.
-We take AIN4..AIN11 and ignore AIN0..AIN3 (the log amps). See
+LabJackT7 + poll worker and feeds every tab the same 14-channel reading dict.
+We take AIN6..AIN13 and ignore AIN0..AIN3 (the log amps). See
 rbl/hardware/labjack_poller.py.
 
-Plot navigation mirrors current_tab.py exactly:
+Plot navigation mirrors logamp_tab.py exactly:
   - Fixed 2-minute viewport (WINDOW_SECONDS = 120).
   - Slider at max  -> LIVE: window tracks "now".
   - Slider dragged -> FROZEN: window locked to a historical position.
@@ -35,7 +35,7 @@ from rbl.hardware.amp_monitor import (
     monitor_to_kv, monitor_to_ma, format_kv, format_ma,
     voltage_status, current_status,
 )
-from rbl.hardware import slit_config as SC
+from rbl.config import hardware_config as SC
 from labjack_panel import LabJackPanel
 
 
@@ -236,7 +236,7 @@ class AmpTab(QWidget):
     # ---- Slots ---------------------------------------------------------------
 
     def _on_reading(self, t: float, values: dict):
-        """Consume ONLY AIN4..AIN11. AIN0..AIN3 belong to the Beam Current tab."""
+        """Consume ONLY AIN6..AIN13. AIN0..AIN3 belong to the Beam Current tab."""
         for amp in SC.AMP_LABELS:
             v_ain = SC.AMP_CHANNEL_MAP[amp]["voltage"]
             i_ain = SC.AMP_CHANNEL_MAP[amp]["current"]
@@ -383,10 +383,11 @@ if __name__ == "__main__":
     # Feed one synthetic reading covering all 12 channels.
     w._on_reading(0.0, {
         "AIN0": 3.0, "AIN1": 3.0, "AIN2": 3.0, "AIN3": 3.0,   # log amps (ignored)
-        "AIN4": 3.0, "AIN5":  1.0,      # X+ : 3 kV, 10 mA
-        "AIN6": -3.0, "AIN7": 1.0,      # X- : -3 kV, 10 mA
-        "AIN8": 2.0, "AIN9":  0.5,      # Y+ : 2 kV, 5 mA
-        "AIN10": -2.0, "AIN11": 0.5,    # Y- : -2 kV, 5 mA
+        "AIN4": 0.0, "AIN5": 0.0,                              # spare (ignored)
+        "AIN13": 3.0, "AIN12":  1.0,    # X+ : 3 kV, 10 mA
+        "AIN11": -3.0, "AIN10": 1.0,    # X- : -3 kV, 10 mA
+        "AIN9": 2.0, "AIN8":  0.5,      # Y+ : 2 kV, 5 mA
+        "AIN7": -2.0, "AIN6": 0.5,      # Y- : -2 kV, 5 mA
     })
     assert "3.000 kV" in w.lbl_kv["X+"].text(), w.lbl_kv["X+"].text()
     assert "10.000 mA" in w.lbl_ma["X+"].text(), w.lbl_ma["X+"].text()

@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from rbl.hardware.galil_driver import GalilController, GalilError
-from rbl.hardware import slit_config as SC
+from rbl.config import hardware_config as SC
 
 
 # ─── Background poll thread ───────────────────────────────────────────────────
@@ -194,6 +194,8 @@ class AxisControls(QGroupBox):
         jog_row = QHBoxLayout()
         self.btn_jog_neg = QPushButton("Jog −")
         self.btn_jog_pos = QPushButton("Jog +")
+        self.btn_jog_neg.setMinimumHeight(30)
+        self.btn_jog_pos.setMinimumHeight(30)
         self.btn_jog_neg.pressed.connect(lambda: self._jog(-1))
         self.btn_jog_neg.released.connect(self._stop)
         self.btn_jog_pos.pressed.connect(lambda: self._jog(+1))
@@ -206,6 +208,7 @@ class AxisControls(QGroupBox):
         speed_row = QHBoxLayout()
         self.spn_speed = QDoubleSpinBox()
         self.spn_speed.setDecimals(2)
+        self.spn_speed.setMaximumWidth(100)
         self.cbo_speed_unit = QComboBox()
         self.cbo_speed_unit.addItems(["cps", "mm/s"])
         self.cbo_speed_unit.currentIndexChanged.connect(self._on_speed_unit_changed)
@@ -218,8 +221,10 @@ class AxisControls(QGroupBox):
         # Stop / Zero row
         ctrl_row1 = QHBoxLayout()
         self.btn_stop = QPushButton("Stop")
+        self.btn_stop.setMinimumHeight(30)
         self.btn_stop.clicked.connect(self._stop)
         self.btn_zero = QPushButton("Zero here")
+        self.btn_zero.setMinimumHeight(30)
         self.btn_zero.clicked.connect(self._define_zero)
         ctrl_row1.addWidget(self.btn_stop)
         ctrl_row1.addWidget(self.btn_zero)
@@ -253,11 +258,13 @@ class AxisControls(QGroupBox):
         move_row = QHBoxLayout()
         self.spn_target = QDoubleSpinBox()
         self.spn_target.setDecimals(3)
+        self.spn_target.setMaximumWidth(100)
         self.cbo_target_unit = QComboBox()
         self.cbo_target_unit.addItems(["counts", "mm"])
         self.cbo_target_unit.setCurrentIndex(1)          # default to mm
         self.cbo_target_unit.currentIndexChanged.connect(self._on_target_unit_changed)
         self.btn_move = QPushButton("Move to")
+        self.btn_move.setMinimumHeight(30)
         self.btn_move.clicked.connect(self._move_absolute)
         move_row.addWidget(self.spn_target, stretch=1)
         move_row.addWidget(self.cbo_target_unit)
@@ -284,23 +291,19 @@ class AxisControls(QGroupBox):
         if unit == "cps":
             self.spn_speed.setRange(1.0, 100_000.0)
             self.spn_speed.setSingleStep(100.0)
-            self.spn_speed.setSuffix(" cps")
         else:  # mm/s
             max_mms = SC.cps_to_mm_per_sec(self.axis, 100_000)
             self.spn_speed.setRange(0.01, max_mms)
             self.spn_speed.setSingleStep(0.1)
-            self.spn_speed.setSuffix(" mm/s")
 
     def _set_target_unit_range(self, unit: str):
         if unit == "counts":
             self.spn_target.setRange(-10_000_000.0, 10_000_000.0)
             self.spn_target.setSingleStep(100.0)
-            self.spn_target.setSuffix(" cts")
         else:  # mm
             max_mm = SC.counts_to_mm(self.axis, 10_000_000)
             self.spn_target.setRange(-max_mm, max_mm)
             self.spn_target.setSingleStep(0.1)
-            self.spn_target.setSuffix(" mm")
 
     def _on_speed_unit_changed(self, idx: int):
         unit = self.cbo_speed_unit.itemText(idx)
@@ -573,9 +576,11 @@ class MotorTab(QWidget):
         self.galil  = GalilController()
         self.worker = None
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(8)
+        outer_layout = QHBoxLayout(self)
+        outer_layout.setContentsMargins(8, 8, 8, 8)
+        outer_layout.setSpacing(8)
+        left_layout = QVBoxLayout()
+        left_layout.setSpacing(8)
 
         # ── Connection bar ──────────────────────────────────────────────────
         conn_box = QGroupBox("Galil DMC-4103 Connection")
@@ -593,7 +598,29 @@ class MotorTab(QWidget):
         self.lbl_model = QLabel("")
         self.lbl_model.setStyleSheet("color: #555; font-style: italic;")
         conn.addWidget(self.lbl_model, stretch=1)
-        layout.addWidget(conn_box)
+        left_layout.addWidget(conn_box)
+
+        # ── Slit jaw offset notice ──────────────────────────────────────────
+        offset_box = QGroupBox("Slit Position Reference — Absolute Distance from Beam Centre")
+        offset_outer = QVBoxLayout(offset_box)
+        offset_outer.setSpacing(4)
+
+        notice_lbl = QLabel(
+            "All position inputs and readouts for each slit jaw are in absolute distance "
+            "from the beam centre (mm). When a jaw is at the homed / zeroed position "
+            "(counts = 0), it physically sits 0.2 mm from centre — giving a 0.4 mm total "
+            "gap between opposing jaws. The software automatically accounts for this 0.2 mm "
+            "hardware offset in every conversion.\n\n"
+            "⚠  The 0.2 mm offset is only valid after each axis has been properly zeroed "
+            "(homed). Always zero all axes before operating the slits. Failure to do so "
+            "will cause all absolute position values to be incorrect."
+        )
+        notice_lbl.setWordWrap(True)
+        notice_lbl.setStyleSheet(
+            "color: #333; font-size: 9pt; padding: 2px;"
+        )
+        offset_outer.addWidget(notice_lbl)
+        left_layout.addWidget(offset_box)
 
         # ── Emergency stop + enable/disable rows ────────────────────────────
         estop_row = QHBoxLayout()
@@ -634,7 +661,7 @@ class MotorTab(QWidget):
         )
         self.btn_simple_mode.toggled.connect(self._toggle_simple_mode)
         estop_row.addWidget(self.btn_simple_mode, stretch=1)
-        layout.addLayout(estop_row)
+        left_layout.addLayout(estop_row)
 
         # ── 4 axis panels in 2×2 grid ────────────────────────────────────────
         grid = QGridLayout()
@@ -644,16 +671,15 @@ class MotorTab(QWidget):
             panel = AxisControls(axis, lambda: self.galil, self._log_line, self)
             self.axes[axis] = panel
             grid.addWidget(panel, i // 2, i % 2)
-        layout.addLayout(grid, stretch=1)
+        left_layout.addLayout(grid, stretch=1)
 
-        # ── Console ────────────────────────────────────────────────────────
+        # ── Console (right panel — full height) ────────────────────────────
         cons_box = QGroupBox("Command Console")
         cons = QVBoxLayout(cons_box)
         self.console = QTextEdit()
         self.console.setReadOnly(True)
         self.console.setFont(QFont("Menlo", 9))
-        self.console.setMaximumHeight(300)
-        cons.addWidget(self.console)
+        cons.addWidget(self.console, stretch=1)
         manual_row = QHBoxLayout()
         self.manual_cmd = HistoryLineEdit()
         self.manual_cmd.setPlaceholderText("Manual DMC command (e.g. MG _RPA, TH, LS)")
@@ -663,7 +689,10 @@ class MotorTab(QWidget):
         manual_row.addWidget(self.manual_cmd, stretch=1)
         manual_row.addWidget(self.btn_send)
         cons.addLayout(manual_row)
-        layout.addWidget(cons_box)
+
+        # ── Assemble outer layout (left 2/3 controls, right 1/3 console) ──
+        outer_layout.addLayout(left_layout, stretch=2)
+        outer_layout.addWidget(cons_box, stretch=1)
 
         self._set_buttons_connected(False)
 

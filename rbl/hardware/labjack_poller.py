@@ -15,13 +15,13 @@ import time
 from PySide6.QtCore import QThread, Signal
 
 from rbl.hardware.labjack_driver import LabJackT7
-from rbl.hardware import slit_config as SC
+from rbl.config import hardware_config as SC
 
 
 class LabJackPollWorker(QThread):
-    """Polls all 12 AINs at a fixed period and emits one dict per cycle.
+    """Polls all 14 AINs at a fixed period and emits one dict per cycle.
 
-    reading: (t_seconds_since_start, {"AIN0": volts, ..., "AIN11": volts})
+    reading: (t_seconds_since_start, {"AIN0": volts, ..., "AIN13": volts})
     """
     reading = Signal(float, dict)   # t_seconds, {AIN: volts}
     error   = Signal(str)

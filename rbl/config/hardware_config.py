@@ -1,10 +1,13 @@
 """
-slit_config.py
-Hardware mapping and calibration for the 4-jaw beam-line slits.
+hardware_config.py
+Central hardware mapping and calibration constants for the RBL beamline.
 
-Galil DMC-4103 axis letters (A,B,C,D) -> physical slit jaws (X+, X-, Y+, Y-).
+Covers:
+  - Galil DMC-4103 slit motor axes (A,B,C,D) -> physical jaws (X+, X-, Y+, Y-)
+  - NEC log-amp LabJack channel assignments (AIN0-AIN3)
+  - EEL5000.20.100 HV amplifier LabJack channel assignments (AIN6-AIN13)
 
-Calibration constants from the 2HA075520 slit controller specification email:
+Galil calibration constants from the 2HA075520 slit controller specification email:
   - Step mode = 1/2  (YA 2)
   - 200 steps/rev motor, 40:1 gear, 25.4 mm/rev lead-screw pitch
   - STEPS_PER_MM = 200 * 40 / 25.4 / 1  (full steps/mm) * 2  (half-step) = 629.92126
@@ -121,7 +124,7 @@ LABJACK_CHANNEL_MAP = {
 #   VOLTAGE MONITOR : 1000:1  -> 1 V at the BNC == 1 kV at the HV output
 #   CURRENT MONITOR : 1 V     == 10 mA drawn from the amplifier
 #
-# Wired to the CB37 terminal board on AIN4..AIN11. AIN0..AIN3 are reserved for
+# Wired to the CB37 terminal board on AIN6..AIN13. AIN0..AIN3 are reserved for
 # the log amps on the T7 body terminals and MUST NOT be duplicated on the CB37.
 #
 # Range must be +/-10 V on all eight: the current monitor reaches +/-10 V during
@@ -131,10 +134,10 @@ AMP_LABELS = ["X+", "X-", "Y+", "Y-"]
 
 # amp label -> {"voltage": AIN name, "current": AIN name}
 AMP_CHANNEL_MAP = {
-    "X+": {"voltage": "AIN4",  "current": "AIN5"},
-    "X-": {"voltage": "AIN6",  "current": "AIN7"},
-    "Y+": {"voltage": "AIN8",  "current": "AIN9"},
-    "Y-": {"voltage": "AIN10", "current": "AIN11"},
+    "X+": {"voltage": "AIN13", "current": "AIN12"},
+    "X-": {"voltage": "AIN11", "current": "AIN10"},
+    "Y+": {"voltage": "AIN9",  "current": "AIN8"},
+    "Y-": {"voltage": "AIN7",  "current": "AIN6"},
 }
 
 # Flat, ordered list of every AIN the amplifier tab needs.
@@ -199,8 +202,8 @@ if __name__ == "__main__":
     # Amplifier monitor map
     assert AMP_LABELS == ["X+", "X-", "Y+", "Y-"]
     assert len(AMP_AIN_NAMES) == 8
-    assert AMP_AIN_NAMES == ["AIN4", "AIN5", "AIN6", "AIN7",
-                             "AIN8", "AIN9", "AIN10", "AIN11"]
+    assert AMP_AIN_NAMES == ["AIN13", "AIN12", "AIN11", "AIN10",
+                             "AIN9", "AIN8", "AIN7", "AIN6"]
     # No overlap with the log amps — this is the whole safety point.
     assert not (set(AMP_AIN_NAMES) & set(LABJACK_CHANNEL_MAP.keys())), \
         "Amplifier AINs collide with log-amp AINs!"
@@ -209,7 +212,7 @@ if __name__ == "__main__":
     for lbl in AMP_LABELS:
         assert lbl in AMP_COLORS
 
-    print("[OK] slit_config self-test passed")
+    print("[OK] hardware_config self-test passed")
     print(f"    STEPS_PER_MM = {STEPS_PER_MM['A']}")
     print(f"    1 mm = {mm_to_counts('A', 1.0)} counts")
     print(f"    1 mm/s = {mm_per_sec_to_cps('A', 1.0)} cps")

@@ -14,7 +14,7 @@ if "DISPLAY" not in os.environ and "QT_QPA_PLATFORM" not in os.environ:
 
 from PySide6.QtWidgets import QApplication
 
-from rbl.hardware import slit_config as SC
+from rbl.config import hardware_config as SC
 
 
 @pytest.fixture(scope="module")

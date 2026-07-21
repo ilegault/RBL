@@ -92,20 +92,30 @@ class ChannelPanel(QGroupBox):
         self.spn_freq.setRange(0.0001, 25_000_000.0)
         self.spn_freq.setValue(1000.0)
         self.spn_freq.setDecimals(4)
-        self.spn_freq.setSuffix(" Hz")
-        self.spn_freq.setMinimumWidth(120)
+        self.spn_freq.setMinimumWidth(80)
+        self.spn_freq.setMaximumWidth(110)
         self.lbl_freq = QLabel("Frequency:")
-        form.addRow(self.lbl_freq, self.spn_freq)
+        freq_row = QHBoxLayout()
+        freq_row.setContentsMargins(0, 0, 0, 0)
+        freq_row.setSpacing(4)
+        freq_row.addWidget(self.spn_freq, stretch=1)
+        freq_row.addWidget(QLabel("Hz"))
+        form.addRow(self.lbl_freq, freq_row)
 
         # Amplitude
         self.spn_amp = QDoubleSpinBox()
         self.spn_amp.setRange(0.0, MAX_GEN_VOLTS)
         self.spn_amp.setValue(0.0)
         self.spn_amp.setDecimals(4)
-        self.spn_amp.setSuffix(" Vpp")
-        self.spn_amp.setMinimumWidth(120)
+        self.spn_amp.setMinimumWidth(80)
+        self.spn_amp.setMaximumWidth(110)
         self.lbl_amp = QLabel("Amplitude:")
-        form.addRow(self.lbl_amp, self.spn_amp)
+        amp_row = QHBoxLayout()
+        amp_row.setContentsMargins(0, 0, 0, 0)
+        amp_row.setSpacing(4)
+        amp_row.addWidget(self.spn_amp, stretch=1)
+        amp_row.addWidget(QLabel("Vpp"))
+        form.addRow(self.lbl_amp, amp_row)
 
         # HV consequence label (updates live)
         self.lbl_hv = QLabel("→ 0.0000 kV/plate  (0.0000 kV p-p)")
@@ -117,19 +127,30 @@ class ChannelPanel(QGroupBox):
         self.spn_offset.setRange(-MAX_GEN_VOLTS, MAX_GEN_VOLTS)
         self.spn_offset.setValue(0.0)
         self.spn_offset.setDecimals(4)
-        self.spn_offset.setSuffix(" V")
-        self.spn_offset.setMinimumWidth(120)
+        self.spn_offset.setMinimumWidth(80)
+        self.spn_offset.setMaximumWidth(110)
         self.lbl_offset = QLabel("Offset:")
-        form.addRow(self.lbl_offset, self.spn_offset)
+        offset_row = QHBoxLayout()
+        offset_row.setContentsMargins(0, 0, 0, 0)
+        offset_row.setSpacing(4)
+        offset_row.addWidget(self.spn_offset, stretch=1)
+        offset_row.addWidget(QLabel("V"))
+        form.addRow(self.lbl_offset, offset_row)
 
         # Phase
         self.spn_phase = QDoubleSpinBox()
         self.spn_phase.setRange(-360.0, 360.0)
         self.spn_phase.setValue(0.0)
         self.spn_phase.setDecimals(2)
-        self.spn_phase.setSuffix(" °")
+        self.spn_phase.setMinimumWidth(80)
+        self.spn_phase.setMaximumWidth(110)
         self.lbl_phase = QLabel("Phase:")
-        form.addRow(self.lbl_phase, self.spn_phase)
+        phase_row = QHBoxLayout()
+        phase_row.setContentsMargins(0, 0, 0, 0)
+        phase_row.setSpacing(4)
+        phase_row.addWidget(self.spn_phase, stretch=1)
+        phase_row.addWidget(QLabel("°"))
+        form.addRow(self.lbl_phase, phase_row)
 
         # Load
         self.le_load = QLineEdit("INFinity")
@@ -147,6 +168,7 @@ class ChannelPanel(QGroupBox):
         self.btn_output = QPushButton("Output OFF")
         self.btn_output.setCheckable(True)
         self.btn_output.setChecked(False)
+        self.btn_output.setMinimumHeight(32)
         self.btn_output.setStyleSheet(
             "QPushButton { background:#8c0000; color:white; font-weight:bold; }"
             "QPushButton:checked { background:#1a7000; color:white; font-weight:bold; }"
@@ -158,6 +180,7 @@ class ChannelPanel(QGroupBox):
         btn_row.addWidget(self.btn_output)
 
         self.btn_apply = QPushButton("Apply")
+        self.btn_apply.setMinimumHeight(32)
         self.btn_apply.setStyleSheet(
             "QPushButton { background:#004e8c; color:white; font-weight:bold; }"
             "QPushButton:hover { background:#0063b1; }"
@@ -256,9 +279,11 @@ class FuncGenTab(QWidget):
         self._discovered: list[dict] = []   # last discover() result
         self._config = _load_config()
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(8)
+        outer_layout = QHBoxLayout(self)
+        outer_layout.setContentsMargins(8, 8, 8, 8)
+        outer_layout.setSpacing(8)
+        left_layout = QVBoxLayout()
+        left_layout.setSpacing(8)
 
         # ── Discovery & instrument assignment ─────────────────────────────
         disc_box = QGroupBox("RIGOL DG1022Z — Discover & Assign")
@@ -301,7 +326,7 @@ class FuncGenTab(QWidget):
         status_row.addWidget(self.lbl_status_b)
         disc_layout.addLayout(status_row)
 
-        layout.addWidget(disc_box)
+        left_layout.addWidget(disc_box)
 
         # ── 4 channel panels in 2×2 grid ─────────────────────────────────
         grid = QGridLayout()
@@ -324,7 +349,7 @@ class FuncGenTab(QWidget):
             self.panels[key] = p
             r, col = positions[key]
             grid.addWidget(p, r, col)
-        layout.addLayout(grid, stretch=1)
+        left_layout.addLayout(grid, stretch=1)
 
         # ── Apply All ─────────────────────────────────────────────────────
         apply_all_row = QHBoxLayout()
@@ -339,14 +364,11 @@ class FuncGenTab(QWidget):
         )
         self.btn_apply_all.clicked.connect(self._apply_all)
         apply_all_row.addWidget(self.btn_apply_all)
-        layout.addLayout(apply_all_row)
+        left_layout.addLayout(apply_all_row)
 
-        # ── SCPI console ──────────────────────────────────────────────────
+        # ── SCPI console (right panel — full height) ──────────────────────
         scpi_box = QGroupBox("SCPI Console  (direct instrument access)")
-        scpi_box.setCheckable(True)
-        scpi_box.setChecked(False)
-        scpi_inner = QWidget()
-        scpi_vbox = QVBoxLayout(scpi_inner)
+        scpi_vbox = QVBoxLayout(scpi_box)
         scpi_vbox.setSpacing(4)
 
         tgt_row = QHBoxLayout()
@@ -376,16 +398,13 @@ class FuncGenTab(QWidget):
         self.scpi_log = QTextEdit()
         self.scpi_log.setReadOnly(True)
         self.scpi_log.setFont(QFont("Menlo", 9))
-        self.scpi_log.setMaximumHeight(200)
-        scpi_vbox.addWidget(self.scpi_log)
+        scpi_vbox.addWidget(self.scpi_log, stretch=1)
 
-        scpi_box_layout = QVBoxLayout(scpi_box)
-        scpi_box_layout.addWidget(scpi_inner)
-        # Show/hide inner widget when group-box checkbox is toggled
-        scpi_box.toggled.connect(scpi_inner.setVisible)
-        scpi_inner.setVisible(False)
         self._set_scpi_enabled(False)
-        layout.addWidget(scpi_box)
+
+        # ── Assemble outer layout (left 2/3 controls, right 1/3 console) ──
+        outer_layout.addLayout(left_layout, stretch=2)
+        outer_layout.addWidget(scpi_box, stretch=1)
 
         # ── Poll timer (read-only) ─────────────────────────────────────────
         self._poll_timer = QTimer(self)

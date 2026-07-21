@@ -49,7 +49,7 @@ class MainWindow(QMainWindow):
 
         # ── Pages: Motors (0), Current (1), Amplifiers (2), FuncGens (3) ───────
         from motor_tab import MotorTab
-        from current_tab import CurrentTab
+        from logamp_tab import CurrentTab
         from amp_tab import AmpTab
         from funcgen_tab import FuncGenTab
         self.motor_tab   = MotorTab(self)
@@ -64,8 +64,8 @@ class MainWindow(QMainWindow):
         # ── Shared LabJack T7 ─────────────────────────────────────────────────
         #
         # ONE physical T7 -> ONE LabJackT7 instance -> ONE poll thread reading
-        # all 12 AINs in a single eReadNames round trip. Both the Beam Current
-        # tab (AIN0-3, log amps) and the HV Amplifier tab (AIN4-11, EEL5000
+        # all 14 AINs in a single eReadNames round trip. Both the Beam Current
+        # tab (AIN0-3, log amps) and the HV Amplifier tab (AIN6-13, EEL5000
         # monitors) subscribe to the same signal and filter for their own
         # channels. Never let a tab open its own handle.
         self._lj        = LabJackT7()

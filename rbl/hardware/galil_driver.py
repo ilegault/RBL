@@ -106,7 +106,7 @@ class GalilController:
         AC/DC, SP, ST, MO, AG, then SH to enable the specified axes.
         Call once after connect().
         """
-        from rbl.hardware import slit_config as SC
+        from rbl.config import hardware_config as SC
         n = len(axes)
 
         def rep(v):

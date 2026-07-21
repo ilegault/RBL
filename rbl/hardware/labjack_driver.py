@@ -3,7 +3,7 @@ labjack_driver.py
 Thin wrapper around the labjack-ljm Python binding for the T7.
 
 Reads single-ended analog inputs. AIN0-AIN3 are the NEC log amps (on the T7 body
-screw terminals); AIN4-AIN11 are the EEL5000 HV amplifier voltage/current monitors
+screw terminals); AIN6-AIN13 are the EEL5000 HV amplifier voltage/current monitors
 (on a CB37 terminal board). All channels are configured +/-10 V, single-ended.
 
 IMPORTANT: only ONE LabJackT7 instance may exist per physical device. LJM will
@@ -24,9 +24,9 @@ except Exception as _e:
     _LJM_IMPORT_ERROR = str(_e)
 
 
-# Number of AINs to configure on connect. AIN0-3 = log amps, AIN4-11 = HV amp
-# monitors. AIN12/13 are left unconfigured (spare).
-N_CONFIGURED_AINS = 12
+# Number of AINs to configure on connect. AIN0-3 = log amps, AIN6-13 = HV amp
+# monitors. AIN4-5 are left unconfigured (spare).
+N_CONFIGURED_AINS = 14
 
 # Default read set: all 12 channels in one batched round trip.
 DEFAULT_CHANNELS = tuple(f"AIN{i}" for i in range(N_CONFIGURED_AINS))

@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch, PropertyMock
 
 from rbl.hardware.galil_driver import GalilController, GalilError
 from rbl.hardware.labjack_driver import LabJackT7
-from rbl.hardware.slit_config import (
+from rbl.config.hardware_config import (
     AXIS_LETTERS, AXIS_NAMES, LABJACK_CHANNEL_MAP,
     counts_to_mm, mm_to_counts,
     DEFAULT_SPEED_COUNTS_PER_SEC, DEFAULT_ACCEL_COUNTS_PER_SEC2,
@@ -113,7 +113,7 @@ class TestGalilControllerMocked:
         assert not g.connected
 
 
-# ── slit_config ───────────────────────────────────────────────────────────────
+# ── hardware_config ───────────────────────────────────────────────────────────
 
 class TestSlitConfig:
     def test_four_axis_letters(self):
@@ -130,7 +130,7 @@ class TestSlitConfig:
         # mm_to_counts rounds to whole motor steps, so the round-trip can only be
         # exact to within one step (~1/630 mm). Assert that physical precision,
         # not an impossible 1e-9.
-        from rbl.hardware.slit_config import STEPS_PER_MM
+        from rbl.config.hardware_config import STEPS_PER_MM
         for axis in AXIS_LETTERS:
             mm = 5.0
             counts = mm_to_counts(axis, mm)
@@ -141,7 +141,7 @@ class TestSlitConfig:
     def test_zero_counts_is_physical_gap_offset(self):
         # counts=0 (after homing) maps to MM_ZERO_OFFSET (0.2 mm), not 0.0.
         # The jaws sit 0.2 mm from true centre when homed, by design.
-        from rbl.hardware.slit_config import MM_ZERO_OFFSET
+        from rbl.config.hardware_config import MM_ZERO_OFFSET
         for axis in AXIS_LETTERS:
             assert counts_to_mm(axis, 0) == pytest.approx(MM_ZERO_OFFSET[axis])
 
