@@ -146,3 +146,28 @@ class TestSerialAndDisconnect:
         mock_ljm.close.side_effect = RuntimeError("already closed")
         lj.disconnect()           # must not raise
         assert lj.handle is None
+
+    def test_disconnect_stops_stream_before_closing(self, mock_ljm):
+        # Regression: closing a handle that is still streaming leaves the T7 in
+        # stream mode until it is physically unplugged.  disconnect() must call
+        # eStreamStop before ljm.close, no matter what.
+        lj = LabJackT7()
+        lj.connect()
+        lj.disconnect()
+        assert mock_ljm.eStreamStop.call_args_list == [((42,),)]
+        assert mock_ljm.close.call_args_list == [((42,),)]
+
+    def test_stop_stream_swallows_not_running(self, mock_ljm):
+        # eStreamStop raises if no stream is running; stop_stream must swallow it.
+        lj = LabJackT7()
+        lj.connect()
+        mock_ljm.eStreamStop.side_effect = RuntimeError("STREAM_NOT_RUNNING")
+        lj.stop_stream()          # must not raise
+        lj.disconnect()           # must still close the handle
+        assert lj.handle is None
+        mock_ljm.close.assert_called_with(42)
+
+    def test_stop_stream_when_not_connected_is_safe(self):
+        lj = LabJackT7()
+        lj.stop_stream()          # must not raise with no handle
+        assert not lj.connected

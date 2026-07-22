@@ -7,6 +7,8 @@ PySide6 front-end. Analysis has been split out to the rbl-analysis repo.
 """
 import sys
 import os
+import time
+import atexit
 sys.path.insert(0, os.path.dirname(__file__))
 
 from PySide6.QtWidgets import (
@@ -20,7 +22,7 @@ from rbl.hardware.labjack_driver import LabJackT7
 from rbl.hardware.labjack_stream_worker import LabJackStreamWorker
 from rbl.config.labjack_stream_config import (
     DEFAULT_PROFILE, STREAM_PROFILES, DEFAULT_SINGLE_CHANNEL,
-    is_single_channel, channel_choices,
+    SINGLE_CHANNEL_CHOICES, is_single_channel,
 )
 
 
@@ -79,7 +81,16 @@ class MainWindow(QMainWindow):
         # Ignored while a multi-channel profile is active.
         self._active_channel  = DEFAULT_SINGLE_CHANNEL
         self._profile_updating = False   # re-entrancy guard for set_profile / set_channel
+        # Shared monotonic epoch for every stream worker this connection spawns.
+        # Set on connect so payload timestamps stay continuous across the
+        # stop/reconfigure/start cycles that profile and channel switches need.
+        self._stream_t0       = None
         self._lj_tabs         = (self.current_tab, self.amp_tab)
+
+        # Last-resort safety net: if the process is torn down without a clean
+        # closeEvent (e.g. an unhandled exit), still stop the stream and close
+        # the handle so the T7 is never left in stream mode.
+        atexit.register(self._emergency_labjack_shutdown)
 
         for tab in self._lj_tabs:
             tab.lj_panel.connect_requested.connect(self._labjack_connect)
@@ -102,6 +113,7 @@ class MainWindow(QMainWindow):
         try:
             self._lj.connect(conn_type, identifier)
             serial = self._lj.serial_number()
+            self._stream_t0 = time.monotonic()   # anchor the shared timeline
             self._start_stream_worker(self._active_profile)
             for tab in self._lj_tabs:
                 tab.on_labjack_connected(serial)
@@ -116,7 +128,9 @@ class MainWindow(QMainWindow):
         override.  Caller is responsible for stopping any existing worker first.
         """
         override = self._active_channel if is_single_channel(profile_name) else None
-        worker = LabJackStreamWorker(self._lj.handle, profile_name, override)
+        worker = LabJackStreamWorker(
+            self._lj.handle, profile_name, override, t0=self._stream_t0
+        )
         for tab in self._lj_tabs:
             worker.window_ready.connect(tab._on_window)
             worker.error.connect(tab._on_error)
@@ -133,16 +147,20 @@ class MainWindow(QMainWindow):
         """
         if self._profile_updating:
             return   # ignore re-entrant call while a switch is in progress
+        if profile_name not in STREAM_PROFILES:
+            return
+
+        # Remember the request even while disconnected so it takes effect on the
+        # next connect (the stream worker is started from _active_profile).
+        changed = (profile_name != self._active_profile)
+        self._active_profile = profile_name
         if not self._lj.connected or self._lj_worker is None:
             return
-        if profile_name == self._active_profile:
-            return
-        if profile_name not in STREAM_PROFILES:
+        if not changed:
             return
 
         self._profile_updating = True
         try:
-            self._active_profile = profile_name
             self._restart_stream_worker(profile_name)
 
             for tab in self._lj_tabs:
@@ -160,14 +178,19 @@ class MainWindow(QMainWindow):
         """
         if self._profile_updating:
             return
-        if ain_name == self._active_channel:
-            return
-        if ain_name not in channel_choices(self._active_profile):
-            return   # not a valid target (or active profile is multi-channel)
+        if ain_name not in SINGLE_CHANNEL_CHOICES:
+            return   # not a valid single-channel target
 
+        # Remember the target regardless of the active profile so a later switch
+        # to a single-channel profile starts on the channel the user picked.
+        changed = (ain_name != self._active_channel)
         self._active_channel = ain_name
+        if not changed:
+            return
         if not self._lj.connected or self._lj_worker is None:
             return   # remembered; applied when a single-channel profile starts
+        if not is_single_channel(self._active_profile):
+            return   # remembered; the live scan list is fixed in multi-channel mode
 
         self._profile_updating = True
         try:
@@ -192,11 +215,36 @@ class MainWindow(QMainWindow):
         # Stop the stream before closing the handle (hardware order matters).
         if self._lj_worker is not None:
             self._lj_worker.stop()
-            self._lj_worker.wait(3000)
+            if not self._lj_worker.wait(3000):
+                # The drain thread did not exit in time (e.g. blocked on a slow
+                # eStreamRead).  Fall through anyway: LabJackT7.disconnect()
+                # force-stops the stream on the handle before closing it, so the
+                # device is never left streaming even in this degraded case.
+                pass
             self._lj_worker = None
-        self._lj.disconnect()
+        self._stream_t0 = None
+        self._lj.disconnect()   # force-stops the stream, then closes the handle
         for tab in self._lj_tabs:
             tab.on_labjack_disconnected()
+
+    def _emergency_labjack_shutdown(self):
+        """atexit safety net — never leave the T7 in stream mode.
+
+        Runs at interpreter exit for any path that skipped closeEvent.  It must
+        not raise; a best-effort stream stop + handle close is all that matters.
+        """
+        try:
+            if self._lj_worker is not None:
+                self._lj_worker.stop()
+                self._lj_worker.wait(2000)
+                self._lj_worker = None
+        except Exception:
+            pass
+        try:
+            self._lj.stop_stream()   # explicit, in case the worker never ran finally
+            self._lj.disconnect()
+        except Exception:
+            pass
 
     def _on_labjack_error(self, msg: str):
         # The tabs each show their own warning box; we tear the connection down.

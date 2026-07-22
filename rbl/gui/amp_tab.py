@@ -7,17 +7,38 @@ EEL5000.20.100 high-voltage amplifiers (X+, X-, Y+, Y-), wired to a LabJack T7
 via a CB37 terminal board on AIN6..AIN13.
 
 This tab does NOT own a LabJack connection. MainWindow owns the single shared
-LabJackT7 + poll worker and feeds every tab the same 14-channel reading dict.
-We take AIN6..AIN13 and ignore AIN0..AIN3 (the log amps). See
-rbl/hardware/labjack_poller.py.
+LabJackT7 + stream worker and feeds every tab the same window payload. We take
+AIN6..AIN13 and ignore AIN0..AIN3 (the log amps).
 
-Plot navigation mirrors logamp_tab.py exactly:
-  - Fixed 2-minute viewport (WINDOW_SECONDS = 120).
-  - Slider at max  -> LIVE: window tracks "now".
-  - Slider dragged -> FROZEN: window locked to a historical position.
-  - Buffer holds ~1 hour (BUFFER_CAPACITY = 36 000 @ 10 Hz).
+ONE plot, two viewing modes (driven by the time-window zoom)
+-----------------------------------------------------------
+There is a single matplotlib figure (voltage over current).  The time-window
+control seamlessly changes WHAT it shows:
+
+  * TREND mode   (window >= SNAPSHOT_MAX_SECONDS):
+        One point per stream window (10 Hz) of peak-kV / RMS-mA, held in the
+        rolling history buffers.  This is the DC-bias / drift / fault view.
+
+  * SNAPSHOT mode (window <  SNAPSHOT_MAX_SECONDS):
+        The actual high-rate waveform samples from the most recent windows,
+        drawn on the SAME axes and lines.  Zooming the window down to a few ms
+        finally lets you see the deflection waveform itself — the 10 Hz trend
+        can never resolve it.
+
+There is deliberately NO second waveform plot: the one figure switches modes.
+
+Applying stream settings
+------------------------
+The profile and single-channel target combos only STAGE a selection; nothing
+touches the hardware until "Apply" is pressed.  Each profile/target change is a
+full eStreamStop -> reconfigure -> eStreamStart cycle on the T7, so committing
+them one deliberate click at a time avoids the churn (and transient glitches) of
+restarting the stream on every stray combo event.
 """
 import time
+import collections
+
+import numpy as np
 from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
@@ -38,8 +59,8 @@ from rbl.hardware.amp_monitor import (
 )
 from rbl.config import hardware_config as SC
 from rbl.config.labjack_stream_config import (
-    STREAM_PROFILES, window_samples, resolution_index,
-    is_single_channel, channel_choices, DEFAULT_SINGLE_CHANNEL,
+    STREAM_PROFILES, GUI_REFRESH_HZ, window_samples, resolution_index,
+    is_single_channel, DEFAULT_SINGLE_CHANNEL,
 )
 from labjack_panel import LabJackPanel
 
@@ -73,14 +94,31 @@ _STATUS_COLOR = {
 class AmpTab(QWidget):
     """The 'HV Amplifiers' outer tab."""
 
-    BUFFER_CAPACITY = 36_000   # ~1 hour at 10 Hz
-    WINDOW_SECONDS  = 120      # fixed 2-minute viewport
+    BUFFER_CAPACITY = 36_000   # ~1 hour at 10 Hz (trend history)
+    WINDOW_SECONDS  = 120      # default 2-minute viewport (trend mode)
 
-    # Emitted when the user changes the profile selector combo.
+    # Below this window width the single plot renders the raw high-rate waveform
+    # (snapshot mode) instead of the 10 Hz trend.  2 s is the hand-off: at 2 s
+    # the trend still has ~20 points, and the raw ring buffer holds enough to
+    # fill the view.
+    SNAPSHOT_MAX_SECONDS = 2.0
+
+    # Each stream window spans exactly one GUI-refresh period of real time,
+    # because window_samples == per_channel_rate_hz / GUI_REFRESH_HZ.
+    WINDOW_DURATION_S = 1.0 / GUI_REFRESH_HZ   # 0.1 s
+
+    # Max samples actually drawn per line in snapshot mode.  The raw window can
+    # be 10 000 points (100 kS/s); pushing all of them into matplotlib every
+    # frame is what made the plot stutter.  We min/max-decimate to this cap,
+    # which preserves the waveform envelope (peaks are never hidden) while
+    # keeping the redraw cheap.
+    WF_MAX_POINTS = 2000
+
+    # Emitted when the user applies a new profile selection.
     # MainWindow connects this to _set_stream_profile().
     profile_change_requested = Signal(str)
 
-    # Emitted (with an AIN name) when the user picks a different single-channel
+    # Emitted (with an AIN name) when the user applies a new single-channel
     # target.  MainWindow connects this to _set_stream_channel().
     single_channel_change_requested = Signal(str)
 
@@ -88,19 +126,29 @@ class AmpTab(QWidget):
         super().__init__(parent)
         self._t0 = time.monotonic()   # reset on labjack_connected
 
-        # One buffer per AIN. Keys are AIN names so _on_reading can index directly.
+        # One trend buffer per AIN. Keys are AIN names so _on_window can index directly.
         self.buffers = {ain: RollingBuffer(self.BUFFER_CAPACITY)
                         for ain in SC.AMP_AIN_NAMES}
+
+        # Raw-waveform ring, one deque per AIN, holding recent (t_end, values)
+        # window chunks (values already in kV / mA).  Feeds snapshot mode.
+        self._wave_chunks = {ain: collections.deque() for ain in SC.AMP_AIN_NAMES}
 
         # Plot state
         self._is_live           = True
         self._frozen_right_edge = None
+        self._plot_mode         = "trend"   # "trend" | "snapshot"
 
         # Single-channel mode state.  When a single-channel profile is active,
         # only self._single_target_ain streams live; the other seven monitors
         # (and all log amps) are paused.
         self._single_mode        = False
         self._single_target_ain  = DEFAULT_SINGLE_CHANNEL
+
+        # What the hardware is CURRENTLY running (vs. the staged combo choices).
+        # Apply is enabled only when a staged choice differs from these.
+        self._applied_profile   = "FULL"
+        self._applied_channel   = DEFAULT_SINGLE_CHANNEL
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -182,7 +230,7 @@ class AmpTab(QWidget):
         self._profile_combo.setCurrentIndex(
             list(STREAM_PROFILES.keys()).index("FULL")
         )
-        self._profile_combo.currentIndexChanged.connect(self._on_profile_combo)
+        self._profile_combo.currentIndexChanged.connect(self._on_selection_staged)
         mode_row.addWidget(self._profile_combo, stretch=1)
         mode_row.addWidget(QLabel("Target:"))
         self._single_combo = QComboBox()
@@ -200,8 +248,21 @@ class AmpTab(QWidget):
             "In single-channel mode, choose which amplifier monitor gets the "
             "full stream bandwidth."
         )
-        self._single_combo.currentIndexChanged.connect(self._on_single_combo)
+        self._single_combo.currentIndexChanged.connect(self._on_selection_staged)
         mode_row.addWidget(self._single_combo)
+
+        # Apply button — the ONLY thing that commits a profile/target change to
+        # the hardware.  Disabled until a staged choice differs from what's live.
+        self._apply_btn = QPushButton("Apply")
+        self._apply_btn.setEnabled(False)
+        self._apply_btn.setToolTip(
+            "Apply the selected stream profile / target to the LabJack.\n"
+            "Changing the stream restarts it on the T7, so it is applied only "
+            "when you click here — not on every dropdown change."
+        )
+        self._apply_btn.clicked.connect(self._apply_stream_settings)
+        mode_row.addWidget(self._apply_btn)
+
         prof_col.addLayout(mode_row)
         self._profile_status = QLabel("")
         self._profile_status.setStyleSheet("color: #555; font-style: italic; font-size: 10px;")
@@ -220,7 +281,7 @@ class AmpTab(QWidget):
         upper_row.addWidget(ro_box, stretch=1)
         layout.addLayout(upper_row)
 
-        # ── History plot ───────────────────────────────────────────────────
+        # ── History / waveform plot (one figure, two modes) ─────────────────
         self._window_seconds = float(self.WINDOW_SECONDS)
         plot_box = QGroupBox("Amplifier History")
         pv = QVBoxLayout(plot_box)
@@ -233,7 +294,8 @@ class AmpTab(QWidget):
         nav_row.addWidget(self.lbl_mode)
         btn_zoom_in = QPushButton("＋")
         btn_zoom_in.setFixedWidth(28)
-        btn_zoom_in.setToolTip("Zoom in — scroll wheel up (halve window)")
+        btn_zoom_in.setToolTip("Zoom in — scroll wheel up (halve window). "
+                               "Below ~2 s the plot shows the raw waveform.")
         btn_zoom_in.setStyleSheet("font-weight: bold; padding: 1px 4px;")
         btn_zoom_in.clicked.connect(self._zoom_in)
         btn_zoom_out = QPushButton("－")
@@ -280,7 +342,8 @@ class AmpTab(QWidget):
         self.ax_i.axhline( SC.AMP_MAX_MA_DC, color="#c47a00", lw=0.8, ls="--", alpha=0.5)
         self.ax_i.axhline(-SC.AMP_MAX_MA_DC, color="#c47a00", lw=0.8, ls="--", alpha=0.5)
 
-        # One line per amplifier per axis, keyed by amp label.
+        # One line per amplifier per axis, keyed by amp label.  Reused by BOTH
+        # trend and snapshot modes.
         self._lines_v = {}
         self._lines_i = {}
         for amp in SC.AMP_LABELS:
@@ -304,7 +367,7 @@ class AmpTab(QWidget):
         self.slider.setValue(10_000)
         self.slider.setTickInterval(1_000)
         self.slider.setToolTip(
-            "Drag left to browse history (2-min window). "
+            "Drag left to browse history. "
             "Drag to far right to return to LIVE mode."
         )
         self.slider.valueChanged.connect(self._on_slider_changed)
@@ -329,6 +392,12 @@ class AmpTab(QWidget):
 
     def on_labjack_connected(self, serial: str):
         self._t0 = time.monotonic()
+        # Start every buffer from a clean slate so the (possibly re-anchored)
+        # stream timeline never mixes with data from a previous session.
+        for buf in self.buffers.values():
+            buf.__init__(self.BUFFER_CAPACITY)
+        for dq in self._wave_chunks.values():
+            dq.clear()
         self.lj_panel.set_connected(True, serial)
         self._redraw_timer.start()
 
@@ -337,7 +406,10 @@ class AmpTab(QWidget):
         self.lj_panel.set_connected(False)
 
     def on_profile_changed(self, profile_name: str):
-        """Called by MainWindow after a profile switch completes."""
+        """Sync the UI to a profile that is now live on the hardware.
+
+        Called by MainWindow after a switch completes, and by us during Apply.
+        """
         idx = list(STREAM_PROFILES.keys()).index(profile_name)
         self._profile_combo.blockSignals(True)
         self._profile_combo.setCurrentIndex(idx)
@@ -361,6 +433,12 @@ class AmpTab(QWidget):
                 f"{rate / 1000:.1f} kS/s/ch  |  res idx {res}  |  "
                 f"window {window_samples(profile_name)} pts"
             )
+
+        # This profile/target is now the live one; clear any pending Apply state.
+        self._applied_profile = profile_name
+        self._applied_channel = self._single_combo.currentData()
+        self._refresh_apply_state()
+
         self._apply_paused_styling()
         self._update_history_layout()
 
@@ -393,7 +471,7 @@ class AmpTab(QWidget):
                 self.lbl_ma[amp].setStyleSheet(neutral)
 
     def _update_history_layout(self):
-        """Show only the relevant history subplot in single-channel mode."""
+        """Show only the relevant subplot in single-channel mode."""
         # Normalized figure coords: [left, bottom, width, height]
         _FULL = [0.10, 0.11, 0.86, 0.80]
         _TOP  = [0.10, 0.54, 0.86, 0.40]
@@ -419,36 +497,78 @@ class AmpTab(QWidget):
             self.ax_i.set_position(_BOT)
         self.canvas.draw_idle()
 
-    # ---- Slots ---------------------------------------------------------------
+    # ---- Profile / target staging + Apply ------------------------------------
 
-    def _on_profile_combo(self):
-        name = self._profile_combo.currentData()
-        if name:
-            self.on_profile_changed(name)          # update UI immediately
-            self.profile_change_requested.emit(name)  # notify MainWindow for hardware
+    def _on_selection_staged(self, *_):
+        """A combo changed — stage it and light up Apply if it differs from live.
 
-    def _on_single_combo(self):
-        """User picked a different single-channel target."""
-        ain = self._single_combo.currentData()
-        if ain:
-            self._single_target_ain = ain
-            if self._single_mode:
-                self._apply_paused_styling()
-                self._update_history_layout()
-            self.single_channel_change_requested.emit(ain)
+        Nothing touches the hardware here.  The single-channel target combo is
+        enabled whenever a single-channel profile is *staged*, so the user can
+        pick the target before applying.
+        """
+        staged_profile = self._profile_combo.currentData()
+        self._single_combo.setEnabled(is_single_channel(staged_profile))
+        self._refresh_apply_state()
+
+    def _refresh_apply_state(self):
+        """Enable/highlight Apply iff the staged selection differs from live."""
+        staged_profile = self._profile_combo.currentData()
+        staged_channel = self._single_combo.currentData()
+        pending = (staged_profile != self._applied_profile) or (
+            is_single_channel(staged_profile)
+            and staged_channel != self._applied_channel
+        )
+        self._apply_btn.setEnabled(pending)
+        if pending:
+            self._apply_btn.setStyleSheet(
+                "QPushButton { background:#c47a00; color:white; font-weight:bold;"
+                " padding:2px 10px; }"
+                "QPushButton:hover { background:#d98c00; }"
+            )
+        else:
+            self._apply_btn.setStyleSheet("")
+
+    def _apply_stream_settings(self):
+        """Commit the staged profile/target to the hardware (one atomic action).
+
+        The channel is emitted before the profile so that a switch INTO a
+        single-channel profile starts directly on the chosen target — a single
+        stream restart instead of two.
+        """
+        staged_profile = self._profile_combo.currentData()
+        staged_channel = self._single_combo.currentData()
+        if staged_profile is None:
+            return
+
+        if (is_single_channel(staged_profile) and staged_channel
+                and staged_channel != self._applied_channel):
+            self.single_channel_change_requested.emit(staged_channel)
+        if staged_profile != self._applied_profile:
+            self.profile_change_requested.emit(staged_profile)
+
+        # Update our own UI immediately.  When connected, MainWindow also calls
+        # on_profile_changed after the restart; both are idempotent.
+        self.on_profile_changed(staged_profile)
+
+    def _on_error(self, msg: str):
+        QMessageBox.warning(self, "LabJack poll error", msg)
+
+    # ---- Window ingestion ----------------------------------------------------
 
     def _on_window(self, payload: dict):
         """Consume one stream window from LabJackStreamWorker.
 
-        Extracts per-amplifier scalars for numeric readouts and the rolling
-        history buffers.
+        Feeds three things per amplifier:
+          * numeric readouts (peak/pk-pk/RMS scalars),
+          * the 10 Hz trend buffers (peak-kV / RMS-mA),
+          * the raw-waveform ring (full window, in kV / mA) for snapshot mode.
         """
         channels = payload["channels"]
         t = payload["t"]
 
         # Voltage and current are handled independently: in single-channel mode
         # only ONE of the two AINs for one amplifier is present, so requiring
-        # both (as the multi-channel path could) would blank the display.
+        # both would blank the display.
         for amp in SC.AMP_LABELS:
             v_ain = SC.AMP_CHANNEL_MAP[amp]["voltage"]
             i_ain = SC.AMP_CHANNEL_MAP[amp]["current"]
@@ -471,6 +591,12 @@ class AmpTab(QWidget):
                 self.lbl_rms[amp].setText(format_kv(kv_rms))
                 self.lbl_rms[amp].setStyleSheet("color: #444; font-weight: bold;")
 
+                wave = v_ch.get("waveform")
+                if wave is not None:
+                    self._store_wave_chunk(
+                        v_ain, t, np.asarray(wave) * SC.VOLTAGE_MONITOR_KV_PER_VOLT
+                    )
+
             if i_ch is not None:
                 ma_rms = monitor_to_ma(i_ch["rms"])
                 self.buffers[i_ain].append(t, ma_rms)
@@ -481,13 +607,31 @@ class AmpTab(QWidget):
                     f"color: {_STATUS_COLOR[istatus]}; font-weight: bold;"
                 )
 
+                wave = i_ch.get("waveform")
+                if wave is not None:
+                    self._store_wave_chunk(
+                        i_ain, t, np.asarray(wave) * SC.CURRENT_MONITOR_MA_PER_VOLT
+                    )
+
         if self._is_live:
             self.slider.blockSignals(True)
             self.slider.setValue(10_000)
             self.slider.blockSignals(False)
 
+    def _store_wave_chunk(self, ain: str, t_end: float, values: np.ndarray):
+        """Append a raw window to the ring and drop chunks older than the ring."""
+        dq = self._wave_chunks[ain]
+        dq.append((t_end, values))
+        cutoff = t_end - (self.SNAPSHOT_MAX_SECONDS + self.WINDOW_DURATION_S)
+        while dq and dq[0][0] < cutoff:
+            dq.popleft()
+
     def _on_reading(self, t: float, values: dict):
-        """Consume ONLY AIN6..AIN13. AIN0..AIN3 belong to the Beam Current tab."""
+        """Legacy command-response path (AIN6..AIN13 only).
+
+        Kept for the standalone smoke test / non-stream callers.  It fills the
+        trend buffers only; snapshot mode requires the stream's waveform arrays.
+        """
         for amp in SC.AMP_LABELS:
             v_ain = SC.AMP_CHANNEL_MAP[amp]["voltage"]
             i_ain = SC.AMP_CHANNEL_MAP[amp]["current"]
@@ -517,9 +661,6 @@ class AmpTab(QWidget):
             self.slider.setValue(10_000)
             self.slider.blockSignals(False)
 
-    def _on_error(self, msg: str):
-        QMessageBox.warning(self, "LabJack poll error", msg)
-
     # ---- Slider / navigation -------------------------------------------------
 
     def _on_slider_changed(self, val: int):
@@ -528,15 +669,22 @@ class AmpTab(QWidget):
         else:
             self._enter_frozen_mode(val)
 
+    def _is_snapshot(self) -> bool:
+        """True when the window is narrow enough to show the raw waveform."""
+        return self._window_seconds < self.SNAPSHOT_MAX_SECONDS
+
     def _window_label(self) -> str:
         ws = self._window_seconds
         if ws < 1.0:
-            return f"{ws * 1000:.3g} ms"
-        ws_int = int(ws)
-        if ws_int < 60:
-            return f"{ws_int} s"
-        m, s = divmod(ws_int, 60)
-        return f"{m} m" if s == 0 else f"{m} m {s} s"
+            body = f"{ws * 1000:.3g} ms"
+        else:
+            ws_int = int(ws)
+            if ws_int < 60:
+                body = f"{ws_int} s"
+            else:
+                m, s = divmod(ws_int, 60)
+                body = f"{m} m" if s == 0 else f"{m} m {s} s"
+        return f"{body} · waveform" if self._is_snapshot() else body
 
     def _enter_live_mode(self):
         self._is_live = True
@@ -566,7 +714,7 @@ class AmpTab(QWidget):
     def _update_frozen_label(self):
         w_start = self._frozen_right_edge - self._window_seconds
         self.lbl_mode.setText(
-            f"⏸  Frozen  —  [{w_start:+.0f} s … {self._frozen_right_edge:+.0f} s]"
+            f"⏸  Frozen  —  [{w_start:+.3g} s … {self._frozen_right_edge:+.3g} s]"
             f"  ({self._window_label()})"
         )
         self.lbl_mode.setStyleSheet(
@@ -610,6 +758,27 @@ class AmpTab(QWidget):
     # ---- Plot redraw ---------------------------------------------------------
 
     def _redraw_plot(self):
+        """Dispatch to the trend or waveform-snapshot renderer for this window."""
+        if self._is_snapshot():
+            self._set_plot_mode("snapshot")
+            self._redraw_snapshot()
+        else:
+            self._set_plot_mode("trend")
+            self._redraw_trend()
+
+    def _set_plot_mode(self, mode: str):
+        """Update x-axis labelling once when crossing the trend/snapshot boundary."""
+        if mode == self._plot_mode:
+            return
+        self._plot_mode = mode
+        xlabel = ("Time (s, waveform — relative to right edge)"
+                  if mode == "snapshot"
+                  else "Time (s, relative to window right edge)")
+        bottom_ax = self.ax_i if self.ax_i.get_visible() else self.ax_v
+        bottom_ax.set_xlabel(xlabel)
+
+    def _redraw_trend(self):
+        """10 Hz peak/RMS history — the drift / fault view (wide windows)."""
         any_data = False
 
         if self._is_live:
@@ -659,6 +828,101 @@ class AmpTab(QWidget):
                 ax.relim()
                 ax.autoscale_view(scalex=False, scaley=True)
             self.canvas.draw_idle()
+
+    def _redraw_snapshot(self):
+        """Raw high-rate waveform over the last window_seconds — the scope view."""
+        if self._is_live:
+            t_right = self._latest_wave_t()
+        else:
+            t_right = self._frozen_right_edge
+        if t_right is None:
+            return
+
+        t_left = t_right - self._window_seconds
+        any_data = False
+
+        for amp in SC.AMP_LABELS:
+            for ain, line in (
+                (SC.AMP_CHANNEL_MAP[amp]["voltage"], self._lines_v[amp]),
+                (SC.AMP_CHANNEL_MAP[amp]["current"], self._lines_i[amp]),
+            ):
+                if self._single_mode and ain != self._single_target_ain:
+                    line.set_data([], [])
+                    continue
+                series = self._snapshot_series(ain, t_left, t_right)
+                if series is None:
+                    line.set_data([], [])
+                    continue
+                tt, vv = series
+                tt, vv = self._decimate_minmax(tt, vv, self.WF_MAX_POINTS)
+                line.set_data(tt - t_right, vv)
+                any_data = True
+
+        if any_data:
+            self.ax_v.set_xlim(-self._window_seconds, 0)
+            for ax in (self.ax_v, self.ax_i):
+                ax.relim()
+                ax.autoscale_view(scalex=False, scaley=True)
+            self.canvas.draw_idle()
+
+    def _latest_wave_t(self):
+        """Most recent raw-window end time across all amp channels (or None)."""
+        best = None
+        for dq in self._wave_chunks.values():
+            if dq:
+                te = dq[-1][0]
+                if best is None or te > best:
+                    best = te
+        return best
+
+    def _snapshot_series(self, ain: str, t_left: float, t_right: float):
+        """Concatenated (times, values) of raw samples in [t_left, t_right].
+
+        Each stored chunk spans WINDOW_DURATION_S ending at its t_end; sample
+        times are reconstructed on demand so the ring only holds the values.
+        Returns None if nothing falls in the window.
+        """
+        dq = self._wave_chunks.get(ain)
+        if not dq:
+            return None
+        ts, vs = [], []
+        for t_end, vals in dq:
+            n = len(vals)
+            if n == 0:
+                continue
+            t_start = t_end - self.WINDOW_DURATION_S
+            # Sample-centre times across the window.
+            tt = t_start + (np.arange(n) + 0.5) * (self.WINDOW_DURATION_S / n)
+            m = (tt >= t_left) & (tt <= t_right)
+            if m.any():
+                ts.append(tt[m])
+                vs.append(vals[m])
+        if not ts:
+            return None
+        return np.concatenate(ts), np.concatenate(vs)
+
+    @staticmethod
+    def _decimate_minmax(x: np.ndarray, y: np.ndarray, max_points: int):
+        """Envelope-preserving decimation: bin the series and keep min+max/bin.
+
+        Plain striding would drop transient peaks between samples; min/max
+        binning keeps the visible envelope while capping the point count so a
+        100 kS/s window redraws cheaply.
+        """
+        n = len(x)
+        if n <= max_points:
+            return x, y
+        bins = max(1, max_points // 2)
+        usable = (n // bins) * bins
+        if usable < bins:
+            return x, y
+        xb = x[:usable].reshape(bins, -1)
+        yb = y[:usable].reshape(bins, -1)
+        x_out = np.repeat(xb[:, 0], 2)
+        y_out = np.empty(bins * 2, dtype=float)
+        y_out[0::2] = yb.min(axis=1)
+        y_out[1::2] = yb.max(axis=1)
+        return x_out, y_out
 
     # ---- Owner-callable cleanup ----------------------------------------------
 

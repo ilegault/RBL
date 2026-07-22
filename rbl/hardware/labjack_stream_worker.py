@@ -85,7 +85,7 @@ class LabJackStreamWorker(QThread):
     error        = Signal(str)
 
     def __init__(self, handle, profile_name: str = DEFAULT_PROFILE,
-                 channel_override: str = None, parent=None):
+                 channel_override: str = None, t0: float = None, parent=None):
         """
         Parameters
         ----------
@@ -100,11 +100,19 @@ class LabJackStreamWorker(QThread):
             channel_choices.  Ignored for multi-channel profiles, whose scan
             list is fixed.  If None on a single-channel profile, the profile's
             default scan_list channel is used.
+        t0               : float, optional
+            Shared ``time.monotonic()`` epoch for the emitted ``t`` timestamps.
+            Switching profiles/channels destroys this worker and builds a new
+            one; passing the SAME epoch across restarts keeps the payload ``t``
+            monotonic so downstream history buffers do not jump backwards (which
+            otherwise makes the plot appear to reset on every mode change).
+            If None, the worker starts its own epoch at run().
         """
         super().__init__(parent)
         self._handle           = handle
         self._profile_name     = profile_name
         self._channel_override = channel_override
+        self._t0               = t0
         self._running          = True
         self._stream_active    = False
 
@@ -150,7 +158,9 @@ class LabJackStreamWorker(QThread):
         # the assert inside the read loop will catch it immediately.
         scan_addresses = [_ain_address(ch) for ch in scan_names]
 
-        t0 = time.monotonic()
+        # Use the shared epoch when the owner supplied one so timestamps stay
+        # continuous across a stop/reconfigure/start cycle; otherwise anchor here.
+        t0 = self._t0 if self._t0 is not None else time.monotonic()
 
         try:
             # --- Configure each AIN in the active scan list -------------------
