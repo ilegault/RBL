@@ -232,7 +232,7 @@ class TestHistoryLineEdit:
 class TestCurrentTab:
     @pytest.fixture
     def current(self, qapp):
-        from current_tab import CurrentTab
+        from logamp_tab import CurrentTab
         ct = CurrentTab()
         yield ct
         ct.shutdown()

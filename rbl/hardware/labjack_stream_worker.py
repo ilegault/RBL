@@ -58,8 +58,9 @@ except Exception:
     _LJM_AVAILABLE = False
 
 from rbl.config.labjack_stream_config import (
-    STREAM_PROFILES, STREAM_RESOLUTION_INDEX, STREAM_RANGE_VOLTS,
+    STREAM_PROFILES, STREAM_RANGE_VOLTS,
     AMP_CHANNELS, LOGAMP_CHANNELS, DEFAULT_PROFILE, window_samples,
+    resolution_index, is_single_channel, channel_choices,
 )
 
 
@@ -83,21 +84,29 @@ class LabJackStreamWorker(QThread):
     window_ready = Signal(dict)
     error        = Signal(str)
 
-    def __init__(self, handle, profile_name: str = DEFAULT_PROFILE, parent=None):
+    def __init__(self, handle, profile_name: str = DEFAULT_PROFILE,
+                 channel_override: str = None, parent=None):
         """
         Parameters
         ----------
-        handle       : int
+        handle           : int
             Open LJM handle from LabJackT7.handle.  Must remain valid for the
             lifetime of this worker.  Do NOT close it here.
-        profile_name : str
-            One of the keys in STREAM_PROFILES ("WAVEFORM" or "FULL").
+        profile_name     : str
+            One of the keys in STREAM_PROFILES.
+        channel_override : str, optional
+            For single-channel profiles ("SINGLE_FAST" / "SINGLE_HIRES"), the
+            AIN name to stream (e.g. "AIN7").  Must be one of the profile's
+            channel_choices.  Ignored for multi-channel profiles, whose scan
+            list is fixed.  If None on a single-channel profile, the profile's
+            default scan_list channel is used.
         """
         super().__init__(parent)
-        self._handle        = handle
-        self._profile_name  = profile_name
-        self._running       = True
-        self._stream_active = False
+        self._handle           = handle
+        self._profile_name     = profile_name
+        self._channel_override = channel_override
+        self._running          = True
+        self._stream_active    = False
 
     def stop(self):
         """Signal the read loop to exit.  Call wait(ms) afterwards."""
@@ -117,8 +126,22 @@ class LabJackStreamWorker(QThread):
 
         profile        = STREAM_PROFILES[self._profile_name]
         # scan_names: ascending physical AIN order (see rbl/config/labjack_stream_config.py)
-        scan_names     = list(profile["scan_list"])
+        # For single-channel profiles the scan list is a single user-selected
+        # channel; for multi-channel profiles it is the profile's fixed list.
+        if is_single_channel(self._profile_name):
+            choices = channel_choices(self._profile_name)
+            ch      = self._channel_override or profile["scan_list"][0]
+            if ch not in choices:
+                self.error.emit(
+                    f"[{self._profile_name}] channel '{ch}' is not a valid "
+                    f"single-channel target (choices: {choices})."
+                )
+                return
+            scan_names = [ch]
+        else:
+            scan_names = list(profile["scan_list"])
         scan_rate      = profile["per_channel_rate_hz"]
+        res_index      = resolution_index(self._profile_name)
         n_ch           = len(scan_names)
         scans_per_read = window_samples(self._profile_name)
 
@@ -137,8 +160,7 @@ class LabJackStreamWorker(QThread):
             for ch in scan_names:
                 _ljm.eWriteName(self._handle, f"{ch}_RANGE",       STREAM_RANGE_VOLTS)
                 _ljm.eWriteName(self._handle, f"{ch}_NEGATIVE_CH", 199)  # GND single-ended
-            _ljm.eWriteName(self._handle, "STREAM_RESOLUTION_INDEX",
-                            STREAM_RESOLUTION_INDEX)
+            _ljm.eWriteName(self._handle, "STREAM_RESOLUTION_INDEX", res_index)
 
             # --- Start stream -------------------------------------------------
             # eStreamStart returns the actual scan rate the device settled on
@@ -206,7 +228,10 @@ class LabJackStreamWorker(QThread):
         """Build the window_ready payload from a de-interleaved data block.
 
         scan_names[i] corresponds to data[:, i] (ascending AIN order).
-        Log-amp channels absent from scan_names receive a None entry.
+        Any amp or log-amp channel absent from scan_names receives a None
+        entry (relevant for single-channel profiles, where only one amp
+        channel is streamed and the other seven — plus all log amps — are
+        paused).
         """
         channels: dict = {}
 
@@ -224,9 +249,9 @@ class LabJackStreamWorker(QThread):
                 # (Full waveform not needed; consumers convert mean -> current.)
                 channels[ain] = {"mean": float(col.mean())}
 
-        # Log-amp channels absent from this profile's scan list -> None.
+        # Any channel absent from this profile's scan list -> None.
         # Consumers must display a "paused" state rather than stale numbers.
-        for ain in LOGAMP_CHANNELS:
+        for ain in AMP_CHANNELS + LOGAMP_CHANNELS:
             if ain not in scan_names:
                 channels[ain] = None
 
@@ -297,5 +322,27 @@ if __name__ == "__main__":
         assert abs(p_f["channels"][ain]["mean"] - 4.5) < 1e-9, \
             f"{ain} mean={p_f['channels'][ain]['mean']} != 4.5"
     print(f"  [OK] FULL: stride={n_f}, window={win_f}, logamp mean=4.5 V")
+
+    # --- SINGLE_FAST profile (one amp channel; all others paused) ---
+    print("Testing SINGLE_FAST single-channel de-interleave...")
+    w._profile_name = "SINGLE_FAST"
+    win_s   = window_samples("SINGLE_FAST")
+    target  = "AIN9"                       # Y+ voltage monitor
+    data_s  = np.full((win_s, 1), 3.3)
+    p_s     = w._build_payload([target], data_s, win_s, 0.3)
+
+    assert p_s["profile"]        == "SINGLE_FAST"
+    assert p_s["window_samples"] == win_s
+    assert p_s["channels"][target] is not None
+    assert len(p_s["channels"][target]["waveform"]) == win_s
+    assert abs(p_s["channels"][target]["peak"] - 3.3) < 1e-9
+    # Every other amp channel and every log amp must be paused (None).
+    for ain in AMP_CHANNELS:
+        if ain != target:
+            assert p_s["channels"][ain] is None, f"{ain} should be paused"
+    for ain in LOGAMP_CHANNELS:
+        assert p_s["channels"][ain] is None, f"{ain} should be paused"
+    print(f"  [OK] SINGLE_FAST: target={target}, window={win_s}, "
+          f"7 amps + 4 log amps paused")
 
     print("[OK] labjack_stream_worker self-test passed")

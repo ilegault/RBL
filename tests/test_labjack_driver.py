@@ -32,16 +32,17 @@ class TestConnect:
         assert lj.connected
         assert lj.connection_type == "USB"
 
-    def test_connect_configures_twelve_ains(self, mock_ljm):
+    def test_connect_configures_fourteen_ains(self, mock_ljm):
         lj = LabJackT7()
         lj.connect("ETHERNET", "192.168.1.5")
-        # AIN0..AIN11 each get range, single-ended negative-ch, and resolution.
+        # AIN0..AIN13 each get range, single-ended negative-ch, and resolution.
+        # (AIN0-3 log amps, AIN4-5 spare, AIN6-13 amp monitors — all configured.)
         names_written = [call.args[1] for call in mock_ljm.eWriteName.call_args_list]
-        for ch in range(12):
+        for ch in range(14):
             assert f"AIN{ch}_RANGE" in names_written
             assert f"AIN{ch}_NEGATIVE_CH" in names_written
             assert f"AIN{ch}_RESOLUTION_INDEX" in names_written
-        assert len(mock_ljm.eWriteName.call_args_list) == 36   # 12 x 3
+        assert len(mock_ljm.eWriteName.call_args_list) == 42   # 14 x 3
 
     def test_connect_sets_pm10v_range(self, mock_ljm):
         lj = LabJackT7()
@@ -94,8 +95,8 @@ class TestRead:
         mock_ljm.eReadNames.assert_called_once()
         args = mock_ljm.eReadNames.call_args.args
         assert args[0] == 42                # handle
-        assert args[1] == 12                # count
-        assert args[2] == [f"AIN{i}" for i in range(12)]
+        assert args[1] == 14                # count
+        assert args[2] == [f"AIN{i}" for i in range(14)]
 
     def test_read_custom_channel_subset(self, mock_ljm):
         mock_ljm.eReadNames.return_value = [1.0, 2.0]

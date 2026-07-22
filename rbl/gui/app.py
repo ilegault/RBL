@@ -18,7 +18,10 @@ from PySide6.QtGui import QColor, QPalette
 
 from rbl.hardware.labjack_driver import LabJackT7
 from rbl.hardware.labjack_stream_worker import LabJackStreamWorker
-from rbl.config.labjack_stream_config import DEFAULT_PROFILE, STREAM_PROFILES
+from rbl.config.labjack_stream_config import (
+    DEFAULT_PROFILE, STREAM_PROFILES, DEFAULT_SINGLE_CHANNEL,
+    is_single_channel, channel_choices,
+)
 
 
 # ─── Main Window ──────────────────────────────────────────────────────────────
@@ -72,15 +75,20 @@ class MainWindow(QMainWindow):
         self._lj              = LabJackT7()
         self._lj_worker       = None
         self._active_profile  = DEFAULT_PROFILE
-        self._profile_updating = False   # re-entrancy guard for set_profile
+        # Target channel for single-channel profiles (SINGLE_FAST/SINGLE_HIRES).
+        # Ignored while a multi-channel profile is active.
+        self._active_channel  = DEFAULT_SINGLE_CHANNEL
+        self._profile_updating = False   # re-entrancy guard for set_profile / set_channel
         self._lj_tabs         = (self.current_tab, self.amp_tab)
 
         for tab in self._lj_tabs:
             tab.lj_panel.connect_requested.connect(self._labjack_connect)
             tab.lj_panel.disconnect_requested.connect(self._labjack_disconnect)
 
-        # Profile selector in AmpTab drives profile switches.
+        # Profile selector in AmpTab drives profile switches; its single-channel
+        # target selector drives which channel a single-channel profile streams.
         self.amp_tab.profile_change_requested.connect(self._set_stream_profile)
+        self.amp_tab.single_channel_change_requested.connect(self._set_stream_channel)
 
         # Start on Stepper Motors
         self._outer_stack.setCurrentIndex(0)
@@ -104,9 +112,11 @@ class MainWindow(QMainWindow):
     def _start_stream_worker(self, profile_name: str):
         """Create and start a stream worker for *profile_name*.
 
-        Caller is responsible for stopping any existing worker first.
+        For single-channel profiles the current channel target is passed as the
+        override.  Caller is responsible for stopping any existing worker first.
         """
-        worker = LabJackStreamWorker(self._lj.handle, profile_name)
+        override = self._active_channel if is_single_channel(profile_name) else None
+        worker = LabJackStreamWorker(self._lj.handle, profile_name, override)
         for tab in self._lj_tabs:
             worker.window_ready.connect(tab._on_window)
             worker.error.connect(tab._on_error)
@@ -132,18 +142,51 @@ class MainWindow(QMainWindow):
 
         self._profile_updating = True
         try:
-            self._lj_worker.stop()
-            self._lj_worker.wait(5000)
-            self._lj_worker = None
-
             self._active_profile = profile_name
-            self._start_stream_worker(profile_name)
+            self._restart_stream_worker(profile_name)
 
             for tab in self._lj_tabs:
                 if hasattr(tab, "on_profile_changed"):
                     tab.on_profile_changed(profile_name)
         finally:
             self._profile_updating = False
+
+    def _set_stream_channel(self, ain_name: str):
+        """Change which channel a single-channel profile streams.
+
+        No-op unless a single-channel profile is active.  Like a profile
+        switch, changing the scan list requires a full stop -> reconfigure ->
+        start cycle (the T7 cannot change its scan list mid-stream).
+        """
+        if self._profile_updating:
+            return
+        if ain_name == self._active_channel:
+            return
+        if ain_name not in channel_choices(self._active_profile):
+            return   # not a valid target (or active profile is multi-channel)
+
+        self._active_channel = ain_name
+        if not self._lj.connected or self._lj_worker is None:
+            return   # remembered; applied when a single-channel profile starts
+
+        self._profile_updating = True
+        try:
+            self._restart_stream_worker(self._active_profile)
+        finally:
+            self._profile_updating = False
+
+    def _restart_stream_worker(self, profile_name: str):
+        """Stop the running worker (if any) and start a fresh one.
+
+        Hardware constraint: the T7 scan list cannot be changed mid-stream, so
+        both profile switches and single-channel target changes go through this
+        stop -> reconfigure -> start cycle.  Callers hold _profile_updating.
+        """
+        if self._lj_worker is not None:
+            self._lj_worker.stop()
+            self._lj_worker.wait(5000)
+            self._lj_worker = None
+        self._start_stream_worker(profile_name)
 
     def _labjack_disconnect(self):
         # Stop the stream before closing the handle (hardware order matters).
