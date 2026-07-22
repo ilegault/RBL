@@ -18,8 +18,6 @@ Plot navigation mirrors logamp_tab.py exactly:
   - Buffer holds ~1 hour (BUFFER_CAPACITY = 36 000 @ 10 Hz).
 """
 import time
-import math
-import numpy as np
 from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
@@ -53,6 +51,15 @@ _AIN_TO_AMP = {
     for amp in SC.AMP_LABELS
     for kind in ("voltage", "current")
 }
+
+
+# Zoom step list (seconds, descending).  Snapping to preset values keeps labels
+# clean: the 15→5→1 jump avoids the ugly 7.5/3.75/1.875/0.9375... sequence,
+# and halving from exactly 1 s gives tidy ms values (500, 250, 125, …).
+_ZOOM_STEPS = [
+    3600, 1800, 900, 600, 300, 120, 60, 30, 15, 5, 1,
+    0.5, 0.25, 0.125, 0.0625, 0.03125, 0.016, 0.008, 0.004, 0.002, 0.001,
+]
 
 
 # Status -> stylesheet color
@@ -99,24 +106,32 @@ class AmpTab(QWidget):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
 
-        # ── Connection (shared panel) ─────────────────────────────────────
+        # ── Connection panel (added to top_row below) ─────────────────────
         self.lj_panel = LabJackPanel()
-        layout.addWidget(self.lj_panel)
 
         # ── Per-amplifier numeric readouts ────────────────────────────────
         ro_box = QGroupBox("Live Amplifier Monitors")
         ro = QGridLayout(ro_box)
-        ro.setSpacing(6)
+        ro.setSpacing(3)
+        ro.setContentsMargins(6, 4, 6, 4)
 
         mono = QFont("Menlo", 13)
         mono.setBold(True)
         small = QFont("Menlo", 9)
 
         ro.addWidget(QLabel(""), 0, 0)
-        ro.addWidget(QLabel("Peak kV"),    1, 0)
-        ro.addWidget(QLabel("Pk-Pk kV"),   2, 0)
-        ro.addWidget(QLabel("RMS kV"),     3, 0)
-        ro.addWidget(QLabel("RMS mA"),     4, 0)
+
+        def _make_hdr(text):
+            lbl = QLabel(text)
+            lbl.setFont(small)
+            lbl.setStyleSheet("color: #666;")
+            lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            return lbl
+
+        ro.addWidget(_make_hdr("Pk kV"), 1, 0)
+        ro.addWidget(_make_hdr("PP kV"), 2, 0)
+        ro.addWidget(_make_hdr("RM kV"), 3, 0)
+        ro.addWidget(_make_hdr("RM mA"), 4, 0)
 
         self.lbl_kv   = {}   # peak output voltage
         self.lbl_pp   = {}   # pk-pk output voltage
@@ -130,43 +145,46 @@ class AmpTab(QWidget):
             hdr.setStyleSheet(
                 f"color: {SC.AMP_COLORS[amp]}; font-weight: bold; font-size: 14px;"
             )
-            sub = QLabel(f"{v_ain} / {i_ain}")
+            sub = QLabel(f"{v_ain}/{i_ain}")
             sub.setFont(small)
             sub.setStyleSheet("color: #888;")
-            hdr_box = QVBoxLayout()
             hdr_w = QWidget()
+            hdr_box = QVBoxLayout(hdr_w)
             hdr_box.setContentsMargins(0, 0, 0, 0)
+            hdr_box.setSpacing(0)
             hdr_box.addWidget(hdr)
             hdr_box.addWidget(sub)
-            hdr_w.setLayout(hdr_box)
             ro.addWidget(hdr_w, 0, col)
 
-            for attr, row in (("lbl_kv", 1), ("lbl_pp", 2), ("lbl_rms", 3), ("lbl_ma", 4)):
+            # One grid row per metric — aligns perfectly with col-0 headers
+            for row, attr in enumerate(("lbl_kv", "lbl_pp", "lbl_rms"), start=1):
                 lbl = QLabel("—")
                 lbl.setFont(mono)
                 lbl.setStyleSheet("color: #555;")
                 getattr(self, attr)[amp] = lbl
                 ro.addWidget(lbl, row, col)
 
-        layout.addWidget(ro_box)
+            # Current: single RMS mA value
+            lbl_ma = QLabel("—")
+            lbl_ma.setFont(mono)
+            lbl_ma.setStyleSheet("color: #555;")
+            self.lbl_ma[amp] = lbl_ma
+            ro.addWidget(lbl_ma, 4, col)
 
-        # ── Profile selector ──────────────────────────────────────────────
+        # ── Profile selector (placed right of lj_panel in top_row below) ────
         prof_box = QGroupBox("Stream Profile")
-        prof_row = QHBoxLayout(prof_box)
-        prof_row.addWidget(QLabel("Mode:"))
+        prof_col = QVBoxLayout(prof_box)
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(QLabel("Mode:"))
         self._profile_combo = QComboBox()
         for pname, pdata in STREAM_PROFILES.items():
             self._profile_combo.addItem(pdata["description"], userData=pname)
-        # Default to FULL (index matches dict insertion order in Python 3.7+)
         self._profile_combo.setCurrentIndex(
             list(STREAM_PROFILES.keys()).index("FULL")
         )
         self._profile_combo.currentIndexChanged.connect(self._on_profile_combo)
-        prof_row.addWidget(self._profile_combo, stretch=1)
-
-        # Single-channel target selector — only the 8 amp monitors are offered.
-        # Enabled only while a single-channel profile is active.
-        prof_row.addWidget(QLabel("Target:"))
+        mode_row.addWidget(self._profile_combo, stretch=1)
+        mode_row.addWidget(QLabel("Target:"))
         self._single_combo = QComboBox()
         for amp in SC.AMP_LABELS:
             for kind in ("voltage", "current"):
@@ -183,56 +201,49 @@ class AmpTab(QWidget):
             "full stream bandwidth."
         )
         self._single_combo.currentIndexChanged.connect(self._on_single_combo)
-        prof_row.addWidget(self._single_combo)
-
+        mode_row.addWidget(self._single_combo)
+        prof_col.addLayout(mode_row)
         self._profile_status = QLabel("")
         self._profile_status.setStyleSheet("color: #555; font-style: italic; font-size: 10px;")
-        prof_row.addWidget(self._profile_status)
-        layout.addWidget(prof_box)
+        prof_col.addWidget(self._profile_status)
 
-        # ── Waveform display ──────────────────────────────────────────────
-        wf_box = QGroupBox("Voltage Waveform (latest window)")
-        wf_v   = QVBoxLayout(wf_box)
+        # ── Assemble upper section: left col (connection + profile) | right (monitors) ──
+        left_col = QVBoxLayout()
+        left_col.setSpacing(8)
+        left_col.addWidget(self.lj_panel)
+        left_col.addWidget(prof_box)
+        left_col.addStretch()
 
-        wf_sel_row = QHBoxLayout()
-        wf_sel_row.addWidget(QLabel("Channel:"))
-        self._wf_combo = QComboBox()
-        for amp in SC.AMP_LABELS:
-            v_ain = SC.AMP_CHANNEL_MAP[amp]["voltage"]
-            self._wf_combo.addItem(f"{amp}  ({v_ain})", userData=amp)
-        self._wf_combo.currentIndexChanged.connect(self._refresh_waveform_plot)
-        wf_sel_row.addWidget(self._wf_combo)
-        self._wf_stats = QLabel("")
-        self._wf_stats.setStyleSheet("font-family: Menlo; font-size: 11px; color: #333;")
-        wf_sel_row.addWidget(self._wf_stats, stretch=1)
-        wf_v.addLayout(wf_sel_row)
+        upper_row = QHBoxLayout()
+        upper_row.setSpacing(8)
+        upper_row.addLayout(left_col)
+        upper_row.addWidget(ro_box, stretch=1)
+        layout.addLayout(upper_row)
 
-        self._wf_fig    = Figure(figsize=(7, 2))
-        self._wf_canvas = FigureCanvasQTAgg(self._wf_fig)
-        self._wf_canvas.setSizePolicy(QSizePolicy.Policy.Expanding,
-                                      QSizePolicy.Policy.Preferred)
-        self._wf_ax = self._wf_fig.add_subplot(111)
-        self._wf_ax.set_xlabel("Time (ms)")
-        self._wf_ax.set_ylabel("Voltage (kV)")
-        self._wf_ax.grid(True, alpha=0.3)
-        self._wf_ax.axhline(0, color="#999", lw=0.7)
-        self._wf_line, = self._wf_ax.plot([], [], lw=1.2, color="#004e8c")
-        self._wf_fig.tight_layout()
-        wf_v.addWidget(self._wf_canvas)
-        layout.addWidget(wf_box)
-
-        # Latest waveform data for the redraw timer (updated in _on_window).
-        self._latest_waveforms: dict = {}   # AIN name -> (t_ms array, kV array)
-
-        # ── Plots ─────────────────────────────────────────────────────────
-        plot_box = QGroupBox("Amplifier History (2-min window)")
+        # ── History plot ───────────────────────────────────────────────────
+        self._window_seconds = float(self.WINDOW_SECONDS)
+        plot_box = QGroupBox("Amplifier History")
         pv = QVBoxLayout(plot_box)
 
         nav_row = QHBoxLayout()
-        self.lbl_mode = QLabel("● LIVE  (last 2 min)")
+        self.lbl_mode = QLabel(f"● LIVE  ({int(self._window_seconds)} s)")
         self.lbl_mode.setStyleSheet(
             "color: #1a7a1a; font-weight: bold; padding: 2px 6px;"
         )
+        nav_row.addWidget(self.lbl_mode)
+        btn_zoom_in = QPushButton("＋")
+        btn_zoom_in.setFixedWidth(28)
+        btn_zoom_in.setToolTip("Zoom in — scroll wheel up (halve window)")
+        btn_zoom_in.setStyleSheet("font-weight: bold; padding: 1px 4px;")
+        btn_zoom_in.clicked.connect(self._zoom_in)
+        btn_zoom_out = QPushButton("－")
+        btn_zoom_out.setFixedWidth(28)
+        btn_zoom_out.setToolTip("Zoom out — scroll wheel down (double window)")
+        btn_zoom_out.setStyleSheet("font-weight: bold; padding: 1px 4px;")
+        btn_zoom_out.clicked.connect(self._zoom_out)
+        nav_row.addWidget(btn_zoom_in)
+        nav_row.addWidget(btn_zoom_out)
+        nav_row.addStretch()
         self.btn_jump_live = QPushButton("Jump to Live")
         self.btn_jump_live.setVisible(False)
         self.btn_jump_live.setStyleSheet(
@@ -241,16 +252,14 @@ class AmpTab(QWidget):
             "QPushButton:hover { background:#0063b1; }"
         )
         self.btn_jump_live.clicked.connect(self._jump_to_live)
-        nav_row.addWidget(self.lbl_mode)
-        nav_row.addStretch()
         nav_row.addWidget(self.btn_jump_live)
         pv.addLayout(nav_row)
 
-        # Two stacked axes sharing the x-axis: voltage on top, current below.
         self.fig    = Figure(figsize=(7, 6))
         self.canvas = FigureCanvasQTAgg(self.fig)
         self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding,
                                   QSizePolicy.Policy.Expanding)
+        self.canvas.mpl_connect('scroll_event', self._on_scroll)
 
         self.ax_v = self.fig.add_subplot(211)
         self.ax_i = self.fig.add_subplot(212, sharex=self.ax_v)
@@ -335,11 +344,7 @@ class AmpTab(QWidget):
         self._profile_combo.blockSignals(False)
 
         self._single_mode = is_single_channel(profile_name)
-        # The single-channel target selector is live only in single mode; the
-        # per-amp waveform picker is live only in multi-channel mode (in single
-        # mode the waveform view follows the streamed target instead).
         self._single_combo.setEnabled(self._single_mode)
-        self._wf_combo.setEnabled(not self._single_mode)
 
         rate = STREAM_PROFILES[profile_name]["per_channel_rate_hz"]
         res  = resolution_index(profile_name)
@@ -357,6 +362,7 @@ class AmpTab(QWidget):
                 f"window {window_samples(profile_name)} pts"
             )
         self._apply_paused_styling()
+        self._update_history_layout()
 
     def _apply_paused_styling(self):
         """Grey out the numeric readouts of any monitor not streaming live.
@@ -366,7 +372,8 @@ class AmpTab(QWidget):
         mistaken for a current reading.  In multi-channel mode nothing is muted
         (every monitor updates each window).
         """
-        muted = "color: #bbb; font-weight: bold;"
+        muted   = "color: #bbb; font-weight: bold;"
+        neutral = "color: #555; font-weight: bold;"
         for amp in SC.AMP_LABELS:
             v_ain = SC.AMP_CHANNEL_MAP[amp]["voltage"]
             i_ain = SC.AMP_CHANNEL_MAP[amp]["current"]
@@ -375,15 +382,50 @@ class AmpTab(QWidget):
             if not v_live:
                 for lbl in (self.lbl_kv[amp], self.lbl_pp[amp], self.lbl_rms[amp]):
                     lbl.setStyleSheet(muted)
+                    lbl.setText("—")
+            else:
+                for lbl in (self.lbl_kv[amp], self.lbl_pp[amp], self.lbl_rms[amp]):
+                    lbl.setStyleSheet(neutral)
             if not i_live:
                 self.lbl_ma[amp].setStyleSheet(muted)
+                self.lbl_ma[amp].setText("—")
+            else:
+                self.lbl_ma[amp].setStyleSheet(neutral)
+
+    def _update_history_layout(self):
+        """Show only the relevant history subplot in single-channel mode."""
+        # Normalized figure coords: [left, bottom, width, height]
+        _FULL = [0.10, 0.11, 0.86, 0.80]
+        _TOP  = [0.10, 0.54, 0.86, 0.40]
+        _BOT  = [0.10, 0.11, 0.86, 0.38]
+
+        if self._single_mode:
+            _, kind = _AIN_TO_AMP.get(self._single_target_ain, ("", "voltage"))
+            is_voltage = (kind == "voltage")
+            self.ax_v.set_visible(is_voltage)
+            self.ax_i.set_visible(not is_voltage)
+            if is_voltage:
+                self.ax_v.tick_params(labelbottom=True)
+                self.ax_v.set_xlabel("Time (s, relative to window right edge)")
+                self.ax_v.set_position(_FULL)
+            else:
+                self.ax_i.set_position(_FULL)
+        else:
+            self.ax_v.set_visible(True)
+            self.ax_i.set_visible(True)
+            self.ax_v.tick_params(labelbottom=False)
+            self.ax_v.set_xlabel("")
+            self.ax_v.set_position(_TOP)
+            self.ax_i.set_position(_BOT)
+        self.canvas.draw_idle()
 
     # ---- Slots ---------------------------------------------------------------
 
     def _on_profile_combo(self):
         name = self._profile_combo.currentData()
         if name:
-            self.profile_change_requested.emit(name)
+            self.on_profile_changed(name)          # update UI immediately
+            self.profile_change_requested.emit(name)  # notify MainWindow for hardware
 
     def _on_single_combo(self):
         """User picked a different single-channel target."""
@@ -392,19 +434,17 @@ class AmpTab(QWidget):
             self._single_target_ain = ain
             if self._single_mode:
                 self._apply_paused_styling()
-                self._refresh_waveform_plot()
+                self._update_history_layout()
             self.single_channel_change_requested.emit(ain)
 
     def _on_window(self, payload: dict):
         """Consume one stream window from LabJackStreamWorker.
 
         Extracts per-amplifier scalars for numeric readouts and the rolling
-        history buffers.  Raw waveform arrays are stored for the waveform plot
-        and redrawn by the 5 Hz redraw timer.
+        history buffers.
         """
         channels = payload["channels"]
         t = payload["t"]
-        rate = STREAM_PROFILES[payload["profile"]]["per_channel_rate_hz"]
 
         # Voltage and current are handled independently: in single-channel mode
         # only ONE of the two AINs for one amplifier is present, so requiring
@@ -431,13 +471,6 @@ class AmpTab(QWidget):
                 self.lbl_rms[amp].setText(format_kv(kv_rms))
                 self.lbl_rms[amp].setStyleSheet("color: #444; font-weight: bold;")
 
-                # Store waveform in kV for the waveform plot.
-                n_pts = len(v_ch["waveform"])
-                t_ms  = np.arange(n_pts) * (1000.0 / rate)
-                self._latest_waveforms[v_ain] = (
-                    t_ms, v_ch["waveform"] * SC.VOLTAGE_MONITOR_KV_PER_VOLT, "kV"
-                )
-
             if i_ch is not None:
                 ma_rms = monitor_to_ma(i_ch["rms"])
                 self.buffers[i_ain].append(t, ma_rms)
@@ -446,14 +479,6 @@ class AmpTab(QWidget):
                 self.lbl_ma[amp].setText(format_ma(ma_rms))
                 self.lbl_ma[amp].setStyleSheet(
                     f"color: {_STATUS_COLOR[istatus]}; font-weight: bold;"
-                )
-
-                # Store waveform in mA (current monitors carry a full waveform
-                # too, so a current channel can be viewed in single-channel mode).
-                n_pts = len(i_ch["waveform"])
-                t_ms  = np.arange(n_pts) * (1000.0 / rate)
-                self._latest_waveforms[i_ain] = (
-                    t_ms, i_ch["waveform"] * SC.CURRENT_MONITOR_MA_PER_VOLT, "mA"
                 )
 
         if self._is_live:
@@ -503,10 +528,20 @@ class AmpTab(QWidget):
         else:
             self._enter_frozen_mode(val)
 
+    def _window_label(self) -> str:
+        ws = self._window_seconds
+        if ws < 1.0:
+            return f"{ws * 1000:.3g} ms"
+        ws_int = int(ws)
+        if ws_int < 60:
+            return f"{ws_int} s"
+        m, s = divmod(ws_int, 60)
+        return f"{m} m" if s == 0 else f"{m} m {s} s"
+
     def _enter_live_mode(self):
         self._is_live = True
         self._frozen_right_edge = None
-        self.lbl_mode.setText("● LIVE  (last 2 min)")
+        self.lbl_mode.setText(f"● LIVE  ({self._window_label()})")
         self.lbl_mode.setStyleSheet(
             "color: #1a7a1a; font-weight: bold; padding: 2px 6px;"
         )
@@ -525,58 +560,52 @@ class AmpTab(QWidget):
         frac = slider_val / 10_000.0
         self._frozen_right_edge = t_oldest + frac * span
         self._is_live = False
+        self._update_frozen_label()
+        self.btn_jump_live.setVisible(True)
 
-        w_start = max(t_oldest, self._frozen_right_edge - self.WINDOW_SECONDS)
+    def _update_frozen_label(self):
+        w_start = self._frozen_right_edge - self._window_seconds
         self.lbl_mode.setText(
-            f"⏸  Frozen  —  t = [{w_start:+.0f} s … {self._frozen_right_edge:+.0f} s]"
+            f"⏸  Frozen  —  [{w_start:+.0f} s … {self._frozen_right_edge:+.0f} s]"
+            f"  ({self._window_label()})"
         )
         self.lbl_mode.setStyleSheet(
             "color: #8c6000; font-weight: bold; padding: 2px 6px;"
         )
-        self.btn_jump_live.setVisible(True)
 
     def _jump_to_live(self):
         self.slider.setValue(10_000)
         self._enter_live_mode()
 
-    # ---- Waveform plot -------------------------------------------------------
+    # ---- Zoom ----------------------------------------------------------------
 
-    def _refresh_waveform_plot(self):
-        """Update the waveform subplot.
+    def _zoom_in(self):
+        # Snap to the next smaller preset step (largest step < current).
+        for step in _ZOOM_STEPS:          # list is descending
+            if step < self._window_seconds - 1e-9:
+                self._window_seconds = step
+                break
+        self._after_zoom()
 
-        In single-channel mode this follows the streamed target (which may be a
-        voltage OR a current monitor); otherwise it follows the per-amp voltage
-        picker as before.
-        """
-        if self._single_mode:
-            ain = self._single_target_ain
-        else:
-            amp = self._wf_combo.currentData()
-            ain = SC.AMP_CHANNEL_MAP[amp]["voltage"]
+    def _zoom_out(self):
+        # Snap to the next larger preset step (smallest step > current).
+        for step in reversed(_ZOOM_STEPS):   # ascending
+            if step > self._window_seconds + 1e-9:
+                self._window_seconds = step
+                break
+        self._after_zoom()
 
-        entry = self._latest_waveforms.get(ain)
-        if entry is None:
-            return
-        t_ms, wave, unit = entry
-        self._wf_line.set_data(t_ms, wave)
-        self._wf_ax.set_xlim(t_ms[0], t_ms[-1])
-        self._wf_ax.set_ylabel("Voltage (kV)" if unit == "kV" else "Current (mA)")
-        self._wf_ax.relim()
-        self._wf_ax.autoscale_view(scalex=False, scaley=True)
+    def _on_scroll(self, event):
+        if event.button == 'up':
+            self._zoom_in()
+        elif event.button == 'down':
+            self._zoom_out()
 
-        fmt    = format_kv if unit == "kV" else format_ma
-        peak   = float(np.max(np.abs(wave)))
-        pkpk   = float(wave.max() - wave.min())
-        rms    = float(np.sqrt(np.mean(wave ** 2)))
-        amp_lbl, kind = _AIN_TO_AMP[ain]
-        self._wf_stats.setText(
-            f"{amp_lbl} {kind} ({ain})  |  "
-            f"peak {fmt(peak).strip()}  |  "
-            f"pk-pk {fmt(pkpk).strip()}  |  "
-            f"RMS {fmt(rms).strip()}  |  "
-            f"{len(t_ms)} pts  {t_ms[-1]:.0f} ms window"
-        )
-        self._wf_canvas.draw_idle()
+    def _after_zoom(self):
+        if self._is_live:
+            self.lbl_mode.setText(f"● LIVE  ({self._window_label()})")
+        elif self._frozen_right_edge is not None:
+            self._update_frozen_label()
 
     # ---- Plot redraw ---------------------------------------------------------
 
@@ -598,13 +627,16 @@ class AmpTab(QWidget):
             if t_right is None:
                 return
 
-        t_left = t_right - self.WINDOW_SECONDS
+        t_left = t_right - self._window_seconds
 
         for amp in SC.AMP_LABELS:
             for ain, line in (
                 (SC.AMP_CHANNEL_MAP[amp]["voltage"], self._lines_v[amp]),
                 (SC.AMP_CHANNEL_MAP[amp]["current"], self._lines_i[amp]),
             ):
+                if self._single_mode and ain != self._single_target_ain:
+                    line.set_data([], [])
+                    continue
                 t, v = self.buffers[ain].snapshot()
                 if len(t) < 2:
                     continue
@@ -622,13 +654,11 @@ class AmpTab(QWidget):
                 any_data = True
 
         if any_data:
-            self.ax_v.set_xlim(-self.WINDOW_SECONDS, 0)
+            self.ax_v.set_xlim(-self._window_seconds, 0)
             for ax in (self.ax_v, self.ax_i):
                 ax.relim()
                 ax.autoscale_view(scalex=False, scaley=True)
             self.canvas.draw_idle()
-
-        self._refresh_waveform_plot()
 
     # ---- Owner-callable cleanup ----------------------------------------------
 
