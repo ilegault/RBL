@@ -39,8 +39,20 @@ from rbl.hardware.amp_monitor import (
     voltage_status, current_status,
 )
 from rbl.config import hardware_config as SC
-from rbl.config.labjack_stream_config import STREAM_PROFILES, window_samples
+from rbl.config.labjack_stream_config import (
+    STREAM_PROFILES, window_samples, resolution_index,
+    is_single_channel, channel_choices, DEFAULT_SINGLE_CHANNEL,
+)
 from labjack_panel import LabJackPanel
+
+
+# Reverse map: AIN name -> (amp label, kind) for the 8 amplifier monitors.
+# Built from AMP_CHANNEL_MAP so it always tracks the wiring config.
+_AIN_TO_AMP = {
+    SC.AMP_CHANNEL_MAP[amp][kind]: (amp, kind)
+    for amp in SC.AMP_LABELS
+    for kind in ("voltage", "current")
+}
 
 
 # Status -> stylesheet color
@@ -61,6 +73,10 @@ class AmpTab(QWidget):
     # MainWindow connects this to _set_stream_profile().
     profile_change_requested = Signal(str)
 
+    # Emitted (with an AIN name) when the user picks a different single-channel
+    # target.  MainWindow connects this to _set_stream_channel().
+    single_channel_change_requested = Signal(str)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._t0 = time.monotonic()   # reset on labjack_connected
@@ -72,6 +88,12 @@ class AmpTab(QWidget):
         # Plot state
         self._is_live           = True
         self._frozen_right_edge = None
+
+        # Single-channel mode state.  When a single-channel profile is active,
+        # only self._single_target_ain streams live; the other seven monitors
+        # (and all log amps) are paused.
+        self._single_mode        = False
+        self._single_target_ain  = DEFAULT_SINGLE_CHANNEL
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -141,6 +163,28 @@ class AmpTab(QWidget):
         )
         self._profile_combo.currentIndexChanged.connect(self._on_profile_combo)
         prof_row.addWidget(self._profile_combo, stretch=1)
+
+        # Single-channel target selector — only the 8 amp monitors are offered.
+        # Enabled only while a single-channel profile is active.
+        prof_row.addWidget(QLabel("Target:"))
+        self._single_combo = QComboBox()
+        for amp in SC.AMP_LABELS:
+            for kind in ("voltage", "current"):
+                ain = SC.AMP_CHANNEL_MAP[amp][kind]
+                self._single_combo.addItem(
+                    f"{amp} {kind.capitalize()}  ({ain})", userData=ain
+                )
+        default_idx = self._single_combo.findData(DEFAULT_SINGLE_CHANNEL)
+        if default_idx >= 0:
+            self._single_combo.setCurrentIndex(default_idx)
+        self._single_combo.setEnabled(False)
+        self._single_combo.setToolTip(
+            "In single-channel mode, choose which amplifier monitor gets the "
+            "full stream bandwidth."
+        )
+        self._single_combo.currentIndexChanged.connect(self._on_single_combo)
+        prof_row.addWidget(self._single_combo)
+
         self._profile_status = QLabel("")
         self._profile_status.setStyleSheet("color: #555; font-style: italic; font-size: 10px;")
         prof_row.addWidget(self._profile_status)
@@ -289,10 +333,50 @@ class AmpTab(QWidget):
         self._profile_combo.blockSignals(True)
         self._profile_combo.setCurrentIndex(idx)
         self._profile_combo.blockSignals(False)
+
+        self._single_mode = is_single_channel(profile_name)
+        # The single-channel target selector is live only in single mode; the
+        # per-amp waveform picker is live only in multi-channel mode (in single
+        # mode the waveform view follows the streamed target instead).
+        self._single_combo.setEnabled(self._single_mode)
+        self._wf_combo.setEnabled(not self._single_mode)
+
         rate = STREAM_PROFILES[profile_name]["per_channel_rate_hz"]
-        self._profile_status.setText(
-            f"{rate / 1000:.1f} kS/s/ch  |  window {window_samples(profile_name)} pts"
-        )
+        res  = resolution_index(profile_name)
+        if self._single_mode:
+            self._single_target_ain = self._single_combo.currentData()
+            amp, kind = _AIN_TO_AMP[self._single_target_ain]
+            self._profile_status.setText(
+                f"{rate / 1000:.1f} kS/s  |  res idx {res}  |  "
+                f"target {amp} {kind} ({self._single_target_ain})  |  "
+                f"window {window_samples(profile_name)} pts"
+            )
+        else:
+            self._profile_status.setText(
+                f"{rate / 1000:.1f} kS/s/ch  |  res idx {res}  |  "
+                f"window {window_samples(profile_name)} pts"
+            )
+        self._apply_paused_styling()
+
+    def _apply_paused_styling(self):
+        """Grey out the numeric readouts of any monitor not streaming live.
+
+        In single-channel mode only the target's voltage OR current readout is
+        live; the rest are visually marked paused so their last value is not
+        mistaken for a current reading.  In multi-channel mode nothing is muted
+        (every monitor updates each window).
+        """
+        muted = "color: #bbb; font-weight: bold;"
+        for amp in SC.AMP_LABELS:
+            v_ain = SC.AMP_CHANNEL_MAP[amp]["voltage"]
+            i_ain = SC.AMP_CHANNEL_MAP[amp]["current"]
+            v_live = (not self._single_mode) or v_ain == self._single_target_ain
+            i_live = (not self._single_mode) or i_ain == self._single_target_ain
+            if not v_live:
+                for lbl in (self.lbl_kv[amp], self.lbl_pp[amp], self.lbl_rms[amp]):
+                    lbl.setStyleSheet(muted)
+            if not i_live:
+                self.lbl_ma[amp].setStyleSheet(muted)
 
     # ---- Slots ---------------------------------------------------------------
 
@@ -300,6 +384,16 @@ class AmpTab(QWidget):
         name = self._profile_combo.currentData()
         if name:
             self.profile_change_requested.emit(name)
+
+    def _on_single_combo(self):
+        """User picked a different single-channel target."""
+        ain = self._single_combo.currentData()
+        if ain:
+            self._single_target_ain = ain
+            if self._single_mode:
+                self._apply_paused_styling()
+                self._refresh_waveform_plot()
+            self.single_channel_change_requested.emit(ain)
 
     def _on_window(self, payload: dict):
         """Consume one stream window from LabJackStreamWorker.
@@ -310,47 +404,57 @@ class AmpTab(QWidget):
         """
         channels = payload["channels"]
         t = payload["t"]
+        rate = STREAM_PROFILES[payload["profile"]]["per_channel_rate_hz"]
 
+        # Voltage and current are handled independently: in single-channel mode
+        # only ONE of the two AINs for one amplifier is present, so requiring
+        # both (as the multi-channel path could) would blank the display.
         for amp in SC.AMP_LABELS:
             v_ain = SC.AMP_CHANNEL_MAP[amp]["voltage"]
             i_ain = SC.AMP_CHANNEL_MAP[amp]["current"]
             v_ch  = channels.get(v_ain)
             i_ch  = channels.get(i_ain)
-            if v_ch is None or i_ch is None:
-                continue
 
-            # Scale from raw volts to physical units using amp_monitor functions.
-            kv_peak = monitor_to_kv(v_ch["peak"])
-            kv_pkpk = v_ch["pk_pk"] * SC.VOLTAGE_MONITOR_KV_PER_VOLT
-            kv_rms  = monitor_to_kv(v_ch["rms"])
-            ma_rms  = monitor_to_ma(i_ch["rms"])
+            if v_ch is not None:
+                kv_peak = monitor_to_kv(v_ch["peak"])
+                kv_pkpk = v_ch["pk_pk"] * SC.VOLTAGE_MONITOR_KV_PER_VOLT
+                kv_rms  = monitor_to_kv(v_ch["rms"])
+                self.buffers[v_ain].append(t, kv_peak)
 
-            # Feed rolling history buffers with peak kV and RMS mA scalars.
-            self.buffers[v_ain].append(t, kv_peak)
-            self.buffers[i_ain].append(t, ma_rms)
+                vstatus = voltage_status(kv_peak)
+                self.lbl_kv[amp].setText(format_kv(kv_peak))
+                self.lbl_kv[amp].setStyleSheet(
+                    f"color: {_STATUS_COLOR[vstatus]}; font-weight: bold;"
+                )
+                self.lbl_pp[amp].setText(format_kv(kv_pkpk))
+                self.lbl_pp[amp].setStyleSheet("color: #444; font-weight: bold;")
+                self.lbl_rms[amp].setText(format_kv(kv_rms))
+                self.lbl_rms[amp].setStyleSheet("color: #444; font-weight: bold;")
 
-            # Update numeric readouts.
-            vstatus = voltage_status(kv_peak)
-            istatus = current_status(ma_rms)
-            self.lbl_kv[amp].setText(format_kv(kv_peak))
-            self.lbl_kv[amp].setStyleSheet(
-                f"color: {_STATUS_COLOR[vstatus]}; font-weight: bold;"
-            )
-            self.lbl_pp[amp].setText(format_kv(kv_pkpk))
-            self.lbl_pp[amp].setStyleSheet("color: #444; font-weight: bold;")
-            self.lbl_rms[amp].setText(format_kv(kv_rms))
-            self.lbl_rms[amp].setStyleSheet("color: #444; font-weight: bold;")
-            self.lbl_ma[amp].setText(format_ma(ma_rms))
-            self.lbl_ma[amp].setStyleSheet(
-                f"color: {_STATUS_COLOR[istatus]}; font-weight: bold;"
-            )
+                # Store waveform in kV for the waveform plot.
+                n_pts = len(v_ch["waveform"])
+                t_ms  = np.arange(n_pts) * (1000.0 / rate)
+                self._latest_waveforms[v_ain] = (
+                    t_ms, v_ch["waveform"] * SC.VOLTAGE_MONITOR_KV_PER_VOLT, "kV"
+                )
 
-            # Store waveform (in kV) for the waveform plot.
-            rate     = STREAM_PROFILES[payload["profile"]]["per_channel_rate_hz"]
-            n_pts    = len(v_ch["waveform"])
-            t_ms     = np.arange(n_pts) * (1000.0 / rate)
-            kv_wave  = v_ch["waveform"] * SC.VOLTAGE_MONITOR_KV_PER_VOLT
-            self._latest_waveforms[v_ain] = (t_ms, kv_wave)
+            if i_ch is not None:
+                ma_rms = monitor_to_ma(i_ch["rms"])
+                self.buffers[i_ain].append(t, ma_rms)
+
+                istatus = current_status(ma_rms)
+                self.lbl_ma[amp].setText(format_ma(ma_rms))
+                self.lbl_ma[amp].setStyleSheet(
+                    f"color: {_STATUS_COLOR[istatus]}; font-weight: bold;"
+                )
+
+                # Store waveform in mA (current monitors carry a full waveform
+                # too, so a current channel can be viewed in single-channel mode).
+                n_pts = len(i_ch["waveform"])
+                t_ms  = np.arange(n_pts) * (1000.0 / rate)
+                self._latest_waveforms[i_ain] = (
+                    t_ms, i_ch["waveform"] * SC.CURRENT_MONITOR_MA_PER_VOLT, "mA"
+                )
 
         if self._is_live:
             self.slider.blockSignals(True)
@@ -438,25 +542,38 @@ class AmpTab(QWidget):
     # ---- Waveform plot -------------------------------------------------------
 
     def _refresh_waveform_plot(self):
-        """Update the waveform subplot for the currently selected amplifier."""
-        amp   = self._wf_combo.currentData()
-        v_ain = SC.AMP_CHANNEL_MAP[amp]["voltage"]
-        entry = self._latest_waveforms.get(v_ain)
+        """Update the waveform subplot.
+
+        In single-channel mode this follows the streamed target (which may be a
+        voltage OR a current monitor); otherwise it follows the per-amp voltage
+        picker as before.
+        """
+        if self._single_mode:
+            ain = self._single_target_ain
+        else:
+            amp = self._wf_combo.currentData()
+            ain = SC.AMP_CHANNEL_MAP[amp]["voltage"]
+
+        entry = self._latest_waveforms.get(ain)
         if entry is None:
             return
-        t_ms, kv_wave = entry
-        self._wf_line.set_data(t_ms, kv_wave)
+        t_ms, wave, unit = entry
+        self._wf_line.set_data(t_ms, wave)
         self._wf_ax.set_xlim(t_ms[0], t_ms[-1])
+        self._wf_ax.set_ylabel("Voltage (kV)" if unit == "kV" else "Current (mA)")
         self._wf_ax.relim()
         self._wf_ax.autoscale_view(scalex=False, scaley=True)
 
-        peak   = float(np.max(np.abs(kv_wave)))
-        pkpk   = float(kv_wave.max() - kv_wave.min())
-        rms    = float(np.sqrt(np.mean(kv_wave ** 2)))
+        fmt    = format_kv if unit == "kV" else format_ma
+        peak   = float(np.max(np.abs(wave)))
+        pkpk   = float(wave.max() - wave.min())
+        rms    = float(np.sqrt(np.mean(wave ** 2)))
+        amp_lbl, kind = _AIN_TO_AMP[ain]
         self._wf_stats.setText(
-            f"peak {format_kv(peak).strip()}  |  "
-            f"pk-pk {format_kv(pkpk).strip()}  |  "
-            f"RMS {format_kv(rms).strip()}  |  "
+            f"{amp_lbl} {kind} ({ain})  |  "
+            f"peak {fmt(peak).strip()}  |  "
+            f"pk-pk {fmt(pkpk).strip()}  |  "
+            f"RMS {fmt(rms).strip()}  |  "
             f"{len(t_ms)} pts  {t_ms[-1]:.0f} ms window"
         )
         self._wf_canvas.draw_idle()

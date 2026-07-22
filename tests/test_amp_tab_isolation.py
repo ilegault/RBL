@@ -24,12 +24,15 @@ def qapp():
 
 
 # A single reading covering every channel, as the shared worker emits it.
+# Channel map (rbl/config/hardware_config.py): log amps AIN0-3, spare AIN4-5,
+# then amp monitors as (current, voltage) pairs Y-(6,7) Y+(8,9) X-(10,11) X+(12,13).
 FULL_READING = {
     "AIN0": 3.0, "AIN1": 3.0, "AIN2": 3.0, "AIN3": 3.0,   # log amps -> 1 µA each
-    "AIN4":  3.0, "AIN5":  1.0,     # X+ :  3 kV, 10 mA
-    "AIN6": -3.0, "AIN7":  1.0,     # X- : -3 kV, 10 mA
-    "AIN8":  2.0, "AIN9":  0.5,     # Y+ :  2 kV,  5 mA
-    "AIN10": -2.0, "AIN11": 0.5,    # Y- : -2 kV,  5 mA
+    "AIN4":  0.0, "AIN5":  0.0,      # spare (unused)
+    "AIN6":  0.5, "AIN7":  -2.0,     # Y- :  5 mA, -2 kV
+    "AIN8":  0.5, "AIN9":   2.0,     # Y+ :  5 mA,  2 kV
+    "AIN10": 1.0, "AIN11": -3.0,     # X- : 10 mA, -3 kV
+    "AIN12": 1.0, "AIN13":  3.0,     # X+ : 10 mA,  3 kV
 }
 
 
@@ -54,17 +57,17 @@ class TestAmpTabIgnoresLogAmps:
 
     def test_voltage_conversion(self, amp):
         amp._on_reading(1.0, FULL_READING)
-        _, kv = amp.buffers["AIN4"].latest()     # X+ voltage
+        _, kv = amp.buffers["AIN13"].latest()    # X+ voltage
         assert abs(kv - 3.0) < 1e-9
 
     def test_current_conversion(self, amp):
         amp._on_reading(1.0, FULL_READING)
-        _, ma = amp.buffers["AIN5"].latest()     # X+ current
+        _, ma = amp.buffers["AIN12"].latest()    # X+ current
         assert abs(ma - 10.0) < 1e-9
 
     def test_negative_rail(self, amp):
         amp._on_reading(1.0, FULL_READING)
-        _, kv = amp.buffers["AIN6"].latest()     # X- voltage
+        _, kv = amp.buffers["AIN11"].latest()    # X- voltage
         assert abs(kv - (-3.0)) < 1e-9
 
     def test_starts_live(self, amp):
@@ -92,7 +95,7 @@ class TestAmpTabIgnoresLogAmps:
 class TestCurrentTabIgnoresAmps:
     @pytest.fixture
     def cur(self, qapp):
-        from current_tab import CurrentTab
+        from logamp_tab import CurrentTab
         t = CurrentTab()
         yield t
         t.shutdown()
@@ -118,7 +121,7 @@ class TestCurrentTabIgnoresAmps:
 class TestBothTabsShareOneReading:
     def test_same_dict_feeds_both_correctly(self, qapp):
         from amp_tab import AmpTab
-        from current_tab import CurrentTab
+        from logamp_tab import CurrentTab
         amp = AmpTab()
         cur = CurrentTab()
         try:
@@ -126,7 +129,7 @@ class TestBothTabsShareOneReading:
             amp._on_reading(1.0, FULL_READING)
             cur._on_reading(1.0, FULL_READING)
 
-            _, kv = amp.buffers["AIN4"].latest()
+            _, kv = amp.buffers["AIN13"].latest()
             assert abs(kv - 3.0) < 1e-9        # amp tab got its channel
 
             _, i = cur.buffers["AIN0"].latest()

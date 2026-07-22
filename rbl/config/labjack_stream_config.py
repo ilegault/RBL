@@ -37,9 +37,32 @@ AIN assignments (from rbl/config/hardware_config.py):
 
 # Resolution index MUST be 0 or 1 to keep the 100 kS/s aggregate ceiling.
 # Index >= 2 enables a noise-averaging filter that drastically reduces the
-# maximum stream rate.  Index 8 (used in old command-response config) is
-# incompatible with streaming.
+# maximum stream rate.  Index 8 gives the most effective bits (lowest noise)
+# but caps the stream rate near ~1 kS/s.
+#
+# This is the DEFAULT resolution index for high-speed profiles that do not
+# declare their own.  A profile may override it via a per-profile
+# "resolution_index" key (see STREAM_PROFILES).  The single-channel
+# high-resolution profile trades rate for a much higher index.
 STREAM_RESOLUTION_INDEX: int = 1
+
+# Maximum aggregate stream rate the T7 can sustain at each resolution index.
+# Higher indices enable the noise-averaging filter, which lowers the ceiling.
+# Values are conservative floors drawn from the T7 datasheet stream tables;
+# they exist as a guardrail so a profile can never request a rate its chosen
+# resolution index cannot deliver.  Only indices actually used by shipped
+# profiles (1 and 8) need to be exact; the rest are safe under-estimates.
+MAX_AGG_RATE_BY_RES: dict = {
+    0: 100_000,
+    1: 100_000,
+    2:  52_000,
+    3:  42_000,
+    4:  25_000,
+    5:  12_000,
+    6:   6_000,
+    7:   3_000,
+    8:   1_000,
+}
 
 # +/-10 V range is REQUIRED on all channels:
 #   • Keeps the maximum aggregate throughput (narrower ranges trigger the
@@ -81,6 +104,16 @@ AMP_CHANNELS: list = [
 ]
 # AIN4 and AIN5 are spare and intentionally absent from all profiles.
 
+# Channels the user may target in single-channel mode.  Per the feature scope,
+# this is exactly the 8 HV amplifier monitors (voltage + current) — the log
+# amps are not offered as single-channel targets.
+SINGLE_CHANNEL_CHOICES: list = list(AMP_CHANNELS)
+
+# Default target when a single-channel profile is first selected: X+ voltage
+# monitor (AIN13, the first amplifier in AMP_LABELS order).  The user picks a
+# different target from the amp tab's channel selector at runtime.
+DEFAULT_SINGLE_CHANNEL: str = "AIN13"
+
 # ---------------------------------------------------------------------------
 # Stream profiles
 # ---------------------------------------------------------------------------
@@ -106,6 +139,7 @@ STREAM_PROFILES: dict = {
         # can display "paused" rather than showing stale numbers as live.
         "scan_list":           AMP_CHANNELS,          # ascending AIN6 → AIN13
         "per_channel_rate_hz": 12_500,
+        "resolution_index":    1,
         "description": (
             "8 amp monitors only — 12.5 kS/s/ch.  "
             "~6× oversampling at 2 kHz fast axis.  Log amps paused."
@@ -118,9 +152,43 @@ STREAM_PROFILES: dict = {
         # monitors (AIN6-13).  AIN4/5 are spare and intentionally skipped.
         "scan_list":           LOGAMP_CHANNELS + AMP_CHANNELS,  # AIN0-3, AIN6-13
         "per_channel_rate_hz": 8_000,
+        "resolution_index":    1,
         "description": (
             "12 channels (4 log amp + 8 amp monitor) — 8 kS/s/ch.  "
             "~4× oversampling at 2 kHz fast axis.  All channels live."
+        ),
+    },
+    "SINGLE_FAST": {
+        # ONE user-selected amp monitor gets the entire 100 kS/s ceiling.
+        # 1 channel × 100 000 Hz = 100 000 S/s → 10 000 samples per GUI window.
+        # Resolution index stays at 1 (same effective bits as WAVEFORM/FULL);
+        # the win here is temporal — maximum sample density for capturing fast
+        # transients on a single reading.  "scan_list" is a placeholder default;
+        # the live scan list is a single channel chosen at runtime (see
+        # single_channel / channel_choices below).
+        "scan_list":           [DEFAULT_SINGLE_CHANNEL],
+        "per_channel_rate_hz": 100_000,
+        "resolution_index":    1,
+        "single_channel":      True,
+        "channel_choices":     SINGLE_CHANNEL_CHOICES,
+        "description": (
+            "Single channel — 100 kS/s (max rate).  Full ceiling on one "
+            "reading; 10 000 pts/window.  Best for fast transients."
+        ),
+    },
+    "SINGLE_HIRES": {
+        # ONE user-selected amp monitor at low rate but MAXIMUM resolution.
+        # 1 channel × 1 000 Hz = 1 000 S/s at resolution index 8 (most
+        # effective bits / lowest noise the T7 offers).  Trades sample density
+        # for quiet, stable counts — best for precise DC-ish measurement.
+        "scan_list":           [DEFAULT_SINGLE_CHANNEL],
+        "per_channel_rate_hz": 1_000,
+        "resolution_index":    8,
+        "single_channel":      True,
+        "channel_choices":     SINGLE_CHANNEL_CHOICES,
+        "description": (
+            "Single channel — 1 kS/s, resolution index 8 (max bits).  "
+            "Lowest noise / highest counts.  Best for precise DC readings."
         ),
     },
 }
@@ -145,6 +213,31 @@ def scan_list(profile_name: str) -> list:
     return list(STREAM_PROFILES[profile_name]["scan_list"])
 
 
+def resolution_index(profile_name: str) -> int:
+    """Return the STREAM_RESOLUTION_INDEX to use for *profile_name*.
+
+    Falls back to the module-level default for profiles that do not declare a
+    per-profile ``resolution_index``.
+    """
+    return STREAM_PROFILES[profile_name].get(
+        "resolution_index", STREAM_RESOLUTION_INDEX
+    )
+
+
+def is_single_channel(profile_name: str) -> bool:
+    """True if *profile_name* streams a single, user-selectable channel."""
+    return bool(STREAM_PROFILES[profile_name].get("single_channel", False))
+
+
+def channel_choices(profile_name: str) -> list:
+    """Channels the user may target for a single-channel profile.
+
+    Returns a copy of the profile's ``channel_choices`` list, or an empty list
+    for multi-channel profiles (whose scan list is fixed).
+    """
+    return list(STREAM_PROFILES[profile_name].get("channel_choices", []))
+
+
 # ---------------------------------------------------------------------------
 # Validation — runs at import time so a mis-configured file fails immediately
 # ---------------------------------------------------------------------------
@@ -159,19 +252,45 @@ assert STREAM_RANGE_VOLTS == 10.0, (
 )
 
 for _pname, _prof in STREAM_PROFILES.items():
-    _n   = len(_prof["scan_list"])
-    _r   = _prof["per_channel_rate_hz"]
-    _agg = _n * _r
+    _n     = len(_prof["scan_list"])
+    _r     = _prof["per_channel_rate_hz"]
+    _agg   = _n * _r
+    _res   = resolution_index(_pname)
+    _single = is_single_channel(_pname)
+
     assert _agg <= T7_AGGREGATE_CEILING_HZ, (
         f"Profile '{_pname}': {_n} ch × {_r} Hz = {_agg} S/s "
         f"exceeds T7 ceiling {T7_AGGREGATE_CEILING_HZ} S/s"
+    )
+    assert _res in MAX_AGG_RATE_BY_RES, (
+        f"Profile '{_pname}': resolution_index={_res} out of range 0..8"
+    )
+    # A profile may not request a rate its resolution index cannot deliver.
+    assert _agg <= MAX_AGG_RATE_BY_RES[_res], (
+        f"Profile '{_pname}': {_agg} S/s exceeds the "
+        f"{MAX_AGG_RATE_BY_RES[_res]} S/s ceiling at resolution index {_res}"
     )
     for _ch in _prof["scan_list"]:
         assert _ch in AMP_CHANNELS or _ch in LOGAMP_CHANNELS, (
             f"Profile '{_pname}': unknown channel '{_ch}'"
         )
 
-del _pname, _prof, _n, _r, _agg, _ch
+    # Single-channel profiles must expose a non-empty, valid choice list.
+    if _single:
+        _choices = _prof.get("channel_choices", [])
+        assert _choices, (
+            f"Profile '{_pname}': single_channel profile needs 'channel_choices'"
+        )
+        for _ch in _choices:
+            assert _ch in AMP_CHANNELS, (
+                f"Profile '{_pname}': channel_choice '{_ch}' is not an amp monitor"
+            )
+        assert _prof["scan_list"][0] in _choices, (
+            f"Profile '{_pname}': default scan_list channel "
+            f"{_prof['scan_list'][0]} not in channel_choices"
+        )
+
+del _pname, _prof, _n, _r, _agg, _res, _single, _ch, _choices
 
 
 # ---------------------------------------------------------------------------
@@ -186,11 +305,24 @@ if __name__ == "__main__":
         agg  = n * rate
         win  = window_samples(name)
         flag = "  <-- AT CEILING" if agg == T7_AGGREGATE_CEILING_HZ else ""
-        print(f"  {name:10s}: {n:2d} ch x {rate:6d} Hz = {agg:7d} S/s  "
-              f"window={win} samples{flag}")
+        tag  = " [single]" if is_single_channel(name) else ""
+        print(f"  {name:12s}: {n:2d} ch x {rate:6d} Hz = {agg:7d} S/s  "
+              f"res={resolution_index(name)}  window={win} samples{flag}{tag}")
         print(f"             scan_list = {prof['scan_list']}")
         assert agg <= T7_AGGREGATE_CEILING_HZ
+        assert agg <= MAX_AGG_RATE_BY_RES[resolution_index(name)]
         assert win == rate // GUI_REFRESH_HZ
+
+    # Single-channel profile invariants.
+    assert is_single_channel("SINGLE_FAST")  and is_single_channel("SINGLE_HIRES")
+    assert not is_single_channel("FULL") and not is_single_channel("WAVEFORM")
+    assert channel_choices("SINGLE_FAST") == AMP_CHANNELS
+    assert set(channel_choices("SINGLE_HIRES")).issubset(set(AMP_CHANNELS))
+    assert DEFAULT_SINGLE_CHANNEL in channel_choices("SINGLE_FAST")
+    assert window_samples("SINGLE_FAST")  == 10_000   # 100 kS/s / 10 Hz
+    assert window_samples("SINGLE_HIRES") == 100       # 1 kS/s  / 10 Hz
+    assert resolution_index("SINGLE_HIRES") == 8
+    assert resolution_index("SINGLE_FAST")  == 1
 
     print(f"\n  DEFAULT_PROFILE         = {DEFAULT_PROFILE}")
     print(f"  STREAM_RESOLUTION_INDEX = {STREAM_RESOLUTION_INDEX}")
