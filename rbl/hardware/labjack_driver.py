@@ -73,7 +73,11 @@ class LabJackT7:
         for ch in range(N_CONFIGURED_AINS):
             ljm.eWriteName(self.handle, f"AIN{ch}_RANGE", 10.0)
             ljm.eWriteName(self.handle, f"AIN{ch}_NEGATIVE_CH", 199)  # GND single-ended
-            ljm.eWriteName(self.handle, f"AIN{ch}_RESOLUTION_INDEX", 8)
+            # Resolution index 1: compatible with stream mode (index 0 or 1 required
+            # to keep the 100 kS/s aggregate ceiling).  The old value of 8 was only
+            # safe for command-response reads and would prevent eStreamStart from
+            # reaching the target aggregate rate.
+            ljm.eWriteName(self.handle, f"AIN{ch}_RESOLUTION_INDEX", 1)
 
     def disconnect(self):
         if self.handle is not None:

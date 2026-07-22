@@ -17,7 +17,8 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPalette
 
 from rbl.hardware.labjack_driver import LabJackT7
-from rbl.hardware.labjack_poller import LabJackPollWorker
+from rbl.hardware.labjack_stream_worker import LabJackStreamWorker
+from rbl.config.labjack_stream_config import DEFAULT_PROFILE, STREAM_PROFILES
 
 
 # ─── Main Window ──────────────────────────────────────────────────────────────
@@ -63,18 +64,23 @@ class MainWindow(QMainWindow):
 
         # ── Shared LabJack T7 ─────────────────────────────────────────────────
         #
-        # ONE physical T7 -> ONE LabJackT7 instance -> ONE poll thread reading
-        # all 14 AINs in a single eReadNames round trip. Both the Beam Current
-        # tab (AIN0-3, log amps) and the HV Amplifier tab (AIN6-13, EEL5000
-        # monitors) subscribe to the same signal and filter for their own
-        # channels. Never let a tab open its own handle.
-        self._lj        = LabJackT7()
-        self._lj_worker = None
-        self._lj_tabs   = (self.current_tab, self.amp_tab)
+        # ONE physical T7 -> ONE LabJackT7 instance -> ONE stream worker reading
+        # all channels at high rate. Both the Beam Current tab (AIN0-3, log amps)
+        # and the HV Amplifier tab (AIN6-13, EEL5000 monitors) subscribe to the
+        # same window_ready signal and filter for their own channels.
+        # Never let a tab open its own handle.
+        self._lj              = LabJackT7()
+        self._lj_worker       = None
+        self._active_profile  = DEFAULT_PROFILE
+        self._profile_updating = False   # re-entrancy guard for set_profile
+        self._lj_tabs         = (self.current_tab, self.amp_tab)
 
         for tab in self._lj_tabs:
             tab.lj_panel.connect_requested.connect(self._labjack_connect)
             tab.lj_panel.disconnect_requested.connect(self._labjack_disconnect)
+
+        # Profile selector in AmpTab drives profile switches.
+        self.amp_tab.profile_change_requested.connect(self._set_stream_profile)
 
         # Start on Stepper Motors
         self._outer_stack.setCurrentIndex(0)
@@ -88,26 +94,62 @@ class MainWindow(QMainWindow):
         try:
             self._lj.connect(conn_type, identifier)
             serial = self._lj.serial_number()
-
-            self._lj_worker = LabJackPollWorker(self._lj, period_s=0.1)
-            # Fan the SAME reading out to every subscribing tab. Each tab picks
-            # out the AINs it owns and ignores the rest.
-            for tab in self._lj_tabs:
-                self._lj_worker.reading.connect(tab._on_reading)
-                self._lj_worker.error.connect(tab._on_error)
-            self._lj_worker.error.connect(self._on_labjack_error)
-            self._lj_worker.start()
-
+            self._start_stream_worker(self._active_profile)
             for tab in self._lj_tabs:
                 tab.on_labjack_connected(serial)
         except Exception as e:
             QMessageBox.critical(self, "LabJack connect failed", str(e))
             self._labjack_disconnect()
 
+    def _start_stream_worker(self, profile_name: str):
+        """Create and start a stream worker for *profile_name*.
+
+        Caller is responsible for stopping any existing worker first.
+        """
+        worker = LabJackStreamWorker(self._lj.handle, profile_name)
+        for tab in self._lj_tabs:
+            worker.window_ready.connect(tab._on_window)
+            worker.error.connect(tab._on_error)
+        worker.error.connect(self._on_labjack_error)
+        worker.start()
+        self._lj_worker = worker
+
+    def _set_stream_profile(self, profile_name: str):
+        """Stop the running stream, reconfigure, and restart with a new profile.
+
+        Hardware constraint: the T7 scan list cannot be changed mid-stream.
+        A full eStreamStop -> reconfigure -> eStreamStart cycle is required.
+        This is user-driven and takes ~tens of ms — never call mid-capture.
+        """
+        if self._profile_updating:
+            return   # ignore re-entrant call while a switch is in progress
+        if not self._lj.connected or self._lj_worker is None:
+            return
+        if profile_name == self._active_profile:
+            return
+        if profile_name not in STREAM_PROFILES:
+            return
+
+        self._profile_updating = True
+        try:
+            self._lj_worker.stop()
+            self._lj_worker.wait(5000)
+            self._lj_worker = None
+
+            self._active_profile = profile_name
+            self._start_stream_worker(profile_name)
+
+            for tab in self._lj_tabs:
+                if hasattr(tab, "on_profile_changed"):
+                    tab.on_profile_changed(profile_name)
+        finally:
+            self._profile_updating = False
+
     def _labjack_disconnect(self):
+        # Stop the stream before closing the handle (hardware order matters).
         if self._lj_worker is not None:
             self._lj_worker.stop()
-            self._lj_worker.wait(2000)
+            self._lj_worker.wait(3000)
             self._lj_worker = None
         self._lj.disconnect()
         for tab in self._lj_tabs:

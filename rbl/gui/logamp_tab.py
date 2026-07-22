@@ -12,6 +12,8 @@ Plot navigation (from TDS-T8 live_plot mechanism):
   - Drag slider left → FROZEN mode: window locked to historical position.
   - Buffer holds ~1 hour of history (BUFFER_CAPACITY = 36 000 @ 10 Hz).
 """
+import time
+import math
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
@@ -43,9 +45,9 @@ class CurrentTab(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        # NOTE: this tab no longer owns a LabJackT7 or a poll thread. MainWindow
-        # owns the single shared instance and feeds us readings via _on_reading().
-        # See rbl/hardware/labjack_poller.py for why.
+        # This tab does not own a LabJack handle or stream worker. MainWindow
+        # owns the single shared instance and feeds readings via _on_window().
+        self._t0 = time.monotonic()   # reset on labjack_connected
         self.buffers = {name: RollingBuffer(self.BUFFER_CAPACITY)
                         for name in SC.LABJACK_CHANNEL_MAP.keys()}
 
@@ -167,6 +169,7 @@ class CurrentTab(QWidget):
 
     def on_labjack_connected(self, serial: str):
         """MainWindow calls this after the shared T7 opens."""
+        self._t0 = time.monotonic()
         self.lj_panel.set_connected(True, serial)
         self._redraw_timer.start()
 
@@ -176,6 +179,65 @@ class CurrentTab(QWidget):
         self.lj_panel.set_connected(False)
 
     # ---- Slots ---------------------------------------------------------------
+
+    def _on_window(self, payload: dict):
+        """Consume one stream window from LabJackStreamWorker.
+
+        Log-amp channels carry only a mean voltage (full waveform not stored).
+        When the WAVEFORM profile is active, log-amp payload entries are None;
+        display a "paused" state rather than stale numbers.
+        """
+        channels = payload["channels"]
+        t        = payload["t"]
+
+        spec  = SC.LOG_AMP_MODELS[SC.DEFAULT_LOG_AMP_MODEL]
+        v1nA  = spec["v_at_1nA"]
+        v1mA  = spec["v_at_1mA"]
+
+        currents = {}
+        for ain in SC.LABJACK_CHANNEL_MAP.keys():
+            ch_data = channels.get(ain)
+
+            if ch_data is None:
+                # WAVEFORM profile: log amps not sampled this window.
+                self.lbl_v[ain].setText("—  (Waveform mode)")
+                self.lbl_v[ain].setStyleSheet("color: #aaa; font-family: Menlo;")
+                self.lbl_i[ain].setText("—  (Waveform mode)")
+                self.lbl_i[ain].setStyleSheet("color: #aaa; font-weight: bold;")
+                currents[ain] = float("nan")
+                continue
+
+            V = ch_data["mean"]
+            I = voltage_to_current(V, v1nA, v1mA)
+            currents[ain] = I
+            self.lbl_v[ain].setText(f"{V:6.3f} V")
+            self.lbl_v[ain].setStyleSheet("color: #555; font-family: Menlo;")
+            self.lbl_i[ain].setText(format_current(I))
+            self.lbl_i[ain].setStyleSheet("color: #1a7a1a; font-weight: bold;")
+            self.buffers[ain].append(t, I)
+
+        # Beam-centering indicators.
+        ain_xp = next((a for a, j in SC.LABJACK_CHANNEL_MAP.items() if j == "X+"), None)
+        ain_xm = next((a for a, j in SC.LABJACK_CHANNEL_MAP.items() if j == "X-"), None)
+        ain_yp = next((a for a, j in SC.LABJACK_CHANNEL_MAP.items() if j == "Y+"), None)
+        ain_ym = next((a for a, j in SC.LABJACK_CHANNEL_MAP.items() if j == "Y-"), None)
+        if ain_xp and ain_xm:
+            xc = beam_centering(currents.get(ain_xp, float("nan")),
+                                currents.get(ain_xm, float("nan")))
+            self.lbl_xc.setText(
+                f"X imbalance: {xc:+.3f}" if not math.isnan(xc) else "X imbalance: —"
+            )
+        if ain_yp and ain_ym:
+            yc = beam_centering(currents.get(ain_yp, float("nan")),
+                                currents.get(ain_ym, float("nan")))
+            self.lbl_yc.setText(
+                f"Y imbalance: {yc:+.3f}" if not math.isnan(yc) else "Y imbalance: —"
+            )
+
+        if self._is_live:
+            self.slider.blockSignals(True)
+            self.slider.setValue(10_000)
+            self.slider.blockSignals(False)
 
     def _on_reading(self, t: float, values: dict):
         spec   = SC.LOG_AMP_MODELS[SC.DEFAULT_LOG_AMP_MODEL]
