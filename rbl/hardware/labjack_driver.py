@@ -79,13 +79,36 @@ class LabJackT7:
             # reaching the target aggregate rate.
             ljm.eWriteName(self.handle, f"AIN{ch}_RESOLUTION_INDEX", 1)
 
+    def stop_stream(self):
+        """Force any active hardware stream to stop.
+
+        Safe to call unconditionally: if the T7 is not streaming, LJM raises
+        LJME_STREAM_NOT_RUNNING, which we swallow.  This is the single choke
+        point that guarantees the device is never left in stream mode — call it
+        before closing the handle, and again from any last-resort shutdown path.
+        """
+        if self.handle is None or not LJM_AVAILABLE:
+            return
+        try:
+            ljm.eStreamStop(self.handle)
+        except Exception:
+            # Not streaming, or already stopped — nothing to do.
+            pass
+
     def disconnect(self):
         if self.handle is not None:
+            # ALWAYS stop the stream before closing the handle.  Closing a
+            # handle that is still streaming leaves the T7 firmware in stream
+            # mode, which blocks every subsequent connection until the device
+            # is physically unplugged.  eStreamStop here is the guarantee that
+            # never happens, no matter which path reached disconnect().
+            self.stop_stream()
             try:
                 ljm.close(self.handle)
             except Exception:
                 pass
             self.handle = None
+            self.connection_type = None
 
     def read_channels(self, channels=DEFAULT_CHANNELS) -> dict:
         """Single batched round-trip; returns {name: voltage}.
