@@ -176,10 +176,10 @@ class AmpTab(QWidget):
             lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             return lbl
 
-        ro.addWidget(_make_hdr("Pk kV"), 1, 0)
-        ro.addWidget(_make_hdr("PP kV"), 2, 0)
-        ro.addWidget(_make_hdr("RM kV"), 3, 0)
-        ro.addWidget(_make_hdr("RM mA"), 4, 0)
+        ro.addWidget(_make_hdr("Peak kV"), 1, 0)
+        ro.addWidget(_make_hdr("Peak-to-Peak kV"), 2, 0)
+        ro.addWidget(_make_hdr("RMS kV"), 3, 0)
+        ro.addWidget(_make_hdr("RMS mA"), 4, 0)
 
         self.lbl_kv   = {}   # peak output voltage
         self.lbl_pp   = {}   # pk-pk output voltage
