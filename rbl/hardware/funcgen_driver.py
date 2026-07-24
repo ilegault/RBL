@@ -267,9 +267,34 @@ class DG1022Z:
         self._inst.write(f":SOURce{ch}:BURSt:INTernal:PERiod {period_s}")
 
     def align_phase(self, channel: int):
-        # Aligns the two channels of THIS instrument only.
-        # Does NOT synchronise across two separate DG1022Z units.
+        # Aligns the two channels of THIS instrument only (the front-panel
+        # "Align Phase" / channel Sync function): it resets the phase generators
+        # of BOTH channels at once so they restart phase-coherent.
+        # Does NOT synchronise across two separate DG1022Z units — for that the
+        # two units must share a timebase (see set_reference_clock).
         self._inst.write(f":SOURce{int(channel)}:PHASe:SYNChronize")
+
+    def set_reference_clock(self, source: str = "INTernal"):
+        """Select the instrument timebase: internal crystal or external 10 MHz.
+
+        Two SEPARATE DG1022Z units cannot hold a stable phase relationship on
+        their independent internal clocks — they drift.  To phase-lock across
+        units, cable one unit's rear-panel [10MHz Out] to the other's
+        [10MHz In] and set the second unit to EXTernal here.  With a shared
+        reference the two units' frequencies are locked, so a phase relationship
+        established at output-enable time is held rather than drifting away.
+
+        SCPI: :ROSCillator:SOURce {INTernal|EXTernal}
+        (RIGOL DG1000Z / DG1022Z programming guide, ROSCillator subsystem.)
+        """
+        s = source.strip().upper()
+        if s.startswith("EXT"):
+            arg = "EXTernal"
+        elif s.startswith("INT"):
+            arg = "INTernal"
+        else:
+            raise ValueError(f"reference clock source must be INTernal or EXTernal, got {source!r}")
+        self._inst.write(f":ROSCillator:SOURce {arg}")
 
     def beep(self):
         self._inst.write(":SYSTem:BEEPer:IMMediate")

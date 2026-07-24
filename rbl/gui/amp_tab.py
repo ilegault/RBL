@@ -227,13 +227,6 @@ class AmpTab(QWidget):
         self.lbl_pp   = {}   # pk-pk output voltage
         self.lbl_rms  = {}   # RMS output voltage
         self.lbl_ma   = {}   # RMS current draw
-
-        # Raw LabJack ADC voltages (V) — shown to the right of the converted
-        # readings as an independent verification channel.
-        self.lbl_raw_vp  = {}   # raw peak voltage-monitor reading (V)
-        self.lbl_raw_vpp = {}   # raw pk-pk voltage-monitor reading (V)
-        self.lbl_raw_vr  = {}   # raw RMS voltage-monitor reading (V)
-        self.lbl_raw_ir  = {}   # raw RMS current-monitor reading (V)
         for col, amp in enumerate(SC.AMP_LABELS, start=1):
             v_ain = SC.AMP_CHANNEL_MAP[amp]["voltage"]
             i_ain = SC.AMP_CHANNEL_MAP[amp]["current"]
@@ -261,33 +254,6 @@ class AmpTab(QWidget):
                 getattr(self, attr)[amp] = lbl
                 ro.addWidget(lbl, row, col)
 
-            # Raw LabJack voltage columns (cols 5-8, immediately right of converted).
-            # Cols 1-4: converted values; cols 5-8: raw V (no dedicated sep column).
-            # Offset from col (1-based) to raw_col: 5 - 1 = 4 = len(AMP_LABELS)
-            RAW_COL_OFFSET = len(SC.AMP_LABELS)  # = 4
-            raw_col = col + RAW_COL_OFFSET
-            _raw_is_first = (col == 1)
-            _raw_style      = ("color: #1a6b9a; font-weight: bold; "
-                               "border-left: 2px solid #aaa; padding-left: 4px;"
-                               if _raw_is_first else
-                               "color: #1a6b9a; font-weight: bold;")
-            for row, attr in enumerate(
-                ("lbl_raw_vp", "lbl_raw_vpp", "lbl_raw_vr"), start=1
-            ):
-                lbl = QLabel("—")
-                lbl.setFont(small)
-                lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                lbl.setStyleSheet(_raw_style)
-                getattr(self, attr)[amp] = lbl
-                ro.addWidget(lbl, row, raw_col)
-
-            lbl_raw_ir = QLabel("—")
-            lbl_raw_ir.setFont(small)
-            lbl_raw_ir.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            lbl_raw_ir.setStyleSheet(_raw_style)
-            self.lbl_raw_ir[amp] = lbl_raw_ir
-            ro.addWidget(lbl_raw_ir, 4, raw_col)
-
             # Current: single RMS mA value
             lbl_ma = QLabel("—")
             lbl_ma.setFont(mono)
@@ -295,24 +261,59 @@ class AmpTab(QWidget):
             self.lbl_ma[amp] = lbl_ma
             ro.addWidget(lbl_ma, 4, col)
 
-        # ── Raw LabJack section: column headers (cols 5-8) ───────────────────
-        # No dedicated separator column — the first raw header carries a
-        # left-border line to visually divide the two sections.
-        _RAW_START = len(SC.AMP_LABELS) + 1  # 5
+        # ── Raw analog inputs: the 8 physical LabJack channels ───────────────
+        # The table above shows DERIVED kV/mA statistics (peak/pk-pk/RMS).  This
+        # separate box shows the 8 raw analog signals exactly as they arrive
+        # from the EEL5000 front-panel monitors into the LabJack — one value per
+        # physical AIN, in volts, with NO scaling applied.  There are only 8
+        # real inputs: each amplifier contributes exactly two, a VOLTAGE monitor
+        # and a CURRENT monitor.  (The value shown is the window average = the
+        # DC level the input sits at, i.e. what a meter on the BNC would read.)
+        raw_box = QGroupBox(
+            "Raw EEL5000 Analog Inputs — 8 physical LabJack channels "
+            "(direct ADC volts, no scaling)"
+        )
+        rawg = QGridLayout(raw_box)
+        rawg.setSpacing(3)
+        rawg.setContentsMargins(6, 4, 6, 4)
+        rawmono = QFont("Menlo", 11)
+        rawmono.setBold(True)
 
-        for idx, (raw_col, amp) in enumerate(
-            enumerate(SC.AMP_LABELS, start=_RAW_START)
-        ):
+        # Column 0: signal-type row labels.  One column per amplifier after that.
+        rawg.addWidget(QLabel(""), 0, 0)
+        for text, row in (("Voltage monitor (V)", 1), ("Current monitor (V)", 2)):
+            rl = QLabel(text)
+            rl.setFont(small)
+            rl.setStyleSheet("color: #666;")
+            rl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            rawg.addWidget(rl, row, 0)
+
+        self.lbl_raw_v = {}   # raw voltage-monitor ADC reading (V)
+        self.lbl_raw_i = {}   # raw current-monitor ADC reading (V)
+        for col, amp in enumerate(SC.AMP_LABELS, start=1):
             v_ain = SC.AMP_CHANNEL_MAP[amp]["voltage"]
             i_ain = SC.AMP_CHANNEL_MAP[amp]["current"]
-            raw_hdr = QLabel(f"{amp}\n{v_ain}/{i_ain}")
-            raw_hdr.setFont(small)
-            raw_hdr.setAlignment(
-                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+
+            hdr = QLabel(amp)
+            hdr.setStyleSheet(
+                f"color: {SC.AMP_COLORS[amp]}; font-weight: bold; font-size: 14px;"
             )
-            border = "border-left: 2px solid #aaa; padding-left: 4px;" if idx == 0 else ""
-            raw_hdr.setStyleSheet(f"color: #1a6b9a; font-weight: bold; {border}")
-            ro.addWidget(raw_hdr, 0, raw_col)
+            hdr.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+            rawg.addWidget(hdr, 0, col)
+
+            lv = QLabel(f"{v_ain}:  —")
+            lv.setFont(rawmono)
+            lv.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
+            lv.setStyleSheet("color: #1a6b9a; font-weight: bold;")
+            self.lbl_raw_v[amp] = lv
+            rawg.addWidget(lv, 1, col)
+
+            li = QLabel(f"{i_ain}:  —")
+            li.setFont(rawmono)
+            li.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
+            li.setStyleSheet("color: #1a6b9a; font-weight: bold;")
+            self.lbl_raw_i[amp] = li
+            rawg.addWidget(li, 2, col)
 
         # ── Profile selector (placed right of lj_panel in top_row below) ────
         prof_box = QGroupBox("Stream Profile")
@@ -370,10 +371,16 @@ class AmpTab(QWidget):
         left_col.addWidget(prof_box)
         left_col.addStretch()
 
+        # Right side stacks the converted monitors over the raw analog inputs.
+        right_col = QVBoxLayout()
+        right_col.setSpacing(8)
+        right_col.addWidget(ro_box)
+        right_col.addWidget(raw_box)
+
         upper_row = QHBoxLayout()
         upper_row.setSpacing(8)
         upper_row.addLayout(left_col)
-        upper_row.addWidget(ro_box, stretch=1)
+        upper_row.addLayout(right_col, stretch=1)
         layout.addLayout(upper_row)
 
         # ── History / waveform plot (one figure, two modes) ─────────────────
@@ -599,40 +606,32 @@ class AmpTab(QWidget):
         mistaken for a current reading.  In multi-channel mode nothing is muted
         (every monitor updates each window).
         """
-        muted         = "color: #bbb; font-weight: bold;"
-        neutral       = "color: #555; font-weight: bold;"
-        raw_live      = "color: #1a6b9a; font-weight: bold;"
-        raw_live_first = (
-            "color: #1a6b9a; font-weight: bold; "
-            "border-left: 2px solid #aaa; padding-left: 4px;"
-        )
+        muted    = "color: #bbb; font-weight: bold;"
+        neutral  = "color: #555; font-weight: bold;"
+        raw_live = "color: #1a6b9a; font-weight: bold;"
         for amp in SC.AMP_LABELS:
             v_ain = SC.AMP_CHANNEL_MAP[amp]["voltage"]
             i_ain = SC.AMP_CHANNEL_MAP[amp]["current"]
             v_live = (not self._single_mode) or v_ain == self._single_target_ain
             i_live = (not self._single_mode) or i_ain == self._single_target_ain
-            is_first = (amp == SC.AMP_LABELS[0])
-            _rl = raw_live_first if is_first else raw_live
             if not v_live:
                 for lbl in (self.lbl_kv[amp], self.lbl_pp[amp], self.lbl_rms[amp]):
                     lbl.setStyleSheet(muted)
                     lbl.setText("—")
-                for lbl in (self.lbl_raw_vp[amp], self.lbl_raw_vpp[amp], self.lbl_raw_vr[amp]):
-                    lbl.setStyleSheet(muted)
-                    lbl.setText("—")
+                self.lbl_raw_v[amp].setStyleSheet(muted)
+                self.lbl_raw_v[amp].setText(f"{v_ain}:  —")
             else:
                 for lbl in (self.lbl_kv[amp], self.lbl_pp[amp], self.lbl_rms[amp]):
                     lbl.setStyleSheet(neutral)
-                for lbl in (self.lbl_raw_vp[amp], self.lbl_raw_vpp[amp], self.lbl_raw_vr[amp]):
-                    lbl.setStyleSheet(_rl)
+                self.lbl_raw_v[amp].setStyleSheet(raw_live)
             if not i_live:
                 self.lbl_ma[amp].setStyleSheet(muted)
                 self.lbl_ma[amp].setText("—")
-                self.lbl_raw_ir[amp].setStyleSheet(muted)
-                self.lbl_raw_ir[amp].setText("—")
+                self.lbl_raw_i[amp].setStyleSheet(muted)
+                self.lbl_raw_i[amp].setText(f"{i_ain}:  —")
             else:
                 self.lbl_ma[amp].setStyleSheet(neutral)
-                self.lbl_raw_ir[amp].setStyleSheet(_rl)
+                self.lbl_raw_i[amp].setStyleSheet(raw_live)
 
     def _update_history_layout(self):
         """Show only the relevant subplot in single-channel mode.
@@ -773,12 +772,14 @@ class AmpTab(QWidget):
                 self.lbl_rms[amp].setText(format_kv(kv_rms))
                 self.lbl_rms[amp].setStyleSheet("color: #444; font-weight: bold;")
 
-                # Raw ADC readings (V) — shown in steel-blue for clear differentiation
-                self.lbl_raw_vp[amp].setText(f"{v_ch['peak']:+.4f} V")
-                self.lbl_raw_vpp[amp].setText(f"{v_ch['pk_pk']:+.4f} V")
-                self.lbl_raw_vr[amp].setText(f"{v_ch['rms']:+.4f} V")
-
+                # Raw analog input: the actual volts arriving from the EEL5000
+                # VOLTAGE monitor into the LabJack, with NO kV scaling.  The
+                # window average is the DC level the input sits at (what a meter
+                # on the BNC would read).
                 wave = v_ch.get("waveform")
+                raw_v = float(np.mean(wave)) if wave is not None else v_ch["rms"]
+                self.lbl_raw_v[amp].setText(f"{v_ain}:  {raw_v:+.4f} V")
+
                 if wave is not None:
                     self._store_wave_chunk(
                         v_ain, t, np.asarray(wave) * SC.VOLTAGE_MONITOR_KV_PER_VOLT
@@ -794,10 +795,12 @@ class AmpTab(QWidget):
                     f"color: {_STATUS_COLOR[istatus]}; font-weight: bold;"
                 )
 
-                # Raw current-monitor ADC reading (V)
-                self.lbl_raw_ir[amp].setText(f"{i_ch['rms']:+.4f} V")
-
+                # Raw analog input: the actual volts from the EEL5000 CURRENT
+                # monitor into the LabJack, with NO mA scaling (window average).
                 wave = i_ch.get("waveform")
+                raw_i = float(np.mean(wave)) if wave is not None else i_ch["rms"]
+                self.lbl_raw_i[amp].setText(f"{i_ain}:  {raw_i:+.4f} V")
+
                 if wave is not None:
                     self._store_wave_chunk(
                         i_ain, t, np.asarray(wave) * SC.CURRENT_MONITOR_MA_PER_VOLT
@@ -846,11 +849,9 @@ class AmpTab(QWidget):
                 f"color: {_STATUS_COLOR[current_status(ma)]}; font-weight: bold;"
             )
 
-            # Raw ADC readings for legacy single-point path (no peak/rms split)
-            self.lbl_raw_vp[amp].setText(f"{v_raw:+.4f} V")
-            self.lbl_raw_vpp[amp].setText("—")
-            self.lbl_raw_vr[amp].setText(f"{v_raw:+.4f} V")
-            self.lbl_raw_ir[amp].setText(f"{i_raw:+.4f} V")
+            # Raw analog inputs (legacy single-point path): the direct volts.
+            self.lbl_raw_v[amp].setText(f"{v_ain}:  {v_raw:+.4f} V")
+            self.lbl_raw_i[amp].setText(f"{i_ain}:  {i_raw:+.4f} V")
 
         if self._is_live:
             self.slider.blockSignals(True)
