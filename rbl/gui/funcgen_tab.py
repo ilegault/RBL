@@ -376,6 +376,29 @@ class FuncGenTab(QWidget):
         status_row.addWidget(self.lbl_status_b)
         disc_layout.addLayout(status_row)
 
+        # ── Cross-unit timebase sharing (for a locked X/Y phase relationship) ─
+        self.chk_ext_ref = QCheckBox(
+            "Share 10 MHz timebase  (Gen A = master → Gen B = external ref)"
+        )
+        self.chk_ext_ref.setToolTip(
+            "Two separate DG1022Z units drift on their own clocks, so their "
+            "X/Y phase relationship will not stay fixed.\n\n"
+            "To lock them: connect a BNC cable from Gen A's rear-panel "
+            "[10MHz Out] to Gen B's rear-panel [10MHz In], then enable this.\n"
+            "Gen A keeps its internal clock (master); Gen B follows the shared "
+            "10 MHz reference (external).  Un-checking returns both to internal."
+        )
+        self.chk_ext_ref.setEnabled(False)
+        self.chk_ext_ref.toggled.connect(self._on_ext_ref_toggled)
+        disc_layout.addWidget(self.chk_ext_ref)
+
+        self.lbl_ref_status = QLabel("")
+        self.lbl_ref_status.setStyleSheet(
+            "color: #555; font-style: italic; font-size: 10px;"
+        )
+        self.lbl_ref_status.setWordWrap(True)
+        disc_layout.addWidget(self.lbl_ref_status)
+
         left_layout.addWidget(disc_box)
 
         # ── Amplifier input-limit note ────────────────────────────────────
@@ -574,8 +597,17 @@ class FuncGenTab(QWidget):
 
     def _refresh_connection_ui(self):
         any_connected = any(v is not None for v in self._gen.values())
+        both_connected = all(v is not None for v in self._gen.values())
         self.btn_connect.setText("Disconnect" if any_connected else "Connect")
         self.btn_apply_all.setEnabled(any_connected)
+
+        # Sharing a timebase only makes sense with BOTH units connected.
+        self.chk_ext_ref.setEnabled(both_connected)
+        if not both_connected and self.chk_ext_ref.isChecked():
+            self.chk_ext_ref.blockSignals(True)
+            self.chk_ext_ref.setChecked(False)
+            self.chk_ext_ref.blockSignals(False)
+            self.lbl_ref_status.setText("")
 
         for gen_letter, lbl in (("A", self.lbl_status_a), ("B", self.lbl_status_b)):
             g = self._gen[gen_letter]
@@ -594,7 +626,84 @@ class FuncGenTab(QWidget):
 
         self._set_scpi_enabled(any_connected)
 
+    # ---- Cross-unit timebase (10 MHz reference) ------------------------------
+
+    def _on_ext_ref_toggled(self, checked: bool):
+        """Lock/unlock the two units to a shared 10 MHz reference.
+
+        Checked  → Gen A internal (master), Gen B external (follows the shared
+                   10 MHz reference on its rear [10MHz In]).
+        Unchecked → both back to their own internal clocks.
+
+        The physical BNC cable from Gen A [10MHz Out] to Gen B [10MHz In] is the
+        user's responsibility; this only sets the SCPI source on each unit.
+        """
+        gen_a = self._gen["A"]
+        gen_b = self._gen["B"]
+        if gen_a is None or gen_b is None:
+            self.lbl_ref_status.setText(
+                "Both generators must be connected to share a timebase."
+            )
+            return
+        try:
+            if checked:
+                gen_a.set_reference_clock("INTernal")
+                gen_b.set_reference_clock("EXTernal")
+                self._log_scpi(
+                    "# Timebase: Gen A internal (master), Gen B external "
+                    "(shared 10 MHz reference)"
+                )
+                self.lbl_ref_status.setText(
+                    "Locked: Gen B follows Gen A's 10 MHz reference. "
+                    "Confirm the [10MHz Out]→[10MHz In] cable is connected."
+                )
+            else:
+                gen_a.set_reference_clock("INTernal")
+                gen_b.set_reference_clock("INTernal")
+                self._log_scpi("# Timebase: both generators on internal clocks")
+                self.lbl_ref_status.setText(
+                    "Independent internal clocks — X/Y phase will drift across "
+                    "the two units."
+                )
+        except Exception as e:
+            self._log_scpi(f"! Timebase set failed: {e}")
+            QMessageBox.warning(self, "Reference clock", str(e))
+
     # ---- Apply helpers -------------------------------------------------------
+
+    @staticmethod
+    def _peak_status(params: dict):
+        """Classify a channel's combined-peak interlock result.
+
+        The amplifier input must stay within ±5 V, and the peak it sees is
+        |offset| + amp/2 — not either field alone.  Returns ("ok"|"warn"|
+        "block", peak_volts).
+        """
+        peak = channel_peak_volts(params["shape"], params["amp"], params["offset"])
+        if peak > PEAK_MAX_VOLTS + 1e-9:
+            return "block", peak
+        if peak > PEAK_WARN_VOLTS + 1e-9:
+            return "warn", peak
+        return "ok", peak
+
+    def _configure_channel(self, gen_letter: str, channel: int, params: dict) -> str:
+        """Push waveform + load to one channel WITHOUT touching its output gate.
+
+        Returns any clamp-warning string from set_waveform ("" if none).  The
+        output on/off is deliberately NOT sent here so callers can enable the
+        outputs separately (see _apply_all's synchronized burst).
+        """
+        g = self._gen[gen_letter]
+        warn = g.set_waveform(
+            channel,
+            params["shape"],
+            params["freq"],
+            params["amp"],
+            params["offset"],
+            params["phase"],
+        )
+        g.set_output_load(channel, params["load"])
+        return warn
 
     def _apply_channel(self, gen_letter: str, channel: int):
         g = self._gen[gen_letter]
@@ -604,11 +713,9 @@ class FuncGenTab(QWidget):
         panel  = self.panels[key]
         params = panel.get_params()
 
-        # Combined-peak interlock: the amplifier input must stay within ±5 V, and
-        # the peak it sees is |offset| + amp/2 — not either field alone. Block
-        # outright above 5 V; ask the user to confirm above the 4 V advisory.
-        peak = channel_peak_volts(params["shape"], params["amp"], params["offset"])
-        if peak > PEAK_MAX_VOLTS + 1e-9:
+        # Combined-peak interlock: block outright above 5 V; confirm above 4 V.
+        status, peak = self._peak_status(params)
+        if status == "block":
             msg = (f"combined peak {peak:.4g} V exceeds the "
                    f"{PEAK_MAX_VOLTS:.0f} V amplifier input limit")
             self._log_scpi(f"! {key}: blocked — {msg}")
@@ -621,7 +728,7 @@ class FuncGenTab(QWidget):
                 f"Reduce the offset or the amplitude, then apply again."
             )
             return
-        if peak > PEAK_WARN_VOLTS + 1e-9:
+        if status == "warn":
             resp = QMessageBox.question(
                 self, "High peak voltage",
                 f"Channel {key}: combined peak = {peak:.4g} V, above the "
@@ -636,15 +743,7 @@ class FuncGenTab(QWidget):
                 return
 
         try:
-            warn = g.set_waveform(
-                channel,
-                params["shape"],
-                params["freq"],
-                params["amp"],
-                params["offset"],
-                params["phase"],
-            )
-            g.set_output_load(channel, params["load"])
+            warn = self._configure_channel(gen_letter, channel, params)
             if params["output"]:
                 g.output_on(channel)
             else:
@@ -659,11 +758,120 @@ class FuncGenTab(QWidget):
             QMessageBox.critical(self, "Apply failed", str(e))
 
     def _apply_all(self):
+        """Apply all four channels so their outputs come up together.
+
+        The old version applied each channel fully — waveform, load AND output —
+        one at a time, so the four outputs enabled tens to hundreds of ms apart
+        (a whole reconfigure between each), which threw the raster off.
+
+        This does it in three ordered phases instead:
+          1. configure every channel (waveform + load) with outputs untouched;
+          2. run each connected unit's Align-Phase (:PHASe:SYNChronize) so its
+             two channels restart phase-coherent;
+          3. fire every "output ON" back-to-back as the very last thing, so the
+             inter-channel skew shrinks to just the gap between consecutive
+             enable commands.
+
+        NOTE ON CROSS-UNIT SYNC: steps 2–3 lock the channels WITHIN each Rigol
+        and start all four close together, but two SEPARATE DG1022Z units drift
+        on their independent clocks.  A stable X/Y phase relationship ACROSS the
+        two units also needs a shared timebase — the 10 MHz reference cable and
+        the "Share 10 MHz timebase" option below.
+        """
+        # Gather only the channels whose generator is connected.
+        active = []   # (key, gen_letter, channel, panel, params)
         for key, panel in self.panels.items():
             gen_letter = key[0]
             channel    = int(key[1])
             if self._gen[gen_letter] is not None:
-                self._apply_channel(gen_letter, channel)
+                active.append((key, gen_letter, channel, panel, panel.get_params()))
+        if not active:
+            return
+
+        # ── Phase 0: validate the interlock for EVERY channel first ──────────
+        # Applying a partial raster is worse than applying none, so if any
+        # channel is over the hard ceiling nothing is sent at all.
+        blocked, warn_ch = [], []
+        for key, _, _, _, params in active:
+            status, peak = self._peak_status(params)
+            if status == "block":
+                blocked.append((key, peak))
+            elif status == "warn":
+                warn_ch.append((key, peak))
+        if blocked:
+            lines = "\n".join(f"  {k}: peak {p:.4g} V" for k, p in blocked)
+            self._log_scpi("! Apply All blocked — channel(s) over the limit:")
+            for k, p in blocked:
+                self._log_scpi(f"!   {k}: peak {p:.4g} V")
+            QMessageBox.critical(
+                self, "Amplifier limit exceeded",
+                f"These channels exceed the {PEAK_MAX_VOLTS:.0f} V amplifier "
+                f"input ceiling (|offset| + ½·amplitude):\n\n{lines}\n\n"
+                f"Nothing was applied. Reduce the offending channels, then "
+                f"Apply All again."
+            )
+            return
+        if warn_ch:
+            lines = "\n".join(f"  {k}: peak {p:.4g} V" for k, p in warn_ch)
+            resp = QMessageBox.question(
+                self, "High peak voltage",
+                f"These channels are above the {PEAK_WARN_VOLTS:.0f} V advisory "
+                f"threshold (hard ceiling {PEAK_MAX_VOLTS:.0f} V):\n\n{lines}\n\n"
+                f"Apply all anyway?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if resp != QMessageBox.StandardButton.Yes:
+                self._log_scpi("# Apply All cancelled at high-peak confirmation")
+                return
+
+        # ── Phase 1: configure every channel (outputs left as they are) ──────
+        warnings = []
+        try:
+            for key, gen_letter, channel, _, params in active:
+                w = self._configure_channel(gen_letter, channel, params)
+                if w:
+                    warnings.append((key, w))
+        except Exception as e:
+            self._log_scpi(f"! Apply All failed during configure: {e}")
+            QMessageBox.critical(self, "Apply All failed", str(e))
+            return
+
+        # ── Phase 1b: align each connected unit's two channels ───────────────
+        for gen_letter in ("A", "B"):
+            g = self._gen[gen_letter]
+            if g is not None:
+                try:
+                    g.align_phase(1)   # front-panel "Align Phase" for this unit
+                except Exception as e:
+                    self._log_scpi(f"! Gen {gen_letter}: align phase failed: {e}")
+
+        # ── Phase 2: enable outputs — OFF ones first, then all ON together ───
+        # Keeping every "output ON" consecutive at the very end is what makes
+        # the four outputs come up as close to simultaneously as USB-TMC allows.
+        try:
+            for key, gen_letter, channel, _, params in active:
+                if not params["output"]:
+                    self._gen[gen_letter].output_off(channel)
+            for key, gen_letter, channel, _, params in active:
+                if params["output"]:
+                    self._gen[gen_letter].output_on(channel)
+        except Exception as e:
+            self._log_scpi(f"! Apply All failed during output enable: {e}")
+            QMessageBox.critical(self, "Apply All failed", str(e))
+            return
+
+        if warnings:
+            for key, w in warnings:
+                self._log_scpi(f"! {key}: {w}")
+            QMessageBox.warning(
+                self, "Safety clamp",
+                "\n".join(f"{key}: {w}" for key, w in warnings)
+            )
+        self._log_scpi(
+            f"# Apply All: configured {len(active)} channel(s), aligned phase, "
+            f"enabled outputs together"
+        )
 
     # ---- Poll (read-only) ----------------------------------------------------
 

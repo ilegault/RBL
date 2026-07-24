@@ -316,6 +316,33 @@ class TestPassthroughMethods:
         gen.align_phase(1)
         mock_inst.write.assert_called_with(":SOURce1:PHASe:SYNChronize")
 
+    def test_set_reference_clock_internal(self, mock_inst, mock_pyvisa):
+        gen = DG1022Z("USB0::...::INSTR")
+        gen.set_reference_clock("INTernal")
+        mock_inst.write.assert_called_with(":ROSCillator:SOURce INTernal")
+
+    def test_set_reference_clock_external(self, mock_inst, mock_pyvisa):
+        gen = DG1022Z("USB0::...::INSTR")
+        gen.set_reference_clock("EXTernal")
+        mock_inst.write.assert_called_with(":ROSCillator:SOURce EXTernal")
+
+    def test_set_reference_clock_defaults_internal(self, mock_inst, mock_pyvisa):
+        gen = DG1022Z("USB0::...::INSTR")
+        gen.set_reference_clock()
+        mock_inst.write.assert_called_with(":ROSCillator:SOURce INTernal")
+
+    def test_set_reference_clock_accepts_short_forms(self, mock_inst, mock_pyvisa):
+        gen = DG1022Z("USB0::...::INSTR")
+        gen.set_reference_clock("ext")
+        mock_inst.write.assert_called_with(":ROSCillator:SOURce EXTernal")
+        gen.set_reference_clock("int")
+        mock_inst.write.assert_called_with(":ROSCillator:SOURce INTernal")
+
+    def test_set_reference_clock_rejects_bad_source(self, mock_inst, mock_pyvisa):
+        gen = DG1022Z("USB0::...::INSTR")
+        with pytest.raises(ValueError):
+            gen.set_reference_clock("bogus")
+
     def test_beep(self, mock_inst, mock_pyvisa):
         gen = DG1022Z("USB0::...::INSTR")
         gen.beep()
