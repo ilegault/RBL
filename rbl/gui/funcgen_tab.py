@@ -44,6 +44,28 @@ _CONFIG_PATH = Path.home() / ".config" / "rbl" / "funcgen.json"
 # EEL5000 gain: 1 V_gen -> 1000 V_plate
 _AMP_GAIN = 1000.0
 
+# The EEL5000 input tolerates ±MAX_GEN_VOLTS (5 V). The *instantaneous* voltage
+# the amplifier sees is the offset plus half the peak-to-peak amplitude — for an
+# AC waveform the signal swings ±amp/2 about the offset, so the worst-case peak
+# magnitude is |offset| + amp/2. That combined peak, not either field alone, is
+# what must stay within the amplifier's rail:
+#   * peak > PEAK_MAX_VOLTS  -> apply is blocked outright.
+#   * peak > PEAK_WARN_VOLTS -> apply asks the user to confirm first.
+PEAK_MAX_VOLTS  = MAX_GEN_VOLTS   # hard ceiling: amplifier cannot exceed ±5 V
+PEAK_WARN_VOLTS = 4.0             # advisory threshold — confirm before applying
+
+
+def channel_peak_volts(shape: str, amp_vpp: float, offset_v: float) -> float:
+    """Worst-case instantaneous voltage magnitude the amplifier input sees (V).
+
+    For any AC shape the waveform swings ±amp/2 about the offset, so the peak
+    magnitude is |offset| + amp/2. In DC mode the held voltage is the offset,
+    so the peak is just |offset|.
+    """
+    if shape == "DC":
+        return abs(offset_v)
+    return abs(offset_v) + abs(amp_vpp) / 2.0
+
 
 def _load_config() -> dict:
     try:
@@ -228,9 +250,26 @@ class ChannelPanel(QGroupBox):
             v = self.spn_amp.value()
         kv_per_plate = abs(v) * _AMP_GAIN / 1000.0
         kv_p2p       = 2.0 * kv_per_plate
+
+        # Combined peak the amplifier input actually sees (|offset| + amp/2).
+        peak = channel_peak_volts(shape, self.spn_amp.value(),
+                                  self.spn_offset.value())
         self.lbl_hv.setText(
             f"→ {kv_per_plate:.4f} kV/plate  ({kv_p2p:.4f} kV p-p)"
+            f"   |   peak {peak:.3f} V"
         )
+        if peak > PEAK_MAX_VOLTS + 1e-9:
+            # Over the amplifier's ±5 V rail — apply will be blocked.
+            self.lbl_hv.setStyleSheet(
+                "color: #c0392b; font-size: 10px; font-weight: bold;"
+            )
+        elif peak > PEAK_WARN_VOLTS + 1e-9:
+            # Above the 4 V advisory — apply will ask to confirm.
+            self.lbl_hv.setStyleSheet(
+                "color: #b06a00; font-size: 10px; font-weight: bold;"
+            )
+        else:
+            self.lbl_hv.setStyleSheet("color: #7a2000; font-size: 10px;")
 
     def set_connected(self, on: bool):
         for w in (self.btn_apply, self.btn_output, self.spn_freq,
@@ -328,6 +367,24 @@ class FuncGenTab(QWidget):
         disc_layout.addLayout(status_row)
 
         left_layout.addWidget(disc_box)
+
+        # ── Amplifier input-limit note ────────────────────────────────────
+        note_lbl = QLabel(
+            "⚠  Amplifier input ceiling — the EEL5000 accepts ±5 V max on its "
+            "input. The peak the amplifier actually sees is |offset| + ½·amplitude "
+            "(for an AC waveform the signal swings ±½·amplitude about the offset), "
+            "and that combined peak must stay ≤ 5 V — not each field on its own. "
+            "So 0 V offset + 5 V amplitude is fine (peak = 2.5 V), but e.g. 4 V "
+            "offset + 4 V amplitude is not (peak = 6 V). Apply is blocked above "
+            "5 V and asks you to confirm above 4 V. Each channel's live "
+            "'peak' readout turns amber past 4 V and red past 5 V."
+        )
+        note_lbl.setWordWrap(True)
+        note_lbl.setStyleSheet(
+            "color: #7a2000; font-size: 9pt; padding: 4px; "
+            "background: #fff6e6; border: 1px solid #e0c080; border-radius: 3px;"
+        )
+        left_layout.addWidget(note_lbl)
 
         # ── 4 channel panels in 2×2 grid ─────────────────────────────────
         grid = QGridLayout()
@@ -534,6 +591,38 @@ class FuncGenTab(QWidget):
         key    = f"{gen_letter}{channel}"
         panel  = self.panels[key]
         params = panel.get_params()
+
+        # Combined-peak interlock: the amplifier input must stay within ±5 V, and
+        # the peak it sees is |offset| + amp/2 — not either field alone. Block
+        # outright above 5 V; ask the user to confirm above the 4 V advisory.
+        peak = channel_peak_volts(params["shape"], params["amp"], params["offset"])
+        if peak > PEAK_MAX_VOLTS + 1e-9:
+            msg = (f"combined peak {peak:.4g} V exceeds the "
+                   f"{PEAK_MAX_VOLTS:.0f} V amplifier input limit")
+            self._log_scpi(f"! {key}: blocked — {msg}")
+            QMessageBox.critical(
+                self, "Amplifier limit exceeded",
+                f"Channel {key}: |offset| + ½·amplitude = {peak:.4g} V, which "
+                f"exceeds the {PEAK_MAX_VOLTS:.0f} V amplifier input ceiling.\n\n"
+                f"Even for an AC waveform the peak (offset plus half the "
+                f"peak-to-peak swing) must stay ≤ {PEAK_MAX_VOLTS:.0f} V. "
+                f"Reduce the offset or the amplitude, then apply again."
+            )
+            return
+        if peak > PEAK_WARN_VOLTS + 1e-9:
+            resp = QMessageBox.question(
+                self, "High peak voltage",
+                f"Channel {key}: combined peak = {peak:.4g} V, above the "
+                f"{PEAK_WARN_VOLTS:.0f} V advisory threshold "
+                f"(hard ceiling {PEAK_MAX_VOLTS:.0f} V).\n\n"
+                f"Apply anyway?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if resp != QMessageBox.StandardButton.Yes:
+                self._log_scpi(f"# {key}: apply cancelled at high-peak confirmation")
+                return
+
         try:
             warn = g.set_waveform(
                 channel,

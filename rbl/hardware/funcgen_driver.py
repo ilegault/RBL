@@ -17,9 +17,13 @@ except ImportError:
     PYVISA_AVAILABLE = False
 
 # ES5 plate rating = 5 kV/plate; EEL5000 gain = 1000x, range +/-5 kV.
-# Cap generator output below the 5 V (=5 kV/plate) hardware ceiling to leave margin.
-# 4.0 V -> 4 kV/plate, 1 kV margin below the 5 kV plate rating. Adjust here only.
-MAX_GEN_VOLTS = 4.0
+# The amplifier input tolerates up to +/-5 V (= +/-5 kV/plate), so this is the
+# hard per-field ceiling for amplitude and offset. Note that this per-field cap
+# alone does NOT bound the instantaneous voltage the amplifier sees: an offset
+# plus half the peak-to-peak amplitude can still exceed 5 V. That combined
+# "true peak" limit is enforced in the GUI at apply time (funcgen_tab.py), which
+# blocks |offset| + amplitude/2 > 5 V and warns above 4 V. Adjust here only.
+MAX_GEN_VOLTS = 5.0
 
 _RIGOL_VENDOR_ID = "0x1AB1"
 
