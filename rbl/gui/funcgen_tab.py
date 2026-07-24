@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout,
     QGroupBox, QLabel, QPushButton, QDoubleSpinBox, QComboBox,
     QTextEdit, QLineEdit, QCheckBox, QMessageBox, QSizePolicy,
-    QScrollArea,
+    QScrollArea, QApplication,
 )
 
 from rbl.hardware.funcgen_driver import DG1022Z, discover, MAX_GEN_VOLTS, MAX_AMP_VPP
@@ -53,6 +53,14 @@ _AMP_GAIN = 1000.0
 #   * peak > PEAK_WARN_VOLTS -> apply asks the user to confirm first.
 PEAK_MAX_VOLTS  = MAX_GEN_VOLTS   # hard ceiling: amplifier cannot exceed ±5 V
 PEAK_WARN_VOLTS = 4.0             # advisory threshold — confirm before applying
+
+# Axis pairs MUST live on the same physical generator: only
+# :PHASe:SYNChronize (same-unit) gives deterministic phase alignment.
+# Cross-unit alignment is impossible on the DG1022Z.
+CHANNEL_ROLE = {
+    "A1": "X+", "A2": "X-",
+    "B1": "Y+", "B2": "Y-",
+}
 
 
 def channel_peak_volts(shape: str, amp_vpp: float, offset_v: float) -> float:
@@ -91,9 +99,10 @@ class ChannelPanel(QGroupBox):
 
     SHAPES = ["Sine", "Triangle", "Square", "Pulse", "DC"]
 
-    def __init__(self, label: str, parent=None):
+    def __init__(self, label: str, parent=None, start_phase_default: float = 0.0):
         super().__init__(label, parent)
         self._label = label
+        self._start_phase_default = start_phase_default
         self._setup_ui()
 
     def _setup_ui(self):
@@ -176,6 +185,38 @@ class ChannelPanel(QGroupBox):
         phase_row.addWidget(self.spn_phase, stretch=1)
         phase_row.addWidget(QLabel("°"))
         form.addRow(self.lbl_phase, phase_row)
+
+        # Start Phase — the waveform phase at the moment of :PHASe:SYNChronize.
+        # Default:  0° for X+/Y+ channels,  180° for X-/Y- channels.
+        # Setting X- = 180° and Y- = 180° produces differential (push-pull) drive:
+        # when X+ is at its positive peak, X- is at its negative peak, giving the
+        # full plate-to-plate voltage swing without a DC imbalance on either plate.
+        # This value is LATCHED by the next Align Phase call; changing it while
+        # outputs are running has no effect until the next Apply All.
+        self.spn_start_phase = QDoubleSpinBox()
+        self.spn_start_phase.setRange(0.0, 360.0)
+        self.spn_start_phase.setValue(self._start_phase_default)
+        self.spn_start_phase.setDecimals(1)
+        self.spn_start_phase.setMinimumWidth(80)
+        self.spn_start_phase.setMaximumWidth(110)
+        self.spn_start_phase.setToolTip(
+            "Waveform start phase (°). Applied by the next Align Phase\n"
+            "(:PHASe:SYNChronize) — does not reposition a running waveform.\n\n"
+            "Recommended defaults:\n"
+            "  X+ (Gen A Ch 1)  →  0°\n"
+            "  X- (Gen A Ch 2)  →  180°   ← anti-phase for push-pull drive\n"
+            "  Y+ (Gen B Ch 1)  →  0°\n"
+            "  Y- (Gen B Ch 2)  →  180°   ← anti-phase for push-pull drive\n\n"
+            "With X+ = 0° and X- = 180°, the two X plates are always at\n"
+            "opposite extremes, giving the full differential swing without\n"
+            "a DC imbalance on either plate."
+        )
+        start_phase_row = QHBoxLayout()
+        start_phase_row.setContentsMargins(0, 0, 0, 0)
+        start_phase_row.setSpacing(4)
+        start_phase_row.addWidget(self.spn_start_phase, stretch=1)
+        start_phase_row.addWidget(QLabel("°"))
+        form.addRow("Start Phase:", start_phase_row)
 
         # Load
         self.le_load = QLineEdit("INFinity")
@@ -284,18 +325,19 @@ class ChannelPanel(QGroupBox):
     def set_connected(self, on: bool):
         for w in (self.btn_apply, self.btn_output, self.spn_freq,
                   self.spn_amp, self.spn_offset, self.spn_phase,
-                  self.le_load, self.cbo_shape):
+                  self.spn_start_phase, self.le_load, self.cbo_shape):
             w.setEnabled(on)
 
     def get_params(self) -> dict:
         return {
-            "shape":    self.cbo_shape.currentText(),
-            "freq":     self.spn_freq.value(),
-            "amp":      self.spn_amp.value(),
-            "offset":   self.spn_offset.value(),
-            "phase":    self.spn_phase.value(),
-            "load":     self.le_load.text().strip() or "INFinity",
-            "output":   self.btn_output.isChecked(),
+            "shape":       self.cbo_shape.currentText(),
+            "freq":        self.spn_freq.value(),
+            "amp":         self.spn_amp.value(),
+            "offset":      self.spn_offset.value(),
+            "phase":       self.spn_phase.value(),
+            "start_phase": self.spn_start_phase.value(),
+            "load":        self.le_load.text().strip() or "INFinity",
+            "output":      self.btn_output.isChecked(),
         }
 
     def update_readback(self, state: dict):
@@ -399,6 +441,16 @@ class FuncGenTab(QWidget):
         self.lbl_ref_status.setWordWrap(True)
         disc_layout.addWidget(self.lbl_ref_status)
 
+        clk_row = QHBoxLayout()
+        self.lbl_clk_a = QLabel("● Gen A: timebase —")
+        self.lbl_clk_b = QLabel("● Gen B: timebase —")
+        self.lbl_clk_a.setStyleSheet("color: #555; font-size: 10px;")
+        self.lbl_clk_b.setStyleSheet("color: #555; font-size: 10px;")
+        clk_row.addWidget(self.lbl_clk_a)
+        clk_row.addStretch()
+        clk_row.addWidget(self.lbl_clk_b)
+        disc_layout.addLayout(clk_row)
+
         left_layout.addWidget(disc_box)
 
         # ── Amplifier input-limit note ────────────────────────────────────
@@ -426,14 +478,19 @@ class FuncGenTab(QWidget):
         grid.setSpacing(8)
         self.panels: dict[str, ChannelPanel] = {}
         panel_labels = {
-            "A1": "Gen A — Ch 1",
-            "A2": "Gen A — Ch 2",
-            "B1": "Gen B — Ch 1",
-            "B2": "Gen B — Ch 2",
+            "A1": f"Gen A — Ch 1  ({CHANNEL_ROLE['A1']})",
+            "A2": f"Gen A — Ch 2  ({CHANNEL_ROLE['A2']})",
+            "B1": f"Gen B — Ch 1  ({CHANNEL_ROLE['B1']})",
+            "B2": f"Gen B — Ch 2  ({CHANNEL_ROLE['B2']})",
         }
+        # X- and Y- channels use 180° start-phase for push-pull (differential)
+        # drive.  With 0° on X+ and 180° on X-, when the X+ plate is at its
+        # positive peak the X- plate is at its negative peak, giving the full
+        # differential swing without a DC offset on either plate.
+        _START_PHASE_DEFAULTS = {"A1": 0.0, "A2": 180.0, "B1": 0.0, "B2": 180.0}
         positions = {"A1": (0, 0), "A2": (0, 1), "B1": (1, 0), "B2": (1, 1)}
         for key, title in panel_labels.items():
-            p = ChannelPanel(title, self)
+            p = ChannelPanel(title, self, start_phase_default=_START_PHASE_DEFAULTS[key])
             gen_letter = key[0]
             ch_num     = int(key[1])
             p.btn_apply.clicked.connect(
@@ -575,6 +632,7 @@ class FuncGenTab(QWidget):
         self._refresh_connection_ui()
         if any(v is not None for v in self._gen.values()):
             self._poll_timer.start()
+            self._refresh_clock_status()
 
     def _do_disconnect(self):
         self._poll_timer.stop()
@@ -651,12 +709,45 @@ class FuncGenTab(QWidget):
                 gen_b.set_reference_clock("EXTernal")
                 self._log_scpi(
                     "# Timebase: Gen A internal (master), Gen B external "
-                    "(shared 10 MHz reference)"
+                    "(shared 10 MHz reference) — verifying lock in 2.5 s…"
                 )
-                self.lbl_ref_status.setText(
-                    "Locked: Gen B follows Gen A's 10 MHz reference. "
-                    "Confirm the [10MHz Out]→[10MHz In] cable is connected."
-                )
+                # DG1022Z datasheet: lock time < 2 s; wait 2.5 s to be safe.
+                time.sleep(2.5)
+                QApplication.processEvents()
+                actual = gen_b.get_reference_clock()
+                if actual == "INT":
+                    self._log_scpi(
+                        "! Gen B: EXTernal reference requested but instrument "
+                        "reports INTernal — check the 10 MHz cable from "
+                        "Gen A [10MHz Out] to Gen B [10MHz In]."
+                    )
+                    self.lbl_ref_status.setText(
+                        "Lock FAILED: Gen B reports internal clock. "
+                        "Check the 10 MHz cable."
+                    )
+                    self.lbl_ref_status.setStyleSheet(
+                        "color: #c0392b; font-style: italic; font-size: 10px;"
+                    )
+                    QMessageBox.warning(
+                        self, "Reference clock lock failed",
+                        "Gen B was set to external 10 MHz reference, but it is "
+                        "reporting its timebase as INTernal.\n\n"
+                        "The DG1022Z silently falls back to its internal clock "
+                        "when no valid 10 MHz signal is detected on the rear "
+                        "[10MHz In] connector.\n\n"
+                        "Check that a BNC cable is connected from Gen A's "
+                        "[10MHz Out] to Gen B's [10MHz In], and that Gen A's "
+                        "10 MHz output is enabled."
+                    )
+                else:
+                    self._log_scpi("# Gen B: EXTernal reference confirmed (locked)")
+                    self.lbl_ref_status.setText(
+                        "Locked: Gen B follows Gen A's 10 MHz reference. "
+                        "Confirm the [10MHz Out]→[10MHz In] cable is connected."
+                    )
+                    self.lbl_ref_status.setStyleSheet(
+                        "color: #555; font-style: italic; font-size: 10px;"
+                    )
             else:
                 gen_a.set_reference_clock("INTernal")
                 gen_b.set_reference_clock("INTernal")
@@ -665,9 +756,32 @@ class FuncGenTab(QWidget):
                     "Independent internal clocks — X/Y phase will drift across "
                     "the two units."
                 )
+                self.lbl_ref_status.setStyleSheet(
+                    "color: #555; font-style: italic; font-size: 10px;"
+                )
+            self._refresh_clock_status()
         except Exception as e:
             self._log_scpi(f"! Timebase set failed: {e}")
             QMessageBox.warning(self, "Reference clock", str(e))
+
+    def _refresh_clock_status(self):
+        """Query each connected unit's active timebase and update the status labels."""
+        for gen_letter, lbl in (("A", self.lbl_clk_a), ("B", self.lbl_clk_b)):
+            g = self._gen[gen_letter]
+            if g is None:
+                lbl.setText(f"● Gen {gen_letter}: timebase —")
+                lbl.setStyleSheet("color: #555; font-size: 10px;")
+            else:
+                try:
+                    src = g.get_reference_clock()
+                    lbl.setText(f"● Gen {gen_letter}: timebase {src}")
+                    if src == "EXT":
+                        lbl.setStyleSheet("color: #1a7a1a; font-size: 10px;")
+                    else:
+                        lbl.setStyleSheet("color: #555; font-size: 10px;")
+                except Exception:
+                    lbl.setText(f"● Gen {gen_letter}: timebase ?")
+                    lbl.setStyleSheet("color: #888; font-size: 10px;")
 
     # ---- Apply helpers -------------------------------------------------------
 
@@ -703,6 +817,7 @@ class FuncGenTab(QWidget):
             params["phase"],
         )
         g.set_output_load(channel, params["load"])
+        g.set_start_phase(channel, params["start_phase"])
         return warn
 
     def _apply_channel(self, gen_letter: str, channel: int):
@@ -765,12 +880,17 @@ class FuncGenTab(QWidget):
         (a whole reconfigure between each), which threw the raster off.
 
         This does it in three ordered phases instead:
-          1. configure every channel (waveform + load) with outputs untouched;
-          2. run each connected unit's Align-Phase (:PHASe:SYNChronize) so its
-             two channels restart phase-coherent;
-          3. fire every "output ON" back-to-back as the very last thing, so the
-             inter-channel skew shrinks to just the gap between consecutive
-             enable commands.
+          1. configure every channel (waveform + load + start phase) with
+             outputs untouched;
+          2. fire every "output ON" back-to-back so the inter-channel skew
+             shrinks to just the gap between consecutive enable commands.
+             NOTE: :OUTPut ON closes an output relay only — it does NOT start
+             or reset the waveform. The DDS phase accumulator is only reset by
+             :PHASe:SYNChronize, so align must run AFTER outputs are enabled.
+          3. after a short relay-settle delay, run each connected unit's
+             Align-Phase (:PHASe:SYNChronize) as the very last operation so
+             both channels of each unit restart phase-coherent from the
+             start-phases set in step 1.
 
         NOTE ON CROSS-UNIT SYNC: steps 2–3 lock the channels WITHIN each Rigol
         and start all four close together, but two SEPARATE DG1022Z units drift
@@ -837,18 +957,12 @@ class FuncGenTab(QWidget):
             QMessageBox.critical(self, "Apply All failed", str(e))
             return
 
-        # ── Phase 1b: align each connected unit's two channels ───────────────
-        for gen_letter in ("A", "B"):
-            g = self._gen[gen_letter]
-            if g is not None:
-                try:
-                    g.align_phase(1)   # front-panel "Align Phase" for this unit
-                except Exception as e:
-                    self._log_scpi(f"! Gen {gen_letter}: align phase failed: {e}")
-
         # ── Phase 2: enable outputs — OFF ones first, then all ON together ───
-        # Keeping every "output ON" consecutive at the very end is what makes
-        # the four outputs come up as close to simultaneously as USB-TMC allows.
+        # :OUTPut ON closes an output relay; it does not start or reset the
+        # waveform. The DDS phase accumulator is only reset by
+        # :PHASe:SYNChronize, so align must be the LAST operation, once all
+        # relays are closed. Keep every "output ON" consecutive so the
+        # inter-channel skew shrinks to just the gap between USB-TMC writes.
         try:
             for key, gen_letter, channel, _, params in active:
                 if not params["output"]:
@@ -861,6 +975,18 @@ class FuncGenTab(QWidget):
             QMessageBox.critical(self, "Apply All failed", str(e))
             return
 
+        # ── Phase 3: align each connected unit's two channels ────────────────
+        # Sleep briefly so the output relays have physically settled before
+        # resetting the DDS phase accumulators via :PHASe:SYNChronize.
+        time.sleep(0.05)
+        for gen_letter in ("A", "B"):
+            g = self._gen[gen_letter]
+            if g is not None:
+                try:
+                    g.align_phase(1)
+                except Exception as e:
+                    self._log_scpi(f"! Gen {gen_letter}: align phase failed: {e}")
+
         if warnings:
             for key, w in warnings:
                 self._log_scpi(f"! {key}: {w}")
@@ -869,9 +995,10 @@ class FuncGenTab(QWidget):
                 "\n".join(f"{key}: {w}" for key, w in warnings)
             )
         self._log_scpi(
-            f"# Apply All: configured {len(active)} channel(s), aligned phase, "
-            f"enabled outputs together"
+            f"# Apply All: configured {len(active)} channel(s), "
+            f"enabled outputs, aligned phase"
         )
+        self._refresh_clock_status()
 
     # ---- Poll (read-only) ----------------------------------------------------
 

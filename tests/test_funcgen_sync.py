@@ -2,11 +2,15 @@
 Synchronized "Apply All" in the Function Generators tab.
 
 The raster needs the four channels to come up together, so Apply All must:
-  1. configure every channel (set_waveform + set_output_load) with outputs
-     still OFF,
-  2. run each connected unit's Align-Phase,
-  3. enable the outputs LAST, back-to-back, so the inter-channel skew shrinks
+  1. configure every channel (set_waveform + set_output_load + set_start_phase)
+     with outputs still OFF,
+  2. enable the outputs NEXT, back-to-back, so the inter-channel skew shrinks
      to just the gap between consecutive :OUTPut ON writes.
+     NOTE: :OUTPut ON closes a relay only — it does NOT reset the waveform.
+     The DDS phase accumulator is only reset by :PHASe:SYNChronize.
+  3. run each connected unit's Align-Phase LAST (after a relay-settle delay),
+     so both channels of each unit restart phase-coherent from the start-phases
+     set in step 1.
 
 These tests drive FuncGenTab with two mocked DG1022Z units and assert on the
 GLOBAL order of SCPI-level calls across both instruments.
@@ -45,8 +49,8 @@ def tab_and_mgr(qapp):
 
 def _method_order(mgr):
     """Ordered list of (unit, method) for the calls we care about."""
-    wanted = {"set_waveform", "set_output_load", "align_phase",
-              "output_on", "output_off"}
+    wanted = {"set_waveform", "set_output_load", "set_start_phase",
+              "align_phase", "output_on", "output_off"}
     order = []
     for call in mgr.mock_calls:
         # call name looks like "A.set_waveform" (unit.method) for child calls.
@@ -80,7 +84,7 @@ class TestApplyAllOrdering:
         assert methods.count("set_waveform") == 4
         assert methods.count("output_on") == 4
 
-    def test_align_phase_runs_once_per_unit_between_config_and_enable(self, tab_and_mgr):
+    def test_align_phase_runs_once_per_unit_after_enable(self, tab_and_mgr):
         tab, mgr = tab_and_mgr
         for key in ("A1", "A2", "B1", "B2"):
             tab.panels[key].btn_output.setChecked(True)
@@ -94,11 +98,10 @@ class TestApplyAllOrdering:
         aligned_units = {u for u, m in order if m == "align_phase"}
         assert aligned_units == {"A", "B"}
 
-        # Align sits after the last config and before the first enable.
-        last_cfg   = max(i for i, m in enumerate(methods) if m == "set_waveform")
-        first_on   = min(i for i, m in enumerate(methods) if m == "output_on")
+        # Every align_phase index must be GREATER than every output_on index.
         align_idxs = [i for i, m in enumerate(methods) if m == "align_phase"]
-        assert all(last_cfg < i < first_on for i in align_idxs), order
+        on_idxs    = [i for i, m in enumerate(methods) if m == "output_on"]
+        assert all(a > max(on_idxs) for a in align_idxs), order
 
     def test_output_enable_burst_is_contiguous(self, tab_and_mgr):
         tab, mgr = tab_and_mgr
@@ -106,11 +109,14 @@ class TestApplyAllOrdering:
             tab.panels[key].btn_output.setChecked(True)
 
         tab._apply_all()
-        methods = [m for _, m in _method_order(mgr)]
+        order = _method_order(mgr)
+        methods = [m for _, m in order]
 
-        # The four output_on calls are the last four calls, with nothing
-        # interleaved between them — the tight simultaneous-start burst.
-        assert methods[-4:] == ["output_on"] * 4
+        # The four output_on calls must be contiguous — nothing interleaved
+        # between them. The align_phase calls follow after, not between.
+        on_idxs = [i for i, m in enumerate(methods) if m == "output_on"]
+        assert len(on_idxs) == 4
+        assert on_idxs == list(range(on_idxs[0], on_idxs[0] + 4)), order
 
     def test_channels_left_off_are_disabled_not_enabled(self, tab_and_mgr):
         tab, mgr = tab_and_mgr
@@ -126,10 +132,38 @@ class TestApplyAllOrdering:
 
         assert methods.count("output_on") == 2
         assert methods.count("output_off") == 2
-        # Every OFF precedes every ON: the ON burst is still last.
+        # Every OFF precedes every ON: the ON burst is still before align.
         last_off = max(i for i, m in enumerate(methods) if m == "output_off")
         first_on = min(i for i, m in enumerate(methods) if m == "output_on")
         assert last_off < first_on, order
+
+    def test_start_phase_called_four_times_before_output_on(self, tab_and_mgr):
+        tab, mgr = tab_and_mgr
+        for key in ("A1", "A2", "B1", "B2"):
+            tab.panels[key].btn_output.setChecked(True)
+
+        tab._apply_all()
+        order = _method_order(mgr)
+        methods = [m for _, m in order]
+
+        # set_start_phase called once per channel.
+        assert methods.count("set_start_phase") == 4
+
+        # All four set_start_phase calls precede the first output_on.
+        sp_idxs  = [i for i, m in enumerate(methods) if m == "set_start_phase"]
+        first_on = min(i for i, m in enumerate(methods) if m == "output_on")
+        assert all(i < first_on for i in sp_idxs), order
+
+    def test_axis_pairs_share_a_generator(self, tab_and_mgr):
+        from funcgen_tab import CHANNEL_ROLE
+
+        # X+/X- must both be on unit A.
+        x_keys = {k for k, v in CHANNEL_ROLE.items() if v in ("X+", "X-")}
+        assert all(k.startswith("A") for k in x_keys), CHANNEL_ROLE
+
+        # Y+/Y- must both be on unit B.
+        y_keys = {k for k, v in CHANNEL_ROLE.items() if v in ("Y+", "Y-")}
+        assert all(k.startswith("B") for k in y_keys), CHANNEL_ROLE
 
 
 class TestReferenceClockToggle:
@@ -144,3 +178,18 @@ class TestReferenceClockToggle:
         tab._on_ext_ref_toggled(False)
         mgr.A.set_reference_clock.assert_called_with("INTernal")
         mgr.B.set_reference_clock.assert_called_with("INTernal")
+
+    def test_ext_lock_failure_triggers_warning(self, tab_and_mgr, monkeypatch):
+        """If Gen B falls back to INT after an EXT request, a warning is shown."""
+        tab, mgr = tab_and_mgr
+        # Simulate Gen B reporting INT despite EXT request.
+        mgr.B.get_reference_clock.return_value = "INT"
+        # Suppress the blocking QMessageBox.
+        monkeypatch.setattr(
+            "funcgen_tab.QMessageBox.warning",
+            lambda *a, **kw: None,
+        )
+        tab._on_ext_ref_toggled(True)
+        # The SCPI log should record the failure.
+        log_text = tab.scpi_log.toPlainText()
+        assert "INTernal" in log_text or "INT" in log_text

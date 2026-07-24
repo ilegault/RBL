@@ -237,6 +237,11 @@ class DG1022Z:
     def set_phase(self, channel: int, deg: float):
         self._inst.write(f":SOURce{int(channel)}:PHASe {deg}")
 
+    def set_start_phase(self, channel: int, degrees: float):
+        """Set the waveform start phase. Only takes effect on the next
+        :PHASe:SYNChronize — it does not reposition a running waveform."""
+        self._inst.write(f":SOURce{int(channel)}:PHASe {degrees}")
+
     def set_duty(self, channel: int, pct: float):
         self._inst.write(f":SOURce{int(channel)}:FUNCtion:SQUare:DCYCle {pct}")
 
@@ -295,6 +300,16 @@ class DG1022Z:
         else:
             raise ValueError(f"reference clock source must be INTernal or EXTernal, got {source!r}")
         self._inst.write(f":ROSCillator:SOURce {arg}")
+
+    def get_reference_clock(self) -> str:
+        """Read back the active timebase. Returns 'INT' or 'EXT'.
+        The DG1022Z silently falls back to INT if no valid 10 MHz is
+        detected on the rear connector, so this MUST be checked after
+        setting EXT — a failed lock is invisible otherwise."""
+        resp = self._inst.query(":ROSCillator:SOURce?").strip().upper()
+        if resp.startswith("EXT"):
+            return "EXT"
+        return "INT"
 
     def beep(self):
         self._inst.write(":SYSTem:BEEPer:IMMediate")
