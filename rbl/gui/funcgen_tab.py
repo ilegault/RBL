@@ -13,10 +13,13 @@ Safety rules enforced here:
     disabled automatically (instrument retains state after app exits).
 """
 import json
+import logging
 import os
 import sys
 import time
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 # When run as a script (python funcgen_tab.py), __package__ is None and
 # Python sets sys.path[0] to this file's directory.  Add the project root
@@ -451,6 +454,16 @@ class FuncGenTab(QWidget):
         clk_row.addWidget(self.lbl_clk_b)
         disc_layout.addLayout(clk_row)
 
+        # Persistent combined timebase indicator — refreshed on connect and
+        # after every Apply All.  Only shows "B: EXT" when the readback
+        # confirmed EXT; never shows a locked state on a failed lock.
+        self.lbl_timebase = QLabel("Timebase:  A: —   B: —")
+        self.lbl_timebase.setStyleSheet(
+            "color: #333; font-weight: bold; font-size: 10px; padding: 2px;"
+        )
+        self.lbl_timebase.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        disc_layout.addWidget(self.lbl_timebase)
+
         left_layout.addWidget(disc_box)
 
         # ── Amplifier input-limit note ────────────────────────────────────
@@ -689,12 +702,14 @@ class FuncGenTab(QWidget):
     def _on_ext_ref_toggled(self, checked: bool):
         """Lock/unlock the two units to a shared 10 MHz reference.
 
-        Checked  → Gen A internal (master), Gen B external (follows the shared
-                   10 MHz reference on its rear [10MHz In]).
+        Checked  → Gen A stays INT (master / clock source), Gen B is set to
+                   EXT and verify_external_lock() confirms the PLL actually
+                   locked.  Gen B is ONLY set to EXT — Gen A is never set EXT
+                   here because the [10MHz In/Out] connector is bidirectional:
+                   setting both units to EXT with a cable between them makes
+                   both drive the connector simultaneously, which damages the
+                   instruments.
         Unchecked → both back to their own internal clocks.
-
-        The physical BNC cable from Gen A [10MHz Out] to Gen B [10MHz In] is the
-        user's responsibility; this only sets the SCPI source on each unit.
         """
         gen_a = self._gen["A"]
         gen_b = self._gen["B"]
@@ -705,45 +720,74 @@ class FuncGenTab(QWidget):
             return
         try:
             if checked:
-                gen_a.set_reference_clock("INTernal")
-                gen_b.set_reference_clock("EXTernal")
-                self._log_scpi(
-                    "# Timebase: Gen A internal (master), Gen B external "
-                    "(shared 10 MHz reference) — verifying lock in 2.5 s…"
-                )
-                # DG1022Z datasheet: lock time < 2 s; wait 2.5 s to be safe.
-                time.sleep(2.5)
-                QApplication.processEvents()
-                actual = gen_b.get_reference_clock()
-                if actual == "INT":
-                    self._log_scpi(
-                        "! Gen B: EXTernal reference requested but instrument "
-                        "reports INTernal — check the 10 MHz cable from "
-                        "Gen A [10MHz Out] to Gen B [10MHz In]."
+                # Safety guard: Gen A must not already be set to EXT (e.g. via
+                # the SCPI console).  If it is, BOTH ends would be driving the
+                # 10 MHz line against each other — refuse and explain.
+                a_clk = gen_a.get_reference_clock()
+                if a_clk == "EXT":
+                    msg = (
+                        "Gen A is currently set to EXTernal reference.\n\n"
+                        "One unit must drive the 10 MHz reference (INT) and the "
+                        "other must follow it (EXT).  Setting both to EXT causes "
+                        "both instruments to drive the rear-panel [10MHz In/Out] "
+                        "connector simultaneously — this will damage the instruments.\n\n"
+                        "Return Gen A to its internal clock first (send "
+                        ":SYSTem:ROSCillator:SOURce INTernal to Gen A via the "
+                        "SCPI console), then enable sharing."
                     )
+                    log.warning("_on_ext_ref_toggled: Gen A is EXT — refusing to set Gen B EXT too")
+                    self._log_scpi("! Timebase: refused — Gen A is already EXT; both EXT would collide")
                     self.lbl_ref_status.setText(
-                        "Lock FAILED: Gen B reports internal clock. "
-                        "Check the 10 MHz cable."
+                        "REFUSED: Gen A is already EXT. Return Gen A to INT first."
                     )
                     self.lbl_ref_status.setStyleSheet(
                         "color: #c0392b; font-style: italic; font-size: 10px;"
                     )
+                    self.chk_ext_ref.blockSignals(True)
+                    self.chk_ext_ref.setChecked(False)
+                    self.chk_ext_ref.blockSignals(False)
+                    QMessageBox.warning(self, "Reference clock — both-EXT refused", msg)
+                    return
+
+                # Gen A stays INT; set Gen B to EXT and verify the PLL locked.
+                gen_a.set_reference_clock("INTernal")
+                self._log_scpi(
+                    "# Timebase: Gen A → INT (master), verifying Gen B EXT lock "
+                    f"(settling {3.0:.1f} s) …"
+                )
+                QApplication.processEvents()
+                locked, actual = gen_b.verify_external_lock(settle_s=3.0)
+                if not locked:
+                    self._log_scpi(
+                        f"! Gen B: EXTernal set but instrument reports {actual!r} — "
+                        "check 10 MHz cable and reference level"
+                    )
+                    self.lbl_ref_status.setText(
+                        f"Lock FAILED: Gen B reports {actual}. Check cable and level."
+                    )
+                    self.lbl_ref_status.setStyleSheet(
+                        "color: #c0392b; font-style: italic; font-size: 10px;"
+                    )
+                    self.chk_ext_ref.blockSignals(True)
+                    self.chk_ext_ref.setChecked(False)
+                    self.chk_ext_ref.blockSignals(False)
                     QMessageBox.warning(
                         self, "Reference clock lock failed",
-                        "Gen B was set to external 10 MHz reference, but it is "
-                        "reporting its timebase as INTernal.\n\n"
-                        "The DG1022Z silently falls back to its internal clock "
-                        "when no valid 10 MHz signal is detected on the rear "
-                        "[10MHz In] connector.\n\n"
-                        "Check that a BNC cable is connected from Gen A's "
-                        "[10MHz Out] to Gen B's [10MHz In], and that Gen A's "
-                        "10 MHz output is enabled."
+                        "Gen B was set to external 10 MHz reference but its "
+                        f"readback is {actual!r} — the DG1022Z silently falls "
+                        "back to INT when no valid signal is present.\n\n"
+                        "Checklist:\n"
+                        "  • BNC cable from Gen A [10MHz Out] → Gen B [10MHz In]\n"
+                        "  • Reference level must be 250 mVpp – 5 Vpp\n"
+                        "  • The [10MHz In/Out] connector is BIDIRECTIONAL — its "
+                        "direction is set by the clock source selection.  "
+                        "Both units set to INT will each try to drive the connector "
+                        "simultaneously, which can damage the instruments."
                     )
                 else:
-                    self._log_scpi("# Gen B: EXTernal reference confirmed (locked)")
+                    self._log_scpi("# Gen B: EXTernal reference confirmed (PLL locked)")
                     self.lbl_ref_status.setText(
-                        "Locked: Gen B follows Gen A's 10 MHz reference. "
-                        "Confirm the [10MHz Out]→[10MHz In] cable is connected."
+                        "Locked: Gen B follows Gen A's 10 MHz reference."
                     )
                     self.lbl_ref_status.setStyleSheet(
                         "color: #555; font-style: italic; font-size: 10px;"
@@ -761,16 +805,23 @@ class FuncGenTab(QWidget):
                 )
             self._refresh_clock_status()
         except Exception as e:
+            log.exception("_on_ext_ref_toggled failed")
             self._log_scpi(f"! Timebase set failed: {e}")
             QMessageBox.warning(self, "Reference clock", str(e))
 
     def _refresh_clock_status(self):
-        """Query each connected unit's active timebase and update the status labels."""
+        """Query each connected unit's active timebase and update the status labels.
+
+        Also refreshes the combined lbl_timebase indicator.  Never displays a
+        locked state when the readback returned INT.
+        """
+        clk: dict[str, str] = {}
         for gen_letter, lbl in (("A", self.lbl_clk_a), ("B", self.lbl_clk_b)):
             g = self._gen[gen_letter]
             if g is None:
                 lbl.setText(f"● Gen {gen_letter}: timebase —")
                 lbl.setStyleSheet("color: #555; font-size: 10px;")
+                clk[gen_letter] = "—"
             else:
                 try:
                     src = g.get_reference_clock()
@@ -779,9 +830,24 @@ class FuncGenTab(QWidget):
                         lbl.setStyleSheet("color: #1a7a1a; font-size: 10px;")
                     else:
                         lbl.setStyleSheet("color: #555; font-size: 10px;")
+                    clk[gen_letter] = src
                 except Exception:
+                    log.exception("_refresh_clock_status: Gen %s query failed", gen_letter)
                     lbl.setText(f"● Gen {gen_letter}: timebase ?")
                     lbl.setStyleSheet("color: #888; font-size: 10px;")
+                    clk[gen_letter] = "?"
+        # Combined indicator — green only when A=INT and B=EXT (locked config).
+        clk_a = clk.get("A", "—")
+        clk_b = clk.get("B", "—")
+        self.lbl_timebase.setText(f"Timebase:  A: {clk_a}   B: {clk_b}")
+        if clk_a == "INT" and clk_b == "EXT":
+            self.lbl_timebase.setStyleSheet(
+                "color: #1a7a1a; font-weight: bold; font-size: 10px; padding: 2px;"
+            )
+        else:
+            self.lbl_timebase.setStyleSheet(
+                "color: #333; font-weight: bold; font-size: 10px; padding: 2px;"
+            )
 
     # ---- Apply helpers -------------------------------------------------------
 
@@ -817,6 +883,12 @@ class FuncGenTab(QWidget):
             params["phase"],
         )
         g.set_output_load(channel, params["load"])
+        # Phase 4 trace: log the start-phase command so its channel number and
+        # value are visible in the SCPI console even without DEBUG logging.
+        self._log_scpi(
+            f"# {gen_letter}{channel}: start_phase → "
+            f":SOURce{channel}:PHASe {params['start_phase']:.1f}"
+        )
         g.set_start_phase(channel, params["start_phase"])
         return warn
 
@@ -1079,6 +1151,10 @@ class FuncGenTab(QWidget):
     def _log_scpi(self, line: str):
         ts = time.strftime("%H:%M:%S")
         self.scpi_log.append(f"[{ts}] {line}")
+        if line.startswith("!"):
+            log.error("SCPI %s", line)
+        else:
+            log.info("SCPI %s", line)
 
     # ---- Owner-callable cleanup ---------------------------------------------
 

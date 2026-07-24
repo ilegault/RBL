@@ -7,7 +7,9 @@ import pytest
 from unittest.mock import MagicMock
 
 import rbl.hardware.funcgen_driver as fgd
-from rbl.hardware.funcgen_driver import discover, DG1022Z, MAX_GEN_VOLTS, MAX_AMP_VPP
+from rbl.hardware.funcgen_driver import (
+    discover, DG1022Z, MAX_GEN_VOLTS, MAX_AMP_VPP, CLOCK_SCPI,
+)
 
 
 @pytest.fixture
@@ -22,11 +24,31 @@ def mock_pyvisa(monkeypatch):
     return m
 
 
+_MOCK_IDN = "RIGOL TECHNOLOGIES,DG1022Z,DG1ZA123456,00.00"
+
+
 @pytest.fixture
 def mock_inst(mock_pyvisa):
-    """A fake instrument resource returned by ResourceManager.open_resource()."""
+    """A fake instrument resource returned by ResourceManager.open_resource().
+
+    query() dispatches by command:
+      *IDN?          → the instrument IDN string
+      :SYSTem:ERRor? → '0,"No error"'  (clean queue for _write_checked)
+      anything else  → '0,"No error"'  (safe default)
+
+    Using side_effect rather than return_value is necessary because
+    _write_checked() calls query(":SYSTem:ERRor?") after every write.
+    A flat return_value of the IDN string causes _write_checked to raise
+    RuntimeError("SCPI error …") on every test that invokes a write method.
+    """
     inst = MagicMock()
-    inst.query.return_value = "RIGOL TECHNOLOGIES,DG1022Z,DG1ZA123456,00.00"
+
+    def _query(cmd: str) -> str:
+        if "*IDN?" in cmd.upper():
+            return _MOCK_IDN
+        return '0,"No error"'
+
+    inst.query.side_effect = _query
     mock_pyvisa.ResourceManager.return_value.open_resource.return_value = inst
     return inst
 
@@ -122,6 +144,8 @@ class TestLifecycle:
         gen = DG1022Z("USB0::...::INSTR")
         gen.write(":SOURce1:FREQuency 1000")
         mock_inst.write.assert_called_with(":SOURce1:FREQuency 1000")
+        # Clear the fixture's side_effect so the explicit return_value is used.
+        mock_inst.query.side_effect = None
         mock_inst.query.return_value = "1000.0"
         assert gen.query(":SOURce1:FREQuency?") == "1000.0"
 
@@ -319,29 +343,76 @@ class TestPassthroughMethods:
     def test_set_reference_clock_internal(self, mock_inst, mock_pyvisa):
         gen = DG1022Z("USB0::...::INSTR")
         gen.set_reference_clock("INTernal")
-        mock_inst.write.assert_called_with(":ROSCillator:SOURce INTernal")
+        mock_inst.write.assert_called_with(f"{CLOCK_SCPI} INTernal")
 
     def test_set_reference_clock_external(self, mock_inst, mock_pyvisa):
         gen = DG1022Z("USB0::...::INSTR")
         gen.set_reference_clock("EXTernal")
-        mock_inst.write.assert_called_with(":ROSCillator:SOURce EXTernal")
+        mock_inst.write.assert_called_with(f"{CLOCK_SCPI} EXTernal")
 
     def test_set_reference_clock_defaults_internal(self, mock_inst, mock_pyvisa):
         gen = DG1022Z("USB0::...::INSTR")
         gen.set_reference_clock()
-        mock_inst.write.assert_called_with(":ROSCillator:SOURce INTernal")
+        mock_inst.write.assert_called_with(f"{CLOCK_SCPI} INTernal")
 
     def test_set_reference_clock_accepts_short_forms(self, mock_inst, mock_pyvisa):
         gen = DG1022Z("USB0::...::INSTR")
         gen.set_reference_clock("ext")
-        mock_inst.write.assert_called_with(":ROSCillator:SOURce EXTernal")
+        mock_inst.write.assert_called_with(f"{CLOCK_SCPI} EXTernal")
         gen.set_reference_clock("int")
-        mock_inst.write.assert_called_with(":ROSCillator:SOURce INTernal")
+        mock_inst.write.assert_called_with(f"{CLOCK_SCPI} INTernal")
 
     def test_set_reference_clock_rejects_bad_source(self, mock_inst, mock_pyvisa):
         gen = DG1022Z("USB0::...::INSTR")
         with pytest.raises(ValueError):
             gen.set_reference_clock("bogus")
+
+    def test_get_reference_clock_returns_int(self, mock_inst, mock_pyvisa):
+        mock_inst.query.side_effect = lambda cmd: (
+            _MOCK_IDN if "*IDN?" in cmd.upper()
+            else ('0,"No error"' if "ERRor?" in cmd else "INT")
+        )
+        gen = DG1022Z("USB0::...::INSTR")
+        assert gen.get_reference_clock() == "INT"
+
+    def test_get_reference_clock_returns_ext(self, mock_inst, mock_pyvisa):
+        mock_inst.query.side_effect = lambda cmd: (
+            _MOCK_IDN if "*IDN?" in cmd.upper()
+            else ('0,"No error"' if "ERRor?" in cmd else "EXT")
+        )
+        gen = DG1022Z("USB0::...::INSTR")
+        assert gen.get_reference_clock() == "EXT"
+
+    def test_get_reference_clock_raises_on_unexpected_response(self, mock_inst, mock_pyvisa):
+        mock_inst.query.side_effect = lambda cmd: (
+            _MOCK_IDN if "*IDN?" in cmd.upper()
+            else ('0,"No error"' if "ERRor?" in cmd else "GARBAGE")
+        )
+        gen = DG1022Z("USB0::...::INSTR")
+        with pytest.raises(RuntimeError, match="unexpected response"):
+            gen.get_reference_clock()
+
+    def test_verify_external_lock_returns_true_when_locked(self, mock_inst, mock_pyvisa):
+        # EXT readback after the PLL settles → confirmed locked.
+        mock_inst.query.side_effect = lambda cmd: (
+            _MOCK_IDN if "*IDN?" in cmd.upper()
+            else ('0,"No error"' if "ERRor?" in cmd else "EXT")
+        )
+        gen = DG1022Z("USB0::...::INSTR")
+        locked, actual = gen.verify_external_lock(settle_s=0.0)
+        assert locked is True
+        assert actual == "EXT"
+
+    def test_verify_external_lock_returns_false_on_fallback(self, mock_inst, mock_pyvisa):
+        # INT readback → DG1022Z fell back (no valid 10 MHz on the connector).
+        mock_inst.query.side_effect = lambda cmd: (
+            _MOCK_IDN if "*IDN?" in cmd.upper()
+            else ('0,"No error"' if "ERRor?" in cmd else "INT")
+        )
+        gen = DG1022Z("USB0::...::INSTR")
+        locked, actual = gen.verify_external_lock(settle_s=0.0)
+        assert locked is False
+        assert actual == "INT"
 
     def test_beep(self, mock_inst, mock_pyvisa):
         gen = DG1022Z("USB0::...::INSTR")

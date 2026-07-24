@@ -43,6 +43,12 @@ def tab_and_mgr(qapp):
     mgr = MagicMock()
     mgr.A.set_waveform.return_value = ""     # no clamp warning
     mgr.B.set_waveform.return_value = ""
+    # Default clock state: Gen A = INT (master), Gen B = INT.
+    # verify_external_lock returns a (bool, str) tuple; configure a default so
+    # unpacking in _on_ext_ref_toggled does not raise and trigger QMessageBox.
+    mgr.A.get_reference_clock.return_value = "INT"
+    mgr.B.get_reference_clock.return_value = "INT"
+    mgr.B.verify_external_lock.return_value = (True, "EXT")
     tab._gen = {"A": mgr.A, "B": mgr.B}
     return tab, mgr
 
@@ -167,11 +173,13 @@ class TestApplyAllOrdering:
 
 
 class TestReferenceClockToggle:
-    def test_toggle_sets_master_and_external(self, tab_and_mgr):
+    def test_toggle_calls_verify_external_lock_on_gen_b(self, tab_and_mgr):
+        """Enabling sharing must set Gen A to INT and call verify_external_lock on Gen B."""
         tab, mgr = tab_and_mgr
+        # Default fixture: mgr.B.verify_external_lock.return_value = (True, "EXT")
         tab._on_ext_ref_toggled(True)
         mgr.A.set_reference_clock.assert_called_with("INTernal")
-        mgr.B.set_reference_clock.assert_called_with("EXTernal")
+        mgr.B.verify_external_lock.assert_called_once()
 
     def test_untoggle_returns_both_internal(self, tab_and_mgr):
         tab, mgr = tab_and_mgr
@@ -180,10 +188,9 @@ class TestReferenceClockToggle:
         mgr.B.set_reference_clock.assert_called_with("INTernal")
 
     def test_ext_lock_failure_triggers_warning(self, tab_and_mgr, monkeypatch):
-        """If Gen B falls back to INT after an EXT request, a warning is shown."""
+        """If verify_external_lock returns (False, 'INT'), a warning is shown."""
         tab, mgr = tab_and_mgr
-        # Simulate Gen B reporting INT despite EXT request.
-        mgr.B.get_reference_clock.return_value = "INT"
+        mgr.B.verify_external_lock.return_value = (False, "INT")
         # Suppress the blocking QMessageBox.
         monkeypatch.setattr(
             "funcgen_tab.QMessageBox.warning",
@@ -192,4 +199,16 @@ class TestReferenceClockToggle:
         tab._on_ext_ref_toggled(True)
         # The SCPI log should record the failure.
         log_text = tab.scpi_log.toPlainText()
-        assert "INTernal" in log_text or "INT" in log_text
+        assert "INT" in log_text
+
+    def test_toggle_guard_refuses_when_gen_a_is_ext(self, tab_and_mgr, monkeypatch):
+        """If Gen A is already EXT, enabling sharing is refused to prevent collision."""
+        tab, mgr = tab_and_mgr
+        mgr.A.get_reference_clock.return_value = "EXT"
+        monkeypatch.setattr(
+            "funcgen_tab.QMessageBox.warning",
+            lambda *a, **kw: None,
+        )
+        tab._on_ext_ref_toggled(True)
+        # verify_external_lock must NOT be called — refused before getting there.
+        mgr.B.verify_external_lock.assert_not_called()
