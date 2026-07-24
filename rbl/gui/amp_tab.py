@@ -153,11 +153,19 @@ class AmpTab(QWidget):
         # window chunks (values already in kV / mA).  Feeds snapshot mode.
         self._wave_chunks = {ain: collections.deque() for ain in SC.AMP_AIN_NAMES}
 
-        # Cache of within-window sample-time offsets, keyed by sample count.
-        # A chunk's absolute sample times are just t_start + template, so we
-        # never rebuild np.arange per chunk per frame (that rebuild, over the
-        # whole ring every redraw, was the sub-second "caching" lag).
-        self._wave_time_templates: dict[int, np.ndarray] = {}
+        # Cache of within-window sample-time offsets, keyed by (sample count,
+        # sample period).  A chunk's absolute sample times are just
+        # t_start + template, so we never rebuild np.arange per chunk per frame
+        # (that rebuild, over the whole ring every redraw, was the sub-second
+        # "caching" lag).
+        self._wave_time_templates: dict[tuple, np.ndarray] = {}
+
+        # Per-sample time step of the live stream (seconds), taken from the
+        # stream payload's sample_period.  Chunks are reconstructed as
+        # t_start = t_end - n * dt so consecutive windows stitch seamlessly.
+        # None until the first payload carrying it arrives; the snapshot path
+        # then falls back to the nominal window duration / sample count.
+        self._wave_dt: float | None = None
 
         # Plot state
         self._is_live           = True
@@ -730,6 +738,12 @@ class AmpTab(QWidget):
         channels = payload["channels"]
         t = payload["t"]
 
+        # Adopt the stream's true sample period when present so stitched
+        # waveform chunks use the real per-sample step (not a nominal guess).
+        dt = payload.get("sample_period")
+        if dt:
+            self._wave_dt = dt
+
         # Voltage and current are handled independently: in single-channel mode
         # only ONE of the two AINs for one amplifier is present, so requiring
         # both would blank the display.
@@ -1145,12 +1159,18 @@ class AmpTab(QWidget):
             n = len(vals)
             if n == 0:
                 continue
-            t_start = t_end - self.WINDOW_DURATION_S
+            # Reconstruct the chunk's start from its OWN sample count and the
+            # true sample period, so chunk k's start lands exactly on chunk
+            # k-1's end (t_end is sample-accurate upstream).  Assuming a fixed
+            # 0.1 s width instead was what let jittery windows overlap/gap and
+            # break the stitched trace at each seam.
+            dt = self._wave_dt if self._wave_dt else (self.WINDOW_DURATION_S / n)
+            t_start = t_end - n * dt
             # Skip chunks that fall entirely outside the visible window — this is
             # what keeps a narrow (few-ms) view from re-scanning the whole ring.
             if t_end < t_left or t_start > t_right:
                 continue
-            tt = t_start + self._wave_times_template(n)   # cached offsets
+            tt = t_start + self._wave_times_template(n, dt)   # cached offsets
             if t_start >= t_left and t_end <= t_right:
                 # Whole chunk is inside the view: no masking needed.
                 ts.append(tt)
@@ -1164,17 +1184,19 @@ class AmpTab(QWidget):
             return None
         return np.concatenate(ts), np.concatenate(vs)
 
-    def _wave_times_template(self, n: int) -> np.ndarray:
-        """Sample-centre time offsets for an n-sample window (cached by length).
+    def _wave_times_template(self, n: int, dt: float) -> np.ndarray:
+        """Sample-centre time offsets for an n-sample window at step *dt*.
 
         Absolute sample times are ``t_start + template``.  The offsets depend
-        only on the sample count (constant per profile), so caching them avoids
-        rebuilding ``np.arange`` for every chunk on every redraw.
+        only on the sample count and the sample period (both constant per
+        profile), so caching them by ``(n, dt)`` avoids rebuilding
+        ``np.arange`` for every chunk on every redraw.
         """
-        tmpl = self._wave_time_templates.get(n)
+        key  = (n, dt)
+        tmpl = self._wave_time_templates.get(key)
         if tmpl is None:
-            tmpl = (np.arange(n) + 0.5) * (self.WINDOW_DURATION_S / n)
-            self._wave_time_templates[n] = tmpl
+            tmpl = (np.arange(n) + 0.5) * dt
+            self._wave_time_templates[key] = tmpl
         return tmpl
 
     @staticmethod
@@ -1184,6 +1206,15 @@ class AmpTab(QWidget):
         Plain striding would drop transient peaks between samples; min/max
         binning keeps the visible envelope while capping the point count so a
         100 kS/s window redraws cheaply.
+
+        Each bin's two extrema are emitted AT THEIR REAL SAMPLE POSITIONS, in
+        the order they occur in time (earliest first).  The old code drew both
+        at the bin's left-edge x with min always before max: at a sharp tip
+        (e.g. a triangle apex) that collapsed the peak onto a vertical segment
+        and, on a falling edge where the max precedes the min, drew the pair
+        backwards — the "somersault"/flip seen on the waveform tips.  Placing
+        each extreme at its own x in temporal order reproduces the true up/down
+        shape of every peak.
         """
         n = len(x)
         if n <= max_points:
@@ -1194,10 +1225,24 @@ class AmpTab(QWidget):
             return x, y
         xb = x[:usable].reshape(bins, -1)
         yb = y[:usable].reshape(bins, -1)
-        x_out = np.repeat(xb[:, 0], 2)
+        cols  = np.arange(bins)
+        i_min = yb.argmin(axis=1)
+        i_max = yb.argmax(axis=1)
+        # Per bin, order the two extrema by their in-bin (time) index so the
+        # emitted x stays monotonic and the peak is drawn the right way round.
+        i_first = np.minimum(i_min, i_max)
+        i_last  = np.maximum(i_min, i_max)
+        x_out = np.empty(bins * 2, dtype=float)
         y_out = np.empty(bins * 2, dtype=float)
-        y_out[0::2] = yb.min(axis=1)
-        y_out[1::2] = yb.max(axis=1)
+        x_out[0::2] = xb[cols, i_first]
+        x_out[1::2] = xb[cols, i_last]
+        y_out[0::2] = yb[cols, i_first]
+        y_out[1::2] = yb[cols, i_last]
+        # Keep the un-binned tail so the live right edge is never truncated
+        # (the reshape drops the final < bins samples otherwise).
+        if usable < n:
+            x_out = np.concatenate([x_out, x[usable:]])
+            y_out = np.concatenate([y_out, y[usable:]])
         return x_out, y_out
 
     # ---- Owner-callable cleanup ----------------------------------------------
