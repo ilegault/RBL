@@ -15,17 +15,29 @@ ONE plot, two viewing modes (driven by the time-window zoom)
 There is a single matplotlib figure (voltage over current).  The time-window
 control seamlessly changes WHAT it shows:
 
-  * TREND mode   (window >= SNAPSHOT_MAX_SECONDS):
-        One point per stream window (10 Hz) of peak-kV / RMS-mA, held in the
-        rolling history buffers.  This is the DC-bias / drift / fault view.
+  * TREND mode   (window >  SNAPSHOT_MAX_SECONDS, i.e. above 1 s):
+        One point per stream window (10 Hz) of RMS-kV / RMS-mA, held in the
+        rolling history buffers.  RMS (not peak) is the summary statistic here
+        so the wide-window envelope reads as a clean, stable line rather than a
+        jagged peak trace.  This is the DC-bias / drift / fault view.
 
-  * SNAPSHOT mode (window <  SNAPSHOT_MAX_SECONDS):
+  * SNAPSHOT mode (window <= SNAPSHOT_MAX_SECONDS, i.e. 1 s and below):
         The actual high-rate waveform samples from the most recent windows,
         drawn on the SAME axes and lines.  Zooming the window down to a few ms
         finally lets you see the deflection waveform itself — the 10 Hz trend
-        can never resolve it.
+        can never resolve it.  Above 1 s the raw ring no longer covers the view,
+        so RMS takes over.
 
 There is deliberately NO second waveform plot: the one figure switches modes.
+
+Vertical (voltage) scale
+------------------------
+The voltage axis does NOT auto-center on the data (that made a small ripple on
+a real DC offset look centered on zero and hid the true operating voltage).
+Instead it defaults to the full +/-5 kV rating envelope and is manually
+scalable: the ＋/－ "Volts" buttons zoom it and a vertical click-drag on the
+plot pans it — the vertical analogue of the scroll-wheel time zoom.  A mirrored
+kV axis is drawn on the right-hand side for readability.
 
 Applying stream settings
 ------------------------
@@ -97,11 +109,18 @@ class AmpTab(QWidget):
     BUFFER_CAPACITY = 36_000   # ~1 hour at 10 Hz (trend history)
     WINDOW_SECONDS  = 120      # default 2-minute viewport (trend mode)
 
-    # Below this window width the single plot renders the raw high-rate waveform
-    # (snapshot mode) instead of the 10 Hz trend.  2 s is the hand-off: at 2 s
-    # the trend still has ~20 points, and the raw ring buffer holds enough to
-    # fill the view.
-    SNAPSHOT_MAX_SECONDS = 2.0
+    # At or below this window width the single plot renders the raw high-rate
+    # waveform (snapshot mode); above it the 10 Hz RMS trend takes over.  1 s is
+    # the hand-off: the raw ring holds ~1 s of samples, enough to fill a 1 s view
+    # at full fidelity, and beyond that RMS is the honest summary.  Keeping the
+    # ring this short (vs. the old 2 s) also keeps each snapshot redraw cheap,
+    # which is what removes the sub-second scrolling lag.
+    SNAPSHOT_MAX_SECONDS = 1.0
+
+    # Vertical (voltage / current) zoom step per ＋/－ click.  Matches the time
+    # axis, which halves/doubles the window: <1 zooms in, its reciprocal zooms
+    # out about the current centre.
+    V_ZOOM_FACTOR = 0.5
 
     # Each stream window spans exactly one GUI-refresh period of real time,
     # because window_samples == per_channel_rate_hz / GUI_REFRESH_HZ.
@@ -134,10 +153,25 @@ class AmpTab(QWidget):
         # window chunks (values already in kV / mA).  Feeds snapshot mode.
         self._wave_chunks = {ain: collections.deque() for ain in SC.AMP_AIN_NAMES}
 
+        # Cache of within-window sample-time offsets, keyed by sample count.
+        # A chunk's absolute sample times are just t_start + template, so we
+        # never rebuild np.arange per chunk per frame (that rebuild, over the
+        # whole ring every redraw, was the sub-second "caching" lag).
+        self._wave_time_templates: dict[int, np.ndarray] = {}
+
         # Plot state
         self._is_live           = True
         self._frozen_right_edge = None
         self._plot_mode         = "trend"   # "trend" | "snapshot"
+
+        # Vertical scale state.  The plot never auto-centers the voltage axis;
+        # it holds these limits and the user zooms/pans them.  Voltage defaults
+        # to the full +/-5 kV rating envelope; current to its +/-20 mA DC rating.
+        self._ylim_v = [-SC.AMP_MAX_KV, SC.AMP_MAX_KV]
+        self._ylim_i = [-SC.AMP_MAX_MA_DC, SC.AMP_MAX_MA_DC]
+
+        # Active vertical click-drag pan (None when not dragging).
+        self._pan = None
 
         # Single-channel mode state.  When a single-channel profile is active,
         # only self._single_target_ain streams live; the other seven monitors
@@ -292,10 +326,13 @@ class AmpTab(QWidget):
             "color: #1a7a1a; font-weight: bold; padding: 2px 6px;"
         )
         nav_row.addWidget(self.lbl_mode)
+        lbl_time = QLabel("Time:")
+        lbl_time.setStyleSheet("color: #555; font-size: 10px; padding-left: 6px;")
+        nav_row.addWidget(lbl_time)
         btn_zoom_in = QPushButton("＋")
         btn_zoom_in.setFixedWidth(28)
         btn_zoom_in.setToolTip("Zoom in — scroll wheel up (halve window). "
-                               "Below ~2 s the plot shows the raw waveform.")
+                               "At 1 s and below the plot shows the raw waveform.")
         btn_zoom_in.setStyleSheet("font-weight: bold; padding: 1px 4px;")
         btn_zoom_in.clicked.connect(self._zoom_in)
         btn_zoom_out = QPushButton("－")
@@ -305,6 +342,30 @@ class AmpTab(QWidget):
         btn_zoom_out.clicked.connect(self._zoom_out)
         nav_row.addWidget(btn_zoom_in)
         nav_row.addWidget(btn_zoom_out)
+
+        # Vertical (voltage) scale controls — the analogue of the time zoom.
+        lbl_volts = QLabel("Volts:")
+        lbl_volts.setStyleSheet("color: #555; font-size: 10px; padding-left: 10px;")
+        nav_row.addWidget(lbl_volts)
+        btn_vzoom_in = QPushButton("＋")
+        btn_vzoom_in.setFixedWidth(28)
+        btn_vzoom_in.setToolTip("Zoom in the vertical (voltage) scale about its centre.")
+        btn_vzoom_in.setStyleSheet("font-weight: bold; padding: 1px 4px;")
+        btn_vzoom_in.clicked.connect(self._v_zoom_in)
+        btn_vzoom_out = QPushButton("－")
+        btn_vzoom_out.setFixedWidth(28)
+        btn_vzoom_out.setToolTip("Zoom out the vertical (voltage) scale about its centre.")
+        btn_vzoom_out.setStyleSheet("font-weight: bold; padding: 1px 4px;")
+        btn_vzoom_out.clicked.connect(self._v_zoom_out)
+        btn_vreset = QPushButton("⤢")
+        btn_vreset.setFixedWidth(28)
+        btn_vreset.setToolTip("Reset the vertical scale to the full ±5 kV rating "
+                              "(and ±20 mA on current).  Drag the plot vertically to pan.")
+        btn_vreset.setStyleSheet("font-weight: bold; padding: 1px 4px;")
+        btn_vreset.clicked.connect(self._v_reset)
+        nav_row.addWidget(btn_vzoom_in)
+        nav_row.addWidget(btn_vzoom_out)
+        nav_row.addWidget(btn_vreset)
         nav_row.addStretch()
         self.btn_jump_live = QPushButton("Jump to Live")
         self.btn_jump_live.setVisible(False)
@@ -322,6 +383,11 @@ class AmpTab(QWidget):
         self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding,
                                   QSizePolicy.Policy.Expanding)
         self.canvas.mpl_connect('scroll_event', self._on_scroll)
+        # Vertical click-drag pans the voltage/current axis (time stays locked to
+        # the window / history slider).
+        self.canvas.mpl_connect('button_press_event',   self._on_press)
+        self.canvas.mpl_connect('motion_notify_event',  self._on_motion)
+        self.canvas.mpl_connect('button_release_event', self._on_release)
 
         self.ax_v = self.fig.add_subplot(211)
         self.ax_i = self.fig.add_subplot(212, sharex=self.ax_v)
@@ -341,6 +407,16 @@ class AmpTab(QWidget):
         # DC rating envelope: +/-20 mA
         self.ax_i.axhline( SC.AMP_MAX_MA_DC, color="#c47a00", lw=0.8, ls="--", alpha=0.5)
         self.ax_i.axhline(-SC.AMP_MAX_MA_DC, color="#c47a00", lw=0.8, ls="--", alpha=0.5)
+
+        # Mirrored voltage axis on the right-hand side, requested for readability.
+        # A secondary y-axis tracks ax_v's data limits automatically, so it
+        # follows every vertical zoom/pan with no extra bookkeeping.
+        self.ax_v_right = self.ax_v.secondary_yaxis("right")
+        self.ax_v_right.set_ylabel("Output Voltage (kV)")
+
+        # Establish the fixed default vertical scale up front (no auto-centering).
+        self.ax_v.set_ylim(self._ylim_v)
+        self.ax_i.set_ylim(self._ylim_i)
 
         # One line per amplifier per axis, keyed by amp label.  Reused by BOTH
         # trend and snapshot modes.
@@ -380,10 +456,16 @@ class AmpTab(QWidget):
 
         layout.addWidget(plot_box, stretch=1)
 
-        # Redraw at 5 Hz max
+        # Redraw at 10 Hz — matched to the window arrival rate so the waveform
+        # scrolls smoothly.  The old 5 Hz redraw showed every other window and
+        # then jumped two at once, which read as lag.  The per-frame work is now
+        # cheap (cached sample times, no auto-scale), so 10 Hz is comfortable.
         self._redraw_timer = QTimer(self)
-        self._redraw_timer.setInterval(200)
+        self._redraw_timer.setInterval(100)
         self._redraw_timer.timeout.connect(self._redraw_plot)
+
+        # Lay the subplots out with room on the right for the mirrored kV axis.
+        self._update_history_layout()
 
         if not LJM_AVAILABLE:
             self.lj_panel.set_enabled(False)
@@ -471,16 +553,21 @@ class AmpTab(QWidget):
                 self.lbl_ma[amp].setStyleSheet(neutral)
 
     def _update_history_layout(self):
-        """Show only the relevant subplot in single-channel mode."""
+        """Show only the relevant subplot in single-channel mode.
+
+        Width is held to 0.82 (right edge 0.92) so the mirrored kV axis on the
+        right has room for its ticks and label.
+        """
         # Normalized figure coords: [left, bottom, width, height]
-        _FULL = [0.10, 0.11, 0.86, 0.80]
-        _TOP  = [0.10, 0.54, 0.86, 0.40]
-        _BOT  = [0.10, 0.11, 0.86, 0.38]
+        _FULL = [0.10, 0.11, 0.82, 0.80]
+        _TOP  = [0.10, 0.54, 0.82, 0.40]
+        _BOT  = [0.10, 0.11, 0.82, 0.38]
 
         if self._single_mode:
             _, kind = _AIN_TO_AMP.get(self._single_target_ain, ("", "voltage"))
             is_voltage = (kind == "voltage")
             self.ax_v.set_visible(is_voltage)
+            self.ax_v_right.set_visible(is_voltage)
             self.ax_i.set_visible(not is_voltage)
             if is_voltage:
                 self.ax_v.tick_params(labelbottom=True)
@@ -490,6 +577,7 @@ class AmpTab(QWidget):
                 self.ax_i.set_position(_FULL)
         else:
             self.ax_v.set_visible(True)
+            self.ax_v_right.set_visible(True)
             self.ax_i.set_visible(True)
             self.ax_v.tick_params(labelbottom=False)
             self.ax_v.set_xlabel("")
@@ -579,7 +667,11 @@ class AmpTab(QWidget):
                 kv_peak = monitor_to_kv(v_ch["peak"])
                 kv_pkpk = v_ch["pk_pk"] * SC.VOLTAGE_MONITOR_KV_PER_VOLT
                 kv_rms  = monitor_to_kv(v_ch["rms"])
-                self.buffers[v_ain].append(t, kv_peak)
+                # The trend / history line plots RMS (not peak): above the 1 s
+                # snapshot boundary RMS is the honest, stable summary and reads
+                # as a clean envelope rather than a jagged peak trace.  Peak and
+                # pk-pk remain in the numeric readouts above.
+                self.buffers[v_ain].append(t, kv_rms)
 
                 vstatus = voltage_status(kv_peak)
                 self.lbl_kv[amp].setText(format_kv(kv_peak))
@@ -670,8 +762,12 @@ class AmpTab(QWidget):
             self._enter_frozen_mode(val)
 
     def _is_snapshot(self) -> bool:
-        """True when the window is narrow enough to show the raw waveform."""
-        return self._window_seconds < self.SNAPSHOT_MAX_SECONDS
+        """True when the window is narrow enough to show the raw waveform.
+
+        Inclusive at the boundary: a 1 s window still shows the real waveform;
+        only *above* 1 s does the RMS trend take over.
+        """
+        return self._window_seconds <= self.SNAPSHOT_MAX_SECONDS + 1e-9
 
     def _window_label(self) -> str:
         ws = self._window_seconds
@@ -684,7 +780,7 @@ class AmpTab(QWidget):
             else:
                 m, s = divmod(ws_int, 60)
                 body = f"{m} m" if s == 0 else f"{m} m {s} s"
-        return f"{body} · waveform" if self._is_snapshot() else body
+        return f"{body} · waveform" if self._is_snapshot() else f"{body} · RMS"
 
     def _enter_live_mode(self):
         self._is_live = True
@@ -755,6 +851,79 @@ class AmpTab(QWidget):
         elif self._frozen_right_edge is not None:
             self._update_frozen_label()
 
+    # ---- Vertical (voltage / current) scale: zoom, pan, reset ----------------
+
+    def _apply_ylimits(self):
+        """Push the held vertical limits onto both axes (no auto-scaling)."""
+        self.ax_v.set_ylim(self._ylim_v)
+        self.ax_i.set_ylim(self._ylim_i)
+
+    @staticmethod
+    def _zoom_span(ylim, factor: float):
+        """Scale a [lo, hi] range about its centre by *factor*."""
+        lo, hi = ylim
+        centre = 0.5 * (lo + hi)
+        half   = 0.5 * (hi - lo) * factor
+        return [centre - half, centre + half]
+
+    def _v_zoom(self, factor: float):
+        """Zoom the vertical scale of both axes about their centres."""
+        self._ylim_v = self._zoom_span(self._ylim_v, factor)
+        self._ylim_i = self._zoom_span(self._ylim_i, factor)
+        self._apply_ylimits()
+        self.canvas.draw_idle()
+
+    def _v_zoom_in(self):
+        self._v_zoom(self.V_ZOOM_FACTOR)          # tighter span
+
+    def _v_zoom_out(self):
+        self._v_zoom(1.0 / self.V_ZOOM_FACTOR)    # wider span
+
+    def _v_reset(self):
+        """Return the vertical scale to the full rating envelope."""
+        self._ylim_v = [-SC.AMP_MAX_KV, SC.AMP_MAX_KV]
+        self._ylim_i = [-SC.AMP_MAX_MA_DC, SC.AMP_MAX_MA_DC]
+        self._apply_ylimits()
+        self.canvas.draw_idle()
+
+    def _on_press(self, event):
+        """Begin a vertical pan.  Left button, inside one of the plot axes."""
+        if event.button != 1 or event.inaxes is None or event.y is None:
+            return
+        if not event.inaxes.get_visible():
+            return   # a hidden axis can still sit under the cursor in single mode
+        if event.inaxes is self.ax_v:
+            which, ylim0 = "v", self._ylim_v
+        elif event.inaxes is self.ax_i:
+            which, ylim0 = "i", self._ylim_i
+        else:
+            return
+        height = event.inaxes.bbox.height
+        if height <= 0:
+            return
+        # Data units per pixel, captured at grab time so the point under the
+        # cursor stays under the cursor for the whole drag.
+        per_px = (ylim0[1] - ylim0[0]) / height
+        self._pan = {"which": which, "y0": event.y,
+                     "ylim0": list(ylim0), "per_px": per_px}
+
+    def _on_motion(self, event):
+        if self._pan is None or event.y is None:
+            return
+        dpix  = event.y - self._pan["y0"]          # pixels dragged (up = +)
+        shift = dpix * self._pan["per_px"]         # data units
+        lo0, hi0 = self._pan["ylim0"]
+        new = [lo0 - shift, hi0 - shift]           # drag up → view follows up
+        if self._pan["which"] == "v":
+            self._ylim_v = new
+        else:
+            self._ylim_i = new
+        self._apply_ylimits()
+        self.canvas.draw_idle()
+
+    def _on_release(self, event):
+        self._pan = None
+
     # ---- Plot redraw ---------------------------------------------------------
 
     def _redraw_plot(self):
@@ -824,9 +993,7 @@ class AmpTab(QWidget):
 
         if any_data:
             self.ax_v.set_xlim(-self._window_seconds, 0)
-            for ax in (self.ax_v, self.ax_i):
-                ax.relim()
-                ax.autoscale_view(scalex=False, scaley=True)
+            self._apply_ylimits()
             self.canvas.draw_idle()
 
     def _redraw_snapshot(self):
@@ -860,9 +1027,7 @@ class AmpTab(QWidget):
 
         if any_data:
             self.ax_v.set_xlim(-self._window_seconds, 0)
-            for ax in (self.ax_v, self.ax_i):
-                ax.relim()
-                ax.autoscale_view(scalex=False, scaley=True)
+            self._apply_ylimits()
             self.canvas.draw_idle()
 
     def _latest_wave_t(self):
@@ -891,15 +1056,36 @@ class AmpTab(QWidget):
             if n == 0:
                 continue
             t_start = t_end - self.WINDOW_DURATION_S
-            # Sample-centre times across the window.
-            tt = t_start + (np.arange(n) + 0.5) * (self.WINDOW_DURATION_S / n)
-            m = (tt >= t_left) & (tt <= t_right)
-            if m.any():
-                ts.append(tt[m])
-                vs.append(vals[m])
+            # Skip chunks that fall entirely outside the visible window — this is
+            # what keeps a narrow (few-ms) view from re-scanning the whole ring.
+            if t_end < t_left or t_start > t_right:
+                continue
+            tt = t_start + self._wave_times_template(n)   # cached offsets
+            if t_start >= t_left and t_end <= t_right:
+                # Whole chunk is inside the view: no masking needed.
+                ts.append(tt)
+                vs.append(vals)
+            else:
+                m = (tt >= t_left) & (tt <= t_right)
+                if m.any():
+                    ts.append(tt[m])
+                    vs.append(vals[m])
         if not ts:
             return None
         return np.concatenate(ts), np.concatenate(vs)
+
+    def _wave_times_template(self, n: int) -> np.ndarray:
+        """Sample-centre time offsets for an n-sample window (cached by length).
+
+        Absolute sample times are ``t_start + template``.  The offsets depend
+        only on the sample count (constant per profile), so caching them avoids
+        rebuilding ``np.arange`` for every chunk on every redraw.
+        """
+        tmpl = self._wave_time_templates.get(n)
+        if tmpl is None:
+            tmpl = (np.arange(n) + 0.5) * (self.WINDOW_DURATION_S / n)
+            self._wave_time_templates[n] = tmpl
+        return tmpl
 
     @staticmethod
     def _decimate_minmax(x: np.ndarray, y: np.ndarray, max_points: int):
