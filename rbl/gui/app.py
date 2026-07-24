@@ -9,6 +9,7 @@ import sys
 import os
 import time
 import atexit
+import logging
 sys.path.insert(0, os.path.dirname(__file__))
 
 from PySide6.QtWidgets import (
@@ -285,6 +286,11 @@ class MainWindow(QMainWindow):
 
 def main():
     import os
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
+        handlers=[logging.StreamHandler(sys.stderr)],
+    )
     os.environ.setdefault("QT_AUTO_SCREEN_SCALE_FACTOR", "1")
 
     QApplication.setHighDpiScaleFactorRoundingPolicy(
