@@ -82,15 +82,16 @@ class ChannelPanel(QGroupBox):
         form = QFormLayout()
         form.setSpacing(3)
 
-        # Shape
+        # Shape — default to Triangle
         self.cbo_shape = QComboBox()
         self.cbo_shape.addItems(self.SHAPES)
+        self.cbo_shape.setCurrentText("Triangle")
         form.addRow("Shape:", self.cbo_shape)
 
-        # Frequency
+        # Frequency — default 10 Hz
         self.spn_freq = QDoubleSpinBox()
         self.spn_freq.setRange(0.0001, 25_000_000.0)
-        self.spn_freq.setValue(1000.0)
+        self.spn_freq.setValue(10.0)
         self.spn_freq.setDecimals(4)
         self.spn_freq.setMinimumWidth(80)
         self.spn_freq.setMaximumWidth(110)
