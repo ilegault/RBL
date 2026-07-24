@@ -287,10 +287,10 @@ def main():
     import os
     os.environ.setdefault("QT_AUTO_SCREEN_SCALE_FACTOR", "1")
 
-    app = QApplication(sys.argv)
-    app.setHighDpiScaleFactorRoundingPolicy(
+    QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
+    app = QApplication(sys.argv)
     app.setStyle("Fusion")
 
     # Light gray palette matching TDS-T8's functional style

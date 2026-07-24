@@ -202,7 +202,7 @@ class AmpTab(QWidget):
         # ── Per-amplifier numeric readouts ────────────────────────────────
         ro_box = QGroupBox("Live Amplifier Monitors")
         ro = QGridLayout(ro_box)
-        ro.setSpacing(3)
+        ro.setSpacing(1)
         ro.setContentsMargins(6, 4, 6, 4)
 
         mono = QFont("Menlo", 13)
@@ -274,13 +274,15 @@ class AmpTab(QWidget):
             "(direct ADC volts, no scaling)"
         )
         rawg = QGridLayout(raw_box)
-        rawg.setSpacing(3)
+        rawg.setSpacing(1)
         rawg.setContentsMargins(6, 4, 6, 4)
         rawmono = QFont("Menlo", 11)
         rawmono.setBold(True)
 
         # Column 0: signal-type row labels.  One column per amplifier after that.
-        rawg.addWidget(QLabel(""), 0, 0)
+        _hdr = QLabel("")
+        _hdr.setFixedHeight(18)
+        rawg.addWidget(_hdr, 0, 0)
         for text, row in (("Voltage monitor (V)", 1), ("Current monitor (V)", 2)):
             rl = QLabel(text)
             rl.setFont(small)
@@ -296,9 +298,10 @@ class AmpTab(QWidget):
 
             hdr = QLabel(amp)
             hdr.setStyleSheet(
-                f"color: {SC.AMP_COLORS[amp]}; font-weight: bold; font-size: 14px;"
+                f"color: {SC.AMP_COLORS[amp]}; font-weight: bold; font-size: 11px;"
             )
             hdr.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+            hdr.setContentsMargins(0, 0, 0, 0)
             rawg.addWidget(hdr, 0, col)
 
             lv = QLabel(f"{v_ain}:  —")
@@ -318,6 +321,8 @@ class AmpTab(QWidget):
         # ── Profile selector (placed right of lj_panel in top_row below) ────
         prof_box = QGroupBox("Stream Profile")
         prof_col = QVBoxLayout(prof_box)
+        prof_col.setSpacing(4)
+
         mode_row = QHBoxLayout()
         mode_row.addWidget(QLabel("Mode:"))
         self._profile_combo = QComboBox()
@@ -328,7 +333,10 @@ class AmpTab(QWidget):
         )
         self._profile_combo.currentIndexChanged.connect(self._on_selection_staged)
         mode_row.addWidget(self._profile_combo, stretch=1)
-        mode_row.addWidget(QLabel("Target:"))
+        prof_col.addLayout(mode_row)
+
+        target_row = QHBoxLayout()
+        target_row.addWidget(QLabel("Target:"))
         self._single_combo = QComboBox()
         for amp in SC.AMP_LABELS:
             for kind in ("voltage", "current"):
@@ -345,7 +353,7 @@ class AmpTab(QWidget):
             "full stream bandwidth."
         )
         self._single_combo.currentIndexChanged.connect(self._on_selection_staged)
-        mode_row.addWidget(self._single_combo)
+        target_row.addWidget(self._single_combo, stretch=1)
 
         # Apply button — the ONLY thing that commits a profile/target change to
         # the hardware.  Disabled until a staged choice differs from what's live.
@@ -357,9 +365,9 @@ class AmpTab(QWidget):
             "when you click here — not on every dropdown change."
         )
         self._apply_btn.clicked.connect(self._apply_stream_settings)
-        mode_row.addWidget(self._apply_btn)
+        target_row.addWidget(self._apply_btn)
+        prof_col.addLayout(target_row)
 
-        prof_col.addLayout(mode_row)
         self._profile_status = QLabel("")
         self._profile_status.setStyleSheet("color: #555; font-style: italic; font-size: 10px;")
         prof_col.addWidget(self._profile_status)
@@ -371,16 +379,16 @@ class AmpTab(QWidget):
         left_col.addWidget(prof_box)
         left_col.addStretch()
 
-        # Right side stacks the converted monitors over the raw analog inputs.
-        right_col = QVBoxLayout()
-        right_col.setSpacing(8)
-        right_col.addWidget(ro_box)
-        right_col.addWidget(raw_box)
+        # Right side: Live Amplifier Monitors | Raw Analog Inputs (side by side)
+        monitors_row = QHBoxLayout()
+        monitors_row.setSpacing(8)
+        monitors_row.addWidget(ro_box)
+        monitors_row.addWidget(raw_box)
 
         upper_row = QHBoxLayout()
         upper_row.setSpacing(8)
         upper_row.addLayout(left_col)
-        upper_row.addLayout(right_col, stretch=1)
+        upper_row.addLayout(monitors_row, stretch=1)
         layout.addLayout(upper_row)
 
         # ── History / waveform plot (one figure, two modes) ─────────────────
