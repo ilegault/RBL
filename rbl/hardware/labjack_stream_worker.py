@@ -28,7 +28,10 @@ Emitted once per GUI refresh window (GUI_REFRESH_HZ = 10 Hz).
     {
       "profile":        str   — active profile name
       "window_samples": int   — samples per channel in this window
-      "t":              float — monotonic elapsed seconds since worker start
+      "t":              float — sample-accurate elapsed seconds at this
+                               window's LAST sample (cumulative sample count
+                               / actual scan rate; not a wall-clock read)
+      "sample_period":  float — seconds per sample (1 / actual scan rate)
       "channels": {
           "AIN6":  {"waveform": np.ndarray,   # raw volts
                     "peak":     float,         # max(|waveform|) in volts
@@ -180,6 +183,23 @@ class LabJackStreamWorker(QThread):
             )
             self._stream_active = True
 
+            # --- Sample-accurate timeline -------------------------------------
+            # Each window's timestamp is derived from a CUMULATIVE SAMPLE COUNT
+            # (scans_total / actual_rate), NOT from a wall-clock read taken when
+            # the window finishes.  A wall-clock timestamp jitters by the thread-
+            # scheduling / eStreamRead latency of each read, and that jitter was
+            # displacing every 0.1 s waveform chunk horizontally — so when the
+            # amp tab stitched ~10 chunks together for a 62.5 ms–1 s snapshot the
+            # trace broke ("tripped") at each seam.  A count-based clock advances
+            # in exact sample steps, so consecutive chunks butt together
+            # seamlessly.  sample_period travels in the payload so consumers can
+            # reconstruct each sample's true time.  t_base seeds elapsed time
+            # from the shared epoch, keeping timestamps monotonic across a
+            # stop/reconfigure/start cycle.
+            sample_period = 1.0 / actual_rate if actual_rate else 1.0 / scan_rate
+            t_base        = time.monotonic() - t0
+            scans_total   = 0
+
             # --- Read loop ----------------------------------------------------
             while self._running:
                 # eStreamRead blocks until scans_per_read scans are ready.
@@ -211,8 +231,13 @@ class LabJackStreamWorker(QThread):
                 )
                 data = flat.reshape(-1, n_ch)   # shape: (scans_per_read, n_ch)
 
+                # Advance the sample-accurate clock by the scans just read, then
+                # stamp this window with the time of its LAST sample.
+                scans_total += data.shape[0]
+                t = t_base + scans_total * sample_period
+
                 payload = self._build_payload(
-                    scan_names, data, scans_per_read, time.monotonic() - t0
+                    scan_names, data, scans_per_read, t, sample_period
                 )
                 self.window_ready.emit(payload)
 
@@ -234,7 +259,8 @@ class LabJackStreamWorker(QThread):
     # ------------------------------------------------------------------
 
     def _build_payload(self, scan_names: list, data: np.ndarray,
-                       scans_per_read: int, t: float) -> dict:
+                       scans_per_read: int, t: float,
+                       sample_period: float = None) -> dict:
         """Build the window_ready payload from a de-interleaved data block.
 
         scan_names[i] corresponds to data[:, i] (ascending AIN order).
@@ -242,6 +268,12 @@ class LabJackStreamWorker(QThread):
         entry (relevant for single-channel profiles, where only one amp
         channel is streamed and the other seven — plus all log amps — are
         paused).
+
+        ``sample_period`` is the per-sample time step (1 / actual scan rate).
+        It is carried through so waveform consumers can reconstruct exact
+        sample times and stitch consecutive windows without seams.  It is
+        optional so pure payload-math callers (self-test, unit tests) need not
+        supply it.
         """
         channels: dict = {}
 
@@ -269,6 +301,7 @@ class LabJackStreamWorker(QThread):
             "profile":        self._profile_name,
             "window_samples": scans_per_read,
             "t":              t,
+            "sample_period":  sample_period,
             "channels":       channels,
         }
 
