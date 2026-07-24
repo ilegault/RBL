@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
 )
 
-from rbl.hardware.funcgen_driver import DG1022Z, discover, MAX_GEN_VOLTS
+from rbl.hardware.funcgen_driver import DG1022Z, discover, MAX_GEN_VOLTS, MAX_AMP_VPP
 
 # Persistence file — keyed on serial, survives replug
 _CONFIG_PATH = Path.home() / ".config" / "rbl" / "funcgen.json"
@@ -125,9 +125,11 @@ class ChannelPanel(QGroupBox):
         freq_row.addWidget(QLabel("Hz"))
         form.addRow(self.lbl_freq, freq_row)
 
-        # Amplitude
+        # Amplitude — peak-to-peak (RIGOL native). A centred 10 Vpp sine reaches
+        # the full ±5 V (±5 kV) rail, so amplitude alone is allowed up to 10 Vpp;
+        # the combined-peak interlock (below) still limits |offset| + amp/2 ≤ 5 V.
         self.spn_amp = QDoubleSpinBox()
-        self.spn_amp.setRange(0.0, MAX_GEN_VOLTS)
+        self.spn_amp.setRange(0.0, MAX_AMP_VPP)
         self.spn_amp.setValue(0.0)
         self.spn_amp.setDecimals(4)
         self.spn_amp.setMinimumWidth(80)
@@ -243,21 +245,29 @@ class ChannelPanel(QGroupBox):
         self._update_hv_label()
 
     def _update_hv_label(self):
-        shape = self.cbo_shape.currentText()
-        if shape == "DC":
-            v = self.spn_offset.value()
-        else:
-            v = self.spn_amp.value()
-        kv_per_plate = abs(v) * _AMP_GAIN / 1000.0
-        kv_p2p       = 2.0 * kv_per_plate
+        # Gain is 1000× (1 V_gen -> 1 kV_plate), so the numeric V value equals kV.
+        shape  = self.cbo_shape.currentText()
+        amp_vpp = self.spn_amp.value()
+        offset  = self.spn_offset.value()
 
         # Combined peak the amplifier input actually sees (|offset| + amp/2).
-        peak = channel_peak_volts(shape, self.spn_amp.value(),
-                                  self.spn_offset.value())
-        self.lbl_hv.setText(
-            f"→ {kv_per_plate:.4f} kV/plate  ({kv_p2p:.4f} kV p-p)"
-            f"   |   peak {peak:.3f} V"
-        )
+        peak = channel_peak_volts(shape, amp_vpp, offset)
+
+        if shape == "DC":
+            # DC hold: the plate sits at a fixed offset·gain.
+            plate_kv = abs(offset) * _AMP_GAIN / 1000.0
+            self.lbl_hv.setText(
+                f"→ {plate_kv:.4f} kV/plate (DC)   |   peak {peak:.3f} V"
+            )
+        else:
+            # Amplitude is peak-to-peak: the plate swings ±(amp/2)·gain about the
+            # offset, so plate 0-to-peak = amp/2 kV and plate p-p = amp kV.
+            plate_peak_kv = (amp_vpp / 2.0) * _AMP_GAIN / 1000.0
+            plate_pp_kv   = amp_vpp * _AMP_GAIN / 1000.0
+            self.lbl_hv.setText(
+                f"→ ±{plate_peak_kv:.4f} kV/plate  ({plate_pp_kv:.4f} kV p-p)"
+                f"   |   peak {peak:.3f} V"
+            )
         if peak > PEAK_MAX_VOLTS + 1e-9:
             # Over the amplifier's ±5 V rail — apply will be blocked.
             self.lbl_hv.setStyleSheet(
@@ -371,13 +381,15 @@ class FuncGenTab(QWidget):
         # ── Amplifier input-limit note ────────────────────────────────────
         note_lbl = QLabel(
             "⚠  Amplifier input ceiling — the EEL5000 accepts ±5 V max on its "
-            "input. The peak the amplifier actually sees is |offset| + ½·amplitude "
-            "(for an AC waveform the signal swings ±½·amplitude about the offset), "
-            "and that combined peak must stay ≤ 5 V — not each field on its own. "
-            "So 0 V offset + 5 V amplitude is fine (peak = 2.5 V), but e.g. 4 V "
-            "offset + 4 V amplitude is not (peak = 6 V). Apply is blocked above "
-            "5 V and asks you to confirm above 4 V. Each channel's live "
-            "'peak' readout turns amber past 4 V and red past 5 V."
+            "input (= ±5 kV/plate). Amplitude is peak-to-peak (Vpp): an AC wave "
+            "swings ±½·amplitude about the offset, so the peak the amplifier "
+            "actually sees is |offset| + ½·amplitude, and THAT combined peak must "
+            "stay ≤ 5 V — not each field on its own. So 0 V offset + 10 Vpp "
+            "reaches the full ±5 kV rail (peak = 5 V), but e.g. 4 V offset + "
+            "4 Vpp is blocked (peak = 6 V). Amplitude allows up to 10 Vpp, offset "
+            "up to ±5 V. Apply is blocked above 5 V peak and asks you to confirm "
+            "above 4 V. Each channel's live 'peak' readout turns amber past 4 V "
+            "and red past 5 V."
         )
         note_lbl.setWordWrap(True)
         note_lbl.setStyleSheet(
