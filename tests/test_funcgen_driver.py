@@ -7,7 +7,7 @@ import pytest
 from unittest.mock import MagicMock
 
 import rbl.hardware.funcgen_driver as fgd
-from rbl.hardware.funcgen_driver import discover, DG1022Z, MAX_GEN_VOLTS
+from rbl.hardware.funcgen_driver import discover, DG1022Z, MAX_GEN_VOLTS, MAX_AMP_VPP
 
 
 @pytest.fixture
@@ -165,11 +165,13 @@ class TestSetWaveform:
             gen.set_waveform(1, "Sawtooth", 100.0, 1.0, 0.0, 0.0)
 
     def test_amplitude_above_max_is_clamped_with_warning(self, mock_inst, mock_pyvisa):
+        # Amplitude (peak-to-peak) clamps to MAX_AMP_VPP (10 Vpp), the level a
+        # centred sine needs to reach the ±5 V rail — not MAX_GEN_VOLTS.
         gen = DG1022Z("USB0::...::INSTR")
-        warn = gen.set_waveform(1, "Sine", 1000.0, MAX_GEN_VOLTS + 1.0, 0.0, 0.0)
+        warn = gen.set_waveform(1, "Sine", 1000.0, MAX_AMP_VPP + 1.0, 0.0, 0.0)
         assert "clamped amplitude" in warn
         sent = mock_inst.write.call_args_list[0].args[0]
-        assert f",{MAX_GEN_VOLTS},0.0,0.0" in sent
+        assert f",{MAX_AMP_VPP},0.0,0.0" in sent
 
     def test_offset_above_max_is_clamped_with_warning(self, mock_inst, mock_pyvisa):
         gen = DG1022Z("USB0::...::INSTR")
@@ -178,7 +180,7 @@ class TestSetWaveform:
 
     def test_amplitude_below_negative_max_is_clamped(self, mock_inst, mock_pyvisa):
         gen = DG1022Z("USB0::...::INSTR")
-        warn = gen.set_waveform(1, "Sine", 1000.0, -(MAX_GEN_VOLTS + 1.0), 0.0, 0.0)
+        warn = gen.set_waveform(1, "Sine", 1000.0, -(MAX_AMP_VPP + 1.0), 0.0, 0.0)
         assert "clamped amplitude" in warn
 
     def test_within_range_values_are_not_clamped(self, mock_inst, mock_pyvisa):

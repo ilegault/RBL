@@ -17,9 +17,19 @@ except ImportError:
     PYVISA_AVAILABLE = False
 
 # ES5 plate rating = 5 kV/plate; EEL5000 gain = 1000x, range +/-5 kV.
-# Cap generator output below the 5 V (=5 kV/plate) hardware ceiling to leave margin.
-# 4.0 V -> 4 kV/plate, 1 kV margin below the 5 kV plate rating. Adjust here only.
-MAX_GEN_VOLTS = 4.0
+# The amplifier input tolerates up to +/-5 V (= +/-5 kV/plate). That +/-5 V rail
+# is the hard ceiling for the DC OFFSET and for the instantaneous voltage the
+# amplifier sees.
+MAX_GEN_VOLTS = 5.0
+
+# Amplitude is entered peak-to-peak (RIGOL's native unit). A centred sine swings
+# +/-amplitude/2 about the offset, so a 10 Vpp wave at 0 offset reaches the full
+# +/-5 V (= +/-5 kV) rail. Hence amplitude alone is allowed up to 2 x the rail.
+# This per-field cap does NOT by itself bound the instantaneous voltage: an
+# offset plus half the peak-to-peak amplitude can still exceed 5 V. That combined
+# "true peak" limit (|offset| + amplitude/2 <= 5 V, warn above 4 V) is enforced
+# in the GUI at apply time (funcgen_tab.py). Adjust these here only.
+MAX_AMP_VPP = 2.0 * MAX_GEN_VOLTS   # 10 Vpp -> +/-5 V peak at 0 offset
 
 _RIGOL_VENDOR_ID = "0x1AB1"
 
@@ -71,9 +81,11 @@ class DG1022Z:
         gen.close()   # session only; instrument keeps its state
 
     Safety:
-        All amplitude/offset values are clamped to ±MAX_GEN_VOLTS before any
-        SCPI command is issued.  set_waveform() returns a warning string when
-        clamping occurs.
+        Offset is clamped to ±MAX_GEN_VOLTS and amplitude (peak-to-peak) to
+        ±MAX_AMP_VPP before any SCPI command is issued.  set_waveform() returns
+        a warning string when clamping occurs.  The combined "true peak"
+        interlock (|offset| + amplitude/2 ≤ MAX_GEN_VOLTS) is enforced by the
+        GUI, not here — this per-field clamp is only the coarse backstop.
     """
 
     def __init__(self, resource: str):
@@ -115,9 +127,9 @@ class DG1022Z:
                      amp_vpp: float, offset_v: float, phase_deg: float) -> str:
         """Push waveform parameters for one channel.
 
-        Clamps amp_vpp and offset_v to ±MAX_GEN_VOLTS BEFORE sending any
-        command.  Returns a non-empty warning string when clamping occurred,
-        otherwise returns "".
+        Clamps offset_v to ±MAX_GEN_VOLTS and amp_vpp to ±MAX_AMP_VPP BEFORE
+        sending any command.  Returns a non-empty warning string when clamping
+        occurred, otherwise returns "".
 
         Shape mapping:
           "Sine"     -> APPLy:SINusoid
@@ -136,7 +148,7 @@ class DG1022Z:
 
         orig_amp = amp_vpp
         orig_off = offset_v
-        amp_vpp  = max(-MAX_GEN_VOLTS, min(MAX_GEN_VOLTS, amp_vpp))
+        amp_vpp  = max(-MAX_AMP_VPP, min(MAX_AMP_VPP, amp_vpp))
         offset_v = max(-MAX_GEN_VOLTS, min(MAX_GEN_VOLTS, offset_v))
         if amp_vpp != orig_amp:
             warnings.append(f"clamped amplitude {orig_amp:.4g}->{amp_vpp:.4g} V")

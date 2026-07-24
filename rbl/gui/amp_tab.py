@@ -414,6 +414,12 @@ class AmpTab(QWidget):
         self.ax_v_right = self.ax_v.secondary_yaxis("right")
         self.ax_v_right.set_ylabel("Output Voltage (kV)")
 
+        # Mirrored current axis on the right-hand side — the same both-sides
+        # readout the voltage plot has.  Tracks ax_i's data limits automatically,
+        # so it follows every vertical zoom/pan of the current plot too.
+        self.ax_i_right = self.ax_i.secondary_yaxis("right")
+        self.ax_i_right.set_ylabel("Current Draw (mA)")
+
         # Establish the fixed default vertical scale up front (no auto-centering).
         self.ax_v.set_ylim(self._ylim_v)
         self.ax_i.set_ylim(self._ylim_i)
@@ -569,6 +575,7 @@ class AmpTab(QWidget):
             self.ax_v.set_visible(is_voltage)
             self.ax_v_right.set_visible(is_voltage)
             self.ax_i.set_visible(not is_voltage)
+            self.ax_i_right.set_visible(not is_voltage)
             if is_voltage:
                 self.ax_v.tick_params(labelbottom=True)
                 self.ax_v.set_xlabel("Time (s, relative to window right edge)")
@@ -579,6 +586,7 @@ class AmpTab(QWidget):
             self.ax_v.set_visible(True)
             self.ax_v_right.set_visible(True)
             self.ax_i.set_visible(True)
+            self.ax_i_right.set_visible(True)
             self.ax_v.tick_params(labelbottom=False)
             self.ax_v.set_xlabel("")
             self.ax_v.set_position(_TOP)
