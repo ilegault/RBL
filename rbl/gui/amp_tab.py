@@ -219,6 +219,13 @@ class AmpTab(QWidget):
         self.lbl_pp   = {}   # pk-pk output voltage
         self.lbl_rms  = {}   # RMS output voltage
         self.lbl_ma   = {}   # RMS current draw
+
+        # Raw LabJack ADC voltages (V) — shown to the right of the converted
+        # readings as an independent verification channel.
+        self.lbl_raw_vp  = {}   # raw peak voltage-monitor reading (V)
+        self.lbl_raw_vpp = {}   # raw pk-pk voltage-monitor reading (V)
+        self.lbl_raw_vr  = {}   # raw RMS voltage-monitor reading (V)
+        self.lbl_raw_ir  = {}   # raw RMS current-monitor reading (V)
         for col, amp in enumerate(SC.AMP_LABELS, start=1):
             v_ain = SC.AMP_CHANNEL_MAP[amp]["voltage"]
             i_ain = SC.AMP_CHANNEL_MAP[amp]["current"]
@@ -246,12 +253,58 @@ class AmpTab(QWidget):
                 getattr(self, attr)[amp] = lbl
                 ro.addWidget(lbl, row, col)
 
+            # Raw LabJack voltage columns (cols 5-8, immediately right of converted).
+            # Cols 1-4: converted values; cols 5-8: raw V (no dedicated sep column).
+            # Offset from col (1-based) to raw_col: 5 - 1 = 4 = len(AMP_LABELS)
+            RAW_COL_OFFSET = len(SC.AMP_LABELS)  # = 4
+            raw_col = col + RAW_COL_OFFSET
+            _raw_is_first = (col == 1)
+            _raw_style      = ("color: #1a6b9a; font-weight: bold; "
+                               "border-left: 2px solid #aaa; padding-left: 4px;"
+                               if _raw_is_first else
+                               "color: #1a6b9a; font-weight: bold;")
+            for row, attr in enumerate(
+                ("lbl_raw_vp", "lbl_raw_vpp", "lbl_raw_vr"), start=1
+            ):
+                lbl = QLabel("—")
+                lbl.setFont(small)
+                lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                lbl.setStyleSheet(_raw_style)
+                getattr(self, attr)[amp] = lbl
+                ro.addWidget(lbl, row, raw_col)
+
+            lbl_raw_ir = QLabel("—")
+            lbl_raw_ir.setFont(small)
+            lbl_raw_ir.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            lbl_raw_ir.setStyleSheet(_raw_style)
+            self.lbl_raw_ir[amp] = lbl_raw_ir
+            ro.addWidget(lbl_raw_ir, 4, raw_col)
+
             # Current: single RMS mA value
             lbl_ma = QLabel("—")
             lbl_ma.setFont(mono)
             lbl_ma.setStyleSheet("color: #555;")
             self.lbl_ma[amp] = lbl_ma
             ro.addWidget(lbl_ma, 4, col)
+
+        # ── Raw LabJack section: column headers (cols 5-8) ───────────────────
+        # No dedicated separator column — the first raw header carries a
+        # left-border line to visually divide the two sections.
+        _RAW_START = len(SC.AMP_LABELS) + 1  # 5
+
+        for idx, (raw_col, amp) in enumerate(
+            enumerate(SC.AMP_LABELS, start=_RAW_START)
+        ):
+            v_ain = SC.AMP_CHANNEL_MAP[amp]["voltage"]
+            i_ain = SC.AMP_CHANNEL_MAP[amp]["current"]
+            raw_hdr = QLabel(f"{amp}\n{v_ain}/{i_ain}")
+            raw_hdr.setFont(small)
+            raw_hdr.setAlignment(
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+            )
+            border = "border-left: 2px solid #aaa; padding-left: 4px;" if idx == 0 else ""
+            raw_hdr.setStyleSheet(f"color: #1a6b9a; font-weight: bold; {border}")
+            ro.addWidget(raw_hdr, 0, raw_col)
 
         # ── Profile selector (placed right of lj_panel in top_row below) ────
         prof_box = QGroupBox("Stream Profile")
@@ -538,25 +591,40 @@ class AmpTab(QWidget):
         mistaken for a current reading.  In multi-channel mode nothing is muted
         (every monitor updates each window).
         """
-        muted   = "color: #bbb; font-weight: bold;"
-        neutral = "color: #555; font-weight: bold;"
+        muted         = "color: #bbb; font-weight: bold;"
+        neutral       = "color: #555; font-weight: bold;"
+        raw_live      = "color: #1a6b9a; font-weight: bold;"
+        raw_live_first = (
+            "color: #1a6b9a; font-weight: bold; "
+            "border-left: 2px solid #aaa; padding-left: 4px;"
+        )
         for amp in SC.AMP_LABELS:
             v_ain = SC.AMP_CHANNEL_MAP[amp]["voltage"]
             i_ain = SC.AMP_CHANNEL_MAP[amp]["current"]
             v_live = (not self._single_mode) or v_ain == self._single_target_ain
             i_live = (not self._single_mode) or i_ain == self._single_target_ain
+            is_first = (amp == SC.AMP_LABELS[0])
+            _rl = raw_live_first if is_first else raw_live
             if not v_live:
                 for lbl in (self.lbl_kv[amp], self.lbl_pp[amp], self.lbl_rms[amp]):
+                    lbl.setStyleSheet(muted)
+                    lbl.setText("—")
+                for lbl in (self.lbl_raw_vp[amp], self.lbl_raw_vpp[amp], self.lbl_raw_vr[amp]):
                     lbl.setStyleSheet(muted)
                     lbl.setText("—")
             else:
                 for lbl in (self.lbl_kv[amp], self.lbl_pp[amp], self.lbl_rms[amp]):
                     lbl.setStyleSheet(neutral)
+                for lbl in (self.lbl_raw_vp[amp], self.lbl_raw_vpp[amp], self.lbl_raw_vr[amp]):
+                    lbl.setStyleSheet(_rl)
             if not i_live:
                 self.lbl_ma[amp].setStyleSheet(muted)
                 self.lbl_ma[amp].setText("—")
+                self.lbl_raw_ir[amp].setStyleSheet(muted)
+                self.lbl_raw_ir[amp].setText("—")
             else:
                 self.lbl_ma[amp].setStyleSheet(neutral)
+                self.lbl_raw_ir[amp].setStyleSheet(_rl)
 
     def _update_history_layout(self):
         """Show only the relevant subplot in single-channel mode.
@@ -691,6 +759,11 @@ class AmpTab(QWidget):
                 self.lbl_rms[amp].setText(format_kv(kv_rms))
                 self.lbl_rms[amp].setStyleSheet("color: #444; font-weight: bold;")
 
+                # Raw ADC readings (V) — shown in steel-blue for clear differentiation
+                self.lbl_raw_vp[amp].setText(f"{v_ch['peak']:+.4f} V")
+                self.lbl_raw_vpp[amp].setText(f"{v_ch['pk_pk']:+.4f} V")
+                self.lbl_raw_vr[amp].setText(f"{v_ch['rms']:+.4f} V")
+
                 wave = v_ch.get("waveform")
                 if wave is not None:
                     self._store_wave_chunk(
@@ -706,6 +779,9 @@ class AmpTab(QWidget):
                 self.lbl_ma[amp].setStyleSheet(
                     f"color: {_STATUS_COLOR[istatus]}; font-weight: bold;"
                 )
+
+                # Raw current-monitor ADC reading (V)
+                self.lbl_raw_ir[amp].setText(f"{i_ch['rms']:+.4f} V")
 
                 wave = i_ch.get("waveform")
                 if wave is not None:
@@ -755,6 +831,12 @@ class AmpTab(QWidget):
             self.lbl_ma[amp].setStyleSheet(
                 f"color: {_STATUS_COLOR[current_status(ma)]}; font-weight: bold;"
             )
+
+            # Raw ADC readings for legacy single-point path (no peak/rms split)
+            self.lbl_raw_vp[amp].setText(f"{v_raw:+.4f} V")
+            self.lbl_raw_vpp[amp].setText("—")
+            self.lbl_raw_vr[amp].setText(f"{v_raw:+.4f} V")
+            self.lbl_raw_ir[amp].setText(f"{i_raw:+.4f} V")
 
         if self._is_live:
             self.slider.blockSignals(True)

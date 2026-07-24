@@ -61,7 +61,9 @@ class CurrentTab(QWidget):
 
         # ── Connection (shared panel; MainWindow does the actual connecting) ──
         self.lj_panel = LabJackPanel()
-        layout.addWidget(self.lj_panel)
+
+        mono = QFont("Menlo", 13)
+        mono.setBold(True)
 
         # ── Per-channel numeric readouts ──────────────────────────────────
         ro_box = QGroupBox("Live Readings")
@@ -69,8 +71,6 @@ class CurrentTab(QWidget):
         ro.setSpacing(6)
         self.lbl_v = {}
         self.lbl_i = {}
-        mono = QFont("Menlo", 13)
-        mono.setBold(True)
         for col, (ain, jaw) in enumerate(SC.LABJACK_CHANNEL_MAP.items()):
             ro.addWidget(QLabel(f"{jaw}  ({ain})"), 0, col)
             self.lbl_v[ain] = QLabel("—")
@@ -80,7 +80,6 @@ class CurrentTab(QWidget):
             self.lbl_i[ain].setFont(mono)
             self.lbl_i[ain].setStyleSheet("color: #1a7a1a; font-weight: bold;")
             ro.addWidget(self.lbl_i[ain], 2, col)
-        layout.addWidget(ro_box)
 
         # ── Beam-centering indicator ──────────────────────────────────────
         center_box = QGroupBox("Beam Centering Indicator")
@@ -92,7 +91,19 @@ class CurrentTab(QWidget):
         center.addWidget(self.lbl_xc)
         center.addStretch()
         center.addWidget(self.lbl_yc)
-        layout.addWidget(center_box)
+
+        # ── Assemble upper section: left (connection + centering) | right (readouts) ──
+        left_col = QVBoxLayout()
+        left_col.setSpacing(8)
+        left_col.addWidget(self.lj_panel)
+        left_col.addWidget(center_box)
+        left_col.addStretch()
+
+        upper_row = QHBoxLayout()
+        upper_row.setSpacing(8)
+        upper_row.addLayout(left_col)
+        upper_row.addWidget(ro_box, stretch=1)
+        layout.addLayout(upper_row)
 
         # ── Live plot ─────────────────────────────────────────────────────
         plot_box = QGroupBox("Live Currents (2-min window)")
