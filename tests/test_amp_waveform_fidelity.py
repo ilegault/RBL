@@ -34,7 +34,7 @@ def qapp():
 
 @pytest.fixture
 def tab(qapp):
-    from amp_tab import AmpTab
+    from rbl.gui.amp_tab import AmpTab
     return AmpTab()
 
 
@@ -107,7 +107,7 @@ class TestSeamlessStitching:
 
 class TestDecimationPreservesPeaks:
     def test_triangle_apex_not_flipped(self):
-        from amp_tab import AmpTab
+        from rbl.gui.amp_tab import AmpTab
 
         # A single sharp triangle: up to an apex at the centre, then down.
         n = 20_000
@@ -133,7 +133,7 @@ class TestDecimationPreservesPeaks:
         assert abs(apex_x - x[np.argmax(y)]) < n / 2000
 
     def test_descending_ramp_not_reversed(self):
-        from amp_tab import AmpTab
+        from rbl.gui.amp_tab import AmpTab
 
         # Pure descending ramp: max at the very start, min at the very end.
         n = 10_000
@@ -149,7 +149,7 @@ class TestDecimationPreservesPeaks:
         assert yd.min() == pytest.approx(-5.0)
 
     def test_short_series_returned_unchanged(self):
-        from amp_tab import AmpTab
+        from rbl.gui.amp_tab import AmpTab
 
         x = np.arange(500, dtype=float)
         y = np.sin(x)

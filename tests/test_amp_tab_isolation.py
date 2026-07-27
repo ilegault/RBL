@@ -39,7 +39,7 @@ FULL_READING = {
 class TestAmpTabIgnoresLogAmps:
     @pytest.fixture
     def amp(self, qapp):
-        from amp_tab import AmpTab
+        from rbl.gui.amp_tab import AmpTab
         t = AmpTab()
         yield t
         t.shutdown()
@@ -95,7 +95,7 @@ class TestAmpTabIgnoresLogAmps:
 class TestCurrentTabIgnoresAmps:
     @pytest.fixture
     def cur(self, qapp):
-        from logamp_tab import CurrentTab
+        from rbl.gui.logamp_tab import CurrentTab
         t = CurrentTab()
         yield t
         t.shutdown()
@@ -121,8 +121,8 @@ class TestCurrentTabIgnoresAmps:
 
 class TestBothTabsShareOneReading:
     def test_same_dict_feeds_both_correctly(self, qapp):
-        from amp_tab import AmpTab
-        from logamp_tab import CurrentTab
+        from rbl.gui.amp_tab import AmpTab
+        from rbl.gui.logamp_tab import CurrentTab
         amp = AmpTab()
         cur = CurrentTab()
         try:

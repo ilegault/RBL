@@ -21,15 +21,6 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-# When run as a script (python funcgen_tab.py), __package__ is None and
-# Python sets sys.path[0] to this file's directory.  Add the project root
-# so the rbl namespace package is importable.
-if __package__ is None:
-    _here = os.path.dirname(os.path.abspath(__file__))
-    _root = os.path.abspath(os.path.join(_here, "..", ".."))
-    if _root not in sys.path:
-        sys.path.insert(0, _root)
-
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (

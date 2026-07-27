@@ -1,16 +1,14 @@
 """
 Right Beam Line DAQ App — Native Desktop GUI
 Hardware-only: Stepper Motors, Beam Current, Function Generators.
-Run: python app.py   (from inside the rbl/gui/ directory)
+Run: python -m rbl.main
 
 PySide6 front-end. Analysis has been split out to the rbl-analysis repo.
 """
 import sys
-import os
 import time
 import atexit
 import logging
-sys.path.insert(0, os.path.dirname(__file__))
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget,
@@ -25,6 +23,10 @@ from rbl.config.labjack_stream_config import (
     DEFAULT_PROFILE, STREAM_PROFILES, DEFAULT_SINGLE_CHANNEL,
     SINGLE_CHANNEL_CHOICES, is_single_channel,
 )
+from rbl.gui.motor_tab import MotorTab
+from rbl.gui.logamp_tab import CurrentTab
+from rbl.gui.amp_tab import AmpTab
+from rbl.gui.funcgen_tab import FuncGenTab
 
 
 # ─── Main Window ──────────────────────────────────────────────────────────────
@@ -60,10 +62,6 @@ class MainWindow(QMainWindow):
         outer_layout.addWidget(self._outer_stack, stretch=1)
 
         # ── Pages: Motors (0), Current (1), Amplifiers (2), FuncGens (3) ───────
-        from motor_tab import MotorTab
-        from logamp_tab import CurrentTab
-        from amp_tab import AmpTab
-        from funcgen_tab import FuncGenTab
         self.motor_tab   = MotorTab(self)
         self.current_tab = CurrentTab(self)
         self.amp_tab     = AmpTab(self)

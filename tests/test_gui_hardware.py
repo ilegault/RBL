@@ -157,7 +157,7 @@ class TestTabStatePersistence:
 class TestMotorTabUnits:
     @pytest.fixture
     def motor(self, qapp):
-        from motor_tab import MotorTab
+        from rbl.gui.motor_tab import MotorTab
         mt = MotorTab()
         yield mt
         mt.abort_and_close()
@@ -197,7 +197,7 @@ class TestMotorTabUnits:
 
 class TestHistoryLineEdit:
     def test_up_down_history(self, qapp):
-        from motor_tab import HistoryLineEdit
+        from rbl.gui.motor_tab import HistoryLineEdit
         le = HistoryLineEdit()
         le.add_to_history("MO")
         le.add_to_history("SH A")
@@ -214,14 +214,14 @@ class TestHistoryLineEdit:
         assert le.text() == ""
 
     def test_duplicate_consecutive_not_stored_twice(self, qapp):
-        from motor_tab import HistoryLineEdit
+        from rbl.gui.motor_tab import HistoryLineEdit
         le = HistoryLineEdit()
         le.add_to_history("TH")
         le.add_to_history("TH")
         assert le._history == ["TH"]
 
     def test_up_on_empty_history_noop(self, qapp):
-        from motor_tab import HistoryLineEdit
+        from rbl.gui.motor_tab import HistoryLineEdit
         le = HistoryLineEdit()
         _press(le, Qt.Key.Key_Up)
         assert le.text() == ""
@@ -232,7 +232,7 @@ class TestHistoryLineEdit:
 class TestCurrentTab:
     @pytest.fixture
     def current(self, qapp):
-        from logamp_tab import CurrentTab
+        from rbl.gui.logamp_tab import CurrentTab
         ct = CurrentTab()
         yield ct
         ct.shutdown()
@@ -336,8 +336,8 @@ class TestHomingWorker:
         return g
 
     def test_three_passes_then_define_zero(self, qapp, monkeypatch):
-        import motor_tab
-        from motor_tab import HomingWorker
+        from rbl.gui import motor_tab
+        from rbl.gui.motor_tab import HomingWorker
         monkeypatch.setattr(motor_tab.time, "sleep", lambda *a, **k: None)
         g = self._mock_galil(home_switch=False)
         hw = HomingWorker(g, "A")
@@ -349,8 +349,8 @@ class TestHomingWorker:
         assert results and results[0][0] is True
 
     def test_backs_off_when_starting_on_home_switch(self, qapp, monkeypatch):
-        import motor_tab
-        from motor_tab import HomingWorker
+        from rbl.gui import motor_tab
+        from rbl.gui.motor_tab import HomingWorker
         monkeypatch.setattr(motor_tab.time, "sleep", lambda *a, **k: None)
         g = self._mock_galil(home_switch=True)
         hw = HomingWorker(g, "B")
@@ -362,8 +362,8 @@ class TestHomingWorker:
         assert first_move.args[1] > 0
 
     def test_cancel_before_pass_aborts(self, qapp, monkeypatch):
-        import motor_tab
-        from motor_tab import HomingWorker
+        from rbl.gui import motor_tab
+        from rbl.gui.motor_tab import HomingWorker
         monkeypatch.setattr(motor_tab.time, "sleep", lambda *a, **k: None)
         g = self._mock_galil(home_switch=False)
         hw = HomingWorker(g, "A")
@@ -376,8 +376,8 @@ class TestHomingWorker:
         assert results and results[0][0] is False
 
     def test_restores_default_speed_after_homing(self, qapp, monkeypatch):
-        import motor_tab
-        from motor_tab import HomingWorker
+        from rbl.gui import motor_tab
+        from rbl.gui.motor_tab import HomingWorker
         import rbl.config.hardware_config as SC
         monkeypatch.setattr(motor_tab.time, "sleep", lambda *a, **k: None)
         g = self._mock_galil(home_switch=False)
@@ -390,7 +390,7 @@ class TestHomingWorker:
 class TestGalilPollWorkerErrorHandling:
     def test_poll_worker_emits_error_and_stops_on_exception(self, qapp):
         from unittest.mock import MagicMock
-        from motor_tab import GalilPollWorker
+        from rbl.gui.motor_tab import GalilPollWorker
         from rbl.hardware.galil_driver import GalilController
 
         g = MagicMock(spec=GalilController)
@@ -414,7 +414,7 @@ class TestGalilPollWorkerErrorHandling:
 class TestConcurrentPollWorkers:
     def test_galil_and_labjack_workers_run_simultaneously(self, qapp):
         from unittest.mock import MagicMock
-        from motor_tab import GalilPollWorker
+        from rbl.gui.motor_tab import GalilPollWorker
         from rbl.hardware.labjack_poller import LabJackPollWorker
         from rbl.hardware.galil_driver import GalilController
         from rbl.hardware.labjack_driver import LabJackT7

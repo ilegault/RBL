@@ -33,7 +33,7 @@ from rbl.hardware.current_monitor import (
 )
 from rbl.hardware import beam_reconstruction as BR
 from rbl.config import hardware_config as SC
-from labjack_panel import LabJackPanel
+from rbl.gui.labjack_panel import LabJackPanel
 
 
 # ─── Beam-position indicator ───────────────────────────────────────────────────

@@ -74,7 +74,7 @@ from rbl.config.labjack_stream_config import (
     STREAM_PROFILES, GUI_REFRESH_HZ, window_samples, resolution_index,
     is_single_channel, DEFAULT_SINGLE_CHANNEL,
 )
-from labjack_panel import LabJackPanel
+from rbl.gui.labjack_panel import LabJackPanel
 
 
 # Reverse map: AIN name -> (amp label, kind) for the 8 amplifier monitors.

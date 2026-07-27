@@ -34,7 +34,7 @@ def qapp():
 @pytest.fixture
 def tab_and_mgr(qapp):
     """A FuncGenTab wired to two mocked generators sharing one call recorder."""
-    from funcgen_tab import FuncGenTab
+    from rbl.gui.funcgen_tab import FuncGenTab
 
     tab = FuncGenTab()
 
@@ -161,7 +161,7 @@ class TestApplyAllOrdering:
         assert all(i < first_on for i in sp_idxs), order
 
     def test_axis_pairs_share_a_generator(self, tab_and_mgr):
-        from funcgen_tab import CHANNEL_ROLE
+        from rbl.gui.funcgen_tab import CHANNEL_ROLE
 
         # X+/X- must both be on unit A.
         x_keys = {k for k, v in CHANNEL_ROLE.items() if v in ("X+", "X-")}
@@ -193,7 +193,7 @@ class TestReferenceClockToggle:
         mgr.B.verify_external_lock.return_value = (False, "INT")
         # Suppress the blocking QMessageBox.
         monkeypatch.setattr(
-            "funcgen_tab.QMessageBox.warning",
+            "rbl.gui.funcgen_tab.QMessageBox.warning",
             lambda *a, **kw: None,
         )
         tab._on_ext_ref_toggled(True)
@@ -206,7 +206,7 @@ class TestReferenceClockToggle:
         tab, mgr = tab_and_mgr
         mgr.A.get_reference_clock.return_value = "EXT"
         monkeypatch.setattr(
-            "funcgen_tab.QMessageBox.warning",
+            "rbl.gui.funcgen_tab.QMessageBox.warning",
             lambda *a, **kw: None,
         )
         tab._on_ext_ref_toggled(True)

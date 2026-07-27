@@ -33,7 +33,7 @@ def qapp():
 
 @pytest.fixture
 def tab(qapp):
-    from amp_tab import AmpTab
+    from rbl.gui.amp_tab import AmpTab
     return AmpTab()
 
 
