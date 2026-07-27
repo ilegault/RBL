@@ -201,6 +201,8 @@ class AmpTab(QWidget):
 
         # ── Per-amplifier numeric readouts ────────────────────────────────
         ro_box = QGroupBox("Live Amplifier Monitors")
+        ro_box.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        ro_box.setMinimumWidth(0)
         ro = QGridLayout(ro_box)
         ro.setSpacing(1)
         ro.setContentsMargins(6, 4, 6, 4)
@@ -269,10 +271,9 @@ class AmpTab(QWidget):
         # real inputs: each amplifier contributes exactly two, a VOLTAGE monitor
         # and a CURRENT monitor.  (The value shown is the window average = the
         # DC level the input sits at, i.e. what a meter on the BNC would read.)
-        raw_box = QGroupBox(
-            "Raw EEL5000 Analog Inputs — 8 physical LabJack channels "
-            "(direct ADC volts, no scaling)"
-        )
+        raw_box = QGroupBox("Raw Analog Inputs (V, unscaled)")
+        raw_box.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        raw_box.setMinimumWidth(0)
         rawg = QGridLayout(raw_box)
         rawg.setSpacing(1)
         rawg.setContentsMargins(6, 4, 6, 4)
@@ -383,7 +384,7 @@ class AmpTab(QWidget):
         monitors_row = QHBoxLayout()
         monitors_row.setSpacing(8)
         monitors_row.addWidget(ro_box)
-        monitors_row.addWidget(raw_box)
+        # monitors_row.addWidget(raw_box)
 
         upper_row = QHBoxLayout()
         upper_row.setSpacing(8)
@@ -394,6 +395,7 @@ class AmpTab(QWidget):
         # ── History / waveform plot (one figure, two modes) ─────────────────
         self._window_seconds = float(self.WINDOW_SECONDS)
         plot_box = QGroupBox("Amplifier History")
+        plot_box.setMinimumWidth(0)
         pv = QVBoxLayout(plot_box)
 
         nav_row = QHBoxLayout()
@@ -458,6 +460,7 @@ class AmpTab(QWidget):
         self.canvas = FigureCanvasQTAgg(self.fig)
         self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding,
                                   QSizePolicy.Policy.Expanding)
+        self.canvas.setMinimumWidth(0)
         self.canvas.mpl_connect('scroll_event', self._on_scroll)
         # Vertical click-drag pans the voltage/current axis (time stays locked to
         # the window / history slider).
@@ -511,10 +514,35 @@ class AmpTab(QWidget):
             self._lines_v[amp] = lv
             self._lines_i[amp] = li
 
-        self.ax_v.legend(loc="upper left", fontsize=8, ncol=4)
-        self.ax_i.legend(loc="upper left", fontsize=8, ncol=4)
         self.fig.tight_layout()
-        pv.addWidget(self.canvas, stretch=1)
+
+        # Qt legend panel (right of canvas — sidesteps matplotlib secondary-axis
+        # layout fighting when placing legends outside the axes)
+        _amp_legend_w = QWidget()
+        _amp_legend_w.setFixedWidth(65)
+        _amp_leg_lay = QVBoxLayout(_amp_legend_w)
+        _amp_leg_lay.setSpacing(3)
+        _amp_leg_lay.setContentsMargins(4, 8, 4, 4)
+        _alt = QLabel("Legend")
+        _alt.setStyleSheet("font-size: 15px; color: #555; font-weight: bold;")
+        _amp_leg_lay.addWidget(_alt)
+        for _amp in SC.AMP_LABELS:
+            _arow = QHBoxLayout()
+            _aswatch = QLabel("━")
+            _aswatch.setStyleSheet(
+                f"color: {SC.AMP_COLORS[_amp]}; font-weight: bold; font-size: 13px;"
+            )
+            _albl = QLabel(_amp)
+            _albl.setStyleSheet("font-size: 15px;")
+            _arow.addWidget(_aswatch)
+            _arow.addWidget(_albl)
+            _amp_leg_lay.addLayout(_arow)
+        _amp_leg_lay.addStretch()
+
+        _canvas_row = QHBoxLayout()
+        _canvas_row.addWidget(self.canvas, stretch=1)
+        _canvas_row.addWidget(_amp_legend_w)
+        pv.addLayout(_canvas_row, stretch=1)
 
         # History slider: 0 = oldest, 10000 = live.
         slider_row = QHBoxLayout()

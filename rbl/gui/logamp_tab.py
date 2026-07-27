@@ -155,7 +155,8 @@ class CurrentTab(QWidget):
     """The 'Beam Current' outer tab."""
 
     BUFFER_CAPACITY = 36_000   # ~1 hour at 10 Hz
-    WINDOW_SECONDS  = 120      # fixed 2-minute viewport
+    WINDOW_SECONDS  = 120      # default 2-minute viewport
+    _TIME_STEPS     = [3600, 1800, 900, 600, 300, 120, 60, 30, 15, 5, 1]
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -168,6 +169,7 @@ class CurrentTab(QWidget):
         # Plot state
         self._is_live           = True
         self._frozen_right_edge = None   # float: elapsed-seconds anchor
+        self._window_seconds    = float(self.WINDOW_SECONDS)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -176,69 +178,67 @@ class CurrentTab(QWidget):
         # ── Connection (shared panel; MainWindow does the actual connecting) ──
         self.lj_panel = LabJackPanel()
 
-        mono = QFont("Consolas", 13)
+        mono = QFont("Consolas", 15)
         mono.setBold(True)
 
         # ── Per-channel numeric readouts ──────────────────────────────────
         ro_box = QGroupBox("Live Readings")
         ro = QGridLayout(ro_box)
-        ro.setSpacing(6)
+        ro.setSpacing(2)
+        ro.setContentsMargins(4, 2, 4, 2)
         self.lbl_v = {}
         self.lbl_i = {}
         for col, (ain, jaw) in enumerate(SC.LABJACK_CHANNEL_MAP.items()):
-            ro.addWidget(QLabel(f"{jaw}  ({ain})"), 0, col)
+            hdr = QLabel(f"{jaw}  ({ain})")
+            hdr.setStyleSheet("font-size: 15px; color: #444;")
+            ro.addWidget(hdr, 0, col)
             self.lbl_v[ain] = QLabel("—")
-            self.lbl_v[ain].setStyleSheet("color: #555; font-family: Consolas, 'Courier New', monospace;")
+            self.lbl_v[ain].setStyleSheet(
+                "color: #555; font-family: Consolas, 'Courier New', monospace; font-size: 15px;"
+            )
             ro.addWidget(self.lbl_v[ain], 1, col)
             self.lbl_i[ain] = QLabel("—")
             self.lbl_i[ain].setFont(mono)
             self.lbl_i[ain].setStyleSheet("color: #1a7a1a; font-weight: bold;")
             ro.addWidget(self.lbl_i[ain], 2, col)
 
-        # ── Beam-centering indicator ──────────────────────────────────────
-        center_box = QGroupBox("Beam Position (estimated)")
-        center = QVBoxLayout(center_box)
-        center.setSpacing(4)
-
-        # Circle-in-a-square visual guess of where the beam sits, driven by the
-        # relative log-amp currents.
+        # Beam indicator — placed in the plot section below, left of the canvas
         self.beam_indicator = BeamPositionIndicator()
-        center.addWidget(self.beam_indicator, stretch=1,
-                         alignment=Qt.AlignmentFlag.AlignHCenter)
 
-        self.lbl_xc = QLabel("X imbalance: —")
-        self.lbl_yc = QLabel("Y imbalance: —")
-        self.lbl_xc.setFont(mono)
-        self.lbl_yc.setFont(mono)
-        imb_row = QHBoxLayout()
-        imb_row.addWidget(self.lbl_xc)
-        imb_row.addStretch()
-        imb_row.addWidget(self.lbl_yc)
-        center.addLayout(imb_row)
-
-        # ── Assemble upper section: left (connection + centering) | right (readouts) ──
-        left_col = QVBoxLayout()
-        left_col.setSpacing(8)
-        left_col.addWidget(self.lj_panel)
-        left_col.addWidget(center_box)
-        left_col.addStretch()
-
+        # ── Assemble upper section: connection panel | readouts ────────────
         upper_row = QHBoxLayout()
         upper_row.setSpacing(8)
-        upper_row.addLayout(left_col)
+        upper_row.addWidget(self.lj_panel)
         upper_row.addWidget(ro_box, stretch=1)
         layout.addLayout(upper_row)
 
         # ── Live plot ─────────────────────────────────────────────────────
-        plot_box = QGroupBox("Live Currents (2-min window)")
+        plot_box = QGroupBox("Live Currents")
         pv = QVBoxLayout(plot_box)
 
-        # Plot mode indicator + jump-to-live button
+        # Plot mode indicator + time-window controls + jump-to-live button
         nav_row = QHBoxLayout()
-        self.lbl_mode = QLabel("● LIVE  (last 2 min)")
+        self.lbl_mode = QLabel("● LIVE  (last 120 s)")
         self.lbl_mode.setStyleSheet(
             "color: #1a7a1a; font-weight: bold; padding: 2px 6px;"
         )
+        nav_row.addWidget(self.lbl_mode)
+        lbl_time = QLabel("  Time:")
+        lbl_time.setStyleSheet("color: #555; font-size: 15px;")
+        nav_row.addWidget(lbl_time)
+        btn_time_out = QPushButton("－")
+        btn_time_out.setFixedWidth(28)
+        btn_time_out.setToolTip("Increase time window (zoom out)")
+        btn_time_out.setStyleSheet("font-weight: bold; padding: 1px 4px;")
+        btn_time_out.clicked.connect(self._zoom_time_out)
+        btn_time_in = QPushButton("＋")
+        btn_time_in.setFixedWidth(28)
+        btn_time_in.setToolTip("Decrease time window (zoom in)")
+        btn_time_in.setStyleSheet("font-weight: bold; padding: 1px 4px;")
+        btn_time_in.clicked.connect(self._zoom_time_in)
+        nav_row.addWidget(btn_time_out)
+        nav_row.addWidget(btn_time_in)
+        nav_row.addStretch()
         self.btn_jump_live = QPushButton("Jump to Live")
         self.btn_jump_live.setVisible(False)
         self.btn_jump_live.setStyleSheet(
@@ -247,8 +247,6 @@ class CurrentTab(QWidget):
             "QPushButton:hover { background:#0063b1; }"
         )
         self.btn_jump_live.clicked.connect(self._jump_to_live)
-        nav_row.addWidget(self.lbl_mode)
-        nav_row.addStretch()
         nav_row.addWidget(self.btn_jump_live)
         pv.addLayout(nav_row)
 
@@ -265,15 +263,42 @@ class CurrentTab(QWidget):
         self.ax.set_yscale("log")
         self.ax.grid(True, which="both", alpha=0.3)
         self._lines = {}
-        colors = {"X+": "#e74c3c", "X-": "#3498db", "Y+": "#c47a00", "Y-": "#1a7a1a"}
+        _colors = {"X+": "#e74c3c", "X-": "#3498db", "Y+": "#c47a00", "Y-": "#1a7a1a"}
         for ain, jaw in SC.LABJACK_CHANNEL_MAP.items():
-            line, = self.ax.plot([], [], label=f"{jaw} ({ain})",
-                                 color=colors.get(jaw, "k"), lw=1.5)
+            line, = self.ax.plot([], [], color=_colors.get(jaw, "k"), lw=1.5)
             self._lines[ain] = line
-        # Legend on the RIGHT side of the plot, to match the right-hand scale.
-        self.ax.legend(loc="upper right", fontsize=8)
         self.fig.tight_layout()
-        pv.addWidget(self.canvas, stretch=1)
+
+        # Qt legend panel (right of canvas — avoids matplotlib layout fighting)
+        _legend_w = QWidget()
+        _legend_w.setFixedWidth(115)
+        _leg_lay = QVBoxLayout(_legend_w)
+        _leg_lay.setSpacing(3)
+        _leg_lay.setContentsMargins(4, 8, 4, 4)
+        _leg_title = QLabel("Legend")
+        _leg_title.setStyleSheet("font-size: 15px; color: #555; font-weight: bold;")
+        _leg_lay.addWidget(_leg_title)
+        for _ain, _jaw in SC.LABJACK_CHANNEL_MAP.items():
+            _row = QHBoxLayout()
+            _swatch = QLabel("━")
+            _swatch.setStyleSheet(
+                f"color: {_colors.get(_jaw, '#000')}; font-weight: bold; font-size: 13px;"
+            )
+            _lbl = QLabel(f"{_jaw}  ({_ain})")
+            _lbl.setStyleSheet("font-size: 15px;")
+            _row.addWidget(_swatch)
+            _row.addWidget(_lbl)
+            _row.addStretch()
+            _leg_lay.addLayout(_row)
+        _leg_lay.addStretch()
+
+        # Horizontal content row: beam position | canvas | legend
+        _content_row = QHBoxLayout()
+        _content_row.setSpacing(4)
+        _content_row.addWidget(self.beam_indicator)
+        _content_row.addWidget(self.canvas, stretch=1)
+        _content_row.addWidget(_legend_w)
+        pv.addLayout(_content_row, stretch=1)
 
         # History slider: 0 = oldest, 10000 = live (rightmost = newest)
         slider_row = QHBoxLayout()
@@ -284,7 +309,7 @@ class CurrentTab(QWidget):
         self.slider.setValue(10_000)   # start in live mode
         self.slider.setTickInterval(1_000)
         self.slider.setToolTip(
-            "Drag left to browse history (2-min window). "
+            "Drag left to browse history. "
             "Drag to far right to return to LIVE mode."
         )
         self.slider.valueChanged.connect(self._on_slider_changed)
@@ -364,15 +389,9 @@ class CurrentTab(QWidget):
         if ain_xp and ain_xm:
             xc = beam_centering(currents.get(ain_xp, float("nan")),
                                 currents.get(ain_xm, float("nan")))
-            self.lbl_xc.setText(
-                f"X imbalance: {xc:+.3f}" if not math.isnan(xc) else "X imbalance: —"
-            )
         if ain_yp and ain_ym:
             yc = beam_centering(currents.get(ain_yp, float("nan")),
                                 currents.get(ain_ym, float("nan")))
-            self.lbl_yc.setText(
-                f"Y imbalance: {yc:+.3f}" if not math.isnan(yc) else "Y imbalance: —"
-            )
         self.beam_indicator.set_position(xc, yc)
 
         if self._is_live:
@@ -404,10 +423,8 @@ class CurrentTab(QWidget):
         xc = yc = float("nan")
         if ain_xplus and ain_xminus:
             xc = beam_centering(currents[ain_xplus], currents[ain_xminus])
-            self.lbl_xc.setText(f"X imbalance: {xc:+.3f}" if not (xc != xc) else "X imbalance: —")
         if ain_yplus and ain_yminus:
             yc = beam_centering(currents[ain_yplus], currents[ain_yminus])
-            self.lbl_yc.setText(f"Y imbalance: {yc:+.3f}" if not (yc != yc) else "Y imbalance: —")
         self.beam_indicator.set_position(xc, yc)
 
         # Auto-advance slider to live edge when in live mode
@@ -431,7 +448,9 @@ class CurrentTab(QWidget):
     def _enter_live_mode(self):
         self._is_live = True
         self._frozen_right_edge = None
-        self.lbl_mode.setText("● LIVE  (last 2 min)")
+        w = self._window_seconds
+        label = f"{int(w)} s" if w >= 1 else f"{int(w * 1000)} ms"
+        self.lbl_mode.setText(f"● LIVE  (last {label})")
         self.lbl_mode.setStyleSheet(
             "color: #1a7a1a; font-weight: bold; padding: 2px 6px;"
         )
@@ -454,7 +473,7 @@ class CurrentTab(QWidget):
 
         import datetime
         # Show elapsed-time window in the label
-        w_start = max(t_oldest, self._frozen_right_edge - self.WINDOW_SECONDS)
+        w_start = max(t_oldest, self._frozen_right_edge - self._window_seconds)
         self.lbl_mode.setText(
             f"⏸  Frozen  —  t = [{w_start:+.0f} s … {self._frozen_right_edge:+.0f} s]"
         )
@@ -466,6 +485,37 @@ class CurrentTab(QWidget):
     def _jump_to_live(self):
         self.slider.setValue(10_000)
         self._enter_live_mode()
+
+    def _zoom_time_in(self):
+        """Decrease the time window (zoom in on time axis)."""
+        smaller = [s for s in self._TIME_STEPS if s < self._window_seconds]
+        if smaller:
+            self._window_seconds = float(max(smaller))
+        else:
+            self._window_seconds = max(1.0, self._window_seconds / 2)
+        self._update_time_label()
+
+    def _zoom_time_out(self):
+        """Increase the time window (zoom out on time axis)."""
+        larger = [s for s in self._TIME_STEPS if s > self._window_seconds]
+        if larger:
+            self._window_seconds = float(min(larger))
+        else:
+            self._window_seconds = min(3600.0, self._window_seconds * 2)
+        self._update_time_label()
+
+    def _update_time_label(self):
+        w = self._window_seconds
+        label = f"{int(w)} s" if w >= 1 else f"{int(w * 1000)} ms"
+        if self._is_live:
+            self.lbl_mode.setText(f"● LIVE  (last {label})")
+            self.lbl_mode.setStyleSheet(
+                "color: #1a7a1a; font-weight: bold; padding: 2px 6px;"
+            )
+        else:
+            self.lbl_mode.setText(
+                f"⏸  Frozen  —  window {label}"
+            )
 
     # ---- Plot redraw ---------------------------------------------------------
 
@@ -492,7 +542,7 @@ class CurrentTab(QWidget):
             if t_right is None:
                 return
 
-        t_left = t_right - self.WINDOW_SECONDS
+        t_left = t_right - self._window_seconds
 
         for ain, line in self._lines.items():
             t, v = self.buffers[ain].snapshot()
@@ -514,7 +564,7 @@ class CurrentTab(QWidget):
             any_data = True
 
         if any_data:
-            self.ax.set_xlim(-self.WINDOW_SECONDS, 0)
+            self.ax.set_xlim(-self._window_seconds, 0)
             self.ax.relim()
             self.ax.autoscale_view(scalex=False, scaley=True)
             self.canvas.draw_idle()
