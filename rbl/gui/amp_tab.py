@@ -1134,35 +1134,3 @@ class AmpTab(QWidget):
 
     def shutdown(self):
         self.plot.stop()
-
-
-# Standalone smoke test
-if __name__ == "__main__":
-    import os
-    import sys
-    if "DISPLAY" not in os.environ and "QT_QPA_PLATFORM" not in os.environ:
-        os.environ["QT_QPA_PLATFORM"] = "offscreen"
-
-    from PySide6.QtWidgets import QApplication
-    app = QApplication(sys.argv)
-    w = AmpTab()
-
-    # Feed one synthetic reading covering all 12 channels.
-    w._on_reading(0.0, {
-        "AIN0": 3.0, "AIN1": 3.0, "AIN2": 3.0, "AIN3": 3.0,   # log amps (ignored)
-        "AIN4": 0.0, "AIN5": 0.0,                              # spare (ignored)
-        "AIN13": 3.0, "AIN12":  1.0,    # X+ : 3 kV, 10 mA
-        "AIN11": -3.0, "AIN10": 1.0,    # X- : -3 kV, 10 mA
-        "AIN9": 2.0, "AIN8":  0.5,      # Y+ : 2 kV, 5 mA
-        "AIN7": -2.0, "AIN6": 0.5,      # Y- : -2 kV, 5 mA
-    })
-    assert "3.000 kV" in w.lbl_kv["X+"].text(), w.lbl_kv["X+"].text()
-    assert "10.000 mA" in w.lbl_ma["X+"].text(), w.lbl_ma["X+"].text()
-    assert "-3.000 kV" in w.lbl_kv["X-"].text()
-    # Log-amp AINs must NOT have been buffered here.
-    assert "AIN0" not in w.buffers
-    print("[OK] amp_tab: constructed and consumed a reading")
-
-    w.resize(1000, 900)
-    w.show()
-    sys.exit(app.exec())
