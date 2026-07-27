@@ -201,9 +201,8 @@ class CurrentTab(QWidget):
         channels = payload["channels"]
         t        = payload["t"]
 
-        spec  = SC.LOG_AMP_MODELS[SC.DEFAULT_LOG_AMP_MODEL]
-        v1nA  = spec["v_at_1nA"]
-        v1mA  = spec["v_at_1mA"]
+        v1nA  = SC.LOG_AMP_V_AT_1NA
+        v1mA  = SC.LOG_AMP_V_AT_1MA
 
         currents = {}
         for ain in SC.LABJACK_CHANNEL_MAP.keys():
@@ -251,9 +250,8 @@ class CurrentTab(QWidget):
             self.slider.blockSignals(False)
 
     def _on_reading(self, t: float, values: dict):
-        spec   = SC.LOG_AMP_MODELS[SC.DEFAULT_LOG_AMP_MODEL]
-        v1nA   = spec["v_at_1nA"]
-        v1mA   = spec["v_at_1mA"]
+        v1nA   = SC.LOG_AMP_V_AT_1NA
+        v1mA   = SC.LOG_AMP_V_AT_1MA
 
         currents = {}
         # The shared worker emits all 12 AINs. Take ONLY the log-amp channels;

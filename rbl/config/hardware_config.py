@@ -102,14 +102,9 @@ def mm_per_sec_to_cps(axis_letter: str, mm_per_sec: float) -> int:
     return int(round(mm_per_sec * STEPS_PER_MM[axis_letter]))
 
 
-# --- Log-amp model registry --------------------------------------------------
-LOG_AMP_MODELS = {
-    "2HA032380 (pos, 0-6V)": {"polarity": "pos", "v_at_1nA": 0.0, "v_at_1mA": 6.0},
-    "2HA032382 (neg, 0-6V)": {"polarity": "neg", "v_at_1nA": 0.0, "v_at_1mA": 6.0},
-    "2HA032390 (pos, 9-3V)": {"polarity": "pos", "v_at_1nA": 9.0, "v_at_1mA": 3.0},
-    "2HA032392 (neg, 9-3V)": {"polarity": "neg", "v_at_1nA": 9.0, "v_at_1mA": 3.0},
-}
-DEFAULT_LOG_AMP_MODEL = "2HA032380 (pos, 0-6V)"
+# --- Log-amp (2HA032380, positive polarity, 0-6 V) ---------------------------
+LOG_AMP_V_AT_1NA = 0.0   # V output at 1 nA input
+LOG_AMP_V_AT_1MA = 6.0   # V output at 1 mA input
 
 # LabJack T7 analog input -> human-readable jaw label
 LABJACK_CHANNEL_MAP = {
@@ -194,10 +189,6 @@ if __name__ == "__main__":
         assert abs(cps - 630) < 1
         mms = cps_to_mm_per_sec(axis, cps)
         assert abs(mms - 1.0) < 0.002
-
-    # Log-amp models
-    for name, spec in LOG_AMP_MODELS.items():
-        assert "polarity" in spec and "v_at_1nA" in spec and "v_at_1mA" in spec
 
     # Amplifier monitor map
     assert AMP_LABELS == ["X+", "X-", "Y+", "Y-"]
