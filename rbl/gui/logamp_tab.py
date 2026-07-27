@@ -62,7 +62,7 @@ class CurrentTab(QWidget):
         # ── Connection (shared panel; MainWindow does the actual connecting) ──
         self.lj_panel = LabJackPanel()
 
-        mono = QFont("Menlo", 13)
+        mono = QFont("Consolas", 13)
         mono.setBold(True)
 
         # ── Per-channel numeric readouts ──────────────────────────────────
@@ -74,7 +74,7 @@ class CurrentTab(QWidget):
         for col, (ain, jaw) in enumerate(SC.LABJACK_CHANNEL_MAP.items()):
             ro.addWidget(QLabel(f"{jaw}  ({ain})"), 0, col)
             self.lbl_v[ain] = QLabel("—")
-            self.lbl_v[ain].setStyleSheet("color: #555; font-family: Menlo;")
+            self.lbl_v[ain].setStyleSheet("color: #555; font-family: Consolas, 'Courier New', monospace;")
             ro.addWidget(self.lbl_v[ain], 1, col)
             self.lbl_i[ain] = QLabel("—")
             self.lbl_i[ain].setFont(mono)
@@ -212,7 +212,7 @@ class CurrentTab(QWidget):
             if ch_data is None:
                 # WAVEFORM profile: log amps not sampled this window.
                 self.lbl_v[ain].setText("—  (Waveform mode)")
-                self.lbl_v[ain].setStyleSheet("color: #aaa; font-family: Menlo;")
+                self.lbl_v[ain].setStyleSheet("color: #aaa; font-family: Consolas, 'Courier New', monospace;")
                 self.lbl_i[ain].setText("—  (Waveform mode)")
                 self.lbl_i[ain].setStyleSheet("color: #aaa; font-weight: bold;")
                 currents[ain] = float("nan")
@@ -222,7 +222,7 @@ class CurrentTab(QWidget):
             I = voltage_to_current(V, v1nA, v1mA)
             currents[ain] = I
             self.lbl_v[ain].setText(f"{V:6.3f} V")
-            self.lbl_v[ain].setStyleSheet("color: #555; font-family: Menlo;")
+            self.lbl_v[ain].setStyleSheet("color: #555; font-family: Consolas, 'Courier New', monospace;")
             self.lbl_i[ain].setText(format_current(I))
             self.lbl_i[ain].setStyleSheet("color: #1a7a1a; font-weight: bold;")
             self.buffers[ain].append(t, I)

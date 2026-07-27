@@ -205,9 +205,9 @@ class AmpTab(QWidget):
         ro.setSpacing(1)
         ro.setContentsMargins(6, 4, 6, 4)
 
-        mono = QFont("Menlo", 13)
+        mono = QFont("Consolas", 13)
         mono.setBold(True)
-        small = QFont("Menlo", 9)
+        small = QFont("Consolas", 9)
 
         ro.addWidget(QLabel(""), 0, 0)
 
@@ -276,7 +276,7 @@ class AmpTab(QWidget):
         rawg = QGridLayout(raw_box)
         rawg.setSpacing(1)
         rawg.setContentsMargins(6, 4, 6, 4)
-        rawmono = QFont("Menlo", 11)
+        rawmono = QFont("Consolas", 11)
         rawmono.setBold(True)
 
         # Column 0: signal-type row labels.  One column per amplifier after that.

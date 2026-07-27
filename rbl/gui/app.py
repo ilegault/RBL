@@ -287,7 +287,7 @@ class MainWindow(QMainWindow):
 def main():
     import os
     logging.basicConfig(
-        level=logging.DEBUG,
+        level=logging.INFO,
         format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
         handlers=[logging.StreamHandler(sys.stderr)],
     )

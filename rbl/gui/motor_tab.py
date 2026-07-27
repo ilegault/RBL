@@ -685,7 +685,7 @@ class MotorTab(QWidget):
         cons = QVBoxLayout(cons_box)
         self.console = QTextEdit()
         self.console.setReadOnly(True)
-        self.console.setFont(QFont("Menlo", 9))
+        self.console.setFont(QFont("Consolas", 9))
         cons.addWidget(self.console, stretch=1)
         manual_row = QHBoxLayout()
         self.manual_cmd = HistoryLineEdit()

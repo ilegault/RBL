@@ -102,10 +102,10 @@ class ChannelPanel(QGroupBox):
 
     SHAPES = ["Sine", "Triangle", "Square", "Pulse", "DC"]
 
-    def __init__(self, label: str, parent=None, start_phase_default: float = 0.0):
+    def __init__(self, label: str, parent=None, phase_default: float = 0.0):
         super().__init__(label, parent)
         self._label = label
-        self._start_phase_default = start_phase_default
+        self._phase_default = phase_default
         self._setup_ui()
 
     def _setup_ui(self):
@@ -174,11 +174,12 @@ class ChannelPanel(QGroupBox):
         offset_row.addWidget(QLabel("V"))
         form.addRow(self.lbl_offset, offset_row)
 
-        # Phase
+        # Phase — 0° for X+/Y+, 180° for X-/Y- (push-pull differential drive).
+        # This value is sent via both the :APPLy command and :PHASe:SYNChronize.
         self.spn_phase = QDoubleSpinBox()
         self.spn_phase.setRange(-360.0, 360.0)
-        self.spn_phase.setValue(0.0)
-        self.spn_phase.setDecimals(2)
+        self.spn_phase.setValue(self._phase_default)
+        self.spn_phase.setDecimals(1)
         self.spn_phase.setMinimumWidth(80)
         self.spn_phase.setMaximumWidth(110)
         self.lbl_phase = QLabel("Phase:")
@@ -188,38 +189,6 @@ class ChannelPanel(QGroupBox):
         phase_row.addWidget(self.spn_phase, stretch=1)
         phase_row.addWidget(QLabel("°"))
         form.addRow(self.lbl_phase, phase_row)
-
-        # Start Phase — the waveform phase at the moment of :PHASe:SYNChronize.
-        # Default:  0° for X+/Y+ channels,  180° for X-/Y- channels.
-        # Setting X- = 180° and Y- = 180° produces differential (push-pull) drive:
-        # when X+ is at its positive peak, X- is at its negative peak, giving the
-        # full plate-to-plate voltage swing without a DC imbalance on either plate.
-        # This value is LATCHED by the next Align Phase call; changing it while
-        # outputs are running has no effect until the next Apply All.
-        self.spn_start_phase = QDoubleSpinBox()
-        self.spn_start_phase.setRange(0.0, 360.0)
-        self.spn_start_phase.setValue(self._start_phase_default)
-        self.spn_start_phase.setDecimals(1)
-        self.spn_start_phase.setMinimumWidth(80)
-        self.spn_start_phase.setMaximumWidth(110)
-        self.spn_start_phase.setToolTip(
-            "Waveform start phase (°). Applied by the next Align Phase\n"
-            "(:PHASe:SYNChronize) — does not reposition a running waveform.\n\n"
-            "Recommended defaults:\n"
-            "  X+ (Gen A Ch 1)  →  0°\n"
-            "  X- (Gen A Ch 2)  →  180°   ← anti-phase for push-pull drive\n"
-            "  Y+ (Gen B Ch 1)  →  0°\n"
-            "  Y- (Gen B Ch 2)  →  180°   ← anti-phase for push-pull drive\n\n"
-            "With X+ = 0° and X- = 180°, the two X plates are always at\n"
-            "opposite extremes, giving the full differential swing without\n"
-            "a DC imbalance on either plate."
-        )
-        start_phase_row = QHBoxLayout()
-        start_phase_row.setContentsMargins(0, 0, 0, 0)
-        start_phase_row.setSpacing(4)
-        start_phase_row.addWidget(self.spn_start_phase, stretch=1)
-        start_phase_row.addWidget(QLabel("°"))
-        form.addRow("Start Phase:", start_phase_row)
 
         # Load
         self.le_load = QLineEdit("INFinity")
@@ -262,7 +231,7 @@ class ChannelPanel(QGroupBox):
         self.lbl_readback = QLabel("—")
         self.lbl_readback.setWordWrap(True)
         self.lbl_readback.setStyleSheet(
-            "font-family: Menlo, monospace; font-size: 10px; color: #444;"
+            "font-family: Consolas, 'Courier New', monospace; font-size: 10px; color: #444;"
         )
         layout.addWidget(self.lbl_readback)
         layout.addStretch()
@@ -328,17 +297,18 @@ class ChannelPanel(QGroupBox):
     def set_connected(self, on: bool):
         for w in (self.btn_apply, self.btn_output, self.spn_freq,
                   self.spn_amp, self.spn_offset, self.spn_phase,
-                  self.spn_start_phase, self.le_load, self.cbo_shape):
+                  self.le_load, self.cbo_shape):
             w.setEnabled(on)
 
     def get_params(self) -> dict:
+        phase = self.spn_phase.value()
         return {
             "shape":       self.cbo_shape.currentText(),
             "freq":        self.spn_freq.value(),
             "amp":         self.spn_amp.value(),
             "offset":      self.spn_offset.value(),
-            "phase":       self.spn_phase.value(),
-            "start_phase": self.spn_start_phase.value(),
+            "phase":       phase,
+            "start_phase": phase,
             "load":        self.le_load.text().strip() or "INFinity",
             "output":      self.btn_output.isChecked(),
         }
@@ -503,7 +473,7 @@ class FuncGenTab(QWidget):
         _START_PHASE_DEFAULTS = {"A1": 0.0, "A2": 180.0, "B1": 0.0, "B2": 180.0}
         positions = {"A1": (0, 0), "A2": (0, 1), "B1": (1, 0), "B2": (1, 1)}
         for key, title in panel_labels.items():
-            p = ChannelPanel(title, self, start_phase_default=_START_PHASE_DEFAULTS[key])
+            p = ChannelPanel(title, self, phase_default=_START_PHASE_DEFAULTS[key])
             gen_letter = key[0]
             ch_num     = int(key[1])
             p.btn_apply.clicked.connect(
@@ -560,7 +530,7 @@ class FuncGenTab(QWidget):
 
         self.scpi_log = QTextEdit()
         self.scpi_log.setReadOnly(True)
-        self.scpi_log.setFont(QFont("Menlo", 9))
+        self.scpi_log.setFont(QFont("Consolas", 9))
         scpi_vbox.addWidget(self.scpi_log, stretch=1)
 
         self._set_scpi_enabled(False)
