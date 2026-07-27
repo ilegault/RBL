@@ -384,7 +384,7 @@ class AmpTab(QWidget):
         monitors_row = QHBoxLayout()
         monitors_row.setSpacing(8)
         monitors_row.addWidget(ro_box)
-        # monitors_row.addWidget(raw_box)
+        monitors_row.addWidget(raw_box)
 
         upper_row = QHBoxLayout()
         upper_row.setSpacing(8)

@@ -115,7 +115,7 @@ class TestCurrentTabIgnoresAmps:
 
     def test_centering_still_works(self, cur):
         cur._on_reading(1.0, FULL_READING)
-        assert "+0.000" in cur.lbl_xc.text()
+        assert abs(cur.beam_indicator._x) < 1e-9
 
 
 class TestBothTabsShareOneReading:

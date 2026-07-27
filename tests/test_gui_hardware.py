@@ -246,13 +246,12 @@ class TestCurrentTab:
 
     def test_balanced_beam_reads_zero_imbalance(self, current):
         current._on_reading(1.0, {"AIN0": 3.0, "AIN1": 3.0, "AIN2": 3.0, "AIN3": 3.0})
-        assert "+0.000" in current.lbl_xc.text()
+        assert abs(current.beam_indicator._x) < 1e-9
 
     def test_imbalanced_beam_positive(self, current):
         # X+ (AIN0) larger than X- (AIN1) -> positive imbalance
         current._on_reading(1.0, {"AIN0": 4.0, "AIN1": 3.0, "AIN2": 3.0, "AIN3": 3.0})
-        txt = current.lbl_xc.text()
-        assert txt.startswith("X imbalance: +") and "+0.000" not in txt
+        assert current.beam_indicator._x > 0
 
     def test_starts_in_live_mode(self, current):
         assert current._is_live is True
