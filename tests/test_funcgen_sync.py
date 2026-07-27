@@ -35,8 +35,9 @@ def qapp():
 def tab_and_mgr(qapp):
     """A FuncGenTab wired to two mocked generators sharing one call recorder."""
     from rbl.gui.funcgen_tab import FuncGenTab
+    from rbl.state.beamline import Beamline
 
-    tab = FuncGenTab()
+    tab = FuncGenTab(Beamline())
 
     # One manager mock records the ordering of calls across BOTH units:
     # every call to mgr.A.* / mgr.B.* lands in mgr.mock_calls in order.

@@ -13,8 +13,6 @@ Safety rules enforced here:
     disabled automatically (instrument retains state after app exits).
 """
 import logging
-import os
-import sys
 import time
 
 log = logging.getLogger(__name__)
@@ -272,17 +270,44 @@ class ChannelPanel(QGroupBox):
 
 # ─── Top-level tab widget ─────────────────────────────────────────────────────
 
+class _GenProxy:
+    """dict-like view onto Beamline.dg_a / Beamline.dg_b.
+
+    Beamline owns the two DG1022Z instances (constructed at connect time,
+    when their VISA resource string is known); this lets the many existing
+    self._gen["A"] / self._gen[letter] = g call sites below keep working
+    unchanged while FuncGenTab itself holds no driver reference of its own.
+    """
+
+    def __init__(self, beamline):
+        self._beamline = beamline
+
+    def __getitem__(self, letter):
+        return self._beamline.dg_a if letter == "A" else self._beamline.dg_b
+
+    def __setitem__(self, letter, value):
+        if letter == "A":
+            self._beamline.dg_a = value
+        else:
+            self._beamline.dg_b = value
+
+    def values(self):
+        return [self._beamline.dg_a, self._beamline.dg_b]
+
+
 class FuncGenTab(QWidget):
     """The 'Function Generators' outer tab."""
 
     # Poll read-back at 500 ms.  The timer is READ-ONLY — it never writes.
     _POLL_INTERVAL_MS = 500
 
-    def __init__(self, parent=None):
+    def __init__(self, beamline, parent=None):
         super().__init__(parent)
 
-        # Driver instances (None until connected)
-        self._gen: dict[str, DG1022Z | None] = {"A": None, "B": None}
+        # Driver instances live on Beamline (None until connected); this tab
+        # accesses them through a dict-like proxy, not a dict of its own.
+        self.beamline = beamline
+        self._gen = _GenProxy(beamline)
         self._discovered: list[dict] = []   # last discover() result
         self._config = _load_config()
 
@@ -1081,21 +1106,3 @@ class FuncGenTab(QWidget):
                 except Exception:
                     pass
                 self._gen[letter] = None
-
-
-# ---- Standalone smoke test ---------------------------------------------------
-
-if __name__ == "__main__":
-    # Use offscreen platform when no display is available (CI / headless).
-    # Must be set before QApplication is created (Qt reads it at startup).
-    if "DISPLAY" not in os.environ and "QT_QPA_PLATFORM" not in os.environ:
-        os.environ["QT_QPA_PLATFORM"] = "offscreen"
-
-    from PySide6.QtWidgets import QApplication
-    app = QApplication(sys.argv)
-    w = FuncGenTab()
-    # Print [OK] right after construction so headless runs capture it.
-    print("[OK] funcgen_tab: constructed")
-    w.resize(1000, 800)
-    w.show()
-    sys.exit(app.exec())

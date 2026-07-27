@@ -1,19 +1,31 @@
 """
 beamline.py
-Beamline: the single place live values get converted from raw volts/counts
-into physical units and published as typed snapshots.
+Beamline: the single owner of every instrument (LabJack T7, Galil DMC-4103,
+two DG1022Z function generators) and the single place live values get
+converted from raw volts/counts into physical units and published as typed
+snapshots.
 
-Today this is fed by the same raw data each tab already receives (LabJack
-stream windows, Galil poll snapshots) — device ownership itself moves here in
-a later phase. The point of this phase is that the conversion happens ONCE,
-here, tested without Qt, instead of once per consuming tab.
+No QWidget holds a driver instance or is responsible for its lifecycle;
+tabs reach the driver objects through a thin delegating property/proxy so
+their existing call sites don't change, but construction and final teardown
+happen here, once.
 """
+import atexit
+import time
+
 from PySide6.QtCore import QObject, Signal
 
 from rbl.config import hardware_config as SC
+from rbl.config.labjack_stream_config import (
+    DEFAULT_PROFILE, STREAM_PROFILES, DEFAULT_SINGLE_CHANNEL,
+    SINGLE_CHANNEL_CHOICES, is_single_channel,
+)
 from rbl.hardware.current_monitor import voltage_to_current
 from rbl.hardware.amp_monitor import monitor_to_kv, monitor_to_ma
 from rbl.hardware import beam_reconstruction as BR
+from rbl.hardware.labjack_driver import LabJackT7
+from rbl.hardware.labjack_stream_worker import LabJackStreamWorker
+from rbl.hardware.galil_driver import GalilController
 from rbl.state.snapshots import (
     AxisSnapshot, MotorState, ChannelSnapshot, FuncGenState,
     LogAmpState, AmpChannelSnapshot, AmpState,
@@ -27,6 +39,15 @@ class Beamline(QObject):
     funcgens_changed = Signal(object)   # FuncGenState
     command_failed   = Signal(str, str)  # subsystem, message
 
+    # LabJack connection lifecycle. Re-emitted here (rather than reaching into
+    # widgets directly) so this class stays Qt-signal-only, no GUI knowledge.
+    labjack_connected    = Signal(str)    # serial
+    labjack_disconnected_evt = Signal()
+    window_ready         = Signal(dict)   # re-emitted stream payload, for tabs
+                                           # still rendering it directly
+    stream_error         = Signal(str)
+    profile_changed      = Signal(str)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         # Last-seen jaw edges (SIGNED mm) and log-amp currents (Amps), cached
@@ -34,6 +55,39 @@ class Beamline(QObject):
         # size the caller currently has selected, without re-deriving them.
         self._jaw_edges_mm: dict[str, float] = {}
         self._log_amp_currents: dict[str, float] = {}
+
+        # ── LabJack T7 + stream worker ──────────────────────────────────────
+        #
+        # ONE physical T7 -> ONE LabJackT7 instance -> ONE stream worker
+        # reading all channels at high rate. Both the Beam Current tab
+        # (AIN0-3, log amps) and the HV Amplifier tab (AIN6-13, EEL5000
+        # monitors) subscribe to window_ready and filter for their own
+        # channels. Never let a tab open its own handle.
+        self.lj                = LabJackT7()
+        self._lj_worker         = None
+        self.active_profile     = DEFAULT_PROFILE
+        # Target channel for single-channel profiles (SINGLE_FAST/SINGLE_HIRES).
+        # Ignored while a multi-channel profile is active.
+        self.active_channel     = DEFAULT_SINGLE_CHANNEL
+        self._profile_updating  = False   # re-entrancy guard for set_profile / set_channel
+        # Shared monotonic epoch for every stream worker this connection spawns.
+        # Set on connect so payload timestamps stay continuous across the
+        # stop/reconfigure/start cycles that profile and channel switches need.
+        self._stream_t0         = None
+
+        # ── Galil DMC-4103 ───────────────────────────────────────────────────
+        self.galil = GalilController()
+
+        # ── DG1022Z function generators ──────────────────────────────────────
+        # None until FuncGenTab connects them (each needs a VISA resource
+        # string at construction time, unlike Galil/LabJack).
+        self.dg_a = None
+        self.dg_b = None
+
+        # Last-resort safety net: if the process is torn down without a clean
+        # closeEvent (e.g. an unhandled exit), still stop the LabJack stream
+        # and close the handle so the T7 is never left in stream mode.
+        atexit.register(self._emergency_labjack_shutdown)
 
     # ---- Motors ----------------------------------------------------------------
 
@@ -114,10 +168,153 @@ class Beamline(QObject):
             AmpState(connected=True, channels=amp_channels, active_profile=active_profile)
         )
 
-    def labjack_disconnected(self):
+    def _mark_labjack_disconnected(self):
         self._log_amp_currents = {}
         self.logamps_changed.emit(LogAmpState(connected=False))
         self.amps_changed.emit(AmpState(connected=False))
+
+    # ---- LabJack connection lifecycle -------------------------------------------
+
+    def connect_labjack(self, conn_type: str, identifier: str):
+        """Raises on failure; caller (the GUI) shows the error."""
+        if self.lj.connected:
+            return
+        self.lj.connect(conn_type, identifier)
+        serial = self.lj.serial_number()
+        self._stream_t0 = time.monotonic()   # anchor the shared timeline
+        self._start_stream_worker(self.active_profile)
+        self.labjack_connected.emit(serial)
+
+    def _start_stream_worker(self, profile_name: str):
+        """Create and start a stream worker for *profile_name*.
+
+        For single-channel profiles the current channel target is passed as
+        the override. Caller is responsible for stopping any existing worker
+        first.
+        """
+        override = self.active_channel if is_single_channel(profile_name) else None
+        worker = LabJackStreamWorker(
+            self.lj.handle, profile_name, override, t0=self._stream_t0
+        )
+        worker.window_ready.connect(self._on_stream_window)
+        worker.error.connect(self._on_stream_error)
+        worker.start()
+        self._lj_worker = worker
+
+    def _on_stream_window(self, payload: dict):
+        self.ingest_labjack_window(payload, active_profile=self.active_profile)
+        self.window_ready.emit(payload)
+
+    def _on_stream_error(self, msg: str):
+        # Tabs each show their own warning box (via stream_error); we tear
+        # the connection down the same way a GUI-initiated disconnect would.
+        self.disconnect_labjack()
+        self.stream_error.emit(msg)
+
+    def set_stream_profile(self, profile_name: str):
+        """Stop the running stream, reconfigure, and restart with a new profile.
+
+        Hardware constraint: the T7 scan list cannot be changed mid-stream.
+        A full eStreamStop -> reconfigure -> eStreamStart cycle is required.
+        This is user-driven and takes ~tens of ms — never call mid-capture.
+        """
+        if self._profile_updating:
+            return   # ignore re-entrant call while a switch is in progress
+        if profile_name not in STREAM_PROFILES:
+            return
+
+        # Remember the request even while disconnected so it takes effect on
+        # the next connect (the stream worker is started from active_profile).
+        changed = (profile_name != self.active_profile)
+        self.active_profile = profile_name
+        if not self.lj.connected or self._lj_worker is None:
+            return
+        if not changed:
+            return
+
+        self._profile_updating = True
+        try:
+            self._restart_stream_worker(profile_name)
+            self.profile_changed.emit(profile_name)
+        finally:
+            self._profile_updating = False
+
+    def set_stream_channel(self, ain_name: str):
+        """Change which channel a single-channel profile streams.
+
+        No-op unless a single-channel profile is active. Like a profile
+        switch, changing the scan list requires a full stop -> reconfigure ->
+        start cycle (the T7 cannot change its scan list mid-stream).
+        """
+        if self._profile_updating:
+            return
+        if ain_name not in SINGLE_CHANNEL_CHOICES:
+            return   # not a valid single-channel target
+
+        # Remember the target regardless of the active profile so a later
+        # switch to a single-channel profile starts on the channel picked.
+        changed = (ain_name != self.active_channel)
+        self.active_channel = ain_name
+        if not changed:
+            return
+        if not self.lj.connected or self._lj_worker is None:
+            return   # remembered; applied when a single-channel profile starts
+        if not is_single_channel(self.active_profile):
+            return   # remembered; the live scan list is fixed in multi-channel mode
+
+        self._profile_updating = True
+        try:
+            self._restart_stream_worker(self.active_profile)
+        finally:
+            self._profile_updating = False
+
+    def _restart_stream_worker(self, profile_name: str):
+        """Stop the running worker (if any) and start a fresh one.
+
+        Hardware constraint: the T7 scan list cannot be changed mid-stream, so
+        both profile switches and single-channel target changes go through
+        this stop -> reconfigure -> start cycle. Callers hold _profile_updating.
+        """
+        if self._lj_worker is not None:
+            self._lj_worker.stop()
+            self._lj_worker.wait(5000)
+            self._lj_worker = None
+        self._start_stream_worker(profile_name)
+
+    def disconnect_labjack(self):
+        # Stop the stream before closing the handle (hardware order matters).
+        if self._lj_worker is not None:
+            self._lj_worker.stop()
+            if not self._lj_worker.wait(3000):
+                # The drain thread did not exit in time (e.g. blocked on a
+                # slow eStreamRead). Fall through anyway: LabJackT7.disconnect()
+                # force-stops the stream on the handle before closing it, so
+                # the device is never left streaming even in this degraded case.
+                pass
+            self._lj_worker = None
+        self._stream_t0 = None
+        self.lj.disconnect()   # force-stops the stream, then closes the handle
+        self._mark_labjack_disconnected()
+        self.labjack_disconnected_evt.emit()
+
+    def _emergency_labjack_shutdown(self):
+        """atexit safety net — never leave the T7 in stream mode.
+
+        Runs at interpreter exit for any path that skipped shutdown(). It must
+        not raise; a best-effort stream stop + handle close is all that matters.
+        """
+        try:
+            if self._lj_worker is not None:
+                self._lj_worker.stop()
+                self._lj_worker.wait(2000)
+                self._lj_worker = None
+        except Exception:
+            pass
+        try:
+            self.lj.stop_stream()   # explicit, in case the worker never ran finally
+            self.lj.disconnect()
+        except Exception:
+            pass
 
     def reconstruct_beam(self, sigma_mm: float, span_x_mm: float = 0.0,
                           span_y_mm: float = 0.0):
@@ -163,3 +360,34 @@ class Beamline(QObject):
         self.funcgens_changed.emit(FuncGenState(
             connected={"A": False, "B": False}, timebase={}, channels={},
         ))
+
+    # ---- Full shutdown (MainWindow.closeEvent) ----------------------------------
+
+    def shutdown(self):
+        """Full hardware teardown, in the required order, for app close.
+
+        Order matters: stop the LabJack stream before closing its handle
+        (disconnect_labjack already guarantees this), abort Galil motion
+        before disconnecting it, and NEVER disable the function generators'
+        outputs here — they are meant to retain state after the app exits
+        (see FuncGenTab.close_session's docstring; this mirrors it).
+        """
+        try:
+            self.disconnect_labjack()
+        except Exception:
+            pass
+        try:
+            if self.galil.connected:
+                self.galil.abort()
+        except Exception:
+            pass
+        try:
+            self.galil.disconnect()
+        except Exception:
+            pass
+        for gen in (self.dg_a, self.dg_b):
+            if gen is not None:
+                try:
+                    gen.close()
+                except Exception:
+                    pass

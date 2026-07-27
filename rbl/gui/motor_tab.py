@@ -421,9 +421,16 @@ class MotorTab(QWidget):
     # Emitted when the Galil link drops. Feeds Beamline.motors_disconnected.
     motors_disconnected = Signal()
 
-    def __init__(self, parent=None):
+    @property
+    def galil(self) -> GalilController:
+        return self.beamline.galil
+
+    def __init__(self, beamline, parent=None):
         super().__init__(parent)
-        self.galil  = GalilController()
+        # Beamline owns the GalilController; this tab reaches it through a
+        # delegating property (self.galil) so the many existing call sites
+        # below don't need touching. MotorTab does not construct or own it.
+        self.beamline = beamline
         self.worker = None
 
         outer_layout = QHBoxLayout(self)
@@ -688,15 +695,3 @@ class MotorTab(QWidget):
         except Exception:
             pass
         self._do_disconnect()
-
-
-# Standalone smoke test
-if __name__ == "__main__":
-    import sys
-    from PySide6.QtWidgets import QApplication
-    app = QApplication(sys.argv)
-    w = MotorTab()
-    w.resize(900, 700)
-    w.show()
-    print("[OK] motor_tab loads")
-    sys.exit(app.exec())

@@ -217,7 +217,8 @@ class TestMotorTabUnits:
     @pytest.fixture
     def motor(self, qapp):
         from rbl.gui.motor_tab import MotorTab
-        mt = MotorTab()
+        from rbl.state.beamline import Beamline
+        mt = MotorTab(Beamline())
         yield mt
         mt.abort_and_close()
 

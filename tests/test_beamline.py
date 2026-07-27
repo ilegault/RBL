@@ -121,7 +121,9 @@ class TestLabjackIngestion:
         log_received, amp_received = [], []
         beamline.logamps_changed.connect(log_received.append)
         beamline.amps_changed.connect(amp_received.append)
-        beamline.labjack_disconnected()
+        # disconnect_labjack() is safe to call even when never connected
+        # (LabJackT7.disconnect() no-ops without a handle).
+        beamline.disconnect_labjack()
         assert log_received[0].connected is False
         assert amp_received[0].connected is False
 
@@ -195,3 +197,70 @@ class TestFuncgenIngestion:
         state = received[0]
         assert state.connected == {"A": False, "B": False}
         assert state.channels == {}
+
+
+class TestDeviceOwnership:
+    """Beamline is the single owner of every instrument (Phase 7): no QWidget
+    constructs or is responsible for tearing down a driver instance."""
+
+    def test_constructs_galil_and_labjack(self, beamline):
+        from rbl.hardware.galil_driver import GalilController
+        from rbl.hardware.labjack_driver import LabJackT7
+        assert isinstance(beamline.galil, GalilController)
+        assert isinstance(beamline.lj, LabJackT7)
+
+    def test_funcgens_start_unconnected(self, beamline):
+        assert beamline.dg_a is None
+        assert beamline.dg_b is None
+
+    def test_shutdown_is_safe_with_nothing_connected(self, beamline):
+        beamline.shutdown()   # must not raise
+
+    def test_shutdown_disconnects_galil(self, beamline):
+        from unittest.mock import MagicMock
+        beamline.galil = MagicMock(connected=True)
+        beamline.shutdown()
+        beamline.galil.abort.assert_called_once()
+        beamline.galil.disconnect.assert_called_once()
+
+    def test_shutdown_never_disables_funcgen_outputs(self, beamline):
+        """Deliberate: instruments retain state after the app exits."""
+        from unittest.mock import MagicMock
+        beamline.dg_a = MagicMock()
+        beamline.dg_b = MagicMock()
+        beamline.shutdown()
+        beamline.dg_a.close.assert_called_once()
+        beamline.dg_b.close.assert_called_once()
+        beamline.dg_a.output_off.assert_not_called()
+        beamline.dg_b.output_off.assert_not_called()
+
+    def test_shutdown_survives_a_broken_generator(self, beamline):
+        """One generator raising on close() must not stop the other's teardown
+        or the Galil/LabJack teardown that follows in shutdown()."""
+        from unittest.mock import MagicMock
+        beamline.dg_a = MagicMock()
+        beamline.dg_a.close.side_effect = RuntimeError("VISA timeout")
+        beamline.dg_b = MagicMock()
+        beamline.shutdown()   # must not raise
+        beamline.dg_b.close.assert_called_once()
+
+    def test_disconnect_labjack_stops_stream_before_closing_handle(self, beamline):
+        from unittest.mock import MagicMock
+        worker = MagicMock()
+        worker.wait.return_value = True
+        beamline._lj_worker = worker
+        beamline.lj = MagicMock(connected=True)
+        beamline.disconnect_labjack()
+        worker.stop.assert_called_once()
+        beamline.lj.disconnect.assert_called_once()
+        assert beamline._lj_worker is None
+
+    def test_labjack_connected_signal_carries_serial(self, beamline):
+        from unittest.mock import MagicMock
+        received = []
+        beamline.labjack_connected.connect(received.append)
+        beamline.lj = MagicMock(connected=False)
+        beamline.lj.serial_number.return_value = "T7-12345"
+        beamline._start_stream_worker = lambda profile: None   # no real worker
+        beamline.connect_labjack("USB", "ANY")
+        assert received == ["T7-12345"]
