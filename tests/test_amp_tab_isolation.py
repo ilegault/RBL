@@ -71,22 +71,22 @@ class TestAmpTabIgnoresLogAmps:
         assert abs(kv - (-3.0)) < 1e-9
 
     def test_starts_live(self, amp):
-        assert amp._is_live is True
-        assert amp.slider.value() == 10_000
+        assert amp.plot.is_live is True
+        assert amp.plot.slider.value() == 10_000
 
     def test_slider_enters_frozen(self, amp):
         for i in range(5):
             amp._on_reading(float(i), FULL_READING)
-        amp._on_slider_changed(4000)
-        assert amp._is_live is False
-        assert amp._frozen_right_edge is not None
+        amp.plot._on_slider_changed(4000)
+        assert amp.plot.is_live is False
+        assert amp.plot.frozen_right_edge is not None
 
     def test_jump_to_live(self, amp):
         for i in range(5):
             amp._on_reading(float(i), FULL_READING)
-        amp._on_slider_changed(4000)
-        amp._jump_to_live()
-        assert amp._is_live is True
+        amp.plot._on_slider_changed(4000)
+        amp.plot.jump_to_live()
+        assert amp.plot.is_live is True
 
     def test_redraw_empty_is_safe(self, amp):
         amp._redraw_plot()   # must not raise

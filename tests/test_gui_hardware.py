@@ -135,21 +135,21 @@ class TestTabStatePersistence:
     def test_current_tab_live_mode_preserved_after_leaving(self, win, qapp):
         win._on_outer_tab_clicked(1)
         ct = win.current_tab
-        assert ct._is_live is True
+        assert ct.plot.is_live is True
         win._on_outer_tab_clicked(0)
         win._on_outer_tab_clicked(1)
-        assert ct._is_live is True
+        assert ct.plot.is_live is True
 
     def test_frozen_current_tab_stays_frozen_after_navigation(self, win, qapp):
         ct = win.current_tab
         for i in range(5):
             ct._on_reading(float(i), {"AIN0": 3.0, "AIN1": 3.0,
                                       "AIN2": 3.0, "AIN3": 3.0})
-        ct._on_slider_changed(4000)         # enter frozen mode
-        assert ct._is_live is False
+        ct.plot._on_slider_changed(4000)    # enter frozen mode
+        assert ct.plot.is_live is False
         win._on_outer_tab_clicked(0)        # leave current tab
         win._on_outer_tab_clicked(1)        # come back
-        assert ct._is_live is False         # still frozen
+        assert ct.plot.is_live is False      # still frozen
 
 
 # ── MotorTab unit conversions + history ──────────────────────────────────────
@@ -268,16 +268,16 @@ class TestCurrentTab:
         assert abs(est.x) < 1e-6 and abs(est.y) < 1e-6
 
     def test_starts_in_live_mode(self, current):
-        assert current._is_live is True
-        assert current.slider.value() == 10_000
+        assert current.plot.is_live is True
+        assert current.plot.slider.value() == 10_000
 
     def test_drag_slider_left_enters_frozen(self, current):
         for i in range(5):
             current._on_reading(float(i), {"AIN0": 3.0, "AIN1": 3.0,
                                            "AIN2": 3.0, "AIN3": 3.0})
-        current._on_slider_changed(4000)
-        assert current._is_live is False
-        assert current._frozen_right_edge is not None
+        current.plot._on_slider_changed(4000)
+        assert current.plot.is_live is False
+        assert current.plot.frozen_right_edge is not None
         # isVisibleTo ignores whether the (un-shown) tab itself is on screen.
         assert current.btn_jump_live.isVisibleTo(current)
 
@@ -285,14 +285,14 @@ class TestCurrentTab:
         for i in range(5):
             current._on_reading(float(i), {"AIN0": 3.0, "AIN1": 3.0,
                                            "AIN2": 3.0, "AIN3": 3.0})
-        current._on_slider_changed(4000)
-        current._jump_to_live()
-        assert current._is_live is True
-        assert current.slider.value() == 10_000
+        current.plot._on_slider_changed(4000)
+        current.plot.jump_to_live()
+        assert current.plot.is_live is True
+        assert current.plot.slider.value() == 10_000
 
     def test_slider_far_right_is_live(self, current):
-        current._on_slider_changed(9_900)
-        assert current._is_live is True
+        current.plot._on_slider_changed(9_900)
+        assert current.plot.is_live is True
 
     def test_redraw_does_not_raise_when_empty(self, current):
         current._redraw_plot()   # no data yet -> must be a safe no-op

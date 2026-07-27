@@ -13,18 +13,11 @@ Plot navigation (from TDS-T8 live_plot mechanism):
   - Buffer holds ~1 hour of history (BUFFER_CAPACITY = 36 000 @ 10 Hz).
 """
 import time
-from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel,
-    QPushButton, QMessageBox, QSizePolicy,
-    QSlider,
+    QMessageBox, QPushButton,
 )
-
-import matplotlib
-matplotlib.use("QtAgg")
-from matplotlib.figure import Figure
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 
 from rbl.hardware.labjack_driver import LJM_AVAILABLE
 from rbl.hardware.current_monitor import (
@@ -33,6 +26,7 @@ from rbl.hardware.current_monitor import (
 from rbl.config import hardware_config as SC
 from rbl.gui.widgets.connection_bar import LabJackPanel
 from rbl.gui.widgets.beam_indicator import BeamPositionIndicator
+from rbl.gui.widgets.live_plot import LivePlotPanel
 from rbl.gui import theme
 
 
@@ -43,7 +37,9 @@ class CurrentTab(QWidget):
 
     BUFFER_CAPACITY = 36_000   # ~1 hour at 10 Hz
     WINDOW_SECONDS  = 120      # default 2-minute viewport
-    _TIME_STEPS     = [3600, 1800, 900, 600, 300, 120, 60, 30, 15, 5, 1]
+    # The log-amp tab never zooms below 1 s: log amps only carry a 10 Hz mean
+    # voltage (see _on_window), so a sub-second window has nothing to show.
+    MIN_WINDOW_SECONDS = 1.0
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -52,11 +48,6 @@ class CurrentTab(QWidget):
         self._t0 = time.monotonic()   # reset on labjack_connected
         self.buffers = {name: RollingBuffer(self.BUFFER_CAPACITY)
                         for name in SC.LABJACK_CHANNEL_MAP.keys()}
-
-        # Plot state
-        self._is_live           = True
-        self._frozen_right_edge = None   # float: elapsed-seconds anchor
-        self._window_seconds    = float(self.WINDOW_SECONDS)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -103,6 +94,20 @@ class CurrentTab(QWidget):
         plot_box = QGroupBox("Live Currents")
         pv = QVBoxLayout(plot_box)
 
+        # Shared history slider + LIVE/FROZEN state machine + zoom-step list.
+        # Redraw at 5 Hz max.
+        self.plot = LivePlotPanel(
+            window_seconds=self.WINDOW_SECONDS,
+            live_edge_provider=self._live_edge,
+            span_provider=self._buffer_span,
+            min_window_seconds=self.MIN_WINDOW_SECONDS,
+            figsize=(7, 3),
+            redraw_interval_ms=200,
+        )
+        self.plot.navigation_changed.connect(self._on_navigation_changed)
+        self.plot.zoom_changed.connect(self._on_zoom_changed)
+        self.plot.redraw_timer.timeout.connect(self._redraw_plot)
+
         # Plot mode indicator + time-window controls + jump-to-live button
         nav_row = QHBoxLayout()
         self.lbl_mode = QLabel("● LIVE  (last 120 s)")
@@ -117,12 +122,12 @@ class CurrentTab(QWidget):
         btn_time_out.setFixedWidth(28)
         btn_time_out.setToolTip("Increase time window (zoom out)")
         btn_time_out.setStyleSheet("font-weight: bold; padding: 1px 4px;")
-        btn_time_out.clicked.connect(self._zoom_time_out)
+        btn_time_out.clicked.connect(self.plot.zoom_out)
         btn_time_in = QPushButton("＋")
         btn_time_in.setFixedWidth(28)
         btn_time_in.setToolTip("Decrease time window (zoom in)")
         btn_time_in.setStyleSheet("font-weight: bold; padding: 1px 4px;")
-        btn_time_in.clicked.connect(self._zoom_time_in)
+        btn_time_in.clicked.connect(self.plot.zoom_in)
         nav_row.addWidget(btn_time_out)
         nav_row.addWidget(btn_time_in)
         nav_row.addStretch()
@@ -133,14 +138,11 @@ class CurrentTab(QWidget):
             " padding:2px 8px; }"
             "QPushButton:hover { background:#0063b1; }"
         )
-        self.btn_jump_live.clicked.connect(self._jump_to_live)
+        self.btn_jump_live.clicked.connect(self.plot.jump_to_live)
         nav_row.addWidget(self.btn_jump_live)
         pv.addLayout(nav_row)
 
-        self.fig    = Figure(figsize=(7, 3))
-        self.canvas = FigureCanvasQTAgg(self.fig)
-        self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.ax = self.fig.add_subplot(111)
+        self.ax = self.plot.fig.add_subplot(111)
         self.ax.set_xlabel("Time (s)")
         # Scale (ticks + label) on the RIGHT: the live edge and newest values
         # arrive from the right, so the axis reads next to where the trace ends.
@@ -153,7 +155,7 @@ class CurrentTab(QWidget):
         for ain, jaw in SC.LABJACK_CHANNEL_MAP.items():
             line, = self.ax.plot([], [], color=theme.JAW_COLORS.get(jaw, "k"), lw=1.5)
             self._lines[ain] = line
-        self.fig.tight_layout()
+        self.plot.fig.tight_layout()
 
         # Qt legend panel (right of canvas — avoids matplotlib layout fighting)
         _legend_w = QWidget()
@@ -182,36 +184,14 @@ class CurrentTab(QWidget):
         _content_row = QHBoxLayout()
         _content_row.setSpacing(4)
         _content_row.addWidget(self.beam_indicator)
-        _content_row.addWidget(self.canvas, stretch=1)
+        _content_row.addWidget(self.plot.canvas, stretch=1)
         _content_row.addWidget(_legend_w)
         pv.addLayout(_content_row, stretch=1)
-
-        # History slider: 0 = oldest, 10000 = live (rightmost = newest)
-        slider_row = QHBoxLayout()
-        lbl_hist = QLabel("◀ History")
-        lbl_hist.setStyleSheet("color: #555; font-size: 10px;")
-        self.slider = QSlider(Qt.Orientation.Horizontal)
-        self.slider.setRange(0, 10_000)
-        self.slider.setValue(10_000)   # start in live mode
-        self.slider.setTickInterval(1_000)
-        self.slider.setToolTip(
-            "Drag left to browse history. "
-            "Drag to far right to return to LIVE mode."
-        )
-        self.slider.valueChanged.connect(self._on_slider_changed)
-        lbl_live = QLabel("Live ▶")
-        lbl_live.setStyleSheet("color: #555; font-size: 10px;")
-        slider_row.addWidget(lbl_hist)
-        slider_row.addWidget(self.slider, stretch=1)
-        slider_row.addWidget(lbl_live)
-        pv.addLayout(slider_row)
+        pv.addLayout(self.plot.slider_row)
 
         layout.addWidget(plot_box, stretch=1)
 
-        # Redraw at 5 Hz max
-        self._redraw_timer = QTimer(self)
-        self._redraw_timer.setInterval(200)
-        self._redraw_timer.timeout.connect(self._redraw_plot)
+        self._on_navigation_changed()   # initial "● LIVE" label
 
         if not LJM_AVAILABLE:
             self.lj_panel.set_enabled(False)
@@ -222,11 +202,11 @@ class CurrentTab(QWidget):
         """MainWindow calls this after the shared T7 opens."""
         self._t0 = time.monotonic()
         self.lj_panel.set_connected(True, serial)
-        self._redraw_timer.start()
+        self.plot.start()
 
     def on_labjack_disconnected(self):
         """MainWindow calls this after the shared T7 closes."""
-        self._redraw_timer.stop()
+        self.plot.stop()
         self.lj_panel.set_connected(False)
 
     # ---- Slots ---------------------------------------------------------------
@@ -278,10 +258,8 @@ class CurrentTab(QWidget):
 
         self.beam_indicator.set_currents(self._by_jaw(currents))
 
-        if self._is_live:
-            self.slider.blockSignals(True)
-            self.slider.setValue(10_000)
-            self.slider.blockSignals(False)
+        if self.plot.is_live:
+            self.plot.force_to_live()
 
     def _on_reading(self, t: float, values: dict):
         v1nA   = SC.LOG_AMP_V_AT_1NA
@@ -303,121 +281,87 @@ class CurrentTab(QWidget):
         self.beam_indicator.set_currents(self._by_jaw(currents))
 
         # Auto-advance slider to live edge when in live mode
-        if self._is_live:
-            self.slider.blockSignals(True)
-            self.slider.setValue(10_000)
-            self.slider.blockSignals(False)
+        if self.plot.is_live:
+            self.plot.force_to_live()
 
     def _on_error(self, msg: str):
         # MainWindow owns teardown; we only surface the message.
         QMessageBox.warning(self, "LabJack poll error", msg)
 
-    # ---- Slider / navigation -------------------------------------------------
+    # ---- Buffer span (LivePlotPanel data callbacks) ---------------------------
 
-    def _on_slider_changed(self, val: int):
-        if val >= 9_800:
-            self._enter_live_mode()
-        else:
-            self._enter_frozen_mode(val)
+    def _live_edge(self):
+        """Newest timestamp available across all channels, or None.
 
-    def _enter_live_mode(self):
-        self._is_live = True
-        self._frozen_right_edge = None
-        w = self._window_seconds
+        Cheap by design (per-buffer O(1) `.latest()`): called on every redraw
+        tick while LIVE.
+        """
+        ref_t = None
+        for buf in self.buffers.values():
+            t, _ = buf.latest()
+            if not (t != t):   # not NaN
+                if ref_t is None or t > ref_t:
+                    ref_t = t
+        return ref_t
+
+    def _buffer_span(self):
+        """(t_oldest, t_newest) across the buffers, or None.
+
+        Only called when a slider drag enters FROZEN mode, so the full
+        snapshot/sort cost here is fine.
+        """
+        t_arr, _ = self.buffers[next(iter(self.buffers))].snapshot()
+        if len(t_arr) < 2:
+            return None
+        return (float(t_arr[0]), float(t_arr[-1]))
+
+    # ---- Mode label ------------------------------------------------------------
+    #
+    # Formatting stays here (not in LivePlotPanel) because the two tabs word
+    # LIVE/FROZEN status slightly differently. Two callbacks rather than one,
+    # matching a pre-existing distinction: right after a slider drag the
+    # frozen label shows the elapsed-time range, but a subsequent zoom while
+    # still frozen shows only the window width, not the range.
+
+    def _set_live_label(self):
+        w = self.plot.window_seconds
         label = f"{int(w)} s" if w >= 1 else f"{int(w * 1000)} ms"
         self.lbl_mode.setText(f"● LIVE  (last {label})")
         self.lbl_mode.setStyleSheet(
             theme.status_label(theme.OK) + " padding: 2px 6px;"
         )
-        self.btn_jump_live.setVisible(False)
 
-    def _enter_frozen_mode(self, slider_val: int):
-        # Compute right-edge from slider position across full history span
-        t_arr, _ = self.buffers[next(iter(self.buffers))].snapshot()
-        if len(t_arr) < 2:
+    def _on_navigation_changed(self):
+        self.btn_jump_live.setVisible(not self.plot.is_live)
+        if self.plot.is_live:
+            self._set_live_label()
             return
-        t_oldest = float(t_arr[0])
-        t_newest = float(t_arr[-1])
-        span = t_newest - t_oldest
-        if span <= 0:
-            return
-
-        frac = slider_val / 10_000.0
-        self._frozen_right_edge = t_oldest + frac * span
-        self._is_live = False
-
-        import datetime
-        # Show elapsed-time window in the label
-        w_start = max(t_oldest, self._frozen_right_edge - self._window_seconds)
+        span = self._buffer_span()
+        t_oldest = span[0] if span is not None else self.plot.frozen_right_edge
+        w_start = max(t_oldest, self.plot.frozen_right_edge - self.plot.window_seconds)
         self.lbl_mode.setText(
-            f"⏸  Frozen  —  t = [{w_start:+.0f} s … {self._frozen_right_edge:+.0f} s]"
+            f"⏸  Frozen  —  t = [{w_start:+.0f} s … {self.plot.frozen_right_edge:+.0f} s]"
         )
         self.lbl_mode.setStyleSheet(
             "color: #8c6000; font-weight: bold; padding: 2px 6px;"
         )
-        self.btn_jump_live.setVisible(True)
 
-    def _jump_to_live(self):
-        self.slider.setValue(10_000)
-        self._enter_live_mode()
-
-    def _zoom_time_in(self):
-        """Decrease the time window (zoom in on time axis)."""
-        smaller = [s for s in self._TIME_STEPS if s < self._window_seconds]
-        if smaller:
-            self._window_seconds = float(max(smaller))
-        else:
-            self._window_seconds = max(1.0, self._window_seconds / 2)
-        self._update_time_label()
-
-    def _zoom_time_out(self):
-        """Increase the time window (zoom out on time axis)."""
-        larger = [s for s in self._TIME_STEPS if s > self._window_seconds]
-        if larger:
-            self._window_seconds = float(min(larger))
-        else:
-            self._window_seconds = min(3600.0, self._window_seconds * 2)
-        self._update_time_label()
-
-    def _update_time_label(self):
-        w = self._window_seconds
+    def _on_zoom_changed(self):
+        if self.plot.is_live:
+            self._set_live_label()
+            return
+        w = self.plot.window_seconds
         label = f"{int(w)} s" if w >= 1 else f"{int(w * 1000)} ms"
-        if self._is_live:
-            self.lbl_mode.setText(f"● LIVE  (last {label})")
-            self.lbl_mode.setStyleSheet(
-                theme.status_label(theme.OK) + " padding: 2px 6px;"
-            )
-        else:
-            self.lbl_mode.setText(
-                f"⏸  Frozen  —  window {label}"
-            )
+        self.lbl_mode.setText(f"⏸  Frozen  —  window {label}")
 
     # ---- Plot redraw ---------------------------------------------------------
 
     def _redraw_plot(self):
+        window = self.plot.compute_window()
+        if window is None:
+            return
+        t_left, t_right = window
         any_data = False
-
-        # Determine window [t_left, t_right]
-        ref_t  = None
-        t_right = None
-
-        if self._is_live:
-            # Use the latest timestamp available across all channels
-            for buf in self.buffers.values():
-                _, val = buf.latest()
-                t, _ = buf.latest()
-                if not (t != t):   # not NaN
-                    if ref_t is None or t > ref_t:
-                        ref_t = t
-            if ref_t is None:
-                return
-            t_right = ref_t
-        else:
-            t_right = self._frozen_right_edge
-            if t_right is None:
-                return
-
-        t_left = t_right - self._window_seconds
 
         for ain, line in self._lines.items():
             t, v = self.buffers[ain].snapshot()
@@ -439,16 +383,16 @@ class CurrentTab(QWidget):
             any_data = True
 
         if any_data:
-            self.ax.set_xlim(-self._window_seconds, 0)
+            self.ax.set_xlim(-self.plot.window_seconds, 0)
             self.ax.relim()
             self.ax.autoscale_view(scalex=False, scaley=True)
-            self.canvas.draw_idle()
+            self.plot.canvas.draw_idle()
 
     # ---- Owner-callable cleanup ----------------------------------------------
 
     def shutdown(self):
         """MainWindow closes the LabJack itself; we just stop redrawing."""
-        self._redraw_timer.stop()
+        self.plot.stop()
 
 
 # Standalone smoke test

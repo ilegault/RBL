@@ -105,8 +105,8 @@ class TestSingleChannelMode:
 
         # Zoom into the waveform (snapshot mode) and confirm the target line
         # on the current axis actually receives data.
-        tab._window_seconds = 0.05
-        tab._is_live = True
+        tab.plot.window_seconds = 0.05
+        tab.plot.is_live = True
         assert tab._is_snapshot()
         tab._redraw_plot()
         assert len(tab._lines_i["Y-"].get_xdata()) > 0
@@ -146,7 +146,7 @@ class TestApplyAndSnapshot:
         target = SC.AMP_CHANNEL_MAP["X+"]["voltage"]
         tab._on_window(_single_payload("FULL", target, 3.0))
 
-        tab._window_seconds = 120.0
+        tab.plot.window_seconds = 120.0
         assert not tab._is_snapshot()
-        tab._window_seconds = 0.02
+        tab.plot.window_seconds = 0.02
         assert tab._is_snapshot()
