@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget,
-    QVBoxLayout, QTabBar, QStackedWidget, QMessageBox,
+    QVBoxLayout, QTabBar, QStackedWidget, QMessageBox, QScrollArea,
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPalette
@@ -34,6 +34,11 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Right Beam Line DAQ")
         self.resize(1440, 920)
+        # Keep the floor low so the whole app stays compressible in the
+        # horizontal direction; each tab is wrapped in a scroll area (see
+        # _wrap_scroll) so content that no longer fits scrolls instead of
+        # pinning a large minimum window width.
+        self.setMinimumSize(480, 400)
 
         # ── Outer navigation: tab bar + stacked widget ────────────────────────
         outer_widget = QWidget()
@@ -63,10 +68,14 @@ class MainWindow(QMainWindow):
         self.current_tab = CurrentTab(self)
         self.amp_tab     = AmpTab(self)
         self.funcgen_tab = FuncGenTab(self)
-        self._outer_stack.addWidget(self.motor_tab)
-        self._outer_stack.addWidget(self.current_tab)
-        self._outer_stack.addWidget(self.amp_tab)
-        self._outer_stack.addWidget(self.funcgen_tab)
+        # Each page goes inside a scroll area: when the window is narrowed past
+        # what a tab's content can reflow to, a scrollbar appears rather than
+        # forcing the window to stay wide. This is what makes the app
+        # horizontally compressible while keeping every control reachable.
+        self._outer_stack.addWidget(self._wrap_scroll(self.motor_tab))
+        self._outer_stack.addWidget(self._wrap_scroll(self.current_tab))
+        self._outer_stack.addWidget(self._wrap_scroll(self.amp_tab))
+        self._outer_stack.addWidget(self._wrap_scroll(self.funcgen_tab))
 
         # ── Shared LabJack T7 ─────────────────────────────────────────────────
         #
@@ -105,6 +114,23 @@ class MainWindow(QMainWindow):
         # Start on Stepper Motors
         self._outer_stack.setCurrentIndex(0)
         self._outer_tabbar.tabBarClicked.connect(self._on_outer_tab_clicked)
+
+    # ── Layout helpers ────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _wrap_scroll(widget: QWidget) -> QScrollArea:
+        """Put *widget* in a resizable scroll area.
+
+        With widgetResizable=True the tab fills the viewport normally; only when
+        the window shrinks below what the tab can reflow to do scrollbars appear.
+        That decouples the window's minimum size from each tab's content width,
+        which is what lets the app be compressed horizontally.
+        """
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setWidget(widget)
+        return scroll
 
     # ── Shared LabJack management ─────────────────────────────────────────────
 

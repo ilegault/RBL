@@ -14,8 +14,8 @@ Plot navigation (from TDS-T8 live_plot mechanism):
 """
 import time
 import math
-from PySide6.QtCore import QTimer, Qt
-from PySide6.QtGui import QFont
+from PySide6.QtCore import QTimer, Qt, QSize, QPointF
+from PySide6.QtGui import QFont, QPainter, QColor, QPen, QBrush
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel,
     QPushButton, QMessageBox, QSizePolicy,
@@ -33,6 +33,120 @@ from rbl.hardware.current_monitor import (
 )
 from rbl.config import hardware_config as SC
 from labjack_panel import LabJackPanel
+
+
+# ─── Beam-position indicator ───────────────────────────────────────────────────
+
+class BeamPositionIndicator(QWidget):
+    """A small square frame with a dot marking the estimated beam position.
+
+    The dot is placed from the left/right (X) and top/bottom (Y) log-amp current
+    imbalance: more current collected on a jaw pulls the estimate toward that
+    jaw.  Each axis takes the ``beam_centering`` metric in [-1, 1] (0 = centred,
+    +1 = fully on the '+' jaw, -1 = fully on the '-' jaw).  This is only a coarse
+    guess — the four slit jaws sample the beam tails, not its centroid — so it is
+    labelled as an estimate, not a measurement.
+    """
+
+    # Jaw colours reused from the plot / readouts for a consistent palette.
+    _COL_XP = QColor("#e74c3c")
+    _COL_XM = QColor("#3498db")
+    _COL_YP = QColor("#c47a00")
+    _COL_YM = QColor("#1a7a1a")
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._x = float("nan")   # X imbalance in [-1, 1]  (+ → X+ jaw)
+        self._y = float("nan")   # Y imbalance in [-1, 1]  (+ → Y+ jaw)
+        # Small but shrinkable so the whole app can still be compressed.
+        self.setMinimumSize(80, 80)
+        self.setMaximumSize(200, 200)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setToolTip(
+            "Estimated beam position from the relative log-amp currents.\n"
+            "The dot moves toward whichever jaw is collecting more current."
+        )
+
+    def set_position(self, x: float, y: float):
+        """Update the estimate (values are the per-axis centering metric)."""
+        self._x = x
+        self._y = y
+        self.update()
+
+    def sizeHint(self):
+        return QSize(150, 150)
+
+    # Keep the drawable region square regardless of the box it lands in.
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, w):
+        return w
+
+    @staticmethod
+    def _clamp(v: float) -> float:
+        return -1.0 if v < -1.0 else (1.0 if v > 1.0 else v)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        w = self.width()
+        h = self.height()
+        margin = 16                       # room for the X±/Y± jaw labels
+        side = min(w, h) - 2 * margin
+        if side <= 0:
+            return
+        x0 = (w - side) / 2.0
+        y0 = (h - side) / 2.0
+        cx = x0 + side / 2.0
+        cy = y0 + side / 2.0
+        half = side / 2.0
+
+        # Square aperture frame.
+        p.setBrush(QBrush(QColor("#fafafa")))
+        p.setPen(QPen(QColor("#555"), 1.5))
+        p.drawRect(int(x0), int(y0), int(side), int(side))
+
+        # Centre crosshair.
+        p.setPen(QPen(QColor("#bbb"), 1, Qt.PenStyle.DashLine))
+        p.drawLine(int(x0), int(cy), int(x0 + side), int(cy))
+        p.drawLine(int(cx), int(y0), int(cx), int(y0 + side))
+
+        # Jaw labels around the frame.
+        p.setFont(QFont("Consolas", 8, QFont.Weight.Bold))
+        p.setPen(QPen(self._COL_XM))
+        p.drawText(int(x0 - 14), int(cy + 4), "X-")
+        p.setPen(QPen(self._COL_XP))
+        p.drawText(int(x0 + side + 2), int(cy + 4), "X+")
+        p.setPen(QPen(self._COL_YP))
+        p.drawText(int(cx - 6), int(y0 - 4), "Y+")
+        p.setPen(QPen(self._COL_YM))
+        p.drawText(int(cx - 6), int(y0 + side + 12), "Y-")
+
+        # The beam-position dot.
+        if math.isnan(self._x) or math.isnan(self._y):
+            # No usable signal — draw a faint hollow marker at the centre.
+            p.setPen(QPen(QColor("#bbb"), 1.5))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            r = side * 0.05
+            p.drawEllipse(QPointF(cx, cy), r, r)
+            return
+
+        dx = self._clamp(self._x)
+        dy = self._clamp(self._y)
+        px = cx + dx * half          # +X imbalance → toward the X+ (right) jaw
+        py = cy - dy * half          # +Y imbalance → toward the Y+ (top) jaw
+
+        # Guide lines from centre to the estimate.
+        p.setPen(QPen(QColor("#e07b39"), 1, Qt.PenStyle.DotLine))
+        p.drawLine(QPointF(cx, cy), QPointF(px, py))
+
+        # The dot itself (circle inside the square).
+        r = max(4.0, side * 0.07)
+        p.setPen(QPen(QColor("#a83a00"), 1.5))
+        p.setBrush(QBrush(QColor("#e67e22")))
+        p.drawEllipse(QPointF(px, py), r, r)
 
 
 # ─── The tab widget ───────────────────────────────────────────────────────────
@@ -82,15 +196,25 @@ class CurrentTab(QWidget):
             ro.addWidget(self.lbl_i[ain], 2, col)
 
         # ── Beam-centering indicator ──────────────────────────────────────
-        center_box = QGroupBox("Beam Centering Indicator")
-        center = QHBoxLayout(center_box)
+        center_box = QGroupBox("Beam Position (estimated)")
+        center = QVBoxLayout(center_box)
+        center.setSpacing(4)
+
+        # Circle-in-a-square visual guess of where the beam sits, driven by the
+        # relative log-amp currents.
+        self.beam_indicator = BeamPositionIndicator()
+        center.addWidget(self.beam_indicator, stretch=1,
+                         alignment=Qt.AlignmentFlag.AlignHCenter)
+
         self.lbl_xc = QLabel("X imbalance: —")
         self.lbl_yc = QLabel("Y imbalance: —")
         self.lbl_xc.setFont(mono)
         self.lbl_yc.setFont(mono)
-        center.addWidget(self.lbl_xc)
-        center.addStretch()
-        center.addWidget(self.lbl_yc)
+        imb_row = QHBoxLayout()
+        imb_row.addWidget(self.lbl_xc)
+        imb_row.addStretch()
+        imb_row.addWidget(self.lbl_yc)
+        center.addLayout(imb_row)
 
         # ── Assemble upper section: left (connection + centering) | right (readouts) ──
         left_col = QVBoxLayout()
@@ -133,7 +257,11 @@ class CurrentTab(QWidget):
         self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.ax = self.fig.add_subplot(111)
         self.ax.set_xlabel("Time (s)")
+        # Scale (ticks + label) on the RIGHT: the live edge and newest values
+        # arrive from the right, so the axis reads next to where the trace ends.
         self.ax.set_ylabel("Current (A)")
+        self.ax.yaxis.set_label_position("right")
+        self.ax.yaxis.tick_right()
         self.ax.set_yscale("log")
         self.ax.grid(True, which="both", alpha=0.3)
         self._lines = {}
@@ -142,7 +270,8 @@ class CurrentTab(QWidget):
             line, = self.ax.plot([], [], label=f"{jaw} ({ain})",
                                  color=colors.get(jaw, "k"), lw=1.5)
             self._lines[ain] = line
-        self.ax.legend(loc="upper left", fontsize=8)
+        # Legend on the RIGHT side of the plot, to match the right-hand scale.
+        self.ax.legend(loc="upper right", fontsize=8)
         self.fig.tight_layout()
         pv.addWidget(self.canvas, stretch=1)
 
@@ -231,6 +360,7 @@ class CurrentTab(QWidget):
         ain_xm = next((a for a, j in SC.LABJACK_CHANNEL_MAP.items() if j == "X-"), None)
         ain_yp = next((a for a, j in SC.LABJACK_CHANNEL_MAP.items() if j == "Y+"), None)
         ain_ym = next((a for a, j in SC.LABJACK_CHANNEL_MAP.items() if j == "Y-"), None)
+        xc = yc = float("nan")
         if ain_xp and ain_xm:
             xc = beam_centering(currents.get(ain_xp, float("nan")),
                                 currents.get(ain_xm, float("nan")))
@@ -243,6 +373,7 @@ class CurrentTab(QWidget):
             self.lbl_yc.setText(
                 f"Y imbalance: {yc:+.3f}" if not math.isnan(yc) else "Y imbalance: —"
             )
+        self.beam_indicator.set_position(xc, yc)
 
         if self._is_live:
             self.slider.blockSignals(True)
@@ -270,12 +401,14 @@ class CurrentTab(QWidget):
         ain_xminus = next((a for a, j in SC.LABJACK_CHANNEL_MAP.items() if j == "X-"), None)
         ain_yplus  = next((a for a, j in SC.LABJACK_CHANNEL_MAP.items() if j == "Y+"), None)
         ain_yminus = next((a for a, j in SC.LABJACK_CHANNEL_MAP.items() if j == "Y-"), None)
+        xc = yc = float("nan")
         if ain_xplus and ain_xminus:
             xc = beam_centering(currents[ain_xplus], currents[ain_xminus])
             self.lbl_xc.setText(f"X imbalance: {xc:+.3f}" if not (xc != xc) else "X imbalance: —")
         if ain_yplus and ain_yminus:
             yc = beam_centering(currents[ain_yplus], currents[ain_yminus])
             self.lbl_yc.setText(f"Y imbalance: {yc:+.3f}" if not (yc != yc) else "Y imbalance: —")
+        self.beam_indicator.set_position(xc, yc)
 
         # Auto-advance slider to live edge when in live mode
         if self._is_live:
