@@ -152,6 +152,65 @@ class TestTabStatePersistence:
         assert ct.plot.is_live is False      # still frozen
 
 
+class TestRedrawGating:
+    """The redraw timer is rendering, not data acquisition: it must run only
+    while a tab is both connected AND the one on screen (Phase 5). Switching
+    away must not stop data collection — only painting.
+    """
+
+    def test_current_tab_redraw_only_while_visible(self, win, qapp):
+        ct = win.current_tab
+        win._on_outer_tab_clicked(0)         # start on Motors: current_tab hidden
+        qapp.processEvents()
+        ct.on_labjack_connected("TESTSERIAL")
+        assert not ct.plot.redraw_timer.isActive()   # connected but hidden
+
+        win._on_outer_tab_clicked(1)         # switch to Beam Current
+        qapp.processEvents()
+        assert ct.plot.redraw_timer.isActive()       # now connected AND visible
+
+        win._on_outer_tab_clicked(0)         # leave again
+        qapp.processEvents()
+        assert not ct.plot.redraw_timer.isActive()
+
+    def test_amp_tab_redraw_only_while_visible(self, win, qapp):
+        amp = win.amp_tab
+        win._on_outer_tab_clicked(0)
+        qapp.processEvents()
+        amp.on_labjack_connected("TESTSERIAL")
+        assert not amp.plot.redraw_timer.isActive()
+
+        win._on_outer_tab_clicked(2)         # switch to HV Amplifiers
+        qapp.processEvents()
+        assert amp.plot.redraw_timer.isActive()
+
+        win._on_outer_tab_clicked(0)
+        qapp.processEvents()
+        assert not amp.plot.redraw_timer.isActive()
+
+    def test_disconnect_stops_redraw_even_while_visible(self, win, qapp):
+        ct = win.current_tab
+        win._on_outer_tab_clicked(1)
+        qapp.processEvents()
+        ct.on_labjack_connected("TESTSERIAL")
+        assert ct.plot.redraw_timer.isActive()
+
+        ct.on_labjack_disconnected()
+        assert not ct.plot.redraw_timer.isActive()
+
+    def test_switching_tabs_does_not_stop_funcgen_poll_timer(self, win, qapp):
+        # Poll timers are data acquisition, not rendering — Phase 5 must not
+        # touch them. FuncGenTab's poll timer runs independent of visibility.
+        fg = win.funcgen_tab
+        fg._poll_timer.start()
+        win._on_outer_tab_clicked(0)
+        qapp.processEvents()
+        assert fg._poll_timer.isActive()
+        win._on_outer_tab_clicked(3)
+        qapp.processEvents()
+        assert fg._poll_timer.isActive()
+
+
 # ── MotorTab unit conversions + history ──────────────────────────────────────
 
 class TestMotorTabUnits:

@@ -49,6 +49,12 @@ class CurrentTab(QWidget):
         self.buffers = {name: RollingBuffer(self.BUFFER_CAPACITY)
                         for name in SC.LABJACK_CHANNEL_MAP.keys()}
 
+        # The redraw timer only needs to run when BOTH hold: connected (data
+        # is arriving) and visible (this tab is the one on screen). Buffers
+        # keep filling in the background either way — only painting pauses.
+        self._connected = False
+        self._visible   = False
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
@@ -201,13 +207,39 @@ class CurrentTab(QWidget):
     def on_labjack_connected(self, serial: str):
         """MainWindow calls this after the shared T7 opens."""
         self._t0 = time.monotonic()
+        self._connected = True
         self.lj_panel.set_connected(True, serial)
-        self.plot.start()
+        self._update_redraw_state()
 
     def on_labjack_disconnected(self):
         """MainWindow calls this after the shared T7 closes."""
-        self.plot.stop()
+        self._connected = False
+        self._update_redraw_state()
         self.lj_panel.set_connected(False)
+
+    # ---- Visibility (QStackedWidget hides the non-current tab) ---------------
+    #
+    # The redraw timer is rendering, not data acquisition: it only needs to run
+    # while this tab is the one on screen. Buffers keep filling via _on_window
+    # regardless of visibility, so no data is lost while hidden — only
+    # painting pauses.
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._visible = True
+        self._update_redraw_state()
+        self._redraw_plot()   # repaint immediately, don't wait for a stale frame
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self._visible = False
+        self._update_redraw_state()
+
+    def _update_redraw_state(self):
+        if self._connected and self._visible:
+            self.plot.start()
+        else:
+            self.plot.stop()
 
     # ---- Slots ---------------------------------------------------------------
 
