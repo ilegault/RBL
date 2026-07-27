@@ -24,11 +24,11 @@ that reads all 12 channels in one round trip at 10 Hz. Tabs subscribe and filter
 | AIN | Where | Signal | Conversion |
 |---|---|---|---|
 | AIN0–AIN3 | T7 body terminals | NEC log amps, jaws X+/X−/Y+/Y− | log-amp curve → A |
-| AIN4 / AIN5 | CB37 | Amp **X+** voltage / current monitor | 1 V = 1 kV / 1 V = 10 mA |
-| AIN6 / AIN7 | CB37 | Amp **X−** voltage / current monitor | " |
-| AIN8 / AIN9 | CB37 | Amp **Y+** voltage / current monitor | " |
-| AIN10 / AIN11 | CB37 | Amp **Y−** voltage / current monitor | " |
-| AIN12, AIN13 | CB37 | *spare* | — |
+| AIN4, AIN5 | CB37 | *spare* | — |
+| AIN6 / AIN7 | CB37 | Amp **Y−** current / voltage monitor | 1 V = 10 mA / 1 V = 1 kV |
+| AIN8 / AIN9 | CB37 | Amp **Y+** current / voltage monitor | " |
+| AIN10 / AIN11 | CB37 | Amp **X−** current / voltage monitor | " |
+| AIN12 / AIN13 | CB37 | Amp **X+** current / voltage monitor | " |
 
 **Wiring notes.**
 CB37 AIN0–AIN3 are electrically duplicated with the T7's own screw terminals — the log
