@@ -19,6 +19,7 @@ from rbl.gui.motor_tab import MotorTab
 from rbl.gui.logamp_tab import CurrentTab
 from rbl.gui.amp_tab import AmpTab
 from rbl.gui.funcgen_tab import FuncGenTab
+from rbl.gui.overview_tab import OverviewTab
 from rbl.state.beamline import Beamline
 
 
@@ -47,6 +48,7 @@ class MainWindow(QMainWindow):
         self._outer_tabbar.addTab("Beam Current")
         self._outer_tabbar.addTab("HV Amplifiers")
         self._outer_tabbar.addTab("Function Generators")
+        self._outer_tabbar.addTab("Overview")
         self._outer_tabbar.setExpanding(False)
         self._outer_tabbar.setDocumentMode(True)
         outer_layout.addWidget(self._outer_tabbar)
@@ -64,6 +66,7 @@ class MainWindow(QMainWindow):
         self.current_tab = CurrentTab(self)
         self.amp_tab     = AmpTab(self)
         self.funcgen_tab = FuncGenTab(self.beamline, self)
+        self.overview_tab = OverviewTab(self.beamline, self)
         # Each page goes inside a scroll area: when the window is narrowed past
         # what a tab's content can reflow to, a scrollbar appears rather than
         # forcing the window to stay wide. This is what makes the app
@@ -72,6 +75,7 @@ class MainWindow(QMainWindow):
         self._outer_stack.addWidget(self._wrap_scroll(self.current_tab))
         self._outer_stack.addWidget(self._wrap_scroll(self.amp_tab))
         self._outer_stack.addWidget(self._wrap_scroll(self.funcgen_tab))
+        self._outer_stack.addWidget(self._wrap_scroll(self.overview_tab))
 
         # ── Shared LabJack T7 ─────────────────────────────────────────────────
         #

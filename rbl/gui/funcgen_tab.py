@@ -914,17 +914,25 @@ class FuncGenTab(QWidget):
     # ---- Poll (read-only) ----------------------------------------------------
 
     def _poll_readback(self):
+        connected = {}
+        readback = {}
         for key, panel in self.panels.items():
             gen_letter = key[0]
             channel    = int(key[1])
             g = self._gen[gen_letter]
+            connected[gen_letter] = g is not None
             if g is None:
                 continue
             try:
                 state = g.get_state(channel)
                 panel.update_readback(state)
+                readback[key] = state
             except Exception as e:
                 panel.update_readback({"error": str(e)})
+        # Beamline republishes this as FuncGenState so any other consumer
+        # (the Overview tab) sees live amplitudes without polling the
+        # driver a second time.
+        self.beamline.ingest_funcgen_readback(connected, {}, readback)
 
     # ---- SCPI console --------------------------------------------------------
 

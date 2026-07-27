@@ -178,6 +178,45 @@ class TestApplyAllOrdering:
         assert all(k.startswith("B") for k in y_keys), CHANNEL_ROLE
 
 
+class TestReadbackIngestion:
+    """_poll_readback republishes through Beamline.ingest_funcgen_readback so
+    any other consumer (Phase 9's Overview tab) sees live amplitudes without
+    querying the driver a second time."""
+
+    _STATE_A = {"shape": "Sine", "freq": 1000.0, "amp": 1.5, "offset": 0.0,
+                "phase": 0.0, "output": True}
+    _STATE_B = {"shape": "Sine", "freq": 2000.0, "amp": 0.5, "offset": 0.0,
+                "phase": 0.0, "output": False}
+
+    def test_poll_readback_republishes_via_beamline(self, tab_and_mgr):
+        tab, mgr = tab_and_mgr
+        mgr.A.get_state.return_value = self._STATE_A
+        mgr.B.get_state.return_value = self._STATE_B
+
+        received = []
+        tab.beamline.funcgens_changed.connect(received.append)
+        tab._poll_readback()
+
+        assert len(received) == 1
+        state = received[0]
+        assert state.connected == {"A": True, "B": True}
+        assert state.channels["A1"].amp_vpp == 1.5
+        assert state.channels["B1"].amp_vpp == 0.5
+
+    def test_poll_readback_marks_unconnected_generator(self, tab_and_mgr):
+        tab, mgr = tab_and_mgr
+        tab._gen["B"] = None
+        mgr.A.get_state.return_value = self._STATE_A
+
+        received = []
+        tab.beamline.funcgens_changed.connect(received.append)
+        tab._poll_readback()
+
+        assert received[0].connected == {"A": True, "B": False}
+        assert "B1" not in received[0].channels
+        assert "B2" not in received[0].channels
+
+
 class TestInterlockParity:
     """Phase 8's actual guarantee: an interlock-violating amplitude is
     rejected the same way whether it comes from the funcgen tab's Apply
