@@ -12,16 +12,17 @@ Features:
 import time
 
 from PySide6.QtCore import QThread, Signal, Qt
-from PySide6.QtGui import QFont, QKeyEvent
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel,
-    QPushButton, QDoubleSpinBox, QTextEdit, QFormLayout, QComboBox,
+    QPushButton, QDoubleSpinBox, QFormLayout, QComboBox,
     QMessageBox, QLineEdit,
 )
 
 from rbl.hardware.galil_driver import GalilController, GalilError
 from rbl.config import hardware_config as SC
 from rbl.gui import theme
+from rbl.gui.widgets.command_console import HistoryLineEdit, LogPane
 
 
 # ─── Background poll thread ───────────────────────────────────────────────────
@@ -530,51 +531,6 @@ class AxisControls(QGroupBox):
         self.lbl_info.setText(f"{sw_part}  |  BL:{bl_counts:,}   FL:{fl_counts:,}")
 
 
-# ─── History-aware command line edit ─────────────────────────────────────────
-
-class HistoryLineEdit(QLineEdit):
-    """QLineEdit with Up/Down arrow key command history."""
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._history: list[str] = []
-        self._history_idx: int = -1   # -1 = not browsing history
-        self._current_draft: str = ""
-
-    def add_to_history(self, cmd: str):
-        if cmd and (not self._history or self._history[-1] != cmd):
-            self._history.append(cmd)
-        self._history_idx = -1
-        self._current_draft = ""
-
-    def keyPressEvent(self, event: QKeyEvent):
-        if event.key() == Qt.Key.Key_Up:
-            if not self._history:
-                return
-            if self._history_idx == -1:
-                self._current_draft = self.text()
-                self._history_idx = len(self._history) - 1
-            elif self._history_idx > 0:
-                self._history_idx -= 1
-            self.setText(self._history[self._history_idx])
-            self.end(False)
-        elif event.key() == Qt.Key.Key_Down:
-            if self._history_idx == -1:
-                return
-            if self._history_idx < len(self._history) - 1:
-                self._history_idx += 1
-                self.setText(self._history[self._history_idx])
-            else:
-                self._history_idx = -1
-                self.setText(self._current_draft)
-            self.end(False)
-        else:
-            if self._history_idx != -1:
-                # any other key resets browsing
-                self._history_idx = -1
-            super().keyPressEvent(event)
-
-
 # ─── Top-level tab widget ─────────────────────────────────────────────────────
 
 class MotorTab(QWidget):
@@ -700,9 +656,7 @@ class MotorTab(QWidget):
         # ── Console (right panel — full height) ────────────────────────────
         cons_box = QGroupBox("Command Console")
         cons = QVBoxLayout(cons_box)
-        self.console = QTextEdit()
-        self.console.setReadOnly(True)
-        self.console.setFont(QFont("Consolas", 9))
+        self.console = LogPane()
         cons.addWidget(self.console, stretch=1)
         manual_row = QHBoxLayout()
         self.manual_cmd = HistoryLineEdit()
@@ -842,8 +796,7 @@ class MotorTab(QWidget):
         self._do_disconnect()
 
     def _log_line(self, line: str):
-        ts = time.strftime("%H:%M:%S")
-        self.console.append(f"[{ts}] {line}")
+        self.console.log(line)
 
     # ---- Owner-callable cleanup ----------------------------------------------
 

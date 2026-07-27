@@ -26,12 +26,13 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout,
     QGroupBox, QLabel, QPushButton, QDoubleSpinBox, QComboBox,
-    QTextEdit, QLineEdit, QCheckBox, QMessageBox, QSizePolicy,
+    QLineEdit, QCheckBox, QMessageBox, QSizePolicy,
     QScrollArea, QApplication,
 )
 
 from rbl.hardware.funcgen_driver import DG1022Z, discover, MAX_GEN_VOLTS, MAX_AMP_VPP
 from rbl.gui import theme
+from rbl.gui.widgets.command_console import LogPane
 
 # Persistence file — keyed on serial, survives replug
 _CONFIG_PATH = Path.home() / ".config" / "rbl" / "funcgen.json"
@@ -520,9 +521,7 @@ class FuncGenTab(QWidget):
         cmd_row.addWidget(self.btn_scpi_err)
         scpi_vbox.addLayout(cmd_row)
 
-        self.scpi_log = QTextEdit()
-        self.scpi_log.setReadOnly(True)
-        self.scpi_log.setFont(QFont("Consolas", 9))
+        self.scpi_log = LogPane()
         scpi_vbox.addWidget(self.scpi_log, stretch=1)
 
         self._set_scpi_enabled(False)
@@ -1111,8 +1110,7 @@ class FuncGenTab(QWidget):
             w.setEnabled(on)
 
     def _log_scpi(self, line: str):
-        ts = time.strftime("%H:%M:%S")
-        self.scpi_log.append(f"[{ts}] {line}")
+        self.scpi_log.log(line)
         if line.startswith("!"):
             log.error("SCPI %s", line)
         else:
