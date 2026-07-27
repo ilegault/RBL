@@ -412,6 +412,15 @@ class MotorTab(QWidget):
     #    "positions": {"X+": mm, ...}}           # UNSIGNED distance from centre
     jaw_state = Signal(dict)
 
+    # Raw per-axis poll snapshot (axis letter -> {pos, moving, switches,
+    # enabled}, exactly GalilPollWorker.state's shape) plus the all-axes-zeroed
+    # flag. Feeds Beamline.ingest_motor_poll, which has richer per-axis fields
+    # (pos_counts, moving, enabled, switches) than jaw_state carries.
+    raw_state_changed = Signal(dict, bool)
+
+    # Emitted when the Galil link drops. Feeds Beamline.motors_disconnected.
+    motors_disconnected = Signal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.galil  = GalilController()
@@ -599,6 +608,7 @@ class MotorTab(QWidget):
         # Positions go stale the moment the link drops; say so rather than
         # letting consumers keep drawing the last known geometry as if live.
         self.jaw_state.emit({"connected": False, "zeroed": False, "positions": {}})
+        self.motors_disconnected.emit()
 
     def _set_buttons_connected(self, on: bool):
         self.btn_connect.setText("Disconnect" if on else "Connect")
@@ -651,13 +661,15 @@ class MotorTab(QWidget):
         for axis, axis_state in snapshot.items():
             self.axes[axis].update_state(axis_state)
 
+        zeroed = all(p.zeroed for p in self.axes.values())
         positions = {SC.AXIS_NAMES[axis]: SC.counts_to_mm(axis, st["pos"])
                      for axis, st in snapshot.items()}
         self.jaw_state.emit({
             "connected": True,
-            "zeroed":    all(p.zeroed for p in self.axes.values()),
+            "zeroed":    zeroed,
             "positions": positions,
         })
+        self.raw_state_changed.emit(snapshot, zeroed)
 
     def _on_poll_error(self, msg: str):
         self._log_line(f"! Poll thread error: {msg}")

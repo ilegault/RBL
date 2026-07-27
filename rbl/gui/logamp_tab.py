@@ -253,6 +253,18 @@ class CurrentTab(QWidget):
         """Jaw geometry pushed over from the motor tab (see MotorTab.jaw_state)."""
         self.beam_indicator.set_jaw_state(state)
 
+    def on_motor_state(self, state):
+        """Jaw geometry from Beamline.motors_changed (a state.MotorState).
+
+        Adapts to the dict shape BeamPositionIndicator already expects rather
+        than changing that widget's interface.
+        """
+        self.set_jaw_state({
+            "connected": state.connected,
+            "zeroed":    state.zeroed,
+            "positions": {jaw: axis.pos_mm for jaw, axis in state.axes.items()},
+        })
+
     def _on_window(self, payload: dict):
         """Consume one stream window from LabJackStreamWorker.
 
