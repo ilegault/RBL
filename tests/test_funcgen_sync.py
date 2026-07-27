@@ -161,7 +161,7 @@ class TestApplyAllOrdering:
         assert all(i < first_on for i in sp_idxs), order
 
     def test_axis_pairs_share_a_generator(self, tab_and_mgr):
-        from rbl.gui.funcgen_tab import CHANNEL_ROLE
+        from rbl.hardware.funcgen_safety import CHANNEL_ROLE
 
         # X+/X- must both be on unit A.
         x_keys = {k for k, v in CHANNEL_ROLE.items() if v in ("X+", "X-")}

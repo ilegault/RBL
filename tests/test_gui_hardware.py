@@ -336,9 +336,9 @@ class TestHomingWorker:
         return g
 
     def test_three_passes_then_define_zero(self, qapp, monkeypatch):
-        from rbl.gui import motor_tab
-        from rbl.gui.motor_tab import HomingWorker
-        monkeypatch.setattr(motor_tab.time, "sleep", lambda *a, **k: None)
+        from rbl.hardware import galil_workers
+        from rbl.hardware.galil_workers import HomingWorker
+        monkeypatch.setattr(galil_workers.time, "sleep", lambda *a, **k: None)
         g = self._mock_galil(home_switch=False)
         hw = HomingWorker(g, "A")
         results = []
@@ -349,9 +349,9 @@ class TestHomingWorker:
         assert results and results[0][0] is True
 
     def test_backs_off_when_starting_on_home_switch(self, qapp, monkeypatch):
-        from rbl.gui import motor_tab
-        from rbl.gui.motor_tab import HomingWorker
-        monkeypatch.setattr(motor_tab.time, "sleep", lambda *a, **k: None)
+        from rbl.hardware import galil_workers
+        from rbl.hardware.galil_workers import HomingWorker
+        monkeypatch.setattr(galil_workers.time, "sleep", lambda *a, **k: None)
         g = self._mock_galil(home_switch=True)
         hw = HomingWorker(g, "B")
         hw.done.connect(lambda ok, msg: None)
@@ -362,9 +362,9 @@ class TestHomingWorker:
         assert first_move.args[1] > 0
 
     def test_cancel_before_pass_aborts(self, qapp, monkeypatch):
-        from rbl.gui import motor_tab
-        from rbl.gui.motor_tab import HomingWorker
-        monkeypatch.setattr(motor_tab.time, "sleep", lambda *a, **k: None)
+        from rbl.hardware import galil_workers
+        from rbl.hardware.galil_workers import HomingWorker
+        monkeypatch.setattr(galil_workers.time, "sleep", lambda *a, **k: None)
         g = self._mock_galil(home_switch=False)
         hw = HomingWorker(g, "A")
         results = []
@@ -376,10 +376,10 @@ class TestHomingWorker:
         assert results and results[0][0] is False
 
     def test_restores_default_speed_after_homing(self, qapp, monkeypatch):
-        from rbl.gui import motor_tab
-        from rbl.gui.motor_tab import HomingWorker
+        from rbl.hardware import galil_workers
+        from rbl.hardware.galil_workers import HomingWorker
         import rbl.config.hardware_config as SC
-        monkeypatch.setattr(motor_tab.time, "sleep", lambda *a, **k: None)
+        monkeypatch.setattr(galil_workers.time, "sleep", lambda *a, **k: None)
         g = self._mock_galil(home_switch=False)
         hw = HomingWorker(g, "A")
         hw.done.connect(lambda ok, msg: None)
@@ -390,7 +390,7 @@ class TestHomingWorker:
 class TestGalilPollWorkerErrorHandling:
     def test_poll_worker_emits_error_and_stops_on_exception(self, qapp):
         from unittest.mock import MagicMock
-        from rbl.gui.motor_tab import GalilPollWorker
+        from rbl.hardware.galil_workers import GalilPollWorker
         from rbl.hardware.galil_driver import GalilController
 
         g = MagicMock(spec=GalilController)
@@ -414,7 +414,7 @@ class TestGalilPollWorkerErrorHandling:
 class TestConcurrentPollWorkers:
     def test_galil_and_labjack_workers_run_simultaneously(self, qapp):
         from unittest.mock import MagicMock
-        from rbl.gui.motor_tab import GalilPollWorker
+        from rbl.hardware.galil_workers import GalilPollWorker
         from rbl.hardware.labjack_poller import LabJackPollWorker
         from rbl.hardware.galil_driver import GalilController
         from rbl.hardware.labjack_driver import LabJackT7

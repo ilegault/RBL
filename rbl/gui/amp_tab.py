@@ -48,7 +48,6 @@ them one deliberate click at a time avoids the churn (and transient glitches) of
 restarting the stream on every stray combo event.
 """
 import time
-import collections
 
 import numpy as np
 from PySide6.QtCore import Qt, Signal
@@ -64,6 +63,7 @@ from rbl.hardware.amp_monitor import (
     monitor_to_kv, monitor_to_ma, format_kv, format_ma,
     voltage_status, current_status,
 )
+from rbl.hardware.waveform_ring import WaveformRing, decimate_minmax
 from rbl.config import hardware_config as SC
 from rbl.config.labjack_stream_config import (
     STREAM_PROFILES, GUI_REFRESH_HZ, window_samples, resolution_index,
@@ -72,16 +72,6 @@ from rbl.config.labjack_stream_config import (
 from rbl.gui.widgets.connection_bar import LabJackPanel
 from rbl.gui.widgets.live_plot import LivePlotPanel
 from rbl.gui import theme
-
-
-# Reverse map: AIN name -> (amp label, kind) for the 8 amplifier monitors.
-# Built from AMP_CHANNEL_MAP so it always tracks the wiring config.
-_AIN_TO_AMP = {
-    SC.AMP_CHANNEL_MAP[amp][kind]: (amp, kind)
-    for amp in SC.AMP_LABELS
-    for kind in ("voltage", "current")
-}
-
 
 
 # Status -> stylesheet color
@@ -138,23 +128,13 @@ class AmpTab(QWidget):
         self.buffers = {ain: RollingBuffer(self.BUFFER_CAPACITY)
                         for ain in SC.AMP_AIN_NAMES}
 
-        # Raw-waveform ring, one deque per AIN, holding recent (t_end, values)
-        # window chunks (values already in kV / mA).  Feeds snapshot mode.
-        self._wave_chunks = {ain: collections.deque() for ain in SC.AMP_AIN_NAMES}
-
-        # Cache of within-window sample-time offsets, keyed by (sample count,
-        # sample period).  A chunk's absolute sample times are just
-        # t_start + template, so we never rebuild np.arange per chunk per frame
-        # (that rebuild, over the whole ring every redraw, was the sub-second
-        # "caching" lag).
-        self._wave_time_templates: dict[tuple, np.ndarray] = {}
-
-        # Per-sample time step of the live stream (seconds), taken from the
-        # stream payload's sample_period.  Chunks are reconstructed as
-        # t_start = t_end - n * dt so consecutive windows stitch seamlessly.
-        # None until the first payload carrying it arrives; the snapshot path
-        # then falls back to the nominal window duration / sample count.
-        self._wave_dt: float | None = None
+        # Raw-waveform ring, holding recent (t_end, values) window chunks per
+        # AIN (values already in kV / mA).  Feeds snapshot mode.
+        self.wave_ring = WaveformRing(
+            SC.AMP_AIN_NAMES,
+            keep_seconds=self.SNAPSHOT_MAX_SECONDS,
+            window_duration_s=self.WINDOW_DURATION_S,
+        )
 
         # Plot state (LIVE/FROZEN + window_seconds live on self.plot, built below)
         self._plot_mode         = "trend"   # "trend" | "snapshot"
@@ -567,9 +547,8 @@ class AmpTab(QWidget):
         # Start every buffer from a clean slate so the (possibly re-anchored)
         # stream timeline never mixes with data from a previous session.
         for buf in self.buffers.values():
-            buf.__init__(self.BUFFER_CAPACITY)
-        for dq in self._wave_chunks.values():
-            dq.clear()
+            buf.clear()
+        self.wave_ring.clear()
         self.lj_panel.set_connected(True, serial)
         self.plot.start()
 
@@ -622,7 +601,7 @@ class AmpTab(QWidget):
         res  = resolution_index(profile_name)
         if self._single_mode:
             self._single_target_ain = self._single_combo.currentData()
-            amp, kind = _AIN_TO_AMP[self._single_target_ain]
+            amp, kind = SC.AIN_TO_AMP[self._single_target_ain]
             self._profile_status.setText(
                 f"{rate / 1000:.1f} kS/s  |  res idx {res}  |  "
                 f"target {amp} {kind} ({self._single_target_ain})  |  "
@@ -689,7 +668,7 @@ class AmpTab(QWidget):
         _BOT  = [0.10, 0.11, 0.82, 0.38]
 
         if self._single_mode:
-            _, kind = _AIN_TO_AMP.get(self._single_target_ain, ("", "voltage"))
+            _, kind = SC.AIN_TO_AMP.get(self._single_target_ain, ("", "voltage"))
             is_voltage = (kind == "voltage")
             self.ax_v.set_visible(is_voltage)
             self.ax_v_right.set_visible(is_voltage)
@@ -783,9 +762,7 @@ class AmpTab(QWidget):
 
         # Adopt the stream's true sample period when present so stitched
         # waveform chunks use the real per-sample step (not a nominal guess).
-        dt = payload.get("sample_period")
-        if dt:
-            self._wave_dt = dt
+        self.wave_ring.set_sample_period(payload.get("sample_period"))
 
         # Voltage and current are handled independently: in single-channel mode
         # only ONE of the two AINs for one amplifier is present, so requiring
@@ -825,7 +802,7 @@ class AmpTab(QWidget):
                 self.lbl_raw_v[amp].setText(f"{v_ain}:  {raw_v:+.4f} V")
 
                 if wave is not None:
-                    self._store_wave_chunk(
+                    self.wave_ring.store(
                         v_ain, t, np.asarray(wave) * SC.VOLTAGE_MONITOR_KV_PER_VOLT
                     )
 
@@ -846,20 +823,12 @@ class AmpTab(QWidget):
                 self.lbl_raw_i[amp].setText(f"{i_ain}:  {raw_i:+.4f} V")
 
                 if wave is not None:
-                    self._store_wave_chunk(
+                    self.wave_ring.store(
                         i_ain, t, np.asarray(wave) * SC.CURRENT_MONITOR_MA_PER_VOLT
                     )
 
         if self.plot.is_live:
             self.plot.force_to_live()
-
-    def _store_wave_chunk(self, ain: str, t_end: float, values: np.ndarray):
-        """Append a raw window to the ring and drop chunks older than the ring."""
-        dq = self._wave_chunks[ain]
-        dq.append((t_end, values))
-        cutoff = t_end - (self.SNAPSHOT_MAX_SECONDS + self.WINDOW_DURATION_S)
-        while dq and dq[0][0] < cutoff:
-            dq.popleft()
 
     def _on_reading(self, t: float, values: dict):
         """Legacy command-response path (AIN6..AIN13 only).
@@ -1098,7 +1067,7 @@ class AmpTab(QWidget):
         and reads `is_live`/`frozen_right_edge`/`window_seconds` directly.
         """
         if self.plot.is_live:
-            t_right = self._latest_wave_t()
+            t_right = self.wave_ring.latest_t()
         else:
             t_right = self.plot.frozen_right_edge
         if t_right is None:
@@ -1115,12 +1084,12 @@ class AmpTab(QWidget):
                 if self._single_mode and ain != self._single_target_ain:
                     line.set_data([], [])
                     continue
-                series = self._snapshot_series(ain, t_left, t_right)
+                series = self.wave_ring.series(ain, t_left, t_right)
                 if series is None:
                     line.set_data([], [])
                     continue
                 tt, vv = series
-                tt, vv = self._decimate_minmax(tt, vv, self.WF_MAX_POINTS)
+                tt, vv = decimate_minmax(tt, vv, self.WF_MAX_POINTS)
                 line.set_data(tt - t_right, vv)
                 any_data = True
 
@@ -1128,117 +1097,6 @@ class AmpTab(QWidget):
             self.ax_v.set_xlim(-self.plot.window_seconds, 0)
             self._apply_ylimits()
             self.canvas.draw_idle()
-
-    def _latest_wave_t(self):
-        """Most recent raw-window end time across all amp channels (or None)."""
-        best = None
-        for dq in self._wave_chunks.values():
-            if dq:
-                te = dq[-1][0]
-                if best is None or te > best:
-                    best = te
-        return best
-
-    def _snapshot_series(self, ain: str, t_left: float, t_right: float):
-        """Concatenated (times, values) of raw samples in [t_left, t_right].
-
-        Each stored chunk spans WINDOW_DURATION_S ending at its t_end; sample
-        times are reconstructed on demand so the ring only holds the values.
-        Returns None if nothing falls in the window.
-        """
-        dq = self._wave_chunks.get(ain)
-        if not dq:
-            return None
-        ts, vs = [], []
-        for t_end, vals in dq:
-            n = len(vals)
-            if n == 0:
-                continue
-            # Reconstruct the chunk's start from its OWN sample count and the
-            # true sample period, so chunk k's start lands exactly on chunk
-            # k-1's end (t_end is sample-accurate upstream).  Assuming a fixed
-            # 0.1 s width instead was what let jittery windows overlap/gap and
-            # break the stitched trace at each seam.
-            dt = self._wave_dt if self._wave_dt else (self.WINDOW_DURATION_S / n)
-            t_start = t_end - n * dt
-            # Skip chunks that fall entirely outside the visible window — this is
-            # what keeps a narrow (few-ms) view from re-scanning the whole ring.
-            if t_end < t_left or t_start > t_right:
-                continue
-            tt = t_start + self._wave_times_template(n, dt)   # cached offsets
-            if t_start >= t_left and t_end <= t_right:
-                # Whole chunk is inside the view: no masking needed.
-                ts.append(tt)
-                vs.append(vals)
-            else:
-                m = (tt >= t_left) & (tt <= t_right)
-                if m.any():
-                    ts.append(tt[m])
-                    vs.append(vals[m])
-        if not ts:
-            return None
-        return np.concatenate(ts), np.concatenate(vs)
-
-    def _wave_times_template(self, n: int, dt: float) -> np.ndarray:
-        """Sample-centre time offsets for an n-sample window at step *dt*.
-
-        Absolute sample times are ``t_start + template``.  The offsets depend
-        only on the sample count and the sample period (both constant per
-        profile), so caching them by ``(n, dt)`` avoids rebuilding
-        ``np.arange`` for every chunk on every redraw.
-        """
-        key  = (n, dt)
-        tmpl = self._wave_time_templates.get(key)
-        if tmpl is None:
-            tmpl = (np.arange(n) + 0.5) * dt
-            self._wave_time_templates[key] = tmpl
-        return tmpl
-
-    @staticmethod
-    def _decimate_minmax(x: np.ndarray, y: np.ndarray, max_points: int):
-        """Envelope-preserving decimation: bin the series and keep min+max/bin.
-
-        Plain striding would drop transient peaks between samples; min/max
-        binning keeps the visible envelope while capping the point count so a
-        100 kS/s window redraws cheaply.
-
-        Each bin's two extrema are emitted AT THEIR REAL SAMPLE POSITIONS, in
-        the order they occur in time (earliest first).  The old code drew both
-        at the bin's left-edge x with min always before max: at a sharp tip
-        (e.g. a triangle apex) that collapsed the peak onto a vertical segment
-        and, on a falling edge where the max precedes the min, drew the pair
-        backwards — the "somersault"/flip seen on the waveform tips.  Placing
-        each extreme at its own x in temporal order reproduces the true up/down
-        shape of every peak.
-        """
-        n = len(x)
-        if n <= max_points:
-            return x, y
-        bins = max(1, max_points // 2)
-        usable = (n // bins) * bins
-        if usable < bins:
-            return x, y
-        xb = x[:usable].reshape(bins, -1)
-        yb = y[:usable].reshape(bins, -1)
-        cols  = np.arange(bins)
-        i_min = yb.argmin(axis=1)
-        i_max = yb.argmax(axis=1)
-        # Per bin, order the two extrema by their in-bin (time) index so the
-        # emitted x stays monotonic and the peak is drawn the right way round.
-        i_first = np.minimum(i_min, i_max)
-        i_last  = np.maximum(i_min, i_max)
-        x_out = np.empty(bins * 2, dtype=float)
-        y_out = np.empty(bins * 2, dtype=float)
-        x_out[0::2] = xb[cols, i_first]
-        x_out[1::2] = xb[cols, i_last]
-        y_out[0::2] = yb[cols, i_first]
-        y_out[1::2] = yb[cols, i_last]
-        # Keep the un-binned tail so the live right edge is never truncated
-        # (the reshape drops the final < bins samples otherwise).
-        if usable < n:
-            x_out = np.concatenate([x_out, x[usable:]])
-            y_out = np.concatenate([y_out, y[usable:]])
-        return x_out, y_out
 
     # ---- Owner-callable cleanup ----------------------------------------------
 

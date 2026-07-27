@@ -74,9 +74,9 @@ class TestSeamlessStitching:
             tab._on_window(_wave_payload(target, wave, t_end, dt))
 
         # The tab adopts the stream's real sample period from the payload.
-        assert tab._wave_dt == pytest.approx(dt)
+        assert tab.wave_ring._dt == pytest.approx(dt)
 
-        series = tab._snapshot_series(target, 0.0, 3 * window_dur)
+        series = tab.wave_ring.series(target, 0.0, 3 * window_dur)
         assert series is not None
         times, _vals = series
 
@@ -99,60 +99,11 @@ class TestSeamlessStitching:
             payload.pop("sample_period")
             tab._on_window(payload)
 
-        series = tab._snapshot_series(target, 0.0, 2 * window_dur)
+        series = tab.wave_ring.series(target, 0.0, 2 * window_dur)
         assert series is not None
         times, _ = series
         assert np.all(np.diff(times) > 0)
 
-
-class TestDecimationPreservesPeaks:
-    def test_triangle_apex_not_flipped(self):
-        from rbl.gui.amp_tab import AmpTab
-
-        # A single sharp triangle: up to an apex at the centre, then down.
-        n = 20_000
-        half = n // 2
-        y = np.concatenate([np.linspace(-1.0, 1.0, half),
-                            np.linspace(1.0, -1.0, n - half)])
-        x = np.arange(n, dtype=float)
-
-        xd, yd = AmpTab._decimate_minmax(x, y, 2000)
-
-        # Fewer points, but the envelope (true peak/trough) is preserved.
-        assert len(xd) < n
-        assert yd.max() == pytest.approx(y.max())
-        assert yd.min() == pytest.approx(y.min())
-
-        # x must stay monotonic non-decreasing — the old min-then-max-at-one-x
-        # scheme produced backward steps at falling edges (the "somersault").
-        assert np.all(np.diff(xd) >= 0)
-
-        # The apex is reproduced near the true peak location, not at a bin's
-        # left edge far from it.
-        apex_x = xd[np.argmax(yd)]
-        assert abs(apex_x - x[np.argmax(y)]) < n / 2000
-
-    def test_descending_ramp_not_reversed(self):
-        from rbl.gui.amp_tab import AmpTab
-
-        # Pure descending ramp: max at the very start, min at the very end.
-        n = 10_000
-        x = np.arange(n, dtype=float)
-        y = np.linspace(5.0, -5.0, n)
-
-        xd, yd = AmpTab._decimate_minmax(x, y, 2000)
-
-        assert np.all(np.diff(xd) >= 0)          # x never steps backward
-        # Overall trend stays descending (first output well above the last).
-        assert yd[0] > yd[-1]
-        assert yd.max() == pytest.approx(5.0)
-        assert yd.min() == pytest.approx(-5.0)
-
-    def test_short_series_returned_unchanged(self):
-        from rbl.gui.amp_tab import AmpTab
-
-        x = np.arange(500, dtype=float)
-        y = np.sin(x)
-        xd, yd = AmpTab._decimate_minmax(x, y, 2000)
-        assert np.array_equal(xd, x)
-        assert np.array_equal(yd, y)
+# Decimation (min/max envelope preservation) is tested directly against
+# rbl.hardware.waveform_ring.decimate_minmax in tests/test_waveform_ring.py —
+# no Qt/AmpTab needed for pure-function coverage of that algorithm.

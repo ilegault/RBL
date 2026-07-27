@@ -143,6 +143,13 @@ AMP_AIN_NAMES = [
     for kind in ("voltage", "current")
 ]
 
+# Reverse map: AIN name -> (amp label, kind) for the 8 amplifier monitors.
+AIN_TO_AMP = {
+    AMP_CHANNEL_MAP[amp][kind]: (amp, kind)
+    for amp in AMP_LABELS
+    for kind in ("voltage", "current")
+}
+
 # Scale factors (see EEL5000 manual, Specifications, p. 1-3)
 VOLTAGE_MONITOR_KV_PER_VOLT = 1.0    # 1000:1 divider -> 1 V == 1 kV
 CURRENT_MONITOR_MA_PER_VOLT = 10.0   # 1 V == 10 mA

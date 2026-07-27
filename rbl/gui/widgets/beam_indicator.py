@@ -22,10 +22,6 @@ from rbl.gui import theme
 # Jaw colours reused from the plot / readouts for a consistent palette.
 _JAW_COLORS = theme.JAW_COLORS
 
-# FWHM -> sigma for a Gaussian.  Operators think in spot width, the maths wants
-# sigma, so the spinbox takes FWHM and this converts.
-_FWHM_TO_SIGMA = 1.0 / 2.35482
-
 
 class _ApertureView(QWidget):
     """The slit aperture and the beam inside it, drawn to scale in millimetres.
@@ -480,7 +476,7 @@ class BeamPositionIndicator(QWidget):
 
     def _recompute(self):
         raster   = self.cmb_mode.currentIndex() == 1
-        sigma    = self.spn_spot.value() * _FWHM_TO_SIGMA
+        sigma    = self.spn_spot.value() * BR.FWHM_TO_SIGMA
         span_x   = self.spn_span_x.value() if raster else 0.0
         span_y   = self.spn_span_y.value() if raster else 0.0
 

@@ -98,7 +98,7 @@ class TestSingleChannelMode:
         assert not tab.ax_v.get_visible()
 
         # The raw waveform is stored in mA (0.5 V * 10 mA/V = 5 mA).
-        chunks = tab._wave_chunks[target]
+        chunks = tab.wave_ring._chunks[target]
         assert len(chunks) > 0
         _, vals = chunks[-1]
         assert vals.max() == pytest.approx(5.0)

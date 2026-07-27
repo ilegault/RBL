@@ -96,6 +96,13 @@ class RollingBuffer:
             idx = (self._n - 1) % self.capacity
             return self._t[idx], self._buf[idx]
 
+    def clear(self):
+        """Reset to empty, keeping the same capacity."""
+        with self._lock:
+            self._buf.fill(np.nan)
+            self._t.fill(np.nan)
+            self._n = 0
+
 
 # --- Self-test ---------------------------------------------------------------
 
