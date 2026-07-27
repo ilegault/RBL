@@ -11,6 +11,8 @@ from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QGroupBox, QLabel, QPushButton, QLineEdit, QComboBox,
 )
 
+from rbl.gui import theme
+
 
 class LabJackPanel(QGroupBox):
     """Connection controls for the shared T7.
@@ -40,11 +42,11 @@ class LabJackPanel(QGroupBox):
         lay.addWidget(self.btn_conn)
 
         self.lbl_status = QLabel("● Disconnected")
-        self.lbl_status.setStyleSheet("color: #666666; font-weight: bold;")
+        self.lbl_status.setStyleSheet(theme.pill(False))
         lay.addWidget(self.lbl_status)
 
         self.lbl_serial = QLabel("")
-        self.lbl_serial.setStyleSheet("color: #555; font-style: italic;")
+        self.lbl_serial.setStyleSheet(f"color: {theme.NEUTRAL}; font-style: italic;")
         lay.addWidget(self.lbl_serial, stretch=1)
 
         self._connected = False
@@ -64,12 +66,12 @@ class LabJackPanel(QGroupBox):
         if connected:
             self.btn_conn.setText("Disconnect")
             self.lbl_status.setText("● Connected")
-            self.lbl_status.setStyleSheet("color: #1a7a1a; font-weight: bold;")
+            self.lbl_status.setStyleSheet(theme.pill(True))
             self.lbl_serial.setText(f"T7 serial #{serial}" if serial else "")
         else:
             self.btn_conn.setText("Connect")
             self.lbl_status.setText("● Disconnected")
-            self.lbl_status.setStyleSheet("color: #666666; font-weight: bold;")
+            self.lbl_status.setStyleSheet(theme.pill(False))
             self.lbl_serial.setText("")
 
     def set_enabled(self, on: bool):

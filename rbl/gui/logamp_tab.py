@@ -34,17 +34,13 @@ from rbl.hardware.current_monitor import (
 from rbl.hardware import beam_reconstruction as BR
 from rbl.config import hardware_config as SC
 from rbl.gui.labjack_panel import LabJackPanel
+from rbl.gui import theme
 
 
 # ─── Beam-position indicator ───────────────────────────────────────────────────
 
 # Jaw colours reused from the plot / readouts for a consistent palette.
-_JAW_COLORS = {
-    "X+": "#e74c3c",
-    "X-": "#3498db",
-    "Y+": "#c47a00",
-    "Y-": "#1a7a1a",
-}
+_JAW_COLORS = theme.JAW_COLORS
 
 # FWHM -> sigma for a Gaussian.  Operators think in spot width, the maths wants
 # sigma, so the spinbox takes FWHM and this converts.
@@ -192,7 +188,7 @@ class _ApertureView(QWidget):
             fill.setAlpha(int(35 + 120 * self._tint(jaw)))
             p.setBrush(QBrush(fill))
             if jaw in bad:
-                p.setPen(QPen(QColor("#cc0000"), 2.0, Qt.PenStyle.DashLine))
+                p.setPen(QPen(QColor(theme.FAULT), 2.0, Qt.PenStyle.DashLine))
             else:
                 p.setPen(QPen(base, 1.5))
             p.drawRect(r)
@@ -551,10 +547,10 @@ class BeamPositionIndicator(QWidget):
         elif not self._zeroed:
             self.lbl_status.setText(
                 "⚠ Axes not zeroed this session — mm positions may be wrong")
-            self.lbl_status.setStyleSheet("font-size: 11px; color: #cc0000;")
+            self.lbl_status.setStyleSheet(f"font-size: 11px; color: {theme.FAULT};")
         else:
             self.lbl_status.setText("Jaw positions live and zeroed")
-            self.lbl_status.setStyleSheet("font-size: 11px; color: #1a7a1a;")
+            self.lbl_status.setStyleSheet(f"font-size: 11px; color: {theme.OK};")
 
     def _update_overscan(self, raster: bool):
         """In raster mode, say which blades the sweep is actually reaching.
@@ -571,10 +567,10 @@ class BeamPositionIndicator(QWidget):
         missed = [jaw for jaw, hit in flags.items() if not hit]
         if not missed:
             self.lbl_overscan.setText("Overscan: beam reaching all four blades")
-            self.lbl_overscan.setStyleSheet("font-size: 11px; color: #1a7a1a;")
+            self.lbl_overscan.setStyleSheet(f"font-size: 11px; color: {theme.OK};")
         else:
             self.lbl_overscan.setText("Not reaching: " + ", ".join(missed))
-            self.lbl_overscan.setStyleSheet("font-size: 11px; color: #cc0000;")
+            self.lbl_overscan.setStyleSheet(f"font-size: 11px; color: {theme.FAULT};")
 
 
 # ─── The tab widget ───────────────────────────────────────────────────────────
@@ -627,7 +623,7 @@ class CurrentTab(QWidget):
             ro.addWidget(self.lbl_v[ain], 1, col)
             self.lbl_i[ain] = QLabel("—")
             self.lbl_i[ain].setFont(mono)
-            self.lbl_i[ain].setStyleSheet("color: #1a7a1a; font-weight: bold;")
+            self.lbl_i[ain].setStyleSheet(theme.status_label(theme.OK))
             ro.addWidget(self.lbl_i[ain], 2, col)
 
         # Beam indicator — placed in the plot section below, left of the canvas
@@ -648,7 +644,7 @@ class CurrentTab(QWidget):
         nav_row = QHBoxLayout()
         self.lbl_mode = QLabel("● LIVE  (last 120 s)")
         self.lbl_mode.setStyleSheet(
-            "color: #1a7a1a; font-weight: bold; padding: 2px 6px;"
+            theme.status_label(theme.OK) + " padding: 2px 6px;"
         )
         nav_row.addWidget(self.lbl_mode)
         lbl_time = QLabel("  Time:")
@@ -691,9 +687,8 @@ class CurrentTab(QWidget):
         self.ax.set_yscale("log")
         self.ax.grid(True, which="both", alpha=0.3)
         self._lines = {}
-        _colors = {"X+": "#e74c3c", "X-": "#3498db", "Y+": "#c47a00", "Y-": "#1a7a1a"}
         for ain, jaw in SC.LABJACK_CHANNEL_MAP.items():
-            line, = self.ax.plot([], [], color=_colors.get(jaw, "k"), lw=1.5)
+            line, = self.ax.plot([], [], color=theme.JAW_COLORS.get(jaw, "k"), lw=1.5)
             self._lines[ain] = line
         self.fig.tight_layout()
 
@@ -710,7 +705,7 @@ class CurrentTab(QWidget):
             _row = QHBoxLayout()
             _swatch = QLabel("━")
             _swatch.setStyleSheet(
-                f"color: {_colors.get(_jaw, '#000')}; font-weight: bold; font-size: 13px;"
+                f"color: {theme.JAW_COLORS.get(_jaw, '#000')}; font-weight: bold; font-size: 13px;"
             )
             _lbl = QLabel(f"{_jaw}  ({_ain})")
             _lbl.setStyleSheet("font-size: 15px;")
@@ -815,7 +810,7 @@ class CurrentTab(QWidget):
             self.lbl_v[ain].setText(f"{V:6.3f} V")
             self.lbl_v[ain].setStyleSheet("color: #555; font-family: Consolas, 'Courier New', monospace;")
             self.lbl_i[ain].setText(format_current(I))
-            self.lbl_i[ain].setStyleSheet("color: #1a7a1a; font-weight: bold;")
+            self.lbl_i[ain].setStyleSheet(theme.status_label(theme.OK))
             self.buffers[ain].append(t, I)
 
         self.beam_indicator.set_currents(self._by_jaw(currents))
@@ -869,7 +864,7 @@ class CurrentTab(QWidget):
         label = f"{int(w)} s" if w >= 1 else f"{int(w * 1000)} ms"
         self.lbl_mode.setText(f"● LIVE  (last {label})")
         self.lbl_mode.setStyleSheet(
-            "color: #1a7a1a; font-weight: bold; padding: 2px 6px;"
+            theme.status_label(theme.OK) + " padding: 2px 6px;"
         )
         self.btn_jump_live.setVisible(False)
 
@@ -927,7 +922,7 @@ class CurrentTab(QWidget):
         if self._is_live:
             self.lbl_mode.setText(f"● LIVE  (last {label})")
             self.lbl_mode.setStyleSheet(
-                "color: #1a7a1a; font-weight: bold; padding: 2px 6px;"
+                theme.status_label(theme.OK) + " padding: 2px 6px;"
             )
         else:
             self.lbl_mode.setText(

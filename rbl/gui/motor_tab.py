@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 
 from rbl.hardware.galil_driver import GalilController, GalilError
 from rbl.config import hardware_config as SC
+from rbl.gui import theme
 
 
 # ─── Background poll thread ───────────────────────────────────────────────────
@@ -503,16 +504,16 @@ class AxisControls(QGroupBox):
                 self.lbl_status.setStyleSheet("color: #c05000; font-weight: bold;")
             elif not enabled:
                 self.lbl_status.setText("Disabled")
-                self.lbl_status.setStyleSheet("color: #888888; font-weight: bold;")
+                self.lbl_status.setStyleSheet(theme.status_label(theme.MUTED))
             elif sw["forward_switch"]:
                 self.lbl_status.setText("FWD LIMIT active")
-                self.lbl_status.setStyleSheet("color: #cc0000; font-weight: bold;")
+                self.lbl_status.setStyleSheet(theme.status_label(theme.FAULT))
             elif sw["reverse_switch"] or sw["home_switch"]:
                 self.lbl_status.setText("REV/HOME LIMIT active")
                 self.lbl_status.setStyleSheet("color: #cc6600; font-weight: bold;")
             else:
                 self.lbl_status.setText("Idle  [enabled]")
-                self.lbl_status.setStyleSheet("color: #1a7a1a; font-weight: bold;")
+                self.lbl_status.setStyleSheet(theme.status_label(theme.OK))
 
         sw = axis_state["switches"]
         def fmt(b): return "●" if b else "○"
@@ -609,10 +610,10 @@ class MotorTab(QWidget):
         self.btn_connect.clicked.connect(self._toggle_connection)
         conn.addWidget(self.btn_connect)
         self.lbl_conn_status = QLabel("● Disconnected")
-        self.lbl_conn_status.setStyleSheet("color: #666666; font-weight: bold;")
+        self.lbl_conn_status.setStyleSheet(theme.pill(False))
         conn.addWidget(self.lbl_conn_status)
         self.lbl_model = QLabel("")
-        self.lbl_model.setStyleSheet("color: #555; font-style: italic;")
+        self.lbl_model.setStyleSheet(f"color: {theme.NEUTRAL}; font-style: italic;")
         conn.addWidget(self.lbl_model, stretch=1)
         left_layout.addWidget(conn_box)
 
@@ -651,8 +652,8 @@ class MotorTab(QWidget):
         self.btn_estop.setMinimumHeight(44)
         self.btn_estop.setStyleSheet(
             "QPushButton { background:#aa0000; color:white; font-size:15px;"
-            " font-weight:bold; border:2px solid #cc0000; }"
-            "QPushButton:hover { background:#cc0000; }"
+            f" font-weight:bold; border:2px solid {theme.FAULT}; }}"
+            f"QPushButton:hover {{ background:{theme.FAULT}; }}"
         )
         self.btn_estop.clicked.connect(self._emergency_stop)
         estop_row.addWidget(self.btn_estop, stretch=3)
@@ -780,10 +781,7 @@ class MotorTab(QWidget):
     def _set_buttons_connected(self, on: bool):
         self.btn_connect.setText("Disconnect" if on else "Connect")
         self.lbl_conn_status.setText("● Connected" if on else "● Disconnected")
-        self.lbl_conn_status.setStyleSheet(
-            "color: #1a7a1a; font-weight: bold;" if on
-            else "color: #666666; font-weight: bold;"
-        )
+        self.lbl_conn_status.setStyleSheet(theme.pill(on))
         self.btn_estop.setEnabled(on)
         self.btn_enable_all.setEnabled(on)
         self.btn_disable_all.setEnabled(on)

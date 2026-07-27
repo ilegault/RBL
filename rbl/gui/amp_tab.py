@@ -75,6 +75,7 @@ from rbl.config.labjack_stream_config import (
     is_single_channel, DEFAULT_SINGLE_CHANNEL,
 )
 from rbl.gui.labjack_panel import LabJackPanel
+from rbl.gui import theme
 
 
 # Reverse map: AIN name -> (amp label, kind) for the 8 amplifier monitors.
@@ -97,9 +98,9 @@ _ZOOM_STEPS = [
 
 # Status -> stylesheet color
 _STATUS_COLOR = {
-    "ok":   "#1a7a1a",   # green
-    "peak": "#c47a00",   # amber — legal only as a <4 ms transient
-    "over": "#c0392b",   # red   — out of spec / bad reading
+    "ok":   theme.OK,     # nominal
+    "peak": theme.WARN,   # legal only as a <4 ms transient
+    "over": theme.FAULT,  # out of spec / bad reading
 }
 
 
@@ -401,7 +402,7 @@ class AmpTab(QWidget):
         nav_row = QHBoxLayout()
         self.lbl_mode = QLabel(f"● LIVE  ({int(self._window_seconds)} s)")
         self.lbl_mode.setStyleSheet(
-            "color: #1a7a1a; font-weight: bold; padding: 2px 6px;"
+            theme.status_label(theme.OK) + " padding: 2px 6px;"
         )
         nav_row.addWidget(self.lbl_mode)
         lbl_time = QLabel("Time:")
@@ -475,8 +476,8 @@ class AmpTab(QWidget):
         self.ax_v.grid(True, alpha=0.3)
         self.ax_v.axhline(0.0, color="#999", lw=0.8, ls="-")
         # Rating envelope: +/-5 kV
-        self.ax_v.axhline( SC.AMP_MAX_KV, color="#c0392b", lw=0.8, ls="--", alpha=0.5)
-        self.ax_v.axhline(-SC.AMP_MAX_KV, color="#c0392b", lw=0.8, ls="--", alpha=0.5)
+        self.ax_v.axhline( SC.AMP_MAX_KV, color=theme.FAULT, lw=0.8, ls="--", alpha=0.5)
+        self.ax_v.axhline(-SC.AMP_MAX_KV, color=theme.FAULT, lw=0.8, ls="--", alpha=0.5)
         self.ax_v.tick_params(labelbottom=False)
 
         self.ax_i.set_ylabel("Current Draw (mA)")
@@ -484,8 +485,8 @@ class AmpTab(QWidget):
         self.ax_i.grid(True, alpha=0.3)
         self.ax_i.axhline(0.0, color="#999", lw=0.8, ls="-")
         # DC rating envelope: +/-20 mA
-        self.ax_i.axhline( SC.AMP_MAX_MA_DC, color="#c47a00", lw=0.8, ls="--", alpha=0.5)
-        self.ax_i.axhline(-SC.AMP_MAX_MA_DC, color="#c47a00", lw=0.8, ls="--", alpha=0.5)
+        self.ax_i.axhline( SC.AMP_MAX_MA_DC, color=theme.WARN, lw=0.8, ls="--", alpha=0.5)
+        self.ax_i.axhline(-SC.AMP_MAX_MA_DC, color=theme.WARN, lw=0.8, ls="--", alpha=0.5)
 
         # Mirrored voltage axis on the right-hand side, requested for readability.
         # A secondary y-axis tracks ax_v's data limits automatically, so it
@@ -728,8 +729,8 @@ class AmpTab(QWidget):
         self._apply_btn.setEnabled(pending)
         if pending:
             self._apply_btn.setStyleSheet(
-                "QPushButton { background:#c47a00; color:white; font-weight:bold;"
-                " padding:2px 10px; }"
+                f"QPushButton {{ background:{theme.WARN}; color:white; font-weight:bold;"
+                " padding:2px 10px; }}"
                 "QPushButton:hover { background:#d98c00; }"
             )
         else:
@@ -928,7 +929,7 @@ class AmpTab(QWidget):
         self._frozen_right_edge = None
         self.lbl_mode.setText(f"● LIVE  ({self._window_label()})")
         self.lbl_mode.setStyleSheet(
-            "color: #1a7a1a; font-weight: bold; padding: 2px 6px;"
+            theme.status_label(theme.OK) + " padding: 2px 6px;"
         )
         self.btn_jump_live.setVisible(False)
 

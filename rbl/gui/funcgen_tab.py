@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from rbl.hardware.funcgen_driver import DG1022Z, discover, MAX_GEN_VOLTS, MAX_AMP_VPP
+from rbl.gui import theme
 
 # Persistence file — keyed on serial, survives replug
 _CONFIG_PATH = Path.home() / ".config" / "rbl" / "funcgen.json"
@@ -275,12 +276,12 @@ class ChannelPanel(QGroupBox):
         if peak > PEAK_MAX_VOLTS + 1e-9:
             # Over the amplifier's ±5 V rail — apply will be blocked.
             self.lbl_hv.setStyleSheet(
-                "color: #c0392b; font-size: 10px; font-weight: bold;"
+                f"color: {theme.FAULT}; font-size: 10px; font-weight: bold;"
             )
         elif peak > PEAK_WARN_VOLTS + 1e-9:
             # Above the 4 V advisory — apply will ask to confirm.
             self.lbl_hv.setStyleSheet(
-                "color: #b06a00; font-size: 10px; font-weight: bold;"
+                f"color: {theme.WARN}; font-size: 10px; font-weight: bold;"
             )
         else:
             self.lbl_hv.setStyleSheet("color: #7a2000; font-size: 10px;")
@@ -375,8 +376,8 @@ class FuncGenTab(QWidget):
         status_row = QHBoxLayout()
         self.lbl_status_a = QLabel("● Gen A: not connected")
         self.lbl_status_b = QLabel("● Gen B: not connected")
-        self.lbl_status_a.setStyleSheet("color: #666666; font-weight: bold;")
-        self.lbl_status_b.setStyleSheet("color: #666666; font-weight: bold;")
+        self.lbl_status_a.setStyleSheet(theme.pill(False))
+        self.lbl_status_b.setStyleSheet(theme.pill(False))
         status_row.addWidget(self.lbl_status_a)
         status_row.addStretch()
         status_row.addWidget(self.lbl_status_b)
@@ -647,10 +648,10 @@ class FuncGenTab(QWidget):
                 serial = self.cbo_gen_a.currentData() if gen_letter == "A" \
                          else self.cbo_gen_b.currentData()
                 lbl.setText(f"● Gen {gen_letter}: connected  [{serial}]")
-                lbl.setStyleSheet("color: #1a7a1a; font-weight: bold;")
+                lbl.setStyleSheet(theme.pill(True))
             else:
                 lbl.setText(f"● Gen {gen_letter}: not connected")
-                lbl.setStyleSheet("color: #666666; font-weight: bold;")
+                lbl.setStyleSheet(theme.pill(False))
 
         for key, panel in self.panels.items():
             gen_letter = key[0]
@@ -702,7 +703,7 @@ class FuncGenTab(QWidget):
                         "REFUSED: Gen A is already EXT. Return Gen A to INT first."
                     )
                     self.lbl_ref_status.setStyleSheet(
-                        "color: #c0392b; font-style: italic; font-size: 10px;"
+                        f"color: {theme.FAULT}; font-style: italic; font-size: 10px;"
                     )
                     self.chk_ext_ref.blockSignals(True)
                     self.chk_ext_ref.setChecked(False)
@@ -727,7 +728,7 @@ class FuncGenTab(QWidget):
                         f"Lock FAILED: Gen B reports {actual}. Check cable and level."
                     )
                     self.lbl_ref_status.setStyleSheet(
-                        "color: #c0392b; font-style: italic; font-size: 10px;"
+                        f"color: {theme.FAULT}; font-style: italic; font-size: 10px;"
                     )
                     self.chk_ext_ref.blockSignals(True)
                     self.chk_ext_ref.setChecked(False)

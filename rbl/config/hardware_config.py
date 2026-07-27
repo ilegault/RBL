@@ -15,6 +15,7 @@ Galil calibration constants from the 2HA075520 slit controller specification ema
   - SP = 1800 steps/s (normal), 900 steps/s (homing)
   - Motor type MT = -2.5, smoothing YB = 2.0, amplifier gain AG = 3
 """
+from rbl.gui.theme import JAW_COLORS
 
 # Galil axis letter -> human-readable name
 AXIS_NAMES = {
@@ -152,12 +153,9 @@ AMP_MAX_MA_DC  = 20.0   # continuous DC rating
 AMP_MAX_MA_PK  = 100.0  # 4 ms peak rating
 
 # Plot colors, matched to the log-amp tab's palette for visual consistency.
-AMP_COLORS = {
-    "X+": "#e74c3c",   # red
-    "X-": "#3498db",   # blue
-    "Y+": "#c47a00",   # amber
-    "Y-": "#1a7a1a",   # green
-}
+# Single definition lives in rbl.gui.theme.JAW_COLORS; re-exported here so
+# existing SC.AMP_COLORS callers don't need to change.
+AMP_COLORS = JAW_COLORS
 
 # The complete channel set the shared poll worker must read every cycle:
 # 4 log amps + 8 amplifier monitors = 12 channels, ONE eReadNames round trip.
