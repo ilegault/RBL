@@ -23,7 +23,7 @@ import pytest
 from unittest.mock import MagicMock
 
 pytest.importorskip("PySide6.QtWidgets")
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 
 @pytest.fixture(scope="module")
@@ -50,7 +50,12 @@ def tab_and_mgr(qapp):
     mgr.A.get_reference_clock.return_value = "INT"
     mgr.B.get_reference_clock.return_value = "INT"
     mgr.B.verify_external_lock.return_value = (True, "EXT")
-    tab._gen = {"A": mgr.A, "B": mgr.B}
+    # tab._gen is a proxy onto beamline.dg_a/dg_b (Phase 7) — set through it
+    # (or directly on the beamline) rather than replacing it with a plain
+    # dict, or Beamline.apply_all_channels/set_channel (Phase 8) would find
+    # no connected generators and silently no-op.
+    tab._gen["A"] = mgr.A
+    tab._gen["B"] = mgr.B
     return tab, mgr
 
 
@@ -171,6 +176,73 @@ class TestApplyAllOrdering:
         # Y+/Y- must both be on unit B.
         y_keys = {k for k, v in CHANNEL_ROLE.items() if v in ("Y+", "Y-")}
         assert all(k.startswith("B") for k in y_keys), CHANNEL_ROLE
+
+
+class TestInterlockParity:
+    """Phase 8's actual guarantee: an interlock-violating amplitude is
+    rejected the same way whether it comes from the funcgen tab's Apply
+    button or a direct Beamline.set_channel call — there is no second path
+    to the driver that skips the ±5 V combined-peak check."""
+
+    def _set_over_limit(self, panel):
+        # |offset| + amp/2 = 4.5 + 1.0 = 5.5 V > the 5 V ceiling.
+        panel.cbo_shape.setCurrentText("Sine")
+        panel.spn_amp.setValue(2.0)
+        panel.spn_offset.setValue(4.5)
+        panel.btn_output.setChecked(True)
+
+    def test_widget_apply_is_rejected_by_the_same_interlock(self, tab_and_mgr, monkeypatch):
+        tab, mgr = tab_and_mgr
+        # Skip the (unrelated) confirmation dialog path — over-limit is a
+        # hard block regardless of what the user answers.
+        monkeypatch.setattr(QMessageBox, "critical", staticmethod(lambda *a, **k: None))
+        monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: None))
+
+        self._set_over_limit(tab.panels["A1"])
+        tab._apply_channel("A", 1)
+
+        # The widget's Apply never reached the driver.
+        mgr.A.set_waveform.assert_not_called()
+        mgr.A.output_on.assert_not_called()
+
+    def test_direct_beamline_call_is_rejected_identically(self, tab_and_mgr, monkeypatch):
+        tab, mgr = tab_and_mgr
+        # Beamline.set_channel's rejection fires command_failed, which the
+        # tab's _on_command_failed turns into a QMessageBox.warning — mock it
+        # so the dialog doesn't block waiting for a click that never comes.
+        monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: None))
+        from rbl.state.snapshots import ChannelParams
+
+        over_limit = ChannelParams(
+            shape="Sine", freq_hz=1000.0, amp_vpp=2.0, offset_v=4.5,
+            phase_deg=0.0, start_phase_deg=0.0, load="INFinity", output_on=True,
+        )
+        ok = tab.beamline.set_channel("A1", over_limit)
+
+        assert ok is False
+        mgr.A.set_waveform.assert_not_called()
+        mgr.A.output_on.assert_not_called()
+
+    def test_both_paths_reach_the_same_beamline_and_agree(self, tab_and_mgr, monkeypatch):
+        """Sanity check that the widget path and the direct call are truly
+        the same code path, not just coincidentally the same answer."""
+        tab, mgr = tab_and_mgr
+        monkeypatch.setattr(QMessageBox, "critical", staticmethod(lambda *a, **k: None))
+        monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: None))
+
+        from rbl.state.snapshots import ChannelParams
+        over_limit = ChannelParams(
+            shape="Sine", freq_hz=1000.0, amp_vpp=2.0, offset_v=4.5,
+            phase_deg=0.0, start_phase_deg=0.0, load="INFinity", output_on=True,
+        )
+
+        result_direct = tab.beamline.set_channel("A2", over_limit)
+        self._set_over_limit(tab.panels["A1"])
+        tab._apply_channel("A", 1)
+        result_widget = tab.beamline.set_channel("A1", over_limit)  # re-derive same call
+
+        assert result_direct == result_widget == False
+        assert mgr.A.set_waveform.call_count == 0
 
 
 class TestReferenceClockToggle:

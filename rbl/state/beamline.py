@@ -26,8 +26,9 @@ from rbl.hardware import beam_reconstruction as BR
 from rbl.hardware.labjack_driver import LabJackT7
 from rbl.hardware.labjack_stream_worker import LabJackStreamWorker
 from rbl.hardware.galil_driver import GalilController
+from rbl.hardware.funcgen_safety import channel_peak_volts, PEAK_MAX_VOLTS
 from rbl.state.snapshots import (
-    AxisSnapshot, MotorState, ChannelSnapshot, FuncGenState,
+    AxisSnapshot, MotorState, ChannelSnapshot, ChannelParams, FuncGenState,
     LogAmpState, AmpChannelSnapshot, AmpState,
 )
 
@@ -360,6 +361,180 @@ class Beamline(QObject):
         self.funcgens_changed.emit(FuncGenState(
             connected={"A": False, "B": False}, timebase={}, channels={},
         ))
+
+    # ---- Command surface ---------------------------------------------------------
+    #
+    # The single path every caller — the funcgen tab, the motor tab, and any
+    # future Overview control — must go through to reach the driver. In
+    # particular the ±5 V combined-peak interlock lives here, not in a widget:
+    # a control that reached the driver by another route would bypass it
+    # entirely. Failures are reported via command_failed rather than raised,
+    # so a bad Overview-tab command can't take down the event loop.
+
+    def _gen_for(self, gen_letter: str):
+        return self.dg_a if gen_letter == "A" else self.dg_b
+
+    def set_channel(self, key: str, params: ChannelParams) -> bool:
+        """Push one channel's parameters to its generator.
+
+        `key` is e.g. "A1" (generator letter + channel number). Returns True
+        on success. The combined-peak interlock (|offset| + amp/2) is
+        enforced unconditionally: a peak above PEAK_MAX_VOLTS is rejected
+        here regardless of what any caller already checked.
+        """
+        gen_letter, channel = key[0], int(key[1])
+        gen = self._gen_for(gen_letter)
+        if gen is None:
+            self.command_failed.emit("funcgen", f"{key}: generator not connected")
+            return False
+
+        peak = channel_peak_volts(params.shape, params.amp_vpp, params.offset_v)
+        if peak > PEAK_MAX_VOLTS + 1e-9:
+            self.command_failed.emit(
+                "funcgen",
+                f"{key}: combined peak {peak:.4g} V exceeds the "
+                f"{PEAK_MAX_VOLTS:.0f} V amplifier input limit",
+            )
+            return False
+
+        try:
+            warn = gen.set_waveform(channel, params.shape, params.freq_hz,
+                                     params.amp_vpp, params.offset_v, params.phase_deg)
+            gen.set_output_load(channel, params.load)
+            gen.set_start_phase(channel, params.start_phase_deg)
+            if params.output_on:
+                gen.output_on(channel)
+            else:
+                gen.output_off(channel)
+            if warn:
+                self.command_failed.emit("funcgen", f"{key}: {warn}")
+            return True
+        except Exception as e:
+            self.command_failed.emit("funcgen", f"{key}: {e}")
+            return False
+
+    def apply_all_channels(self, params_by_key: dict) -> bool:
+        """Configure + enable every given channel together.
+
+        `params_by_key`: {"A1": ChannelParams, ...} for whichever channels
+        the caller wants applied — channels whose generator isn't connected
+        are silently skipped.
+
+        Preserves the three-phase ordering exactly (load-bearing for raster
+        alignment): configure every channel first (outputs untouched), THEN
+        fire every output-enable back-to-back, THEN run :PHASe:SYNChronize
+        last on each connected unit, once the relays have settled.
+        :OUTPut ON only closes a relay — it does not reset the waveform's DDS
+        phase accumulator, so aligning before the relays are closed would
+        lock in the wrong start point.
+
+        The interlock is checked for EVERY channel before anything is sent —
+        applying a partial raster is worse than applying none, so if any
+        channel is over the hard ceiling, nothing goes out at all.
+        """
+        active = []   # (key, gen_letter, channel, gen, params)
+        for key, params in params_by_key.items():
+            gen = self._gen_for(key[0])
+            if gen is not None:
+                active.append((key, key[0], int(key[1]), gen, params))
+        if not active:
+            return False
+
+        blocked = []
+        for key, _, _, _, params in active:
+            peak = channel_peak_volts(params.shape, params.amp_vpp, params.offset_v)
+            if peak > PEAK_MAX_VOLTS + 1e-9:
+                blocked.append(key)
+        if blocked:
+            self.command_failed.emit(
+                "funcgen",
+                "Apply All blocked — over the "
+                f"{PEAK_MAX_VOLTS:.0f} V limit: " + ", ".join(blocked),
+            )
+            return False
+
+        # Phase 1: configure every channel (outputs untouched).
+        try:
+            for key, gen_letter, channel, gen, params in active:
+                warn = gen.set_waveform(channel, params.shape, params.freq_hz,
+                                         params.amp_vpp, params.offset_v, params.phase_deg)
+                gen.set_output_load(channel, params.load)
+                gen.set_start_phase(channel, params.start_phase_deg)
+                if warn:
+                    self.command_failed.emit("funcgen", f"{key}: {warn}")
+        except Exception as e:
+            self.command_failed.emit("funcgen", f"Apply All failed during configure: {e}")
+            return False
+
+        # Phase 2: enable outputs — OFF ones first, then all ON back-to-back.
+        try:
+            for key, gen_letter, channel, gen, params in active:
+                if not params.output_on:
+                    gen.output_off(channel)
+            for key, gen_letter, channel, gen, params in active:
+                if params.output_on:
+                    gen.output_on(channel)
+        except Exception as e:
+            self.command_failed.emit("funcgen", f"Apply All failed during output enable: {e}")
+            return False
+
+        # Phase 3: align each connected unit's two channels, last.
+        time.sleep(0.05)   # let the output relays physically settle first
+        for gen_letter in ("A", "B"):
+            gen = self._gen_for(gen_letter)
+            if gen is not None:
+                try:
+                    gen.align_phase(1)
+                except Exception as e:
+                    self.command_failed.emit("funcgen", f"Gen {gen_letter}: align phase failed: {e}")
+
+        return True
+
+    def all_outputs_off(self):
+        """Turn off every function-generator channel's output.
+
+        Deliberately narrow: this only opens the output relays, the same as
+        a manual "Output OFF" click on each channel. It does not disconnect,
+        zero any setpoint, or otherwise touch the generators.
+        """
+        for gen_letter in ("A", "B"):
+            gen = self._gen_for(gen_letter)
+            if gen is None:
+                continue
+            for channel in (1, 2):
+                try:
+                    gen.output_off(channel)
+                except Exception as e:
+                    self.command_failed.emit("funcgen", f"{gen_letter}{channel}: {e}")
+
+    def move_jaw(self, jaw: str, mm: float) -> bool:
+        """Move one jaw to an absolute position in mm.
+
+        `jaw` is a jaw label ("X+", "X-", "Y+", "Y-"), not a Galil axis
+        letter — callers shouldn't need to know the axis mapping.
+        """
+        axis_letter = next((a for a, j in SC.AXIS_NAMES.items() if j == jaw), None)
+        if axis_letter is None:
+            self.command_failed.emit("motors", f"{jaw}: not a valid jaw label")
+            return False
+        if not self.galil.connected:
+            self.command_failed.emit("motors", f"{jaw}: Galil not connected")
+            return False
+        try:
+            self.galil.move_absolute(axis_letter, SC.mm_to_counts(axis_letter, mm))
+            return True
+        except Exception as e:
+            self.command_failed.emit("motors", f"{jaw}: {e}")
+            return False
+
+    def emergency_stop(self):
+        """Abort all motion immediately (Galil AB command)."""
+        if not self.galil.connected:
+            return
+        try:
+            self.galil.abort()
+        except Exception as e:
+            self.command_failed.emit("motors", f"emergency stop: {e}")
 
     # ---- Full shutdown (MainWindow.closeEvent) ----------------------------------
 

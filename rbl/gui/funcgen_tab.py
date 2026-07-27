@@ -13,7 +13,6 @@ Safety rules enforced here:
     disabled automatically (instrument retains state after app exits).
 """
 import logging
-import time
 
 log = logging.getLogger(__name__)
 
@@ -31,6 +30,7 @@ from rbl.hardware.funcgen_safety import (
     channel_peak_volts, PEAK_MAX_VOLTS, PEAK_WARN_VOLTS, _AMP_GAIN, CHANNEL_ROLE,
 )
 from rbl.config.persistence import load_config as _load_config, save_config as _save_config
+from rbl.state.snapshots import ChannelParams
 from rbl.gui import theme
 from rbl.gui.widgets.command_console import LogPane
 
@@ -307,6 +307,7 @@ class FuncGenTab(QWidget):
         # Driver instances live on Beamline (None until connected); this tab
         # accesses them through a dict-like proxy, not a dict of its own.
         self.beamline = beamline
+        self.beamline.command_failed.connect(self._on_command_failed)
         self._gen = _GenProxy(beamline)
         self._discovered: list[dict] = []   # last discover() result
         self._config = _load_config()
@@ -785,6 +786,13 @@ class FuncGenTab(QWidget):
             )
 
     # ---- Apply helpers -------------------------------------------------------
+    #
+    # The ±5 V combined-peak interlock is enforced inside Beamline.set_channel
+    # / apply_all_channels — every path to the hardware goes through those,
+    # so a control that reached the driver another way (e.g. a future
+    # Overview-tab control) cannot bypass it. What stays here is advisory-only:
+    # a local pre-check purely to decide whether to show the "apply anyway?"
+    # confirmation for the softer warn tier, which Beamline has no way to ask.
 
     @staticmethod
     def _peak_status(params: dict):
@@ -801,31 +809,20 @@ class FuncGenTab(QWidget):
             return "warn", peak
         return "ok", peak
 
-    def _configure_channel(self, gen_letter: str, channel: int, params: dict) -> str:
-        """Push waveform + load to one channel WITHOUT touching its output gate.
+    @staticmethod
+    def _to_channel_params(params: dict) -> ChannelParams:
+        return ChannelParams(
+            shape=params["shape"], freq_hz=params["freq"], amp_vpp=params["amp"],
+            offset_v=params["offset"], phase_deg=params["phase"],
+            start_phase_deg=params["start_phase"], load=params["load"],
+            output_on=params["output"],
+        )
 
-        Returns any clamp-warning string from set_waveform ("" if none).  The
-        output on/off is deliberately NOT sent here so callers can enable the
-        outputs separately (see _apply_all's synchronized burst).
-        """
-        g = self._gen[gen_letter]
-        warn = g.set_waveform(
-            channel,
-            params["shape"],
-            params["freq"],
-            params["amp"],
-            params["offset"],
-            params["phase"],
-        )
-        g.set_output_load(channel, params["load"])
-        # Phase 4 trace: log the start-phase command so its channel number and
-        # value are visible in the SCPI console even without DEBUG logging.
-        self._log_scpi(
-            f"# {gen_letter}{channel}: start_phase → "
-            f":SOURce{channel}:PHASe {params['start_phase']:.1f}"
-        )
-        g.set_start_phase(channel, params["start_phase"])
-        return warn
+    def _on_command_failed(self, subsystem: str, msg: str):
+        if subsystem != "funcgen":
+            return
+        self._log_scpi(f"! {msg}")
+        QMessageBox.warning(self, "Command failed", msg)
 
     def _apply_channel(self, gen_letter: str, channel: int):
         g = self._gen[gen_letter]
@@ -835,21 +832,10 @@ class FuncGenTab(QWidget):
         panel  = self.panels[key]
         params = panel.get_params()
 
-        # Combined-peak interlock: block outright above 5 V; confirm above 4 V.
+        # Advisory-only: ask before applying a channel above the 4 V warn
+        # threshold. If the operator confirms (or the peak is over the hard
+        # 5 V ceiling), Beamline.set_channel makes the real decision below.
         status, peak = self._peak_status(params)
-        if status == "block":
-            msg = (f"combined peak {peak:.4g} V exceeds the "
-                   f"{PEAK_MAX_VOLTS:.0f} V amplifier input limit")
-            self._log_scpi(f"! {key}: blocked — {msg}")
-            QMessageBox.critical(
-                self, "Amplifier limit exceeded",
-                f"Channel {key}: |offset| + ½·amplitude = {peak:.4g} V, which "
-                f"exceeds the {PEAK_MAX_VOLTS:.0f} V amplifier input ceiling.\n\n"
-                f"Even for an AC waveform the peak (offset plus half the "
-                f"peak-to-peak swing) must stay ≤ {PEAK_MAX_VOLTS:.0f} V. "
-                f"Reduce the offset or the amplitude, then apply again."
-            )
-            return
         if status == "warn":
             resp = QMessageBox.question(
                 self, "High peak voltage",
@@ -864,80 +850,45 @@ class FuncGenTab(QWidget):
                 self._log_scpi(f"# {key}: apply cancelled at high-peak confirmation")
                 return
 
-        try:
-            warn = self._configure_channel(gen_letter, channel, params)
-            if params["output"]:
-                g.output_on(channel)
-            else:
-                g.output_off(channel)
-            if warn:
-                self._log_scpi(f"! {key}: {warn}")
-                QMessageBox.warning(self, "Safety clamp", f"Channel {key}: {warn}")
-            else:
-                self._log_scpi(f"# {key}: applied")
-        except Exception as e:
-            self._log_scpi(f"! {key}: {e}")
-            QMessageBox.critical(self, "Apply failed", str(e))
+        self._log_scpi(
+            f"# {gen_letter}{channel}: start_phase → "
+            f":SOURce{channel}:PHASe {params['start_phase']:.1f}"
+        )
+        if self.beamline.set_channel(key, self._to_channel_params(params)):
+            self._log_scpi(f"# {key}: applied")
 
     def _apply_all(self):
-        """Apply all four channels so their outputs come up together.
+        """Apply all connected channels so their outputs come up together.
 
-        The old version applied each channel fully — waveform, load AND output —
-        one at a time, so the four outputs enabled tens to hundreds of ms apart
-        (a whole reconfigure between each), which threw the raster off.
+        Delegates the actual three-phase configure/enable/align sequence and
+        the interlock to Beamline.apply_all_channels — see that method's
+        docstring for why the ordering matters for raster alignment. This
+        method is now just: gather what's connected, ask about the warn
+        tier, apply, then refresh the clock-status readout.
 
-        This does it in three ordered phases instead:
-          1. configure every channel (waveform + load + start phase) with
-             outputs untouched;
-          2. fire every "output ON" back-to-back so the inter-channel skew
-             shrinks to just the gap between consecutive enable commands.
-             NOTE: :OUTPut ON closes an output relay only — it does NOT start
-             or reset the waveform. The DDS phase accumulator is only reset by
-             :PHASe:SYNChronize, so align must run AFTER outputs are enabled.
-          3. after a short relay-settle delay, run each connected unit's
-             Align-Phase (:PHASe:SYNChronize) as the very last operation so
-             both channels of each unit restart phase-coherent from the
-             start-phases set in step 1.
-
-        NOTE ON CROSS-UNIT SYNC: steps 2–3 lock the channels WITHIN each Rigol
-        and start all four close together, but two SEPARATE DG1022Z units drift
-        on their independent clocks.  A stable X/Y phase relationship ACROSS the
-        two units also needs a shared timebase — the 10 MHz reference cable and
-        the "Share 10 MHz timebase" option below.
+        NOTE ON CROSS-UNIT SYNC: Beamline's ordering locks the channels
+        WITHIN each Rigol and starts all four close together, but two
+        SEPARATE DG1022Z units drift on their independent clocks. A stable
+        X/Y phase relationship ACROSS the two units also needs a shared
+        timebase — the 10 MHz reference cable and the "Share 10 MHz
+        timebase" option below.
         """
         # Gather only the channels whose generator is connected.
-        active = []   # (key, gen_letter, channel, panel, params)
+        active = {}   # key -> params dict
         for key, panel in self.panels.items():
             gen_letter = key[0]
-            channel    = int(key[1])
             if self._gen[gen_letter] is not None:
-                active.append((key, gen_letter, channel, panel, panel.get_params()))
+                active[key] = panel.get_params()
         if not active:
             return
 
-        # ── Phase 0: validate the interlock for EVERY channel first ──────────
-        # Applying a partial raster is worse than applying none, so if any
-        # channel is over the hard ceiling nothing is sent at all.
-        blocked, warn_ch = [], []
-        for key, _, _, _, params in active:
+        # Advisory-only warn-tier confirmation (see _apply_channel). The hard
+        # ceiling is Beamline's call, made inside apply_all_channels below.
+        warn_ch = []
+        for key, params in active.items():
             status, peak = self._peak_status(params)
-            if status == "block":
-                blocked.append((key, peak))
-            elif status == "warn":
+            if status == "warn":
                 warn_ch.append((key, peak))
-        if blocked:
-            lines = "\n".join(f"  {k}: peak {p:.4g} V" for k, p in blocked)
-            self._log_scpi("! Apply All blocked — channel(s) over the limit:")
-            for k, p in blocked:
-                self._log_scpi(f"!   {k}: peak {p:.4g} V")
-            QMessageBox.critical(
-                self, "Amplifier limit exceeded",
-                f"These channels exceed the {PEAK_MAX_VOLTS:.0f} V amplifier "
-                f"input ceiling (|offset| + ½·amplitude):\n\n{lines}\n\n"
-                f"Nothing was applied. Reduce the offending channels, then "
-                f"Apply All again."
-            )
-            return
         if warn_ch:
             lines = "\n".join(f"  {k}: peak {p:.4g} V" for k, p in warn_ch)
             resp = QMessageBox.question(
@@ -952,59 +903,12 @@ class FuncGenTab(QWidget):
                 self._log_scpi("# Apply All cancelled at high-peak confirmation")
                 return
 
-        # ── Phase 1: configure every channel (outputs left as they are) ──────
-        warnings = []
-        try:
-            for key, gen_letter, channel, _, params in active:
-                w = self._configure_channel(gen_letter, channel, params)
-                if w:
-                    warnings.append((key, w))
-        except Exception as e:
-            self._log_scpi(f"! Apply All failed during configure: {e}")
-            QMessageBox.critical(self, "Apply All failed", str(e))
-            return
-
-        # ── Phase 2: enable outputs — OFF ones first, then all ON together ───
-        # :OUTPut ON closes an output relay; it does not start or reset the
-        # waveform. The DDS phase accumulator is only reset by
-        # :PHASe:SYNChronize, so align must be the LAST operation, once all
-        # relays are closed. Keep every "output ON" consecutive so the
-        # inter-channel skew shrinks to just the gap between USB-TMC writes.
-        try:
-            for key, gen_letter, channel, _, params in active:
-                if not params["output"]:
-                    self._gen[gen_letter].output_off(channel)
-            for key, gen_letter, channel, _, params in active:
-                if params["output"]:
-                    self._gen[gen_letter].output_on(channel)
-        except Exception as e:
-            self._log_scpi(f"! Apply All failed during output enable: {e}")
-            QMessageBox.critical(self, "Apply All failed", str(e))
-            return
-
-        # ── Phase 3: align each connected unit's two channels ────────────────
-        # Sleep briefly so the output relays have physically settled before
-        # resetting the DDS phase accumulators via :PHASe:SYNChronize.
-        time.sleep(0.05)
-        for gen_letter in ("A", "B"):
-            g = self._gen[gen_letter]
-            if g is not None:
-                try:
-                    g.align_phase(1)
-                except Exception as e:
-                    self._log_scpi(f"! Gen {gen_letter}: align phase failed: {e}")
-
-        if warnings:
-            for key, w in warnings:
-                self._log_scpi(f"! {key}: {w}")
-            QMessageBox.warning(
-                self, "Safety clamp",
-                "\n".join(f"{key}: {w}" for key, w in warnings)
+        params_by_key = {k: self._to_channel_params(p) for k, p in active.items()}
+        if self.beamline.apply_all_channels(params_by_key):
+            self._log_scpi(
+                f"# Apply All: configured {len(active)} channel(s), "
+                f"enabled outputs, aligned phase"
             )
-        self._log_scpi(
-            f"# Apply All: configured {len(active)} channel(s), "
-            f"enabled outputs, aligned phase"
-        )
         self._refresh_clock_status()
 
     # ---- Poll (read-only) ----------------------------------------------------
