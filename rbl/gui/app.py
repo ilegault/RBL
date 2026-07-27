@@ -111,6 +111,10 @@ class MainWindow(QMainWindow):
         self.amp_tab.profile_change_requested.connect(self._set_stream_profile)
         self.amp_tab.single_channel_change_requested.connect(self._set_stream_channel)
 
+        # Slit geometry feeds the beam-position indicator: the log-amp currents
+        # only become millimetres once you know where the jaws are.
+        self.motor_tab.jaw_state.connect(self.current_tab.set_jaw_state)
+
         # Start on Stepper Motors
         self._outer_stack.setCurrentIndex(0)
         self._outer_tabbar.tabBarClicked.connect(self._on_outer_tab_clicked)

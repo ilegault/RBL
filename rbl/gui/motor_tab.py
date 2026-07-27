@@ -167,6 +167,10 @@ class AxisControls(QGroupBox):
         self.get_galil = get_galil_fn
         self.log       = log_fn
         self._homing_worker: HomingWorker | None = None
+        # Has this axis had its zero established since the app started?  The
+        # controller does not remember, and every mm figure downstream is wrong
+        # without it, so consumers get told rather than left to assume.
+        self.zeroed = False
 
         main_layout = QVBoxLayout(self)
         main_layout.setSpacing(2)
@@ -432,6 +436,7 @@ class AxisControls(QGroupBox):
         try:
             self.log(f"> DP {self.axis}=0")
             g.define_zero(self.axis)
+            self.zeroed = True
         except (GalilError, ConnectionError) as e:
             self.log(f"! {e}")
 
@@ -476,6 +481,9 @@ class AxisControls(QGroupBox):
 
     def _on_homing_done(self, success: bool, msg: str):
         self.btn_home.setText(f"Home {self.axis}")
+        if success:
+            # Homing ends on DP=0, so the axis is now referenced.
+            self.zeroed = True
         self.log(f"{'✓' if success else '✗'} {msg}")
         if not success:
             QMessageBox.warning(self, "Homing failed", msg)
@@ -570,6 +578,14 @@ class HistoryLineEdit(QLineEdit):
 
 class MotorTab(QWidget):
     """The "Stepper Motors" outer tab."""
+
+    # Jaw geometry for anything that needs to know where the slits are.  The
+    # beam-position indicator on the log-amp tab reconstructs the beam from
+    # jaw positions plus currents, so it needs this at poll rate.
+    #   {"connected": bool,
+    #    "zeroed":    bool,                      # all four axes referenced
+    #    "positions": {"X+": mm, ...}}           # UNSIGNED distance from centre
+    jaw_state = Signal(dict)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -757,6 +773,9 @@ class MotorTab(QWidget):
         self._set_buttons_connected(False)
         self.lbl_model.setText("")
         self._log_line("# Disconnected.")
+        # Positions go stale the moment the link drops; say so rather than
+        # letting consumers keep drawing the last known geometry as if live.
+        self.jaw_state.emit({"connected": False, "zeroed": False, "positions": {}})
 
     def _set_buttons_connected(self, on: bool):
         self.btn_connect.setText("Disconnect" if on else "Connect")
@@ -811,6 +830,14 @@ class MotorTab(QWidget):
     def _on_state(self, snapshot: dict):
         for axis, axis_state in snapshot.items():
             self.axes[axis].update_state(axis_state)
+
+        positions = {SC.AXIS_NAMES[axis]: SC.counts_to_mm(axis, st["pos"])
+                     for axis, st in snapshot.items()}
+        self.jaw_state.emit({
+            "connected": True,
+            "zeroed":    all(p.zeroed for p in self.axes.values()),
+            "positions": positions,
+        })
 
     def _on_poll_error(self, msg: str):
         self._log_line(f"! Poll thread error: {msg}")

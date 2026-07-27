@@ -14,12 +14,12 @@ Plot navigation (from TDS-T8 live_plot mechanism):
 """
 import time
 import math
-from PySide6.QtCore import QTimer, Qt, QSize, QPointF
+from PySide6.QtCore import QTimer, Qt, QSize, QPointF, QRectF
 from PySide6.QtGui import QFont, QPainter, QColor, QPen, QBrush
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel,
     QPushButton, QMessageBox, QSizePolicy,
-    QSlider,
+    QSlider, QComboBox, QDoubleSpinBox, QFormLayout,
 )
 
 import matplotlib
@@ -31,122 +31,550 @@ from rbl.hardware.labjack_driver import LJM_AVAILABLE
 from rbl.hardware.current_monitor import (
     voltage_to_current, format_current, beam_centering, RollingBuffer,
 )
+from rbl.hardware import beam_reconstruction as BR
 from rbl.config import hardware_config as SC
 from labjack_panel import LabJackPanel
 
 
 # ─── Beam-position indicator ───────────────────────────────────────────────────
 
-class BeamPositionIndicator(QWidget):
-    """A small square frame with a dot marking the estimated beam position.
+# Jaw colours reused from the plot / readouts for a consistent palette.
+_JAW_COLORS = {
+    "X+": "#e74c3c",
+    "X-": "#3498db",
+    "Y+": "#c47a00",
+    "Y-": "#1a7a1a",
+}
 
-    The dot is placed from the left/right (X) and top/bottom (Y) log-amp current
-    imbalance: more current collected on a jaw pulls the estimate toward that
-    jaw.  Each axis takes the ``beam_centering`` metric in [-1, 1] (0 = centred,
-    +1 = fully on the '+' jaw, -1 = fully on the '-' jaw).  This is only a coarse
-    guess — the four slit jaws sample the beam tails, not its centroid — so it is
-    labelled as an estimate, not a measurement.
+# FWHM -> sigma for a Gaussian.  Operators think in spot width, the maths wants
+# sigma, so the spinbox takes FWHM and this converts.
+_FWHM_TO_SIGMA = 1.0 / 2.35482
+
+
+class _ApertureView(QWidget):
+    """The slit aperture and the beam inside it, drawn to scale in millimetres.
+
+    One isotropic mm-per-pixel scale is used for both axes, so a 3 mm gap really
+    does look three times a 1 mm gap and a 3x10 mm aperture really does look
+    tall and narrow.  The blades are drawn where the Galil says they are; the
+    beam is drawn where the log-amp currents say it is.
+
+    Nothing here computes anything — the parent hands it a finished
+    ``BeamEstimate`` and it draws what it is given.
     """
-
-    # Jaw colours reused from the plot / readouts for a consistent palette.
-    _COL_XP = QColor("#e74c3c")
-    _COL_XM = QColor("#3498db")
-    _COL_YP = QColor("#c47a00")
-    _COL_YM = QColor("#1a7a1a")
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._x = float("nan")   # X imbalance in [-1, 1]  (+ → X+ jaw)
-        self._y = float("nan")   # Y imbalance in [-1, 1]  (+ → Y+ jaw)
-        # Small but shrinkable so the whole app can still be compressed.
-        self.setMinimumSize(80, 80)
-        self.setMaximumSize(200, 200)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.setToolTip(
-            "Estimated beam position from the relative log-amp currents.\n"
-            "The dot moves toward whichever jaw is collecting more current."
-        )
+        self.edges     = {}      # jaw -> SIGNED mm; empty when Galil unavailable
+        self.currents  = {}      # jaw -> Amps
+        self.est       = None    # BR.BeamEstimate, or None before first data
+        self.sigma_mm  = 0.85
+        self.span_x    = 0.0     # raster half-travel, 0 in static mode
+        self.span_y    = 0.0
+        self.raster    = False
+        self.ratio_x   = float("nan")   # fallback when jaw positions are absent
+        self.ratio_y   = float("nan")
+        self.setMinimumSize(190, 190)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding,
+                           QSizePolicy.Policy.Expanding)
 
-    def set_position(self, x: float, y: float):
-        """Update the estimate (values are the per-axis centering metric)."""
-        self._x = x
-        self._y = y
-        self.update()
+    # ---- Geometry helpers ---------------------------------------------------
 
-    def sizeHint(self):
-        return QSize(150, 150)
+    def _fov_mm(self) -> tuple:
+        """Half-extent of the field of view per axis, in mm, as (x, y).
 
-    # Keep the drawable region square regardless of the box it lands in.
-    def hasHeightForWidth(self):
-        return True
+        Sized from the jaws themselves so the aperture always fills a useful
+        fraction of the frame, with headroom past the blades — that margin is
+        where raster overscan shows up, so it has to be visible.
 
-    def heightForWidth(self, w):
-        return w
+        The two axes are sized independently because the aperture is not
+        square: a 3 mm gap on X beside a 10 mm gap on Y would leave the X view
+        almost empty if both shared one extent.  The drawing still uses a
+        single mm-per-pixel scale, so the picture stays honest — the axes
+        differ in how much they SHOW, not in how much a millimetre measures.
+        """
+        def reach(jaws, beam_centre, span):
+            r = max((abs(self.edges[j]) for j in jaws if j in self.edges),
+                    default=3.0)
+            if self.est is not None and self.est.ok:
+                r = max(r, abs(beam_centre) + span + 2 * self.sigma_mm)
+            return max(1.0, r * 1.35)
 
-    @staticmethod
-    def _clamp(v: float) -> float:
-        return -1.0 if v < -1.0 else (1.0 if v > 1.0 else v)
+        bx = self.est.x if (self.est is not None and self.est.ok) else 0.0
+        by = self.est.y if (self.est is not None and self.est.ok) else 0.0
+        return (reach(("X+", "X-"), bx, self.span_x),
+                reach(("Y+", "Y-"), by, self.span_y))
+
+    def _tint(self, jaw: str) -> float:
+        """How lit up a blade should be, 0..1, from its current on a log scale.
+
+        The log amps span 1 nA to 1 mA — six decades — so a linear tint would
+        leave everything below a microamp looking identically dead.
+        """
+        i = self.currents.get(jaw)
+        if i is None or math.isnan(i) or i <= 1e-9:
+            return 0.0
+        f = (math.log10(i) + 9.0) / 6.0
+        return 0.0 if f < 0.0 else (1.0 if f > 1.0 else f)
+
+    # ---- Painting -----------------------------------------------------------
 
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        w = self.width()
-        h = self.height()
-        margin = 16                       # room for the X±/Y± jaw labels
-        side = min(w, h) - 2 * margin
-        if side <= 0:
+        margin_x, margin_y = 20, 16      # room for the X±/Y± jaw labels
+        x0 = float(margin_x)
+        y0 = float(margin_y)
+        vw = self.width()  - 2 * margin_x
+        vh = self.height() - 2 * margin_y
+        if vw < 40 or vh < 40:
             return
-        x0 = (w - side) / 2.0
-        y0 = (h - side) / 2.0
-        cx = x0 + side / 2.0
-        cy = y0 + side / 2.0
-        half = side / 2.0
+        cx = x0 + vw / 2.0
+        cy = y0 + vh / 2.0
 
-        # Square aperture frame.
-        p.setBrush(QBrush(QColor("#fafafa")))
-        p.setPen(QPen(QColor("#555"), 1.5))
-        p.drawRect(int(x0), int(y0), int(side), int(side))
+        if not self.edges:
+            self._paint_without_geometry(p, x0, y0, vw, vh, cx, cy)
+            return
 
-        # Centre crosshair.
+        fov_x, fov_y = self._fov_mm()
+        # ONE scale for both axes -- whichever axis is tighter sets it, so the
+        # picture is never stretched and a millimetre is a millimetre.
+        s = min((vw / 2.0) / fov_x, (vh / 2.0) / fov_y)
+
+        def X(mm): return cx + mm * s
+        def Y(mm): return cy - mm * s    # +Y is up
+
+        # Field of view.
+        p.setBrush(QBrush(QColor("#fdfdfd")))
+        p.setPen(QPen(QColor("#888"), 1.0))
+        p.drawRect(QRectF(x0, y0, vw, vh))
+
+        bad = set(self.est.bad_jaws) if self.est is not None else set()
+        self._paint_blades(p, X, Y, x0, y0, vw, vh, bad)
+
+        # Nominal beam axis.
         p.setPen(QPen(QColor("#bbb"), 1, Qt.PenStyle.DashLine))
-        p.drawLine(int(x0), int(cy), int(x0 + side), int(cy))
-        p.drawLine(int(cx), int(y0), int(cx), int(y0 + side))
+        p.drawLine(QPointF(x0, cy), QPointF(x0 + vw, cy))
+        p.drawLine(QPointF(cx, y0), QPointF(cx, y0 + vh))
 
-        # Jaw labels around the frame.
+        self._paint_jaw_labels(p, x0, y0, vw, vh, cx, cy)
+
+        if self.est is not None and self.est.ok:
+            self._paint_beam(p, X, Y, s)
+        else:
+            self._paint_no_estimate(p, x0, y0, vw, vh, cy)
+
+        self._paint_scale_bar(p, x0, y0, vh, s, min(fov_x, fov_y))
+
+    def _paint_blades(self, p, X, Y, x0, y0, vw, vh, bad):
+        """Four slit blades at their measured positions, lit by their current.
+
+        Each blade is drawn as the solid region it actually occupies — from its
+        edge outward to the limit of the view — because that region is exactly
+        what the beam has to miss to get through.
+        """
+        rects = {
+            "X+": lambda e: QRectF(X(e), y0, x0 + vw - X(e), vh),
+            "X-": lambda e: QRectF(x0, y0, X(e) - x0, vh),
+            "Y+": lambda e: QRectF(x0, y0, vw, Y(e) - y0),
+            "Y-": lambda e: QRectF(x0, Y(e), vw, y0 + vh - Y(e)),
+        }
+        for jaw, make in rects.items():
+            e = self.edges.get(jaw)
+            if e is None or math.isnan(e):
+                continue
+            r = make(e).normalized()
+            base = QColor(_JAW_COLORS[jaw])
+            fill = QColor(base)
+            # Blades overlap at the corners, so keep them translucent enough
+            # that the overlap reads as overlap rather than as a fifth object.
+            fill.setAlpha(int(35 + 120 * self._tint(jaw)))
+            p.setBrush(QBrush(fill))
+            if jaw in bad:
+                p.setPen(QPen(QColor("#cc0000"), 2.0, Qt.PenStyle.DashLine))
+            else:
+                p.setPen(QPen(base, 1.5))
+            p.drawRect(r)
+
+    def _paint_jaw_labels(self, p, x0, y0, vw, vh, cx, cy):
         p.setFont(QFont("Consolas", 8, QFont.Weight.Bold))
-        p.setPen(QPen(self._COL_XM))
-        p.drawText(int(x0 - 14), int(cy + 4), "X-")
-        p.setPen(QPen(self._COL_XP))
-        p.drawText(int(x0 + side + 2), int(cy + 4), "X+")
-        p.setPen(QPen(self._COL_YP))
-        p.drawText(int(cx - 6), int(y0 - 4), "Y+")
-        p.setPen(QPen(self._COL_YM))
-        p.drawText(int(cx - 6), int(y0 + side + 12), "Y-")
+        p.setPen(QPen(QColor(_JAW_COLORS["X-"])))
+        p.drawText(int(x0 - 18), int(cy + 4), "X-")
+        p.setPen(QPen(QColor(_JAW_COLORS["X+"])))
+        p.drawText(int(x0 + vw + 3), int(cy + 4), "X+")
+        p.setPen(QPen(QColor(_JAW_COLORS["Y+"])))
+        p.drawText(int(cx - 7), int(y0 - 4), "Y+")
+        p.setPen(QPen(QColor(_JAW_COLORS["Y-"])))
+        p.drawText(int(cx - 7), int(y0 + vh + 12), "Y-")
 
-        # The beam-position dot.
-        if math.isnan(self._x) or math.isnan(self._y):
-            # No usable signal — draw a faint hollow marker at the centre.
+    def _paint_beam(self, p, X, Y, s):
+        """The reconstructed beam, then the uncertainty on where its centre is."""
+        est = self.est
+        px, py = X(est.x), Y(est.y)
+
+        if self.raster:
+            # Swept envelope: a flat top with spot-softened edges.  Rounding the
+            # corners by the spot size is a fair picture of that softening.
+            rx = max(2.0, self.span_x * s)
+            ry = max(2.0, self.span_y * s)
+            body = QRectF(px - rx, py - ry, 2 * rx, 2 * ry)
+            p.setBrush(QBrush(QColor(230, 126, 34, 70)))
+            p.setPen(QPen(QColor("#e67e22"), 1.5))
+            soft = min(self.sigma_mm * s, rx, ry)
+            p.drawRoundedRect(body, soft, soft)
+        else:
+            # Static spot: 1-sigma solid, 2-sigma outline for the tails that are
+            # doing the actual measuring.
+            r1 = max(2.0, self.sigma_mm * s)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setPen(QPen(QColor(230, 126, 34, 110), 1.0, Qt.PenStyle.DashLine))
+            p.drawEllipse(QPointF(px, py), 2 * r1, 2 * r1)
+            p.setBrush(QBrush(QColor(230, 126, 34, 90)))
+            p.setPen(QPen(QColor("#e67e22"), 1.5))
+            p.drawEllipse(QPointF(px, py), r1, r1)
+
+        # Where the centre could be, given the width is only assumed.  This
+        # closes to a point for a centred beam and opens up as it goes off
+        # centre — the honest shape of the ambiguity, not a fudge factor.
+        # Drawn as error bars rather than a box: at this size a box reads as
+        # just another shape in the picture, where capped whiskers say
+        # "uncertainty" on sight.
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.setPen(QPen(QColor("#7a2a00"), 1.4))
+        cap = 3.0
+        bx0, bx1 = X(est.x_lo), X(est.x_hi)
+        by0, by1 = Y(est.y_hi), Y(est.y_lo)
+        if abs(bx1 - bx0) > 1.5:
+            p.drawLine(QPointF(bx0, py), QPointF(bx1, py))
+            p.drawLine(QPointF(bx0, py - cap), QPointF(bx0, py + cap))
+            p.drawLine(QPointF(bx1, py - cap), QPointF(bx1, py + cap))
+        if abs(by1 - by0) > 1.5:
+            p.drawLine(QPointF(px, by0), QPointF(px, by1))
+            p.drawLine(QPointF(px - cap, by0), QPointF(px + cap, by0))
+            p.drawLine(QPointF(px - cap, by1), QPointF(px + cap, by1))
+
+        # The centre itself.
+        p.setPen(QPen(QColor("#4a1a00"), 1.5))
+        p.setBrush(QBrush(QColor("#7a2a00")))
+        p.drawEllipse(QPointF(px, py), 2.5, 2.5)
+
+    def _paint_no_estimate(self, p, x0, y0, vw, vh, cy):
+        """Grey wash plus the reason, when the currents cannot support a beam."""
+        p.setBrush(QBrush(QColor(250, 250, 250, 190)))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawRect(QRectF(x0, y0, vw, vh))
+
+        msg = "waiting for data"
+        if self.est is not None and self.est.reason:
+            msg = self.est.reason
+        p.setFont(QFont("Consolas", 8, QFont.Weight.Bold))
+        p.setPen(QPen(QColor("#999")))
+        p.drawText(QRectF(x0 + 4, cy - 24, vw - 8, 48),
+                   int(Qt.AlignmentFlag.AlignCenter) | int(Qt.TextFlag.TextWordWrap),
+                   "NO BEAM ESTIMATE\n" + msg)
+
+    def _paint_scale_bar(self, p, x0, y0, vh, s, fov):
+        """A labelled ruler, so the drawing reads as millimetres not pixels."""
+        step = 0.5
+        for candidate in (0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0):
+            if candidate <= fov * 0.7:
+                step = candidate
+        length = step * s
+        bx = x0 + 6
+        by = y0 + vh - 8
+        # The bar sits on top of whichever blade happens to be there, so give it
+        # a backing or the label disappears into a saturated jaw colour.
+        p.setBrush(QBrush(QColor(255, 255, 255, 205)))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawRect(QRectF(bx - 3, by - 17, length + 6, 23))
+        p.setPen(QPen(QColor("#666"), 1.5))
+        p.drawLine(QPointF(bx, by), QPointF(bx + length, by))
+        p.drawLine(QPointF(bx, by - 3), QPointF(bx, by + 3))
+        p.drawLine(QPointF(bx + length, by - 3), QPointF(bx + length, by + 3))
+        p.setFont(QFont("Consolas", 7))
+        p.drawText(QPointF(bx, by - 5), f"{step:g} mm")
+
+    def _paint_without_geometry(self, p, x0, y0, vw, vh, cx, cy):
+        """Fallback view for when the Galil is not supplying jaw positions.
+
+        Without mm positions there is no scale and no reconstruction — only the
+        raw current imbalance, which is what the old indicator always showed.
+        It is still useful for spotting drift, so it is kept, but it is labelled
+        unmistakably so nobody reads millimetres off a picture that has none.
+        """
+        p.setBrush(QBrush(QColor("#f4f4f4")))
+        p.setPen(QPen(QColor("#999"), 1.5, Qt.PenStyle.DashLine))
+        p.drawRect(QRectF(x0, y0, vw, vh))
+
+        p.setPen(QPen(QColor("#bbb"), 1, Qt.PenStyle.DashLine))
+        p.drawLine(QPointF(x0, cy), QPointF(x0 + vw, cy))
+        p.drawLine(QPointF(cx, y0), QPointF(cx, y0 + vh))
+        self._paint_jaw_labels(p, x0, y0, vw, vh, cx, cy)
+
+        p.setFont(QFont("Consolas", 7, QFont.Weight.Bold))
+        p.setPen(QPen(QColor("#b06000")))
+        p.drawText(QRectF(x0, y0 + 3, vw, 26),
+                   int(Qt.AlignmentFlag.AlignHCenter) | int(Qt.TextFlag.TextWordWrap),
+                   "NO JAW POSITIONS\nrelative only — not to scale")
+
+        r = max(4.0, min(vw, vh) * 0.05)
+        if math.isnan(self.ratio_x) or math.isnan(self.ratio_y):
             p.setPen(QPen(QColor("#bbb"), 1.5))
             p.setBrush(Qt.BrushStyle.NoBrush)
-            r = side * 0.05
             p.drawEllipse(QPointF(cx, cy), r, r)
             return
 
-        dx = self._clamp(self._x)
-        dy = self._clamp(self._y)
-        px = cx + dx * half          # +X imbalance → toward the X+ (right) jaw
-        py = cy - dy * half          # +Y imbalance → toward the Y+ (top) jaw
-
-        # Guide lines from centre to the estimate.
-        p.setPen(QPen(QColor("#e07b39"), 1, Qt.PenStyle.DotLine))
+        dx = max(-1.0, min(1.0, self.ratio_x))
+        dy = max(-1.0, min(1.0, self.ratio_y))
+        px = cx + dx * (vw / 2.0)
+        py = cy - dy * (vh / 2.0)
+        p.setPen(QPen(QColor("#c9a06a"), 1, Qt.PenStyle.DotLine))
         p.drawLine(QPointF(cx, cy), QPointF(px, py))
+        p.setPen(QPen(QColor("#8a6a3a"), 1.5))
+        p.setBrush(QBrush(QColor("#d0a878")))
+        p.drawEllipse(QPointF(px, py), r + 2, r + 2)
 
-        # The dot itself (circle inside the square).
-        r = max(4.0, side * 0.07)
-        p.setPen(QPen(QColor("#a83a00"), 1.5))
-        p.setBrush(QBrush(QColor("#e67e22")))
-        p.drawEllipse(QPointF(px, py), r, r)
+
+class BeamPositionIndicator(QWidget):
+    """Panel showing where the log-amp currents say the beam is.
+
+    Each NEC log amp reads a whole slit blade, so its current is all the beam
+    landing on that blade — the integral of the beam profile past that blade's
+    edge.  Combined with the jaw positions the Galil reports, that makes four
+    knife-edge measurements, which is enough to place the beam in millimetres
+    instead of merely nudging a dot toward whichever jaw reads higher.
+
+    What it cannot do is measure the beam's width.  Beam intensity is not
+    measured anywhere in this program, and per axis there are two currents
+    against three unknowns (centre, width, intensity).  Taking the ratio kills
+    the intensity and leaves one equation in two unknowns, so the centre can
+    only be solved against an ASSUMED width — hence the spot-size box.  The
+    drawn band shows how far that assumption could be moving the answer: it
+    shrinks to nothing for a centred beam and widens as the beam goes off
+    centre, which is precisely when someone is most tempted to trust it.
+
+    Static and raster modes are a manual toggle.  The widget deliberately does
+    not read the function generators or HV amplifiers — it reports what the log
+    amps see, and nothing else.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._currents = {}
+        self._edges    = {}
+        self._zeroed   = False
+        self._connected = False
+
+        self.setFixedWidth(288)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(2, 2, 2, 2)
+        lay.setSpacing(4)
+
+        title = QLabel("Beam Position")
+        title.setStyleSheet("font-weight: bold; color: #444; font-size: 13px;")
+        lay.addWidget(title)
+
+        # ── Mode + assumptions ────────────────────────────────────────────
+        self.cmb_mode = QComboBox()
+        self.cmb_mode.addItems(["Static beam", "Rastering"])
+        self.cmb_mode.setToolTip(
+            "Static: a stationary spot.\n"
+            "Rastering: the steerer is sweeping the beam, so each current is a\n"
+            "time-average over the sweep and the envelope is drawn instead."
+        )
+        self.cmb_mode.currentIndexChanged.connect(self._on_mode_changed)
+        lay.addWidget(self.cmb_mode)
+
+        form = QFormLayout()
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setSpacing(2)
+
+        self.spn_spot = QDoubleSpinBox()
+        self.spn_spot.setRange(0.05, 25.0)
+        self.spn_spot.setSingleStep(0.1)
+        self.spn_spot.setDecimals(2)
+        self.spn_spot.setValue(2.0)
+        self.spn_spot.setSuffix(" mm")
+        self.spn_spot.setToolTip(
+            "Spot size (FWHM) you believe the beam has.\n"
+            "The currents cannot measure this — it is an assumption, and the\n"
+            "band in the picture shows how much it is moving the answer."
+        )
+        self.spn_spot.valueChanged.connect(self._recompute)
+        self.lbl_spot = QLabel("Spot FWHM")
+        self.lbl_spot.setStyleSheet("font-size: 12px; color: #555;")
+        form.addRow(self.lbl_spot, self.spn_spot)
+
+        self.spn_span_x = QDoubleSpinBox()
+        self.spn_span_x.setRange(0.0, 50.0)
+        self.spn_span_x.setSingleStep(0.5)
+        self.spn_span_x.setDecimals(2)
+        self.spn_span_x.setValue(3.0)
+        self.spn_span_x.setSuffix(" mm")
+        self.spn_span_x.setToolTip("Raster half-travel on X (centre to turn-around).")
+        self.spn_span_x.valueChanged.connect(self._recompute)
+        self.lbl_span_x = QLabel("Sweep X ±")
+        self.lbl_span_x.setStyleSheet("font-size: 12px; color: #555;")
+        form.addRow(self.lbl_span_x, self.spn_span_x)
+
+        self.spn_span_y = QDoubleSpinBox()
+        self.spn_span_y.setRange(0.0, 50.0)
+        self.spn_span_y.setSingleStep(0.5)
+        self.spn_span_y.setDecimals(2)
+        self.spn_span_y.setValue(8.0)
+        self.spn_span_y.setSuffix(" mm")
+        self.spn_span_y.setToolTip("Raster half-travel on Y (centre to turn-around).")
+        self.spn_span_y.valueChanged.connect(self._recompute)
+        self.lbl_span_y = QLabel("Sweep Y ±")
+        self.lbl_span_y.setStyleSheet("font-size: 12px; color: #555;")
+        form.addRow(self.lbl_span_y, self.spn_span_y)
+
+        lay.addLayout(form)
+
+        # ── The picture ───────────────────────────────────────────────────
+        self.view = _ApertureView()
+        lay.addWidget(self.view, stretch=1)
+
+        # ── Readouts ──────────────────────────────────────────────────────
+        self.lbl_xy = QLabel("X  —      Y  —")
+        self.lbl_xy.setFont(QFont("Consolas", 12, QFont.Weight.Bold))
+        self.lbl_xy.setStyleSheet("color: #a83a00;")
+        self.lbl_xy.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(self.lbl_xy)
+
+        self.lbl_status = QLabel("Galil not connected — no jaw positions")
+        self.lbl_status.setWordWrap(True)
+        self.lbl_status.setStyleSheet("font-size: 11px; color: #888;")
+        self.lbl_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(self.lbl_status)
+
+        self.lbl_overscan = QLabel("")
+        self.lbl_overscan.setWordWrap(True)
+        self.lbl_overscan.setStyleSheet("font-size: 11px; color: #888;")
+        self.lbl_overscan.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(self.lbl_overscan)
+
+        self._on_mode_changed()
+
+    # ---- Inputs -------------------------------------------------------------
+
+    def set_currents(self, currents_by_jaw: dict):
+        """Latest log-amp current per jaw label, in Amps."""
+        self._currents = dict(currents_by_jaw)
+        self._recompute()
+
+    def set_jaw_state(self, state: dict):
+        """Jaw geometry from the motor tab.
+
+        ``state`` carries ``positions`` (jaw label -> UNSIGNED mm from beam
+        centre, exactly as the motor tab displays them), ``zeroed`` (have all
+        four axes been homed or zeroed this session) and ``connected``.
+        """
+        self._connected = bool(state.get("connected", False))
+        self._zeroed    = bool(state.get("zeroed", False))
+        positions       = state.get("positions") or {}
+
+        # The Galil reports each jaw as a distance from centre with no sign;
+        # the '-' jaws live on the negative side of the axis.  Getting this
+        # backwards would silently mirror the whole picture.
+        self._edges = {}
+        for jaw, mm in positions.items():
+            if mm is None or math.isnan(mm):
+                continue
+            self._edges[jaw] = abs(mm) if jaw.endswith("+") else -abs(mm)
+        self._recompute()
+
+    # ---- Internals ----------------------------------------------------------
+
+    def _on_mode_changed(self, *_):
+        raster = self.cmb_mode.currentIndex() == 1
+        for wdg in (self.lbl_span_x, self.spn_span_x,
+                    self.lbl_span_y, self.spn_span_y):
+            wdg.setVisible(raster)
+        self._recompute()
+
+    def _recompute(self):
+        raster   = self.cmb_mode.currentIndex() == 1
+        sigma    = self.spn_spot.value() * _FWHM_TO_SIGMA
+        span_x   = self.spn_span_x.value() if raster else 0.0
+        span_y   = self.spn_span_y.value() if raster else 0.0
+
+        v = self.view
+        v.currents = self._currents
+        v.edges    = self._edges
+        v.sigma_mm = sigma
+        v.span_x   = span_x
+        v.span_y   = span_y
+        v.raster   = raster
+
+        if len(self._edges) == 4:
+            est = BR.reconstruct(self._currents, self._edges, sigma,
+                                 span_x, span_y)
+            v.est = est
+            self._update_readout(est)
+        else:
+            v.est = None
+            # No geometry — fall back to the bare current imbalance.
+            v.ratio_x = beam_centering(self._currents.get("X+", float("nan")),
+                                       self._currents.get("X-", float("nan")))
+            v.ratio_y = beam_centering(self._currents.get("Y+", float("nan")),
+                                       self._currents.get("Y-", float("nan")))
+            self.lbl_xy.setText("X  —      Y  —")
+
+        self._update_status()
+        self._update_overscan(raster)
+        v.update()
+
+    def _update_readout(self, est):
+        if not est.ok:
+            self.lbl_xy.setText("X  —      Y  —")
+            return
+        # Only the centre is reported.  Width is assumed, not measured, so
+        # printing a number for it would dress an input up as a result.
+        # Snap to zero first: a signed format turns -1e-17 into a "-0.00" that
+        # reads as a real leftward offset.
+        x = 0.0 if abs(est.x) < 5e-3 else est.x
+        y = 0.0 if abs(est.y) < 5e-3 else est.y
+        self.lbl_xy.setText(f"X {x:+.2f}   Y {y:+.2f} mm")
+
+    def _update_status(self):
+        if not self._connected:
+            self.lbl_status.setText(
+                "Galil not connected — showing current imbalance only")
+            self.lbl_status.setStyleSheet("font-size: 11px; color: #b06000;")
+        elif len(self._edges) < 4:
+            self.lbl_status.setText("Waiting for all four jaw positions")
+            self.lbl_status.setStyleSheet("font-size: 11px; color: #b06000;")
+        elif not self._zeroed:
+            self.lbl_status.setText(
+                "⚠ Axes not zeroed this session — mm positions may be wrong")
+            self.lbl_status.setStyleSheet("font-size: 11px; color: #cc0000;")
+        else:
+            self.lbl_status.setText("Jaw positions live and zeroed")
+            self.lbl_status.setStyleSheet("font-size: 11px; color: #1a7a1a;")
+
+    def _update_overscan(self, raster: bool):
+        """In raster mode, say which blades the sweep is actually reaching.
+
+        The sweep is meant to carry the beam clear off both ends of the
+        aperture so deposition speed stays constant across the sample.  A blade
+        sitting at the noise floor is one the beam never reaches — which is the
+        failure this readout exists to catch.
+        """
+        if not raster:
+            self.lbl_overscan.setText("")
+            return
+        flags = BR.overscan_flags(self._currents)
+        missed = [jaw for jaw, hit in flags.items() if not hit]
+        if not missed:
+            self.lbl_overscan.setText("Overscan: beam reaching all four blades")
+            self.lbl_overscan.setStyleSheet("font-size: 11px; color: #1a7a1a;")
+        else:
+            self.lbl_overscan.setText("Not reaching: " + ", ".join(missed))
+            self.lbl_overscan.setStyleSheet("font-size: 11px; color: #cc0000;")
 
 
 # ─── The tab widget ───────────────────────────────────────────────────────────
@@ -345,6 +773,16 @@ class CurrentTab(QWidget):
 
     # ---- Slots ---------------------------------------------------------------
 
+    @staticmethod
+    def _by_jaw(currents_by_ain: dict) -> dict:
+        """Re-key AIN -> current as jaw label -> current for the indicator."""
+        return {jaw: currents_by_ain.get(ain, float("nan"))
+                for ain, jaw in SC.LABJACK_CHANNEL_MAP.items()}
+
+    def set_jaw_state(self, state: dict):
+        """Jaw geometry pushed over from the motor tab (see MotorTab.jaw_state)."""
+        self.beam_indicator.set_jaw_state(state)
+
     def _on_window(self, payload: dict):
         """Consume one stream window from LabJackStreamWorker.
 
@@ -380,19 +818,7 @@ class CurrentTab(QWidget):
             self.lbl_i[ain].setStyleSheet("color: #1a7a1a; font-weight: bold;")
             self.buffers[ain].append(t, I)
 
-        # Beam-centering indicators.
-        ain_xp = next((a for a, j in SC.LABJACK_CHANNEL_MAP.items() if j == "X+"), None)
-        ain_xm = next((a for a, j in SC.LABJACK_CHANNEL_MAP.items() if j == "X-"), None)
-        ain_yp = next((a for a, j in SC.LABJACK_CHANNEL_MAP.items() if j == "Y+"), None)
-        ain_ym = next((a for a, j in SC.LABJACK_CHANNEL_MAP.items() if j == "Y-"), None)
-        xc = yc = float("nan")
-        if ain_xp and ain_xm:
-            xc = beam_centering(currents.get(ain_xp, float("nan")),
-                                currents.get(ain_xm, float("nan")))
-        if ain_yp and ain_ym:
-            yc = beam_centering(currents.get(ain_yp, float("nan")),
-                                currents.get(ain_ym, float("nan")))
-        self.beam_indicator.set_position(xc, yc)
+        self.beam_indicator.set_currents(self._by_jaw(currents))
 
         if self._is_live:
             self.slider.blockSignals(True)
@@ -416,16 +842,7 @@ class CurrentTab(QWidget):
             self.lbl_i[ain].setText(format_current(I))
             self.buffers[ain].append(t, I)
 
-        ain_xplus  = next((a for a, j in SC.LABJACK_CHANNEL_MAP.items() if j == "X+"), None)
-        ain_xminus = next((a for a, j in SC.LABJACK_CHANNEL_MAP.items() if j == "X-"), None)
-        ain_yplus  = next((a for a, j in SC.LABJACK_CHANNEL_MAP.items() if j == "Y+"), None)
-        ain_yminus = next((a for a, j in SC.LABJACK_CHANNEL_MAP.items() if j == "Y-"), None)
-        xc = yc = float("nan")
-        if ain_xplus and ain_xminus:
-            xc = beam_centering(currents[ain_xplus], currents[ain_xminus])
-        if ain_yplus and ain_yminus:
-            yc = beam_centering(currents[ain_yplus], currents[ain_yminus])
-        self.beam_indicator.set_position(xc, yc)
+        self.beam_indicator.set_currents(self._by_jaw(currents))
 
         # Auto-advance slider to live edge when in live mode
         if self._is_live:

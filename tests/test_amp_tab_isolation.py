@@ -115,7 +115,8 @@ class TestCurrentTabIgnoresAmps:
 
     def test_centering_still_works(self, cur):
         cur._on_reading(1.0, FULL_READING)
-        assert abs(cur.beam_indicator._x) < 1e-9
+        # No Galil in this fixture, so the indicator reports raw imbalance.
+        assert abs(cur.beam_indicator.view.ratio_x) < 1e-9
 
 
 class TestBothTabsShareOneReading:
