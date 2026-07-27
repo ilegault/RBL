@@ -311,13 +311,6 @@ class LabJackStreamWorker(QThread):
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    import sys
-    import os
-    # Allow running as: python rbl/hardware/labjack_stream_worker.py from project root
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-
-    import numpy as np  # already imported above but explicit for clarity
-
     w = LabJackStreamWorker.__new__(LabJackStreamWorker)
 
     # --- WAVEFORM profile ---

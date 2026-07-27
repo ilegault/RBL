@@ -1,15 +1,39 @@
 """
-labjack_panel.py
-A shared LabJack T7 connection panel.
+connection_bar.py
+Shared connection-status pill and the LabJack T7 connection panel.
 
-Both the Beam Current tab and the HV Amplifiers tab embed one of these. They all
-drive the SAME LabJackT7 instance owned by MainWindow, so connecting from either
-tab connects for both. That is intentional: there is one physical T7.
+The Beam Current tab and the HV Amplifiers tab each embed a LabJackPanel.
+They all drive the SAME LabJackT7 instance owned by MainWindow, so connecting
+from either tab connects for both. That is intentional: there is one physical
+T7.
 """
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QWidget, QHBoxLayout, QGroupBox, QLabel, QPushButton, QLineEdit, QComboBox,
+    QLabel, QHBoxLayout, QGroupBox, QPushButton, QLineEdit, QComboBox,
 )
+
+from rbl.gui import theme
+
+
+class StatusPill(QLabel):
+    """The recurring '● Connected' / '● Disconnected' status label.
+
+    Callers own the text (it varies: "● Connected", "● Gen A: connected
+    [serial]", ...) — this widget only tracks the connected/disconnected
+    colour so every connection indicator in the app reads the same way.
+    """
+
+    def __init__(self, connected_text="● Connected",
+                 disconnected_text="● Disconnected", parent=None):
+        super().__init__(disconnected_text, parent)
+        self._connected_text = connected_text
+        self._disconnected_text = disconnected_text
+        self.setStyleSheet(theme.pill(False))
+
+    def set_connected(self, connected: bool, text: str = None):
+        self.setText(text if text is not None else
+                     (self._connected_text if connected else self._disconnected_text))
+        self.setStyleSheet(theme.pill(connected))
 
 
 class LabJackPanel(QGroupBox):
@@ -39,12 +63,11 @@ class LabJackPanel(QGroupBox):
         self.btn_conn.clicked.connect(self._on_click)
         lay.addWidget(self.btn_conn)
 
-        self.lbl_status = QLabel("● Disconnected")
-        self.lbl_status.setStyleSheet("color: #666666; font-weight: bold;")
+        self.lbl_status = StatusPill()
         lay.addWidget(self.lbl_status)
 
         self.lbl_serial = QLabel("")
-        self.lbl_serial.setStyleSheet("color: #555; font-style: italic;")
+        self.lbl_serial.setStyleSheet(f"color: {theme.NEUTRAL}; font-style: italic;")
         lay.addWidget(self.lbl_serial, stretch=1)
 
         self._connected = False
@@ -61,26 +84,9 @@ class LabJackPanel(QGroupBox):
     def set_connected(self, connected: bool, serial: str = ""):
         """Called by MainWindow to push state down to every panel at once."""
         self._connected = connected
-        if connected:
-            self.btn_conn.setText("Disconnect")
-            self.lbl_status.setText("● Connected")
-            self.lbl_status.setStyleSheet("color: #1a7a1a; font-weight: bold;")
-            self.lbl_serial.setText(f"T7 serial #{serial}" if serial else "")
-        else:
-            self.btn_conn.setText("Connect")
-            self.lbl_status.setText("● Disconnected")
-            self.lbl_status.setStyleSheet("color: #666666; font-weight: bold;")
-            self.lbl_serial.setText("")
+        self.btn_conn.setText("Disconnect" if connected else "Connect")
+        self.lbl_status.set_connected(connected)
+        self.lbl_serial.setText(f"T7 serial #{serial}" if connected and serial else "")
 
     def set_enabled(self, on: bool):
         self.btn_conn.setEnabled(on)
-
-
-if __name__ == "__main__":
-    import sys
-    from PySide6.QtWidgets import QApplication
-    app = QApplication(sys.argv)
-    w = LabJackPanel()
-    w.show()
-    print("[OK] labjack_panel loads")
-    sys.exit(app.exec())

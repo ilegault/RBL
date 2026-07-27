@@ -12,87 +12,29 @@ Safety rules enforced here:
   - close_session() closes only the VISA sessions; outputs are never
     disabled automatically (instrument retains state after app exits).
 """
-import json
 import logging
 import os
 import sys
 import time
-from pathlib import Path
 
 log = logging.getLogger(__name__)
-
-# When run as a script (python funcgen_tab.py), __package__ is None and
-# Python sets sys.path[0] to this file's directory.  Add the project root
-# so the rbl namespace package is importable.
-if __package__ is None:
-    _here = os.path.dirname(os.path.abspath(__file__))
-    _root = os.path.abspath(os.path.join(_here, "..", ".."))
-    if _root not in sys.path:
-        sys.path.insert(0, _root)
 
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout,
     QGroupBox, QLabel, QPushButton, QDoubleSpinBox, QComboBox,
-    QTextEdit, QLineEdit, QCheckBox, QMessageBox, QSizePolicy,
+    QLineEdit, QCheckBox, QMessageBox, QSizePolicy,
     QScrollArea, QApplication,
 )
 
 from rbl.hardware.funcgen_driver import DG1022Z, discover, MAX_GEN_VOLTS, MAX_AMP_VPP
-
-# Persistence file — keyed on serial, survives replug
-_CONFIG_PATH = Path.home() / ".config" / "rbl" / "funcgen.json"
-
-# EEL5000 gain: 1 V_gen -> 1000 V_plate
-_AMP_GAIN = 1000.0
-
-# The EEL5000 input tolerates ±MAX_GEN_VOLTS (5 V). The *instantaneous* voltage
-# the amplifier sees is the offset plus half the peak-to-peak amplitude — for an
-# AC waveform the signal swings ±amp/2 about the offset, so the worst-case peak
-# magnitude is |offset| + amp/2. That combined peak, not either field alone, is
-# what must stay within the amplifier's rail:
-#   * peak > PEAK_MAX_VOLTS  -> apply is blocked outright.
-#   * peak > PEAK_WARN_VOLTS -> apply asks the user to confirm first.
-PEAK_MAX_VOLTS  = MAX_GEN_VOLTS   # hard ceiling: amplifier cannot exceed ±5 V
-PEAK_WARN_VOLTS = 4.0             # advisory threshold — confirm before applying
-
-# Axis pairs MUST live on the same physical generator: only
-# :PHASe:SYNChronize (same-unit) gives deterministic phase alignment.
-# Cross-unit alignment is impossible on the DG1022Z.
-CHANNEL_ROLE = {
-    "A1": "X+", "A2": "X-",
-    "B1": "Y+", "B2": "Y-",
-}
-
-
-def channel_peak_volts(shape: str, amp_vpp: float, offset_v: float) -> float:
-    """Worst-case instantaneous voltage magnitude the amplifier input sees (V).
-
-    For any AC shape the waveform swings ±amp/2 about the offset, so the peak
-    magnitude is |offset| + amp/2. In DC mode the held voltage is the offset,
-    so the peak is just |offset|.
-    """
-    if shape == "DC":
-        return abs(offset_v)
-    return abs(offset_v) + abs(amp_vpp) / 2.0
-
-
-def _load_config() -> dict:
-    try:
-        with open(_CONFIG_PATH) as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-
-def _save_config(data: dict):
-    try:
-        _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with open(_CONFIG_PATH, "w") as f:
-            json.dump(data, f, indent=2)
-    except Exception:
-        pass
+from rbl.hardware.funcgen_safety import (
+    channel_peak_volts, PEAK_MAX_VOLTS, PEAK_WARN_VOLTS, _AMP_GAIN, CHANNEL_ROLE,
+)
+from rbl.config.persistence import load_config as _load_config, save_config as _save_config
+from rbl.gui import theme
+from rbl.gui.widgets.command_console import LogPane
 
 
 # ─── Per-channel panel ────────────────────────────────────────────────────────
@@ -284,12 +226,12 @@ class ChannelPanel(QGroupBox):
         if peak > PEAK_MAX_VOLTS + 1e-9:
             # Over the amplifier's ±5 V rail — apply will be blocked.
             self.lbl_hv.setStyleSheet(
-                "color: #c0392b; font-size: 10px; font-weight: bold;"
+                f"color: {theme.FAULT}; font-size: 10px; font-weight: bold;"
             )
         elif peak > PEAK_WARN_VOLTS + 1e-9:
             # Above the 4 V advisory — apply will ask to confirm.
             self.lbl_hv.setStyleSheet(
-                "color: #b06a00; font-size: 10px; font-weight: bold;"
+                f"color: {theme.WARN}; font-size: 10px; font-weight: bold;"
             )
         else:
             self.lbl_hv.setStyleSheet("color: #7a2000; font-size: 10px;")
@@ -384,8 +326,8 @@ class FuncGenTab(QWidget):
         status_row = QHBoxLayout()
         self.lbl_status_a = QLabel("● Gen A: not connected")
         self.lbl_status_b = QLabel("● Gen B: not connected")
-        self.lbl_status_a.setStyleSheet("color: #666666; font-weight: bold;")
-        self.lbl_status_b.setStyleSheet("color: #666666; font-weight: bold;")
+        self.lbl_status_a.setStyleSheet(theme.pill(False))
+        self.lbl_status_b.setStyleSheet(theme.pill(False))
         status_row.addWidget(self.lbl_status_a)
         status_row.addStretch()
         status_row.addWidget(self.lbl_status_b)
@@ -528,9 +470,7 @@ class FuncGenTab(QWidget):
         cmd_row.addWidget(self.btn_scpi_err)
         scpi_vbox.addLayout(cmd_row)
 
-        self.scpi_log = QTextEdit()
-        self.scpi_log.setReadOnly(True)
-        self.scpi_log.setFont(QFont("Consolas", 9))
+        self.scpi_log = LogPane()
         scpi_vbox.addWidget(self.scpi_log, stretch=1)
 
         self._set_scpi_enabled(False)
@@ -656,10 +596,10 @@ class FuncGenTab(QWidget):
                 serial = self.cbo_gen_a.currentData() if gen_letter == "A" \
                          else self.cbo_gen_b.currentData()
                 lbl.setText(f"● Gen {gen_letter}: connected  [{serial}]")
-                lbl.setStyleSheet("color: #1a7a1a; font-weight: bold;")
+                lbl.setStyleSheet(theme.pill(True))
             else:
                 lbl.setText(f"● Gen {gen_letter}: not connected")
-                lbl.setStyleSheet("color: #666666; font-weight: bold;")
+                lbl.setStyleSheet(theme.pill(False))
 
         for key, panel in self.panels.items():
             gen_letter = key[0]
@@ -711,7 +651,7 @@ class FuncGenTab(QWidget):
                         "REFUSED: Gen A is already EXT. Return Gen A to INT first."
                     )
                     self.lbl_ref_status.setStyleSheet(
-                        "color: #c0392b; font-style: italic; font-size: 10px;"
+                        f"color: {theme.FAULT}; font-style: italic; font-size: 10px;"
                     )
                     self.chk_ext_ref.blockSignals(True)
                     self.chk_ext_ref.setChecked(False)
@@ -736,7 +676,7 @@ class FuncGenTab(QWidget):
                         f"Lock FAILED: Gen B reports {actual}. Check cable and level."
                     )
                     self.lbl_ref_status.setStyleSheet(
-                        "color: #c0392b; font-style: italic; font-size: 10px;"
+                        f"color: {theme.FAULT}; font-style: italic; font-size: 10px;"
                     )
                     self.chk_ext_ref.blockSignals(True)
                     self.chk_ext_ref.setChecked(False)
@@ -1119,8 +1059,7 @@ class FuncGenTab(QWidget):
             w.setEnabled(on)
 
     def _log_scpi(self, line: str):
-        ts = time.strftime("%H:%M:%S")
-        self.scpi_log.append(f"[{ts}] {line}")
+        self.scpi_log.log(line)
         if line.startswith("!"):
             log.error("SCPI %s", line)
         else:

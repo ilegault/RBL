@@ -1,16 +1,14 @@
 """
 Right Beam Line DAQ App — Native Desktop GUI
 Hardware-only: Stepper Motors, Beam Current, Function Generators.
-Run: python app.py   (from inside the rbl/gui/ directory)
+Run: python -m rbl.main
 
 PySide6 front-end. Analysis has been split out to the rbl-analysis repo.
 """
 import sys
-import os
 import time
 import atexit
 import logging
-sys.path.insert(0, os.path.dirname(__file__))
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget,
@@ -25,6 +23,11 @@ from rbl.config.labjack_stream_config import (
     DEFAULT_PROFILE, STREAM_PROFILES, DEFAULT_SINGLE_CHANNEL,
     SINGLE_CHANNEL_CHOICES, is_single_channel,
 )
+from rbl.gui.motor_tab import MotorTab
+from rbl.gui.logamp_tab import CurrentTab
+from rbl.gui.amp_tab import AmpTab
+from rbl.gui.funcgen_tab import FuncGenTab
+from rbl.state.beamline import Beamline
 
 
 # ─── Main Window ──────────────────────────────────────────────────────────────
@@ -59,11 +62,12 @@ class MainWindow(QMainWindow):
         self._outer_stack = QStackedWidget()
         outer_layout.addWidget(self._outer_stack, stretch=1)
 
+        # Beamline: converts raw stream/poll data into typed state snapshots
+        # for cross-tab consumption (Phase 6 of the RBL implementation plan).
+        # Device ownership itself stays with the tabs/MainWindow for now.
+        self.beamline = Beamline(self)
+
         # ── Pages: Motors (0), Current (1), Amplifiers (2), FuncGens (3) ───────
-        from motor_tab import MotorTab
-        from logamp_tab import CurrentTab
-        from amp_tab import AmpTab
-        from funcgen_tab import FuncGenTab
         self.motor_tab   = MotorTab(self)
         self.current_tab = CurrentTab(self)
         self.amp_tab     = AmpTab(self)
@@ -111,9 +115,13 @@ class MainWindow(QMainWindow):
         self.amp_tab.profile_change_requested.connect(self._set_stream_profile)
         self.amp_tab.single_channel_change_requested.connect(self._set_stream_channel)
 
-        # Slit geometry feeds the beam-position indicator: the log-amp currents
-        # only become millimetres once you know where the jaws are.
-        self.motor_tab.jaw_state.connect(self.current_tab.set_jaw_state)
+        # Motor poll data feeds Beamline, which derives MotorState (typed,
+        # richer than jaw_state) and republishes it. The beam-position
+        # indicator renders from that: the log-amp currents only become
+        # millimetres once you know where the jaws are.
+        self.motor_tab.raw_state_changed.connect(self.beamline.ingest_motor_poll)
+        self.motor_tab.motors_disconnected.connect(self.beamline.motors_disconnected)
+        self.beamline.motors_changed.connect(self.current_tab.on_motor_state)
 
         # Start on Stepper Motors
         self._outer_stack.setCurrentIndex(0)
@@ -165,9 +173,13 @@ class MainWindow(QMainWindow):
         for tab in self._lj_tabs:
             worker.window_ready.connect(tab._on_window)
             worker.error.connect(tab._on_error)
+        worker.window_ready.connect(self._on_labjack_window)
         worker.error.connect(self._on_labjack_error)
         worker.start()
         self._lj_worker = worker
+
+    def _on_labjack_window(self, payload: dict):
+        self.beamline.ingest_labjack_window(payload, active_profile=self._active_profile)
 
     def _set_stream_profile(self, profile_name: str):
         """Stop the running stream, reconfigure, and restart with a new profile.
@@ -257,6 +269,7 @@ class MainWindow(QMainWindow):
         self._lj.disconnect()   # force-stops the stream, then closes the handle
         for tab in self._lj_tabs:
             tab.on_labjack_disconnected()
+        self.beamline.labjack_disconnected()
 
     def _emergency_labjack_shutdown(self):
         """atexit safety net — never leave the T7 in stream mode.

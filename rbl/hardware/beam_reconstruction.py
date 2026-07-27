@@ -56,6 +56,10 @@ WIDTH_RANGE_HI = 2.0      # x nominal
 _BISECT_ITERS = 60
 _SEARCH_PAD   = 10.0      # mm searched beyond the jaw edges
 
+# FWHM -> sigma for a Gaussian.  Operators think in spot width, the maths wants
+# sigma, so callers taking a FWHM spinbox value convert with this.
+FWHM_TO_SIGMA = 1.0 / 2.35482
+
 
 # --- Profile tails -----------------------------------------------------------
 

@@ -135,21 +135,80 @@ class TestTabStatePersistence:
     def test_current_tab_live_mode_preserved_after_leaving(self, win, qapp):
         win._on_outer_tab_clicked(1)
         ct = win.current_tab
-        assert ct._is_live is True
+        assert ct.plot.is_live is True
         win._on_outer_tab_clicked(0)
         win._on_outer_tab_clicked(1)
-        assert ct._is_live is True
+        assert ct.plot.is_live is True
 
     def test_frozen_current_tab_stays_frozen_after_navigation(self, win, qapp):
         ct = win.current_tab
         for i in range(5):
             ct._on_reading(float(i), {"AIN0": 3.0, "AIN1": 3.0,
                                       "AIN2": 3.0, "AIN3": 3.0})
-        ct._on_slider_changed(4000)         # enter frozen mode
-        assert ct._is_live is False
+        ct.plot._on_slider_changed(4000)    # enter frozen mode
+        assert ct.plot.is_live is False
         win._on_outer_tab_clicked(0)        # leave current tab
         win._on_outer_tab_clicked(1)        # come back
-        assert ct._is_live is False         # still frozen
+        assert ct.plot.is_live is False      # still frozen
+
+
+class TestRedrawGating:
+    """The redraw timer is rendering, not data acquisition: it must run only
+    while a tab is both connected AND the one on screen (Phase 5). Switching
+    away must not stop data collection — only painting.
+    """
+
+    def test_current_tab_redraw_only_while_visible(self, win, qapp):
+        ct = win.current_tab
+        win._on_outer_tab_clicked(0)         # start on Motors: current_tab hidden
+        qapp.processEvents()
+        ct.on_labjack_connected("TESTSERIAL")
+        assert not ct.plot.redraw_timer.isActive()   # connected but hidden
+
+        win._on_outer_tab_clicked(1)         # switch to Beam Current
+        qapp.processEvents()
+        assert ct.plot.redraw_timer.isActive()       # now connected AND visible
+
+        win._on_outer_tab_clicked(0)         # leave again
+        qapp.processEvents()
+        assert not ct.plot.redraw_timer.isActive()
+
+    def test_amp_tab_redraw_only_while_visible(self, win, qapp):
+        amp = win.amp_tab
+        win._on_outer_tab_clicked(0)
+        qapp.processEvents()
+        amp.on_labjack_connected("TESTSERIAL")
+        assert not amp.plot.redraw_timer.isActive()
+
+        win._on_outer_tab_clicked(2)         # switch to HV Amplifiers
+        qapp.processEvents()
+        assert amp.plot.redraw_timer.isActive()
+
+        win._on_outer_tab_clicked(0)
+        qapp.processEvents()
+        assert not amp.plot.redraw_timer.isActive()
+
+    def test_disconnect_stops_redraw_even_while_visible(self, win, qapp):
+        ct = win.current_tab
+        win._on_outer_tab_clicked(1)
+        qapp.processEvents()
+        ct.on_labjack_connected("TESTSERIAL")
+        assert ct.plot.redraw_timer.isActive()
+
+        ct.on_labjack_disconnected()
+        assert not ct.plot.redraw_timer.isActive()
+
+    def test_switching_tabs_does_not_stop_funcgen_poll_timer(self, win, qapp):
+        # Poll timers are data acquisition, not rendering — Phase 5 must not
+        # touch them. FuncGenTab's poll timer runs independent of visibility.
+        fg = win.funcgen_tab
+        fg._poll_timer.start()
+        win._on_outer_tab_clicked(0)
+        qapp.processEvents()
+        assert fg._poll_timer.isActive()
+        win._on_outer_tab_clicked(3)
+        qapp.processEvents()
+        assert fg._poll_timer.isActive()
 
 
 # ── MotorTab unit conversions + history ──────────────────────────────────────
@@ -157,7 +216,7 @@ class TestTabStatePersistence:
 class TestMotorTabUnits:
     @pytest.fixture
     def motor(self, qapp):
-        from motor_tab import MotorTab
+        from rbl.gui.motor_tab import MotorTab
         mt = MotorTab()
         yield mt
         mt.abort_and_close()
@@ -197,7 +256,7 @@ class TestMotorTabUnits:
 
 class TestHistoryLineEdit:
     def test_up_down_history(self, qapp):
-        from motor_tab import HistoryLineEdit
+        from rbl.gui.motor_tab import HistoryLineEdit
         le = HistoryLineEdit()
         le.add_to_history("MO")
         le.add_to_history("SH A")
@@ -214,14 +273,14 @@ class TestHistoryLineEdit:
         assert le.text() == ""
 
     def test_duplicate_consecutive_not_stored_twice(self, qapp):
-        from motor_tab import HistoryLineEdit
+        from rbl.gui.motor_tab import HistoryLineEdit
         le = HistoryLineEdit()
         le.add_to_history("TH")
         le.add_to_history("TH")
         assert le._history == ["TH"]
 
     def test_up_on_empty_history_noop(self, qapp):
-        from motor_tab import HistoryLineEdit
+        from rbl.gui.motor_tab import HistoryLineEdit
         le = HistoryLineEdit()
         _press(le, Qt.Key.Key_Up)
         assert le.text() == ""
@@ -232,7 +291,7 @@ class TestHistoryLineEdit:
 class TestCurrentTab:
     @pytest.fixture
     def current(self, qapp):
-        from logamp_tab import CurrentTab
+        from rbl.gui.logamp_tab import CurrentTab
         ct = CurrentTab()
         yield ct
         ct.shutdown()
@@ -268,16 +327,16 @@ class TestCurrentTab:
         assert abs(est.x) < 1e-6 and abs(est.y) < 1e-6
 
     def test_starts_in_live_mode(self, current):
-        assert current._is_live is True
-        assert current.slider.value() == 10_000
+        assert current.plot.is_live is True
+        assert current.plot.slider.value() == 10_000
 
     def test_drag_slider_left_enters_frozen(self, current):
         for i in range(5):
             current._on_reading(float(i), {"AIN0": 3.0, "AIN1": 3.0,
                                            "AIN2": 3.0, "AIN3": 3.0})
-        current._on_slider_changed(4000)
-        assert current._is_live is False
-        assert current._frozen_right_edge is not None
+        current.plot._on_slider_changed(4000)
+        assert current.plot.is_live is False
+        assert current.plot.frozen_right_edge is not None
         # isVisibleTo ignores whether the (un-shown) tab itself is on screen.
         assert current.btn_jump_live.isVisibleTo(current)
 
@@ -285,14 +344,14 @@ class TestCurrentTab:
         for i in range(5):
             current._on_reading(float(i), {"AIN0": 3.0, "AIN1": 3.0,
                                            "AIN2": 3.0, "AIN3": 3.0})
-        current._on_slider_changed(4000)
-        current._jump_to_live()
-        assert current._is_live is True
-        assert current.slider.value() == 10_000
+        current.plot._on_slider_changed(4000)
+        current.plot.jump_to_live()
+        assert current.plot.is_live is True
+        assert current.plot.slider.value() == 10_000
 
     def test_slider_far_right_is_live(self, current):
-        current._on_slider_changed(9_900)
-        assert current._is_live is True
+        current.plot._on_slider_changed(9_900)
+        assert current.plot.is_live is True
 
     def test_redraw_does_not_raise_when_empty(self, current):
         current._redraw_plot()   # no data yet -> must be a safe no-op
@@ -336,9 +395,9 @@ class TestHomingWorker:
         return g
 
     def test_three_passes_then_define_zero(self, qapp, monkeypatch):
-        import motor_tab
-        from motor_tab import HomingWorker
-        monkeypatch.setattr(motor_tab.time, "sleep", lambda *a, **k: None)
+        from rbl.hardware import galil_workers
+        from rbl.hardware.galil_workers import HomingWorker
+        monkeypatch.setattr(galil_workers.time, "sleep", lambda *a, **k: None)
         g = self._mock_galil(home_switch=False)
         hw = HomingWorker(g, "A")
         results = []
@@ -349,9 +408,9 @@ class TestHomingWorker:
         assert results and results[0][0] is True
 
     def test_backs_off_when_starting_on_home_switch(self, qapp, monkeypatch):
-        import motor_tab
-        from motor_tab import HomingWorker
-        monkeypatch.setattr(motor_tab.time, "sleep", lambda *a, **k: None)
+        from rbl.hardware import galil_workers
+        from rbl.hardware.galil_workers import HomingWorker
+        monkeypatch.setattr(galil_workers.time, "sleep", lambda *a, **k: None)
         g = self._mock_galil(home_switch=True)
         hw = HomingWorker(g, "B")
         hw.done.connect(lambda ok, msg: None)
@@ -362,9 +421,9 @@ class TestHomingWorker:
         assert first_move.args[1] > 0
 
     def test_cancel_before_pass_aborts(self, qapp, monkeypatch):
-        import motor_tab
-        from motor_tab import HomingWorker
-        monkeypatch.setattr(motor_tab.time, "sleep", lambda *a, **k: None)
+        from rbl.hardware import galil_workers
+        from rbl.hardware.galil_workers import HomingWorker
+        monkeypatch.setattr(galil_workers.time, "sleep", lambda *a, **k: None)
         g = self._mock_galil(home_switch=False)
         hw = HomingWorker(g, "A")
         results = []
@@ -376,10 +435,10 @@ class TestHomingWorker:
         assert results and results[0][0] is False
 
     def test_restores_default_speed_after_homing(self, qapp, monkeypatch):
-        import motor_tab
-        from motor_tab import HomingWorker
+        from rbl.hardware import galil_workers
+        from rbl.hardware.galil_workers import HomingWorker
         import rbl.config.hardware_config as SC
-        monkeypatch.setattr(motor_tab.time, "sleep", lambda *a, **k: None)
+        monkeypatch.setattr(galil_workers.time, "sleep", lambda *a, **k: None)
         g = self._mock_galil(home_switch=False)
         hw = HomingWorker(g, "A")
         hw.done.connect(lambda ok, msg: None)
@@ -390,7 +449,7 @@ class TestHomingWorker:
 class TestGalilPollWorkerErrorHandling:
     def test_poll_worker_emits_error_and_stops_on_exception(self, qapp):
         from unittest.mock import MagicMock
-        from motor_tab import GalilPollWorker
+        from rbl.hardware.galil_workers import GalilPollWorker
         from rbl.hardware.galil_driver import GalilController
 
         g = MagicMock(spec=GalilController)
@@ -414,7 +473,7 @@ class TestGalilPollWorkerErrorHandling:
 class TestConcurrentPollWorkers:
     def test_galil_and_labjack_workers_run_simultaneously(self, qapp):
         from unittest.mock import MagicMock
-        from motor_tab import GalilPollWorker
+        from rbl.hardware.galil_workers import GalilPollWorker
         from rbl.hardware.labjack_poller import LabJackPollWorker
         from rbl.hardware.galil_driver import GalilController
         from rbl.hardware.labjack_driver import LabJackT7

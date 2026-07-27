@@ -11,149 +11,19 @@ Features:
 """
 import time
 
-from PySide6.QtCore import QThread, Signal, Qt
-from PySide6.QtGui import QFont, QKeyEvent
+from PySide6.QtCore import Signal, Qt
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel,
-    QPushButton, QDoubleSpinBox, QTextEdit, QFormLayout, QComboBox,
+    QPushButton, QDoubleSpinBox, QFormLayout, QComboBox,
     QMessageBox, QLineEdit,
 )
 
 from rbl.hardware.galil_driver import GalilController, GalilError
+from rbl.hardware.galil_workers import GalilPollWorker, HomingWorker
 from rbl.config import hardware_config as SC
-
-
-# ─── Background poll thread ───────────────────────────────────────────────────
-
-class GalilPollWorker(QThread):
-    state = Signal(dict)
-    error = Signal(str)
-
-    def __init__(self, galil: GalilController, period_s: float = 0.2):
-        super().__init__()
-        self.galil    = galil
-        self.period   = period_s
-        self._running = True
-
-    def stop(self):
-        self._running = False
-
-    def run(self):
-        while self._running and self.galil.connected:
-            t0 = time.time()
-            try:
-                snapshot = {}
-                for axis in SC.AXIS_LETTERS:
-                    snapshot[axis] = {
-                        "pos":      self.galil.get_position(axis),
-                        "moving":   self.galil.is_moving(axis),
-                        "switches": self.galil.get_switch_states(axis),
-                        "enabled":  not self.galil.is_motor_off(axis),
-                    }
-                self.state.emit(snapshot)
-            except Exception as e:
-                self.error.emit(str(e))
-                break
-            elapsed   = time.time() - t0
-            remaining = max(0.0, self.period - elapsed)
-            self.msleep(int(remaining * 1000))
-
-
-# ─── Auto-homing worker ───────────────────────────────────────────────────────
-
-class HomingWorker(QThread):
-    """Multi-pass homing for accuracy: coarse → medium → fine speed, always all passes.
-
-    Each pass backs off a small amount then re-homes at a slower speed.
-    define_zero is only called after the final (slowest) pass.
-    """
-    progress = Signal(str)
-    done     = Signal(bool, str)   # success, message
-
-    # Speeds and matching back-off distances for each successive pass (coarse → fine)
-    _SPEEDS   = [225, 112, 58]
-    _BACKOFFS = [1000, 500, 250]   # counts to back off before each pass
-
-    def __init__(self, galil: GalilController, axis: str, parent=None):
-        super().__init__(parent)
-        self.galil = galil
-        self.axis  = axis
-        self._cancelled = False
-
-    def cancel(self):
-        self._cancelled = True
-
-    def run(self):
-        g    = self.galil
-        axis = self.axis
-        n    = len(self._SPEEDS)
-        try:
-            # If already on home switch, back off using the coarse distance first
-            sw = g.get_switch_states(axis)
-            if sw["home_switch"]:
-                self.progress.emit(f"{axis}: on home switch — backing off {self._BACKOFFS[0]} counts…")
-                g.move_relative(axis, self._BACKOFFS[0])
-                if not self._wait_idle(timeout=15.0):
-                    self.done.emit(False, "Timeout while backing off home switch")
-                    return
-
-            for pass_num, (speed, backoff) in enumerate(zip(self._SPEEDS, self._BACKOFFS)):
-                if self._cancelled:
-                    self.done.emit(False, "Homing cancelled by user")
-                    return
-
-                # Back off before every pass using this pass's distance
-                if pass_num > 0:
-                    self.progress.emit(
-                        f"{axis}: pass {pass_num+1}/{n} — backing off {backoff} counts…"
-                    )
-                    g.move_relative(axis, backoff)
-                    if not self._wait_idle(timeout=15.0):
-                        self.done.emit(False, f"Timeout on back-off before pass {pass_num+1}")
-                        return
-
-                self.progress.emit(
-                    f"{axis}: pass {pass_num+1}/{n} — "
-                    f"HM at {speed} cps "
-                    f"({SC.cps_to_mm_per_sec(axis, speed):.2f} mm/s)…"
-                )
-                g.begin_home(axis, speed)
-                time.sleep(0.5)   # let motion start
-
-                if not self._wait_idle(timeout=60.0):
-                    self.progress.emit(f"{axis}: HM timeout on pass {pass_num+1}")
-                    g.stop(axis)
-                    time.sleep(0.3)
-                    # Restore speed and report failure — don't continue further passes
-                    try:
-                        g.set_speed(axis, SC.DEFAULT_SPEED_COUNTS_PER_SEC)
-                    except Exception:
-                        pass
-                    self.done.emit(False, f"{axis}: homing timed out on pass {pass_num+1}/{n}")
-                    return
-
-                self.progress.emit(f"{axis}: pass {pass_num+1}/{n} complete")
-
-            # All passes done — define zero on the final fine-speed position
-            g.define_zero(axis)
-            g.set_speed(axis, SC.DEFAULT_SPEED_COUNTS_PER_SEC)
-            self.done.emit(True, f"{axis}: homed ({n} passes), DP=0, SP restored")
-
-        except Exception as e:
-            self.done.emit(False, f"{axis}: homing error — {e}")
-
-    def _wait_idle(self, timeout: float = 30.0) -> bool:
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            if self._cancelled:
-                return False
-            try:
-                if not self.galil.is_moving(self.axis):
-                    return True
-            except Exception:
-                return False
-            time.sleep(0.2)
-        return False
+from rbl.gui import theme
+from rbl.gui.widgets.command_console import HistoryLineEdit, LogPane
 
 
 # ─── Per-axis control groupbox ────────────────────────────────────────────────
@@ -503,16 +373,16 @@ class AxisControls(QGroupBox):
                 self.lbl_status.setStyleSheet("color: #c05000; font-weight: bold;")
             elif not enabled:
                 self.lbl_status.setText("Disabled")
-                self.lbl_status.setStyleSheet("color: #888888; font-weight: bold;")
+                self.lbl_status.setStyleSheet(theme.status_label(theme.MUTED))
             elif sw["forward_switch"]:
                 self.lbl_status.setText("FWD LIMIT active")
-                self.lbl_status.setStyleSheet("color: #cc0000; font-weight: bold;")
+                self.lbl_status.setStyleSheet(theme.status_label(theme.FAULT))
             elif sw["reverse_switch"] or sw["home_switch"]:
                 self.lbl_status.setText("REV/HOME LIMIT active")
                 self.lbl_status.setStyleSheet("color: #cc6600; font-weight: bold;")
             else:
                 self.lbl_status.setText("Idle  [enabled]")
-                self.lbl_status.setStyleSheet("color: #1a7a1a; font-weight: bold;")
+                self.lbl_status.setStyleSheet(theme.status_label(theme.OK))
 
         sw = axis_state["switches"]
         def fmt(b): return "●" if b else "○"
@@ -529,51 +399,6 @@ class AxisControls(QGroupBox):
         self.lbl_info.setText(f"{sw_part}  |  BL:{bl_counts:,}   FL:{fl_counts:,}")
 
 
-# ─── History-aware command line edit ─────────────────────────────────────────
-
-class HistoryLineEdit(QLineEdit):
-    """QLineEdit with Up/Down arrow key command history."""
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._history: list[str] = []
-        self._history_idx: int = -1   # -1 = not browsing history
-        self._current_draft: str = ""
-
-    def add_to_history(self, cmd: str):
-        if cmd and (not self._history or self._history[-1] != cmd):
-            self._history.append(cmd)
-        self._history_idx = -1
-        self._current_draft = ""
-
-    def keyPressEvent(self, event: QKeyEvent):
-        if event.key() == Qt.Key.Key_Up:
-            if not self._history:
-                return
-            if self._history_idx == -1:
-                self._current_draft = self.text()
-                self._history_idx = len(self._history) - 1
-            elif self._history_idx > 0:
-                self._history_idx -= 1
-            self.setText(self._history[self._history_idx])
-            self.end(False)
-        elif event.key() == Qt.Key.Key_Down:
-            if self._history_idx == -1:
-                return
-            if self._history_idx < len(self._history) - 1:
-                self._history_idx += 1
-                self.setText(self._history[self._history_idx])
-            else:
-                self._history_idx = -1
-                self.setText(self._current_draft)
-            self.end(False)
-        else:
-            if self._history_idx != -1:
-                # any other key resets browsing
-                self._history_idx = -1
-            super().keyPressEvent(event)
-
-
 # ─── Top-level tab widget ─────────────────────────────────────────────────────
 
 class MotorTab(QWidget):
@@ -586,6 +411,15 @@ class MotorTab(QWidget):
     #    "zeroed":    bool,                      # all four axes referenced
     #    "positions": {"X+": mm, ...}}           # UNSIGNED distance from centre
     jaw_state = Signal(dict)
+
+    # Raw per-axis poll snapshot (axis letter -> {pos, moving, switches,
+    # enabled}, exactly GalilPollWorker.state's shape) plus the all-axes-zeroed
+    # flag. Feeds Beamline.ingest_motor_poll, which has richer per-axis fields
+    # (pos_counts, moving, enabled, switches) than jaw_state carries.
+    raw_state_changed = Signal(dict, bool)
+
+    # Emitted when the Galil link drops. Feeds Beamline.motors_disconnected.
+    motors_disconnected = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -609,10 +443,10 @@ class MotorTab(QWidget):
         self.btn_connect.clicked.connect(self._toggle_connection)
         conn.addWidget(self.btn_connect)
         self.lbl_conn_status = QLabel("● Disconnected")
-        self.lbl_conn_status.setStyleSheet("color: #666666; font-weight: bold;")
+        self.lbl_conn_status.setStyleSheet(theme.pill(False))
         conn.addWidget(self.lbl_conn_status)
         self.lbl_model = QLabel("")
-        self.lbl_model.setStyleSheet("color: #555; font-style: italic;")
+        self.lbl_model.setStyleSheet(f"color: {theme.NEUTRAL}; font-style: italic;")
         conn.addWidget(self.lbl_model, stretch=1)
         left_layout.addWidget(conn_box)
 
@@ -651,8 +485,8 @@ class MotorTab(QWidget):
         self.btn_estop.setMinimumHeight(44)
         self.btn_estop.setStyleSheet(
             "QPushButton { background:#aa0000; color:white; font-size:15px;"
-            " font-weight:bold; border:2px solid #cc0000; }"
-            "QPushButton:hover { background:#cc0000; }"
+            f" font-weight:bold; border:2px solid {theme.FAULT}; }}"
+            f"QPushButton:hover {{ background:{theme.FAULT}; }}"
         )
         self.btn_estop.clicked.connect(self._emergency_stop)
         estop_row.addWidget(self.btn_estop, stretch=3)
@@ -699,9 +533,7 @@ class MotorTab(QWidget):
         # ── Console (right panel — full height) ────────────────────────────
         cons_box = QGroupBox("Command Console")
         cons = QVBoxLayout(cons_box)
-        self.console = QTextEdit()
-        self.console.setReadOnly(True)
-        self.console.setFont(QFont("Consolas", 9))
+        self.console = LogPane()
         cons.addWidget(self.console, stretch=1)
         manual_row = QHBoxLayout()
         self.manual_cmd = HistoryLineEdit()
@@ -776,14 +608,12 @@ class MotorTab(QWidget):
         # Positions go stale the moment the link drops; say so rather than
         # letting consumers keep drawing the last known geometry as if live.
         self.jaw_state.emit({"connected": False, "zeroed": False, "positions": {}})
+        self.motors_disconnected.emit()
 
     def _set_buttons_connected(self, on: bool):
         self.btn_connect.setText("Disconnect" if on else "Connect")
         self.lbl_conn_status.setText("● Connected" if on else "● Disconnected")
-        self.lbl_conn_status.setStyleSheet(
-            "color: #1a7a1a; font-weight: bold;" if on
-            else "color: #666666; font-weight: bold;"
-        )
+        self.lbl_conn_status.setStyleSheet(theme.pill(on))
         self.btn_estop.setEnabled(on)
         self.btn_enable_all.setEnabled(on)
         self.btn_disable_all.setEnabled(on)
@@ -831,21 +661,22 @@ class MotorTab(QWidget):
         for axis, axis_state in snapshot.items():
             self.axes[axis].update_state(axis_state)
 
+        zeroed = all(p.zeroed for p in self.axes.values())
         positions = {SC.AXIS_NAMES[axis]: SC.counts_to_mm(axis, st["pos"])
                      for axis, st in snapshot.items()}
         self.jaw_state.emit({
             "connected": True,
-            "zeroed":    all(p.zeroed for p in self.axes.values()),
+            "zeroed":    zeroed,
             "positions": positions,
         })
+        self.raw_state_changed.emit(snapshot, zeroed)
 
     def _on_poll_error(self, msg: str):
         self._log_line(f"! Poll thread error: {msg}")
         self._do_disconnect()
 
     def _log_line(self, line: str):
-        ts = time.strftime("%H:%M:%S")
-        self.console.append(f"[{ts}] {line}")
+        self.console.log(line)
 
     # ---- Owner-callable cleanup ----------------------------------------------
 

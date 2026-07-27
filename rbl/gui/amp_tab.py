@@ -48,20 +48,14 @@ them one deliberate click at a time avoids the churn (and transient glitches) of
 restarting the stream on every stray combo event.
 """
 import time
-import collections
 
 import numpy as np
-from PySide6.QtCore import QTimer, Qt, Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel,
-    QPushButton, QMessageBox, QSizePolicy, QSlider, QComboBox,
+    QPushButton, QMessageBox, QSizePolicy, QComboBox,
 )
-
-import matplotlib
-matplotlib.use("QtAgg")
-from matplotlib.figure import Figure
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 
 from rbl.hardware.labjack_driver import LJM_AVAILABLE
 from rbl.hardware.current_monitor import RollingBuffer
@@ -69,37 +63,22 @@ from rbl.hardware.amp_monitor import (
     monitor_to_kv, monitor_to_ma, format_kv, format_ma,
     voltage_status, current_status,
 )
+from rbl.hardware.waveform_ring import WaveformRing, decimate_minmax
 from rbl.config import hardware_config as SC
 from rbl.config.labjack_stream_config import (
     STREAM_PROFILES, GUI_REFRESH_HZ, window_samples, resolution_index,
     is_single_channel, DEFAULT_SINGLE_CHANNEL,
 )
-from labjack_panel import LabJackPanel
-
-
-# Reverse map: AIN name -> (amp label, kind) for the 8 amplifier monitors.
-# Built from AMP_CHANNEL_MAP so it always tracks the wiring config.
-_AIN_TO_AMP = {
-    SC.AMP_CHANNEL_MAP[amp][kind]: (amp, kind)
-    for amp in SC.AMP_LABELS
-    for kind in ("voltage", "current")
-}
-
-
-# Zoom step list (seconds, descending).  Snapping to preset values keeps labels
-# clean: the 15→5→1 jump avoids the ugly 7.5/3.75/1.875/0.9375... sequence,
-# and halving from exactly 1 s gives tidy ms values (500, 250, 125, …).
-_ZOOM_STEPS = [
-    3600, 1800, 900, 600, 300, 120, 60, 30, 15, 5, 1,
-    0.5, 0.25, 0.125, 0.0625, 0.03125, 0.016, 0.008, 0.004, 0.002, 0.001,
-]
+from rbl.gui.widgets.connection_bar import LabJackPanel
+from rbl.gui.widgets.live_plot import LivePlotPanel
+from rbl.gui import theme
 
 
 # Status -> stylesheet color
 _STATUS_COLOR = {
-    "ok":   "#1a7a1a",   # green
-    "peak": "#c47a00",   # amber — legal only as a <4 ms transient
-    "over": "#c0392b",   # red   — out of spec / bad reading
+    "ok":   theme.OK,     # nominal
+    "peak": theme.WARN,   # legal only as a <4 ms transient
+    "over": theme.FAULT,  # out of spec / bad reading
 }
 
 
@@ -145,31 +124,25 @@ class AmpTab(QWidget):
         super().__init__(parent)
         self._t0 = time.monotonic()   # reset on labjack_connected
 
+        # The redraw timer only needs to run when BOTH hold: connected (data
+        # is arriving) and visible (this tab is the one on screen). Buffers
+        # keep filling in the background either way — only painting pauses.
+        self._connected = False
+        self._visible   = False
+
         # One trend buffer per AIN. Keys are AIN names so _on_window can index directly.
         self.buffers = {ain: RollingBuffer(self.BUFFER_CAPACITY)
                         for ain in SC.AMP_AIN_NAMES}
 
-        # Raw-waveform ring, one deque per AIN, holding recent (t_end, values)
-        # window chunks (values already in kV / mA).  Feeds snapshot mode.
-        self._wave_chunks = {ain: collections.deque() for ain in SC.AMP_AIN_NAMES}
+        # Raw-waveform ring, holding recent (t_end, values) window chunks per
+        # AIN (values already in kV / mA).  Feeds snapshot mode.
+        self.wave_ring = WaveformRing(
+            SC.AMP_AIN_NAMES,
+            keep_seconds=self.SNAPSHOT_MAX_SECONDS,
+            window_duration_s=self.WINDOW_DURATION_S,
+        )
 
-        # Cache of within-window sample-time offsets, keyed by (sample count,
-        # sample period).  A chunk's absolute sample times are just
-        # t_start + template, so we never rebuild np.arange per chunk per frame
-        # (that rebuild, over the whole ring every redraw, was the sub-second
-        # "caching" lag).
-        self._wave_time_templates: dict[tuple, np.ndarray] = {}
-
-        # Per-sample time step of the live stream (seconds), taken from the
-        # stream payload's sample_period.  Chunks are reconstructed as
-        # t_start = t_end - n * dt so consecutive windows stitch seamlessly.
-        # None until the first payload carrying it arrives; the snapshot path
-        # then falls back to the nominal window duration / sample count.
-        self._wave_dt: float | None = None
-
-        # Plot state
-        self._is_live           = True
-        self._frozen_right_edge = None
+        # Plot state (LIVE/FROZEN + window_seconds live on self.plot, built below)
         self._plot_mode         = "trend"   # "trend" | "snapshot"
 
         # Vertical scale state.  The plot never auto-centers the voltage axis;
@@ -393,15 +366,30 @@ class AmpTab(QWidget):
         layout.addLayout(upper_row)
 
         # ── History / waveform plot (one figure, two modes) ─────────────────
-        self._window_seconds = float(self.WINDOW_SECONDS)
+        # Shared history slider + LIVE/FROZEN state machine + zoom-step list.
+        # The nav row stays local (see module docstring: amp_tab interleaves
+        # its own vertical zoom controls and orders its time-zoom buttons the
+        # other way round from the log-amp tab, so it is not built here).
+        self.plot = LivePlotPanel(
+            window_seconds=self.WINDOW_SECONDS,
+            live_edge_provider=self._live_edge,
+            span_provider=self._buffer_span,
+            min_window_seconds=None,   # amp_tab zooms into the ms waveform range
+            figsize=(7, 6),
+            redraw_interval_ms=100,
+        )
+        self.plot.navigation_changed.connect(self._on_navigation_changed)
+        self.plot.zoom_changed.connect(self._on_zoom_changed)
+        self.plot.redraw_timer.timeout.connect(self._redraw_plot)
+
         plot_box = QGroupBox("Amplifier History")
         plot_box.setMinimumWidth(0)
         pv = QVBoxLayout(plot_box)
 
         nav_row = QHBoxLayout()
-        self.lbl_mode = QLabel(f"● LIVE  ({int(self._window_seconds)} s)")
+        self.lbl_mode = QLabel(f"● LIVE  ({int(self.plot.window_seconds)} s)")
         self.lbl_mode.setStyleSheet(
-            "color: #1a7a1a; font-weight: bold; padding: 2px 6px;"
+            theme.status_label(theme.OK) + " padding: 2px 6px;"
         )
         nav_row.addWidget(self.lbl_mode)
         lbl_time = QLabel("Time:")
@@ -412,12 +400,12 @@ class AmpTab(QWidget):
         btn_zoom_in.setToolTip("Zoom in — scroll wheel up (halve window). "
                                "At 1 s and below the plot shows the raw waveform.")
         btn_zoom_in.setStyleSheet("font-weight: bold; padding: 1px 4px;")
-        btn_zoom_in.clicked.connect(self._zoom_in)
+        btn_zoom_in.clicked.connect(self.plot.zoom_in)
         btn_zoom_out = QPushButton("－")
         btn_zoom_out.setFixedWidth(28)
         btn_zoom_out.setToolTip("Zoom out — scroll wheel down (double window)")
         btn_zoom_out.setStyleSheet("font-weight: bold; padding: 1px 4px;")
-        btn_zoom_out.clicked.connect(self._zoom_out)
+        btn_zoom_out.clicked.connect(self.plot.zoom_out)
         nav_row.addWidget(btn_zoom_in)
         nav_row.addWidget(btn_zoom_out)
 
@@ -452,14 +440,12 @@ class AmpTab(QWidget):
             " padding:2px 8px; }"
             "QPushButton:hover { background:#0063b1; }"
         )
-        self.btn_jump_live.clicked.connect(self._jump_to_live)
+        self.btn_jump_live.clicked.connect(self.plot.jump_to_live)
         nav_row.addWidget(self.btn_jump_live)
         pv.addLayout(nav_row)
 
-        self.fig    = Figure(figsize=(7, 6))
-        self.canvas = FigureCanvasQTAgg(self.fig)
-        self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding,
-                                  QSizePolicy.Policy.Expanding)
+        self.fig    = self.plot.fig
+        self.canvas = self.plot.canvas
         self.canvas.setMinimumWidth(0)
         self.canvas.mpl_connect('scroll_event', self._on_scroll)
         # Vertical click-drag pans the voltage/current axis (time stays locked to
@@ -475,8 +461,8 @@ class AmpTab(QWidget):
         self.ax_v.grid(True, alpha=0.3)
         self.ax_v.axhline(0.0, color="#999", lw=0.8, ls="-")
         # Rating envelope: +/-5 kV
-        self.ax_v.axhline( SC.AMP_MAX_KV, color="#c0392b", lw=0.8, ls="--", alpha=0.5)
-        self.ax_v.axhline(-SC.AMP_MAX_KV, color="#c0392b", lw=0.8, ls="--", alpha=0.5)
+        self.ax_v.axhline( SC.AMP_MAX_KV, color=theme.FAULT, lw=0.8, ls="--", alpha=0.5)
+        self.ax_v.axhline(-SC.AMP_MAX_KV, color=theme.FAULT, lw=0.8, ls="--", alpha=0.5)
         self.ax_v.tick_params(labelbottom=False)
 
         self.ax_i.set_ylabel("Current Draw (mA)")
@@ -484,8 +470,8 @@ class AmpTab(QWidget):
         self.ax_i.grid(True, alpha=0.3)
         self.ax_i.axhline(0.0, color="#999", lw=0.8, ls="-")
         # DC rating envelope: +/-20 mA
-        self.ax_i.axhline( SC.AMP_MAX_MA_DC, color="#c47a00", lw=0.8, ls="--", alpha=0.5)
-        self.ax_i.axhline(-SC.AMP_MAX_MA_DC, color="#c47a00", lw=0.8, ls="--", alpha=0.5)
+        self.ax_i.axhline( SC.AMP_MAX_MA_DC, color=theme.WARN, lw=0.8, ls="--", alpha=0.5)
+        self.ax_i.axhline(-SC.AMP_MAX_MA_DC, color=theme.WARN, lw=0.8, ls="--", alpha=0.5)
 
         # Mirrored voltage axis on the right-hand side, requested for readability.
         # A secondary y-axis tracks ax_v's data limits automatically, so it
@@ -544,35 +530,15 @@ class AmpTab(QWidget):
         _canvas_row.addWidget(_amp_legend_w)
         pv.addLayout(_canvas_row, stretch=1)
 
-        # History slider: 0 = oldest, 10000 = live.
-        slider_row = QHBoxLayout()
-        lbl_hist = QLabel("◀ History")
-        lbl_hist.setStyleSheet("color: #555; font-size: 10px;")
-        self.slider = QSlider(Qt.Orientation.Horizontal)
-        self.slider.setRange(0, 10_000)
-        self.slider.setValue(10_000)
-        self.slider.setTickInterval(1_000)
-        self.slider.setToolTip(
-            "Drag left to browse history. "
-            "Drag to far right to return to LIVE mode."
-        )
-        self.slider.valueChanged.connect(self._on_slider_changed)
-        lbl_live = QLabel("Live ▶")
-        lbl_live.setStyleSheet("color: #555; font-size: 10px;")
-        slider_row.addWidget(lbl_hist)
-        slider_row.addWidget(self.slider, stretch=1)
-        slider_row.addWidget(lbl_live)
-        pv.addLayout(slider_row)
+        # History slider: 0 = oldest, 10000 = live. Redraw at 10 Hz — matched
+        # to the window arrival rate so the waveform scrolls smoothly (see
+        # LivePlotPanel's redraw_interval_ms=100 above). The old 5 Hz redraw
+        # showed every other window and then jumped two at once, which read
+        # as lag. The per-frame work is now cheap (cached sample times, no
+        # auto-scale), so 10 Hz is comfortable.
+        pv.addLayout(self.plot.slider_row)
 
         layout.addWidget(plot_box, stretch=1)
-
-        # Redraw at 10 Hz — matched to the window arrival rate so the waveform
-        # scrolls smoothly.  The old 5 Hz redraw showed every other window and
-        # then jumped two at once, which read as lag.  The per-frame work is now
-        # cheap (cached sample times, no auto-scale), so 10 Hz is comfortable.
-        self._redraw_timer = QTimer(self)
-        self._redraw_timer.setInterval(100)
-        self._redraw_timer.timeout.connect(self._redraw_plot)
 
         # Lay the subplots out with room on the right for the mirrored kV axis.
         self._update_history_layout()
@@ -587,15 +553,68 @@ class AmpTab(QWidget):
         # Start every buffer from a clean slate so the (possibly re-anchored)
         # stream timeline never mixes with data from a previous session.
         for buf in self.buffers.values():
-            buf.__init__(self.BUFFER_CAPACITY)
-        for dq in self._wave_chunks.values():
-            dq.clear()
+            buf.clear()
+        self.wave_ring.clear()
+        self._connected = True
         self.lj_panel.set_connected(True, serial)
-        self._redraw_timer.start()
+        self._update_redraw_state()
 
     def on_labjack_disconnected(self):
-        self._redraw_timer.stop()
+        self._connected = False
+        self._update_redraw_state()
         self.lj_panel.set_connected(False)
+
+    # ---- Visibility (QStackedWidget hides the non-current tab) ---------------
+    #
+    # The redraw timer is rendering, not data acquisition: it only needs to run
+    # while this tab is the one on screen. Buffers keep filling via _on_window
+    # regardless of visibility, so no data is lost while hidden — only
+    # painting pauses.
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._visible = True
+        self._update_redraw_state()
+        self._redraw_plot()   # repaint immediately, don't wait for a stale frame
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self._visible = False
+        self._update_redraw_state()
+
+    def _update_redraw_state(self):
+        if self._connected and self._visible:
+            self.plot.start()
+        else:
+            self.plot.stop()
+
+    # ---- Buffer span (LivePlotPanel data callbacks) ---------------------------
+
+    def _live_edge(self):
+        """Newest timestamp available across all trend buffers, or None.
+
+        Cheap by design (per-buffer O(1) `.latest()`): called on every redraw
+        tick while LIVE and TREND mode is active (snapshot mode reads its own
+        waveform-ring edge instead — see _redraw_snapshot).
+        """
+        ref_t = None
+        for buf in self.buffers.values():
+            t, _ = buf.latest()
+            if not (t != t):   # not NaN
+                if ref_t is None or t > ref_t:
+                    ref_t = t
+        return ref_t
+
+    def _buffer_span(self):
+        """(t_oldest, t_newest) across the buffers, or None.
+
+        Only called when a slider drag enters FROZEN mode, so the full
+        snapshot/sort cost here is fine.
+        """
+        t_arr, _ = self.buffers[next(iter(self.buffers))].snapshot()
+        if len(t_arr) < 2:
+            return None
+        return (float(t_arr[0]), float(t_arr[-1]))
 
     def on_profile_changed(self, profile_name: str):
         """Sync the UI to a profile that is now live on the hardware.
@@ -614,7 +633,7 @@ class AmpTab(QWidget):
         res  = resolution_index(profile_name)
         if self._single_mode:
             self._single_target_ain = self._single_combo.currentData()
-            amp, kind = _AIN_TO_AMP[self._single_target_ain]
+            amp, kind = SC.AIN_TO_AMP[self._single_target_ain]
             self._profile_status.setText(
                 f"{rate / 1000:.1f} kS/s  |  res idx {res}  |  "
                 f"target {amp} {kind} ({self._single_target_ain})  |  "
@@ -681,7 +700,7 @@ class AmpTab(QWidget):
         _BOT  = [0.10, 0.11, 0.82, 0.38]
 
         if self._single_mode:
-            _, kind = _AIN_TO_AMP.get(self._single_target_ain, ("", "voltage"))
+            _, kind = SC.AIN_TO_AMP.get(self._single_target_ain, ("", "voltage"))
             is_voltage = (kind == "voltage")
             self.ax_v.set_visible(is_voltage)
             self.ax_v_right.set_visible(is_voltage)
@@ -728,8 +747,8 @@ class AmpTab(QWidget):
         self._apply_btn.setEnabled(pending)
         if pending:
             self._apply_btn.setStyleSheet(
-                "QPushButton { background:#c47a00; color:white; font-weight:bold;"
-                " padding:2px 10px; }"
+                f"QPushButton {{ background:{theme.WARN}; color:white; font-weight:bold;"
+                " padding:2px 10px; }}"
                 "QPushButton:hover { background:#d98c00; }"
             )
         else:
@@ -775,9 +794,7 @@ class AmpTab(QWidget):
 
         # Adopt the stream's true sample period when present so stitched
         # waveform chunks use the real per-sample step (not a nominal guess).
-        dt = payload.get("sample_period")
-        if dt:
-            self._wave_dt = dt
+        self.wave_ring.set_sample_period(payload.get("sample_period"))
 
         # Voltage and current are handled independently: in single-channel mode
         # only ONE of the two AINs for one amplifier is present, so requiring
@@ -817,7 +834,7 @@ class AmpTab(QWidget):
                 self.lbl_raw_v[amp].setText(f"{v_ain}:  {raw_v:+.4f} V")
 
                 if wave is not None:
-                    self._store_wave_chunk(
+                    self.wave_ring.store(
                         v_ain, t, np.asarray(wave) * SC.VOLTAGE_MONITOR_KV_PER_VOLT
                     )
 
@@ -838,22 +855,12 @@ class AmpTab(QWidget):
                 self.lbl_raw_i[amp].setText(f"{i_ain}:  {raw_i:+.4f} V")
 
                 if wave is not None:
-                    self._store_wave_chunk(
+                    self.wave_ring.store(
                         i_ain, t, np.asarray(wave) * SC.CURRENT_MONITOR_MA_PER_VOLT
                     )
 
-        if self._is_live:
-            self.slider.blockSignals(True)
-            self.slider.setValue(10_000)
-            self.slider.blockSignals(False)
-
-    def _store_wave_chunk(self, ain: str, t_end: float, values: np.ndarray):
-        """Append a raw window to the ring and drop chunks older than the ring."""
-        dq = self._wave_chunks[ain]
-        dq.append((t_end, values))
-        cutoff = t_end - (self.SNAPSHOT_MAX_SECONDS + self.WINDOW_DURATION_S)
-        while dq and dq[0][0] < cutoff:
-            dq.popleft()
+        if self.plot.is_live:
+            self.plot.force_to_live()
 
     def _on_reading(self, t: float, values: dict):
         """Legacy command-response path (AIN6..AIN13 only).
@@ -889,18 +896,13 @@ class AmpTab(QWidget):
             self.lbl_raw_v[amp].setText(f"{v_ain}:  {v_raw:+.4f} V")
             self.lbl_raw_i[amp].setText(f"{i_ain}:  {i_raw:+.4f} V")
 
-        if self._is_live:
-            self.slider.blockSignals(True)
-            self.slider.setValue(10_000)
-            self.slider.blockSignals(False)
+        if self.plot.is_live:
+            self.plot.force_to_live()
 
-    # ---- Slider / navigation -------------------------------------------------
-
-    def _on_slider_changed(self, val: int):
-        if val >= 9_800:
-            self._enter_live_mode()
-        else:
-            self._enter_frozen_mode(val)
+    # ---- Mode label ------------------------------------------------------------
+    #
+    # Formatting stays here (not in LivePlotPanel) because amp_tab's wording
+    # differs from the log-amp tab's (a window-size / snapshot-vs-RMS suffix).
 
     def _is_snapshot(self) -> bool:
         """True when the window is narrow enough to show the raw waveform.
@@ -908,10 +910,10 @@ class AmpTab(QWidget):
         Inclusive at the boundary: a 1 s window still shows the real waveform;
         only *above* 1 s does the RMS trend take over.
         """
-        return self._window_seconds <= self.SNAPSHOT_MAX_SECONDS + 1e-9
+        return self.plot.window_seconds <= self.SNAPSHOT_MAX_SECONDS + 1e-9
 
     def _window_label(self) -> str:
-        ws = self._window_seconds
+        ws = self.plot.window_seconds
         if ws < 1.0:
             body = f"{ws * 1000:.3g} ms"
         else:
@@ -923,74 +925,37 @@ class AmpTab(QWidget):
                 body = f"{m} m" if s == 0 else f"{m} m {s} s"
         return f"{body} · waveform" if self._is_snapshot() else f"{body} · RMS"
 
-    def _enter_live_mode(self):
-        self._is_live = True
-        self._frozen_right_edge = None
-        self.lbl_mode.setText(f"● LIVE  ({self._window_label()})")
-        self.lbl_mode.setStyleSheet(
-            "color: #1a7a1a; font-weight: bold; padding: 2px 6px;"
-        )
-        self.btn_jump_live.setVisible(False)
-
-    def _enter_frozen_mode(self, slider_val: int):
-        t_arr, _ = self.buffers[next(iter(self.buffers))].snapshot()
-        if len(t_arr) < 2:
-            return
-        t_oldest = float(t_arr[0])
-        t_newest = float(t_arr[-1])
-        span = t_newest - t_oldest
-        if span <= 0:
-            return
-
-        frac = slider_val / 10_000.0
-        self._frozen_right_edge = t_oldest + frac * span
-        self._is_live = False
-        self._update_frozen_label()
-        self.btn_jump_live.setVisible(True)
-
     def _update_frozen_label(self):
-        w_start = self._frozen_right_edge - self._window_seconds
+        w_start = self.plot.frozen_right_edge - self.plot.window_seconds
         self.lbl_mode.setText(
-            f"⏸  Frozen  —  [{w_start:+.3g} s … {self._frozen_right_edge:+.3g} s]"
+            f"⏸  Frozen  —  [{w_start:+.3g} s … {self.plot.frozen_right_edge:+.3g} s]"
             f"  ({self._window_label()})"
         )
         self.lbl_mode.setStyleSheet(
             "color: #8c6000; font-weight: bold; padding: 2px 6px;"
         )
 
-    def _jump_to_live(self):
-        self.slider.setValue(10_000)
-        self._enter_live_mode()
+    def _on_navigation_changed(self):
+        self.btn_jump_live.setVisible(not self.plot.is_live)
+        if self.plot.is_live:
+            self.lbl_mode.setText(f"● LIVE  ({self._window_label()})")
+            self.lbl_mode.setStyleSheet(
+                theme.status_label(theme.OK) + " padding: 2px 6px;"
+            )
+        else:
+            self._update_frozen_label()
 
-    # ---- Zoom ----------------------------------------------------------------
-
-    def _zoom_in(self):
-        # Snap to the next smaller preset step (largest step < current).
-        for step in _ZOOM_STEPS:          # list is descending
-            if step < self._window_seconds - 1e-9:
-                self._window_seconds = step
-                break
-        self._after_zoom()
-
-    def _zoom_out(self):
-        # Snap to the next larger preset step (smallest step > current).
-        for step in reversed(_ZOOM_STEPS):   # ascending
-            if step > self._window_seconds + 1e-9:
-                self._window_seconds = step
-                break
-        self._after_zoom()
+    def _on_zoom_changed(self):
+        if self.plot.is_live:
+            self.lbl_mode.setText(f"● LIVE  ({self._window_label()})")
+        elif self.plot.frozen_right_edge is not None:
+            self._update_frozen_label()
 
     def _on_scroll(self, event):
         if event.button == 'up':
-            self._zoom_in()
+            self.plot.zoom_in()
         elif event.button == 'down':
-            self._zoom_out()
-
-    def _after_zoom(self):
-        if self._is_live:
-            self.lbl_mode.setText(f"● LIVE  ({self._window_label()})")
-        elif self._frozen_right_edge is not None:
-            self._update_frozen_label()
+            self.plot.zoom_out()
 
     # ---- Vertical (voltage / current) scale: zoom, pan, reset ----------------
 
@@ -1091,22 +1056,10 @@ class AmpTab(QWidget):
         """10 Hz peak/RMS history — the drift / fault view (wide windows)."""
         any_data = False
 
-        if self._is_live:
-            ref_t = None
-            for buf in self.buffers.values():
-                t, _ = buf.latest()
-                if not (t != t):   # not NaN
-                    if ref_t is None or t > ref_t:
-                        ref_t = t
-            if ref_t is None:
-                return
-            t_right = ref_t
-        else:
-            t_right = self._frozen_right_edge
-            if t_right is None:
-                return
-
-        t_left = t_right - self._window_seconds
+        window = self.plot.compute_window()
+        if window is None:
+            return
+        t_left, t_right = window
 
         for amp in SC.AMP_LABELS:
             for ain, line in (
@@ -1133,20 +1086,26 @@ class AmpTab(QWidget):
                 any_data = True
 
         if any_data:
-            self.ax_v.set_xlim(-self._window_seconds, 0)
+            self.ax_v.set_xlim(-self.plot.window_seconds, 0)
             self._apply_ylimits()
             self.canvas.draw_idle()
 
     def _redraw_snapshot(self):
-        """Raw high-rate waveform over the last window_seconds — the scope view."""
-        if self._is_live:
-            t_right = self._latest_wave_t()
+        """Raw high-rate waveform over the last window_seconds — the scope view.
+
+        LIVE mode's right edge comes from the waveform ring, not the trend
+        buffers `self.plot` uses — the ring can be ahead of the 10 Hz trend
+        by up to one window — so this bypasses `self.plot.compute_window()`
+        and reads `is_live`/`frozen_right_edge`/`window_seconds` directly.
+        """
+        if self.plot.is_live:
+            t_right = self.wave_ring.latest_t()
         else:
-            t_right = self._frozen_right_edge
+            t_right = self.plot.frozen_right_edge
         if t_right is None:
             return
 
-        t_left = t_right - self._window_seconds
+        t_left = t_right - self.plot.window_seconds
         any_data = False
 
         for amp in SC.AMP_LABELS:
@@ -1157,135 +1116,24 @@ class AmpTab(QWidget):
                 if self._single_mode and ain != self._single_target_ain:
                     line.set_data([], [])
                     continue
-                series = self._snapshot_series(ain, t_left, t_right)
+                series = self.wave_ring.series(ain, t_left, t_right)
                 if series is None:
                     line.set_data([], [])
                     continue
                 tt, vv = series
-                tt, vv = self._decimate_minmax(tt, vv, self.WF_MAX_POINTS)
+                tt, vv = decimate_minmax(tt, vv, self.WF_MAX_POINTS)
                 line.set_data(tt - t_right, vv)
                 any_data = True
 
         if any_data:
-            self.ax_v.set_xlim(-self._window_seconds, 0)
+            self.ax_v.set_xlim(-self.plot.window_seconds, 0)
             self._apply_ylimits()
             self.canvas.draw_idle()
-
-    def _latest_wave_t(self):
-        """Most recent raw-window end time across all amp channels (or None)."""
-        best = None
-        for dq in self._wave_chunks.values():
-            if dq:
-                te = dq[-1][0]
-                if best is None or te > best:
-                    best = te
-        return best
-
-    def _snapshot_series(self, ain: str, t_left: float, t_right: float):
-        """Concatenated (times, values) of raw samples in [t_left, t_right].
-
-        Each stored chunk spans WINDOW_DURATION_S ending at its t_end; sample
-        times are reconstructed on demand so the ring only holds the values.
-        Returns None if nothing falls in the window.
-        """
-        dq = self._wave_chunks.get(ain)
-        if not dq:
-            return None
-        ts, vs = [], []
-        for t_end, vals in dq:
-            n = len(vals)
-            if n == 0:
-                continue
-            # Reconstruct the chunk's start from its OWN sample count and the
-            # true sample period, so chunk k's start lands exactly on chunk
-            # k-1's end (t_end is sample-accurate upstream).  Assuming a fixed
-            # 0.1 s width instead was what let jittery windows overlap/gap and
-            # break the stitched trace at each seam.
-            dt = self._wave_dt if self._wave_dt else (self.WINDOW_DURATION_S / n)
-            t_start = t_end - n * dt
-            # Skip chunks that fall entirely outside the visible window — this is
-            # what keeps a narrow (few-ms) view from re-scanning the whole ring.
-            if t_end < t_left or t_start > t_right:
-                continue
-            tt = t_start + self._wave_times_template(n, dt)   # cached offsets
-            if t_start >= t_left and t_end <= t_right:
-                # Whole chunk is inside the view: no masking needed.
-                ts.append(tt)
-                vs.append(vals)
-            else:
-                m = (tt >= t_left) & (tt <= t_right)
-                if m.any():
-                    ts.append(tt[m])
-                    vs.append(vals[m])
-        if not ts:
-            return None
-        return np.concatenate(ts), np.concatenate(vs)
-
-    def _wave_times_template(self, n: int, dt: float) -> np.ndarray:
-        """Sample-centre time offsets for an n-sample window at step *dt*.
-
-        Absolute sample times are ``t_start + template``.  The offsets depend
-        only on the sample count and the sample period (both constant per
-        profile), so caching them by ``(n, dt)`` avoids rebuilding
-        ``np.arange`` for every chunk on every redraw.
-        """
-        key  = (n, dt)
-        tmpl = self._wave_time_templates.get(key)
-        if tmpl is None:
-            tmpl = (np.arange(n) + 0.5) * dt
-            self._wave_time_templates[key] = tmpl
-        return tmpl
-
-    @staticmethod
-    def _decimate_minmax(x: np.ndarray, y: np.ndarray, max_points: int):
-        """Envelope-preserving decimation: bin the series and keep min+max/bin.
-
-        Plain striding would drop transient peaks between samples; min/max
-        binning keeps the visible envelope while capping the point count so a
-        100 kS/s window redraws cheaply.
-
-        Each bin's two extrema are emitted AT THEIR REAL SAMPLE POSITIONS, in
-        the order they occur in time (earliest first).  The old code drew both
-        at the bin's left-edge x with min always before max: at a sharp tip
-        (e.g. a triangle apex) that collapsed the peak onto a vertical segment
-        and, on a falling edge where the max precedes the min, drew the pair
-        backwards — the "somersault"/flip seen on the waveform tips.  Placing
-        each extreme at its own x in temporal order reproduces the true up/down
-        shape of every peak.
-        """
-        n = len(x)
-        if n <= max_points:
-            return x, y
-        bins = max(1, max_points // 2)
-        usable = (n // bins) * bins
-        if usable < bins:
-            return x, y
-        xb = x[:usable].reshape(bins, -1)
-        yb = y[:usable].reshape(bins, -1)
-        cols  = np.arange(bins)
-        i_min = yb.argmin(axis=1)
-        i_max = yb.argmax(axis=1)
-        # Per bin, order the two extrema by their in-bin (time) index so the
-        # emitted x stays monotonic and the peak is drawn the right way round.
-        i_first = np.minimum(i_min, i_max)
-        i_last  = np.maximum(i_min, i_max)
-        x_out = np.empty(bins * 2, dtype=float)
-        y_out = np.empty(bins * 2, dtype=float)
-        x_out[0::2] = xb[cols, i_first]
-        x_out[1::2] = xb[cols, i_last]
-        y_out[0::2] = yb[cols, i_first]
-        y_out[1::2] = yb[cols, i_last]
-        # Keep the un-binned tail so the live right edge is never truncated
-        # (the reshape drops the final < bins samples otherwise).
-        if usable < n:
-            x_out = np.concatenate([x_out, x[usable:]])
-            y_out = np.concatenate([y_out, y[usable:]])
-        return x_out, y_out
 
     # ---- Owner-callable cleanup ----------------------------------------------
 
     def shutdown(self):
-        self._redraw_timer.stop()
+        self.plot.stop()
 
 
 # Standalone smoke test
