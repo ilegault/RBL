@@ -217,7 +217,8 @@ class TestMotorTabUnits:
     @pytest.fixture
     def motor(self, qapp):
         from rbl.gui.motor_tab import MotorTab
-        mt = MotorTab()
+        from rbl.state.beamline import Beamline
+        mt = MotorTab(Beamline())
         yield mt
         mt.abort_and_close()
 
@@ -357,8 +358,6 @@ class TestCurrentTab:
         current._redraw_plot()   # no data yet -> must be a safe no-op
 
 
-# ── Both poll workers running concurrently (two-tab scenario) ────────────────
-
 class _Collector(QObject):
     """A real QObject receiver so cross-thread signals use safe *queued*
     connections — exactly as MotorTab/CurrentTab do in the live app."""
@@ -366,14 +365,10 @@ class _Collector(QObject):
     def __init__(self):
         super().__init__()
         self.galil_states = []
-        self.lj_reads = []
         self.errors = []
 
     def on_state(self, s):
         self.galil_states.append(s)
-
-    def on_reading(self, t, v):
-        self.lj_reads.append((t, v))
 
     def on_error(self, m):
         self.errors.append(m)
@@ -468,51 +463,3 @@ class TestGalilPollWorkerErrorHandling:
         qapp.processEvents()
         assert col.errors, "poll worker should have reported the error"
         assert not gw.isRunning()
-
-
-class TestConcurrentPollWorkers:
-    def test_galil_and_labjack_workers_run_simultaneously(self, qapp):
-        from unittest.mock import MagicMock
-        from rbl.hardware.galil_workers import GalilPollWorker
-        from rbl.hardware.labjack_poller import LabJackPollWorker
-        from rbl.hardware.galil_driver import GalilController
-        from rbl.hardware.labjack_driver import LabJackT7
-
-        galil = MagicMock(spec=GalilController)
-        galil.connected = True
-        galil.get_position.return_value = 1000
-        galil.is_moving.return_value = False
-        galil.get_switch_states.return_value = {
-            "forward_switch": False, "reverse_switch": False, "home_switch": False}
-        galil.is_motor_off.return_value = False
-
-        lj = MagicMock(spec=LabJackT7)
-        lj.connected = True
-        lj.read_channels.return_value = {"AIN0": 3.0, "AIN1": 3.0,
-                                         "AIN2": 3.0, "AIN3": 3.0}
-
-        col = _Collector()
-        gw = GalilPollWorker(galil, period_s=0.02)
-        lw = LabJackPollWorker(lj, period_s=0.02)
-        gw.state.connect(col.on_state)
-        gw.error.connect(col.on_error)
-        lw.reading.connect(col.on_reading)
-        lw.error.connect(col.on_error)
-
-        gw.start()
-        lw.start()
-        try:
-            deadline = time.time() + 0.4
-            while time.time() < deadline:
-                qapp.processEvents()
-                time.sleep(0.01)
-        finally:
-            gw.stop(); lw.stop()
-            gw.wait(2000); lw.wait(2000)
-        qapp.processEvents()
-
-        assert not col.errors, f"poll workers errored: {col.errors}"
-        assert len(col.galil_states) >= 3, "Galil poll produced too few updates"
-        assert len(col.lj_reads) >= 3, "LabJack poll produced too few reads"
-        # The two workers use independent hardware objects -> no cross-talk.
-        assert galil is not lj

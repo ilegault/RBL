@@ -437,15 +437,3 @@ class CurrentTab(QWidget):
     def shutdown(self):
         """MainWindow closes the LabJack itself; we just stop redrawing."""
         self.plot.stop()
-
-
-# Standalone smoke test
-if __name__ == "__main__":
-    import sys
-    from PySide6.QtWidgets import QApplication
-    app = QApplication(sys.argv)
-    w = CurrentTab()
-    w.resize(900, 700)
-    w.show()
-    print("[OK] current_tab loads")
-    sys.exit(app.exec())

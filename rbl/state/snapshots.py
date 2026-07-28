@@ -41,6 +41,24 @@ class ChannelSnapshot:
 
 
 @dataclass(frozen=True)
+class ChannelParams:
+    """A channel setpoint intent, e.g. from ChannelPanel.get_params().
+
+    Distinct from ChannelSnapshot (a readback): this is what a caller wants
+    to push to the hardware, including the two fields get_state() doesn't
+    read back (start_phase_deg, load).
+    """
+    shape: str
+    freq_hz: float
+    amp_vpp: float
+    offset_v: float
+    phase_deg: float
+    start_phase_deg: float
+    load: str
+    output_on: bool
+
+
+@dataclass(frozen=True)
 class FuncGenState:
     connected: dict[str, bool] = field(default_factory=dict)          # "A" -> bool
     timebase: dict[str, str] = field(default_factory=dict)            # "A" -> "INT"/"EXT"
