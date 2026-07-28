@@ -11,8 +11,8 @@ import math
 from PySide6.QtCore import Qt, QPointF, QRectF
 from PySide6.QtGui import QFont, QPainter, QColor, QPen, QBrush
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QLabel, QSizePolicy, QComboBox, QDoubleSpinBox,
-    QFormLayout,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSizePolicy, QComboBox,
+    QDoubleSpinBox, QFormLayout,
 )
 
 from rbl.hardware import beam_reconstruction as BR
@@ -35,7 +35,7 @@ class _ApertureView(QWidget):
     ``BeamEstimate`` and it draws what it is given.
     """
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, compact: bool = False):
         super().__init__(parent)
         self.edges     = {}      # slit -> SIGNED mm; empty when Galil unavailable
         self.currents  = {}      # slit -> Amps
@@ -46,7 +46,16 @@ class _ApertureView(QWidget):
         self.raster    = False
         self.ratio_x   = float("nan")   # fallback when slit positions are absent
         self.ratio_y   = float("nan")
-        self.setMinimumSize(190, 190)
+        # The drawing is resolution-independent (one mm-per-pixel scale,
+        # computed from whatever size it gets), so a smaller floor costs
+        # detail, never correctness. This is the one place that "square" is
+        # actually enforced — the aperture picture is the thing being read,
+        # so IT gets a square floor, regardless of what the panel around it
+        # (title, controls, readouts) ends up shaped like.
+        if compact:
+            self.setMinimumSize(200, 300)
+        else:
+            self.setMinimumSize(250, 350)
         self.setSizePolicy(QSizePolicy.Policy.Expanding,
                            QSizePolicy.Policy.Expanding)
 
@@ -330,8 +339,15 @@ class BeamPositionIndicator(QWidget):
     not read the function generators or HV amplifiers — it reports what the log
     amps see, and nothing else.
 
-    ``compact`` shrinks the fixed width for embedding in the Overview tab,
-    where screen real estate is shared with several other panels.
+    ``compact`` shrinks the panel for embedding in the Overview tab, where
+    screen real estate is shared with several other subsystems and more are
+    still to come. It only floors the panel's size — it does not cap it and
+    does not force the panel itself into a square. The square-aperture idea
+    lives on ``_ApertureView`` alone (the graph/frame of the slits, which is
+    the thing actually being read); the title, mode controls, and readout
+    labels around it are free to make the outer panel whatever rectangle
+    they need, and the whole thing can grow past the floor when its
+    container has room to give it.
     """
 
     def __init__(self, parent=None, compact: bool = False):
@@ -340,19 +356,31 @@ class BeamPositionIndicator(QWidget):
         self._edges    = {}
         self._zeroed   = False
         self._connected = False
+        self._compact  = compact
 
         if compact:
-            self.setFixedWidth(200)
+            # No fixed/minimum size set here on purpose: the panel's floor
+            # falls out of its children's own minimums (title, combo, form
+            # rows, the aperture view's square floor, readout labels) via the
+            # layout below. Expanding lets it grow past that floor when the
+            # Overview tab's layout has slack to give it.
+            self.setSizePolicy(QSizePolicy.Policy.Expanding,
+                               QSizePolicy.Policy.Expanding)
         else:
             self.setFixedWidth(288)
-        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
+            self.setSizePolicy(QSizePolicy.Policy.Fixed,
+                               QSizePolicy.Policy.Expanding)
+
+        label_px = 10 if compact else 12
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(2, 2, 2, 2)
-        lay.setSpacing(4)
+        lay.setSpacing(2 if compact else 4)
 
         title = QLabel("Beam Position")
-        title.setStyleSheet("font-weight: bold; color: #444; font-size: 13px;")
+        title.setStyleSheet(
+            "font-weight: bold; color: #444; "
+            f"font-size: {11 if compact else 13}px;")
         lay.addWidget(title)
 
         # ── Mode + assumptions ────────────────────────────────────────────
@@ -383,7 +411,7 @@ class BeamPositionIndicator(QWidget):
         )
         self.spn_spot.valueChanged.connect(self._recompute)
         self.lbl_spot = QLabel("Spot FWHM")
-        self.lbl_spot.setStyleSheet("font-size: 12px; color: #555;")
+        self.lbl_spot.setStyleSheet(f"font-size: {label_px}px; color: #555;")
         form.addRow(self.lbl_spot, self.spn_spot)
 
         self.spn_span_x = QDoubleSpinBox()
@@ -395,8 +423,7 @@ class BeamPositionIndicator(QWidget):
         self.spn_span_x.setToolTip("Raster half-travel on X (centre to turn-around).")
         self.spn_span_x.valueChanged.connect(self._recompute)
         self.lbl_span_x = QLabel("Sweep X ±")
-        self.lbl_span_x.setStyleSheet("font-size: 12px; color: #555;")
-        form.addRow(self.lbl_span_x, self.spn_span_x)
+        self.lbl_span_x.setStyleSheet(f"font-size: {label_px}px; color: #555;")
 
         self.spn_span_y = QDoubleSpinBox()
         self.spn_span_y.setRange(0.0, 50.0)
@@ -407,31 +434,48 @@ class BeamPositionIndicator(QWidget):
         self.spn_span_y.setToolTip("Raster half-travel on Y (centre to turn-around).")
         self.spn_span_y.valueChanged.connect(self._recompute)
         self.lbl_span_y = QLabel("Sweep Y ±")
-        self.lbl_span_y.setStyleSheet("font-size: 12px; color: #555;")
-        form.addRow(self.lbl_span_y, self.spn_span_y)
+        self.lbl_span_y.setStyleSheet(f"font-size: {label_px}px; color: #555;")
+
+        if compact:
+            # Both sweep boxes on ONE row. Every row these controls take is a
+            # row the aperture picture loses inside a fixed square, and the two
+            # sweep numbers are read together anyway.
+            self.lbl_span_x.setText("Sweep ±")
+            self.lbl_span_y.setText("")
+            sweeps = QHBoxLayout()
+            sweeps.setContentsMargins(0, 0, 0, 0)
+            sweeps.setSpacing(3)
+            sweeps.addWidget(self.spn_span_x)
+            sweeps.addWidget(self.spn_span_y)
+            form.addRow(self.lbl_span_x, sweeps)
+        else:
+            form.addRow(self.lbl_span_x, self.spn_span_x)
+            form.addRow(self.lbl_span_y, self.spn_span_y)
 
         lay.addLayout(form)
 
         # ── The picture ───────────────────────────────────────────────────
-        self.view = _ApertureView()
+        self.view = _ApertureView(compact=compact)
         lay.addWidget(self.view, stretch=1)
 
         # ── Readouts ──────────────────────────────────────────────────────
+        self._small = 10 if compact else 11
         self.lbl_xy = QLabel("X  —      Y  —")
-        self.lbl_xy.setFont(QFont("Consolas", 12, QFont.Weight.Bold))
+        self.lbl_xy.setFont(QFont("Consolas", 10 if compact else 12,
+                                  QFont.Weight.Bold))
         self.lbl_xy.setStyleSheet("color: #a83a00;")
         self.lbl_xy.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(self.lbl_xy)
 
         self.lbl_status = QLabel("Galil not connected — no slit positions")
         self.lbl_status.setWordWrap(True)
-        self.lbl_status.setStyleSheet("font-size: 11px; color: #888;")
+        self.lbl_status.setStyleSheet(f"font-size: {self._small}px; color: #888;")
         self.lbl_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(self.lbl_status)
 
         self.lbl_overscan = QLabel("")
         self.lbl_overscan.setWordWrap(True)
-        self.lbl_overscan.setStyleSheet("font-size: 11px; color: #888;")
+        self.lbl_overscan.setStyleSheet(f"font-size: {self._small}px; color: #888;")
         self.lbl_overscan.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(self.lbl_overscan)
 
@@ -522,17 +566,17 @@ class BeamPositionIndicator(QWidget):
         if not self._connected:
             self.lbl_status.setText(
                 "Galil not connected — showing current imbalance only")
-            self.lbl_status.setStyleSheet("font-size: 11px; color: #b06000;")
+            self.lbl_status.setStyleSheet(f"font-size: {self._small}px; color: #b06000;")
         elif len(self._edges) < 4:
             self.lbl_status.setText("Waiting for all four slit positions")
-            self.lbl_status.setStyleSheet("font-size: 11px; color: #b06000;")
+            self.lbl_status.setStyleSheet(f"font-size: {self._small}px; color: #b06000;")
         elif not self._zeroed:
             self.lbl_status.setText(
                 "⚠ Axes not zeroed this session — mm positions may be wrong")
-            self.lbl_status.setStyleSheet(f"font-size: 11px; color: {theme.FAULT};")
+            self.lbl_status.setStyleSheet(f"font-size: {self._small}px; color: {theme.FAULT};")
         else:
             self.lbl_status.setText("Slit positions live and zeroed")
-            self.lbl_status.setStyleSheet(f"font-size: 11px; color: {theme.OK};")
+            self.lbl_status.setStyleSheet(f"font-size: {self._small}px; color: {theme.OK};")
 
     def _update_overscan(self, raster: bool):
         """In raster mode, say which blades the sweep is actually reaching.
@@ -549,7 +593,7 @@ class BeamPositionIndicator(QWidget):
         missed = [slit for slit, hit in flags.items() if not hit]
         if not missed:
             self.lbl_overscan.setText("Overscan: beam reaching all four blades")
-            self.lbl_overscan.setStyleSheet(f"font-size: 11px; color: {theme.OK};")
+            self.lbl_overscan.setStyleSheet(f"font-size: {self._small}px; color: {theme.OK};")
         else:
             self.lbl_overscan.setText("Not reaching: " + ", ".join(missed))
-            self.lbl_overscan.setStyleSheet(f"font-size: 11px; color: {theme.FAULT};")
+            self.lbl_overscan.setStyleSheet(f"font-size: {self._small}px; color: {theme.FAULT};")

@@ -102,6 +102,44 @@ def voltage_status(kv: float) -> str:
     return "ok" if abs(kv) <= SC.AMP_MAX_KV else "over"
 
 
+# --- Push-pull pair check ----------------------------------------------------
+
+def pair_correlation(a, b) -> float:
+    """Pearson correlation between two same-window waveforms, or NaN.
+
+    A push-pull pair driven correctly sits at -1: every volt one plate rises,
+    the other falls by the same amount. It stays at -1 for any amplitude and
+    any frequency, which is what makes it a phase check rather than a
+    disguised amplitude comparison.
+
+    It leaves -1 when the two channels stop being mirror images — which, for
+    an X or Y pair on ONE generator, means a misapplied start-phase, and for
+    the X pair against the Y pair means the two units' clocks have drifted.
+
+    Both series must come from the same stream window; comparing across
+    windows would measure the sampling, not the signals.
+    """
+    n = min(len(a), len(b))
+    if n < 2:
+        return float("nan")
+    a, b = list(a[:n]), list(b[:n])
+    if any(math.isnan(v) for v in a) or any(math.isnan(v) for v in b):
+        return float("nan")
+
+    mean_a = sum(a) / n
+    mean_b = sum(b) / n
+    da = [v - mean_a for v in a]
+    db = [v - mean_b for v in b]
+    cov = sum(x * y for x, y in zip(da, db))
+    var_a = sum(x * x for x in da)
+    var_b = sum(y * y for y in db)
+    if var_a <= 0.0 or var_b <= 0.0:
+        # One channel is flat: a dead plate has no phase, so there is no
+        # relationship to report. Saying "0" would read as "out of phase".
+        return float("nan")
+    return cov / math.sqrt(var_a * var_b)
+
+
 # --- Self-test ---------------------------------------------------------------
 
 if __name__ == "__main__":

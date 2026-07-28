@@ -79,12 +79,27 @@ class LogAmpState:
 
 @dataclass(frozen=True)
 class AmpChannelSnapshot:
+    """One amplifier's monitors for one stream window.
+
+    `wave_kv` is the SIGNED deflection waveform for that window, decimated to
+    a bounded point count. The scalar fields above are all magnitudes, which
+    is enough to answer "how hard is this plate driven?" but says nothing
+    about WHEN in the cycle it got there — so a push-pull pair's 0/180
+    relationship is invisible in them. That relationship is the thing the
+    Overview has to be able to check at a glance, hence the samples.
+
+    Every channel in one window is decimated on the same grid, so index i of
+    one channel and index i of another are the same instant to within a scan.
+    Comparing two channels sampled any other way would show a phase that is
+    an artefact of the resampling.
+    """
     peak_kv: float
     pkpk_kv: float
     rms_kv: float
     rms_ma: float
     raw_v: float
     raw_i: float
+    wave_kv: tuple = ()
 
 
 @dataclass(frozen=True)

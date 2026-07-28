@@ -1,40 +1,62 @@
 """
 overview_tab.py
 Every subsystem on one screen: slit positions (with the controls to move
-them), log-amp beam reconstruction, function-generator amplitudes, and HV
-amplifier output.
+them), log-amp beam reconstruction, the raster drive (with the controls to set
+it), and HV amplifier output.
 
 Laid out after the Michigan accelerator overview screen: each live value sits
 in a scaled mini bar chart rather than standing alone as digits, so the screen
-answers "is this where it should be?" at a glance, and the slit controls sit
-directly under the slit bars they act on — the operator adjusts the beam and
-watches the same track it is drawn on.
+answers "is this where it should be?" at a glance, and each control sits
+directly on the bar it acts on — the operator adjusts a value and watches the
+same track it is drawn on.
 
 Composition only — no hardware access, no unit conversion, no polling of its
 own. Every value here already exists somewhere else in the app (Beamline's
-typed snapshots), and every command goes out through Beamline's command
-surface, which is where the interlocks live. This tab never touches a driver.
+typed snapshots and the shared FuncGenSetpoints), and every command goes out
+through Beamline's command surface, which is where the interlocks live. This
+tab never touches a driver.
 
-Scope of the controls here: SLIT MOTION ONLY (move, step, stop). The function
-generators and HV amplifiers stay read-only on this screen — raising a voltage
-is deliberately a trip to the Function Generators tab, where the full
-interlock context is on screen.
+Scope of the controls here:
+  - SLIT MOTION: absolute target + Move, per slit. No step size, no jog, no
+    stop — relative motion and the abort live on the Stepper Motors tab, which
+    has the limit-switch context that makes them safe.
+  - RASTER DRIVE: amplitude and frequency per AXIS, plus output intent, the
+    10 MHz timebase lock, and one Apply. Per axis, not per channel, because
+    X+/X- are a push-pull pair that must share both numbers; the 0 deg /
+    180 deg phase relationship and the triangle shape are held for you and are
+    not editable here. Amplitude is in PEAK volts, which is what reads across
+    to the amplifier bars below (see axis_drive.py). Per-channel editing,
+    offset, shape and load stay on the Function Generators tab.
+The HV amplifiers stay read-only — nothing on this screen commands them. Their
+panels are grouped by axis with each pair's waveforms drawn over each other,
+because the failure worth catching there is a RELATIONSHIP (a pair that has
+stopped being mirror images), which no single channel's readout can show.
+
+Setpoints are shared, not copied: the boxes here and the Function Generators
+tab's panels are two views on one FuncGenSetpoints object, so neither screen
+can show a stale value or silently overwrite what the other has typed.
 """
-from PySide6.QtCore import QTimer
+import math
+
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel,
-    QPushButton, QMessageBox,
+    QPushButton, QMessageBox, QCheckBox,
 )
 
 from rbl.config import hardware_config as SC
+from rbl.hardware.amp_monitor import pair_correlation
 from rbl.hardware.current_monitor import format_current
-from rbl.hardware.funcgen_driver import MAX_AMP_VPP
-from rbl.hardware.funcgen_safety import CHANNEL_ROLE
+from rbl.hardware.funcgen_safety import (
+    CHANNEL_ROLE, peak_status, PEAK_WARN_VOLTS, PEAK_MAX_VOLTS,
+)
 from rbl.gui import theme
+from rbl.gui.widgets.axis_drive import AxisDriveControl
 from rbl.gui.widgets.beam_indicator import BeamPositionIndicator
-from rbl.gui.widgets.mini import MiniBar, Sparkline
+from rbl.gui.widgets.mini import MiniBar, PairTrace
 from rbl.gui.widgets.slit_control import SlitControl
 from rbl.state.beamline import Beamline
+from rbl.state.setpoints import AXIS_CHANNELS, AXIS_GENERATOR
 from rbl.state.snapshots import MotorState, LogAmpState, AmpState, FuncGenState
 
 
@@ -44,6 +66,19 @@ class OverviewTab(QWidget):
 
     _STANDING_MESSAGE = ("Positions are absolute distance from beam centre; "
                          "the 0.2 mm home offset is applied for you.")
+
+    _STANDING_DRIVE_MESSAGE = (
+        "Triangle, 0 V offset, 0°/180° push-pull. Amplitude is PEAK volts at "
+        "the amplifier input — 1 V pk = 1 kV per plate. The Function "
+        "Generators tab shows the same setpoint peak-to-peak."
+    )
+
+    # A perfect push-pull pair correlates at -1.0. The thresholds are loose
+    # because a real pair is measured through two amplifier monitors with
+    # their own noise — this has to flag a pair coming apart, not a pair that
+    # is 2% short of textbook.
+    _ANTIPHASE_OK   = -0.90
+    _ANTIPHASE_WARN = -0.50
 
     def __init__(self, beamline: Beamline, parent=None):
         super().__init__(parent)
@@ -65,9 +100,15 @@ class OverviewTab(QWidget):
         # up, instead of fighting the operator's typing every 100 ms.
         self._motors_were_connected = False
 
-        # Redraws left before the motion line reverts from the operator's last
-        # command note to the standing message.
+        # Redraws left before each status line reverts from the operator's last
+        # command note to its standing message.
         self._note_frames = 0
+        self._drive_note_frames = 0
+
+        # The shared setpoint model (also edited by the Function Generators
+        # tab). This tab owns no setpoint of its own — the boxes below are a
+        # view on this object.
+        self._setpoints = beamline.funcgen_setpoints
 
         outer = QVBoxLayout(self)
 
@@ -76,16 +117,23 @@ class OverviewTab(QWidget):
         body = QHBoxLayout()
         outer.addLayout(body, stretch=1)
 
+        # Every column is pinned to the top rather than sharing the leftover
+        # height. Three panels of different natural heights, each stretched to
+        # match the tallest, is three frames with dead space inside them; this
+        # way the slack collects once, at the bottom, which is also where the
+        # next subsystem will go.
+        top = Qt.AlignmentFlag.AlignTop
+
         # BeamPositionIndicator brings its own titled group box, so it goes in
         # unwrapped — a second frame around it would just nest two identical
         # titles.
         self.beam = BeamPositionIndicator(compact=True)
-        body.addWidget(self.beam)
-        body.addWidget(self._build_slit_box(), stretch=1)
+        body.addWidget(self.beam, alignment=top)
+        body.addWidget(self._build_slit_box(), stretch=1, alignment=top)
 
         right = QVBoxLayout()
-        right.addWidget(self._build_funcgen_box())
-        right.addWidget(self._build_hv_box())
+        right.addWidget(self._build_funcgen_box(), alignment=top)
+        right.addWidget(self._build_hv_box(), alignment=top)
         right.addStretch(1)
         body.addLayout(right, stretch=1)
 
@@ -94,6 +142,13 @@ class OverviewTab(QWidget):
         beamline.amps_changed.connect(self._on_amps)
         beamline.funcgens_changed.connect(self._on_funcgens)
         beamline.command_failed.connect(self._on_failure)
+        beamline.timebase_changed.connect(self._on_timebase_changed)
+
+        # Setpoint edits are applied immediately, not on the redraw timer: they
+        # are the operator's own keystrokes and must never lag behind them.
+        self._setpoints.changed.connect(self._on_setpoint_changed)
+        for axis in self.drives:
+            self._sync_axis_from_setpoints(axis)
 
         self._redraw_timer = QTimer(self)
         self._redraw_timer.setInterval(self._REDRAW_INTERVAL_MS)
@@ -144,23 +199,6 @@ class OverviewTab(QWidget):
         self.lbl_motion.setStyleSheet(theme.status_label(theme.NEUTRAL, bold=False))
         lay.addWidget(self.lbl_motion)
 
-        # The controls keep their natural height at the top of the column; the
-        # slack goes here so STOP stays pinned at the bottom edge, where a hand
-        # reaching for it lands.
-        lay.addStretch(1)
-
-        self.btn_stop = QPushButton("STOP ALL SLIT MOTION")
-        self.btn_stop.setMinimumHeight(38)
-        self.btn_stop.setStyleSheet(
-            "QPushButton { background:#aa0000; color:white; font-size:14px;"
-            f" font-weight:bold; border:2px solid {theme.FAULT}; }}"
-            f"QPushButton:hover {{ background:{theme.FAULT}; }}"
-            "QPushButton:disabled { background:#c0c0c0; color:#888;"
-            " border:2px solid #a0a0a0; }"
-        )
-        self.btn_stop.clicked.connect(self._on_stop_clicked)
-        self.btn_stop.setEnabled(False)
-        lay.addWidget(self.btn_stop)
         return box
 
     def _build_current_box(self) -> QGroupBox:
@@ -184,33 +222,143 @@ class OverviewTab(QWidget):
         return box
 
     def _build_funcgen_box(self) -> QGroupBox:
-        box = QGroupBox("Function Generator Amplitude")
-        grid = QGridLayout(box)
-        self.amps = {}
-        for i, key in enumerate(CHANNEL_ROLE):
-            role = CHANNEL_ROLE[key]
-            bar = MiniBar(f"{key} ({role})", 0.0, MAX_AMP_VPP, unit="Vpp",
-                          color=theme.SLIT_COLORS.get(role))
-            self.amps[key] = bar
-            grid.addWidget(bar, i // 2, i % 2)
+        """Raster drive: one amplitude and one frequency per steering axis.
+
+        Per axis rather than per channel because X+ and X- are one push-pull
+        pair — driving them at different amplitudes or frequencies does not
+        steer the beam differently, it just stops the pair being differential.
+        The 0 deg / 180 deg phase split that makes it differential is held
+        automatically and is deliberately not editable here.
+        """
+        box = QGroupBox("Raster Drive — Function Generators")
+        lay = QVBoxLayout(box)
+        lay.setSpacing(4)
+
+        # Both axes on one row: they are read together (is X sweeping as fast
+        # as Y is slow?) and applied together, so stacking them put the two
+        # halves of one comparison a screenful apart.
+        axes_row = QHBoxLayout()
+        axes_row.setSpacing(6)
+        self.drives: dict[str, AxisDriveControl] = {}
+        for axis in AXIS_CHANNELS:
+            ctrl = AxisDriveControl(axis)
+            ctrl.params_edited.connect(self._on_axis_params_edited)
+            ctrl.output_toggled.connect(self._on_axis_output_toggled)
+            self.drives[axis] = ctrl
+            axes_row.addWidget(ctrl, stretch=1)
+        lay.addLayout(axes_row)
+
+        lay.addLayout(self._build_timebase_row())
+
+        self.btn_apply_all = QPushButton("Apply All — X && Y")
+        self.btn_apply_all.setMinimumHeight(34)
+        self.btn_apply_all.setStyleSheet(
+            "QPushButton { background:#004e8c; color:white; font-weight:bold;"
+            " font-size:13px; }"
+            "QPushButton:hover { background:#0063b1; }"
+            "QPushButton:disabled { background:#c0c0c0; color:#888; }"
+        )
+        self.btn_apply_all.setToolTip(
+            "Configure all four channels with outputs untouched, then enable "
+            "the outputs back-to-back, then phase-synchronise each unit — the "
+            "same sequence as the Function Generators tab's Apply All, and the "
+            "only ordering that brings the raster up aligned."
+        )
+        self.btn_apply_all.setEnabled(False)
+        self.btn_apply_all.clicked.connect(self._on_apply_all)
+        lay.addWidget(self.btn_apply_all)
+
+        self.lbl_drive_note = QLabel(self._STANDING_DRIVE_MESSAGE)
+        self.lbl_drive_note.setWordWrap(True)
+        self.lbl_drive_note.setStyleSheet(
+            theme.status_label(theme.NEUTRAL, bold=False) + "font-size: 10px;")
+        lay.addWidget(self.lbl_drive_note)
         return box
 
+    def _build_timebase_row(self) -> QHBoxLayout:
+        """The 10 MHz reference lock, shared with the Function Generators tab.
+
+        X and Y live on two separate DG1022Z units running their own crystals,
+        so without a shared reference the X/Y phase relationship walks — the
+        raster slowly turns into a Lissajous figure. Nothing else on this
+        screen shows that happening, which is why the control belongs here and
+        not only two tabs away.
+        """
+        row = QHBoxLayout()
+        row.setSpacing(6)
+
+        self.chk_ext_ref = QCheckBox("Share 10 MHz timebase")
+        self.chk_ext_ref.setToolTip(
+            "Two separate DG1022Z units drift on their own clocks, so their "
+            "X/Y phase relationship will not stay fixed.\n\n"
+            "To lock them: connect a BNC cable from Gen A's rear-panel "
+            "[10MHz Out] to Gen B's rear-panel [10MHz In], then enable this.\n"
+            "Gen A keeps its internal clock (master); Gen B follows the shared "
+            "10 MHz reference (external). Un-checking returns both to internal."
+        )
+        self.chk_ext_ref.setEnabled(False)
+        self.chk_ext_ref.toggled.connect(self._on_ext_ref_toggled)
+        row.addWidget(self.chk_ext_ref)
+
+        self.lbl_timebase = QLabel("A: —  B: —")
+        self.lbl_timebase.setStyleSheet(
+            f"color: {theme.NEUTRAL}; font-weight: bold; font-size: 10px;")
+        row.addWidget(self.lbl_timebase)
+        row.addStretch(1)
+        return row
+
     def _build_hv_box(self) -> QGroupBox:
-        box = QGroupBox("HV Amplifier Peak Output")
-        grid = QGridLayout(box)
-        self.hv_bars = {}
-        self.hv = {}
-        for i, amp in enumerate(SC.AMP_LABELS):
-            cell = QVBoxLayout()
-            cell.setSpacing(0)
-            bar = MiniBar(f"{amp} peak", 0.0, SC.AMP_MAX_KV, unit="kV",
-                          color=theme.SLIT_COLORS[amp])
-            spark = Sparkline(f"{amp} trend", theme.SLIT_COLORS[amp])
-            self.hv_bars[amp] = bar
-            self.hv[amp] = spark
-            cell.addWidget(bar)
-            cell.addWidget(spark)
-            grid.addLayout(cell, i // 2, i % 2)
+        """One panel per AXIS, stacked, each with its pair's waveforms overlaid.
+
+        Grouped by axis rather than four independent cells because the thing
+        worth checking is the RELATIONSHIP inside each pair: driven correctly,
+        X+ and X- are mirror images crossing at zero, and that is only visible
+        when they are drawn over each other on one scale. Four separately
+        auto-scaled traces in a 2x2 grid show four plausible-looking waves and
+        hide the one fault — the two units' clocks drifting apart — that
+        nothing else on this screen would catch.
+        """
+        box = QGroupBox("HV Amplifier Output")
+        lay = QVBoxLayout(box)
+        lay.setSpacing(4)
+
+        self.hv_bars: dict[str, MiniBar] = {}
+        self.hv_traces: dict[str, PairTrace] = {}
+        self.hv_phase: dict[str, QLabel] = {}
+        for axis in ("X", "Y"):
+            plus, minus = f"{axis}+", f"{axis}-"
+            panel = QGroupBox(f"{axis}  —  {plus} / {minus}")
+            cell = QVBoxLayout(panel)
+            cell.setContentsMargins(6, 3, 6, 4)
+            cell.setSpacing(2)
+
+            bars = QHBoxLayout()
+            bars.setSpacing(6)
+            for amp in (plus, minus):
+                bar = MiniBar(f"{amp} peak", 0.0, SC.AMP_MAX_KV, unit="kV",
+                              color=theme.SLIT_COLORS[amp])
+                self.hv_bars[amp] = bar
+                bars.addWidget(bar, stretch=1)
+            cell.addLayout(bars)
+
+            trace = PairTrace(theme.SLIT_COLORS[plus], theme.SLIT_COLORS[minus])
+            trace.setToolTip(
+                f"{plus} and {minus} deflection waveforms over one stream "
+                "window (0.1 s), drawn on one shared scale.\n"
+                "Driven push-pull they are mirror images crossing at zero. "
+                "Two traces sliding past each other mean the generators are "
+                "not sharing a timebase."
+            )
+            self.hv_traces[axis] = trace
+            cell.addWidget(trace, stretch=1)
+
+            lbl = QLabel("—")
+            lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
+            lbl.setStyleSheet(f"color: {theme.NEUTRAL}; font-size: 9px;")
+            self.hv_phase[axis] = lbl
+            cell.addWidget(lbl)
+
+            lay.addWidget(panel)
         return box
 
     # ---- Signal handlers (cheap: cache only) -----------------------------------
@@ -267,10 +415,123 @@ class OverviewTab(QWidget):
         )
         return answer == QMessageBox.StandardButton.Yes
 
-    def _on_stop_clicked(self):
-        """Abort all slit motion. No confirmation — a stop must be instant."""
-        self.beamline.emergency_stop()
-        self._note("STOP sent — all slit motion aborted", theme.FAULT)
+    # ---- Raster drive: setpoint edits and Apply --------------------------------
+    #
+    # Editing a box changes the SHARED setpoint and nothing else; nothing
+    # reaches an instrument until Apply. That is the Function Generators tab's
+    # behaviour too, and keeping it identical is the point — an operator who
+    # learned "typing is safe, Apply is the commit" on one screen must not
+    # discover the other screen energises plates on a keystroke.
+
+    def _on_axis_params_edited(self, axis: str, amp_vpp: float, freq_hz: float):
+        self._setpoints.update_axis(axis, amp_vpp=amp_vpp, freq_hz=freq_hz)
+
+    def _on_axis_output_toggled(self, axis: str, on: bool):
+        self._setpoints.update_axis(axis, output_on=on)
+
+    def _on_setpoint_changed(self, key: str, params):
+        """A setpoint moved — here or on the Function Generators tab."""
+        for axis, keys in AXIS_CHANNELS.items():
+            if key in keys:
+                self._sync_axis_from_setpoints(axis)
+
+    def _sync_axis_from_setpoints(self, axis: str):
+        params = self._setpoints.axis_params(axis)
+        self.drives[axis].set_setpoint(
+            params.amp_vpp, params.freq_hz, params.output_on,
+            matched=self._setpoints.axis_matched(axis),
+        )
+
+    # ---- Cross-unit timebase ---------------------------------------------------
+
+    def _on_ext_ref_toggled(self, checked: bool):
+        """Lock/unlock Gen B to Gen A's 10 MHz reference.
+
+        The instrument sequence and the both-EXT guard live in
+        Beamline.set_shared_timebase — this screen is the second one offering
+        the control, and a guard that protects hardware cannot live in
+        whichever widget the operator happened to use.
+        """
+        ok, message = self.beamline.set_shared_timebase(checked)
+        first_line = message.splitlines()[0]
+        if not ok:
+            # Never leave the box showing a lock that is not there.
+            self.chk_ext_ref.blockSignals(True)
+            self.chk_ext_ref.setChecked(False)
+            self.chk_ext_ref.blockSignals(False)
+            if checked:
+                self._warn("Reference clock", message)
+        self._note_drive(first_line, theme.OK if ok else theme.FAULT)
+        self._redraw_timebase(self.beamline.read_timebase())
+
+    def _warn(self, title: str, message: str):
+        """Every blocking dialog on this tab goes through one overridable
+        method, so a test can drive the path without a live dialog — the same
+        reason _confirm_unzeroed_move and _confirm_high_peak are methods."""
+        QMessageBox.warning(self, title, message)
+
+    def _on_timebase_changed(self, clocks: dict):
+        """The other screen changed the lock — follow it."""
+        self._redraw_timebase(clocks)
+
+    def _redraw_timebase(self, clocks: dict):
+        locked = clocks.get("A") == "INT" and clocks.get("B") == "EXT"
+        self.lbl_timebase.setText(f"A: {clocks.get('A', '—')}  B: {clocks.get('B', '—')}")
+        self.lbl_timebase.setStyleSheet(
+            theme.status_label(theme.OK if locked else theme.NEUTRAL) + "font-size: 10px;")
+        self.chk_ext_ref.blockSignals(True)
+        self.chk_ext_ref.setChecked(locked)
+        self.chk_ext_ref.blockSignals(False)
+
+    def _on_apply_all(self):
+        """Push every channel's setpoint through Beamline's Apply-All sequence.
+
+        Beamline does the configure -> enable outputs -> phase-synchronise
+        ordering and enforces the ±5 V combined-peak interlock; what is left
+        here is the advisory tier Beamline has no way to ask about — a peak
+        past the warn threshold but under the ceiling gets one confirmation.
+        """
+        params_by_key = self._setpoints.all()
+
+        warned = []
+        for key, params in params_by_key.items():
+            if not self._funcgens.connected.get(key[0], False):
+                continue
+            status, peak = peak_status(params.shape, params.amp_vpp, params.offset_v)
+            if status == "warn":
+                warned.append((CHANNEL_ROLE[key], peak))
+        if warned and not self._confirm_high_peak(warned):
+            self._note_drive("Apply cancelled at the high-peak confirmation")
+            return
+
+        if self.beamline.apply_all_channels(params_by_key):
+            self._note_drive("Applied — outputs enabled together, phase synchronised",
+                             theme.OK)
+
+    def _confirm_high_peak(self, warned: list) -> bool:
+        """Ask before applying a peak above the advisory threshold.
+
+        Its own method so tests can drive both answers without a live dialog,
+        exactly as _confirm_unzeroed_move does for slit motion.
+        """
+        lines = "\n".join(f"  {slit}: peak {peak:.4g} V" for slit, peak in warned)
+        answer = QMessageBox.question(
+            self, "High peak voltage",
+            f"These channels are above the {PEAK_WARN_VOLTS:.0f} V advisory "
+            f"threshold (hard ceiling {PEAK_MAX_VOLTS:.0f} V):\n\n{lines}\n\n"
+            f"Apply anyway?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return answer == QMessageBox.StandardButton.Yes
+
+    def _note_drive(self, text: str, role: str = theme.NEUTRAL):
+        """Show the result of the operator's last Apply, briefly, then let the
+        standing drive message come back (see _redraw_funcgens)."""
+        self.lbl_drive_note.setText(text)
+        self.lbl_drive_note.setStyleSheet(
+            theme.status_label(role, bold=False) + "font-size: 10px;")
+        self._drive_note_frames = self._NOTE_FRAMES
 
     def _note(self, text: str, role: str = theme.NEUTRAL):
         """Show the operator's own last action, briefly outranking the
@@ -330,7 +591,6 @@ class OverviewTab(QWidget):
                 ctrl.sync_target_to_position()
         self._motors_were_connected = motors.connected
 
-        self.btn_stop.setEnabled(motors.connected)
         self._redraw_gaps()
         self._redraw_motion_message()
         self.pills["motors"].setStyleSheet(theme.pill(motors.connected))
@@ -381,24 +641,78 @@ class OverviewTab(QWidget):
         self.pills["logamps"].setStyleSheet(theme.pill(logamps.connected))
 
     def _redraw_funcgens(self):
+        """Readback only — the setpoint boxes are driven by FuncGenSetpoints.
+
+        Keeping the two apart is what stops a 10 Hz redraw from overwriting a
+        half-typed amplitude: nothing on this path ever writes a spinbox.
+        """
         funcgens = self._funcgens
-        for key, bar in self.amps.items():
-            ch = funcgens.channels.get(key)
-            connected = funcgens.connected.get(key[0], False)
-            output_on = bool(ch is not None and ch.output_on)
-            bar.set(ch.amp_vpp if ch is not None else None,
-                    stale=not connected,
-                    role=None if output_on else theme.NEUTRAL)
-            state = "OUT ON" if output_on else "OUT OFF"
-            bar.lbl_name.setText(f"{key} ({CHANNEL_ROLE[key]}) · {state}")
+        any_connected = False
+        for axis, ctrl in self.drives.items():
+            connected = funcgens.connected.get(AXIS_GENERATOR[axis], False)
+            any_connected = any_connected or connected
+            ctrl.set_readback(funcgens.channels, connected)
+            ctrl.set_connected(connected)
+
+        self.btn_apply_all.setEnabled(any_connected)
+        # Sharing a timebase only means anything with BOTH units connected —
+        # there is nothing to lock one generator to.
+        both = all(funcgens.connected.get(g, False) for g in ("A", "B"))
+        self.chk_ext_ref.setEnabled(both)
+        self._redraw_timebase(funcgens.timebase)
+        self._redraw_drive_message()
         for gen in ("A", "B"):
             self.pills[gen].setStyleSheet(theme.pill(funcgens.connected.get(gen, False)))
 
+    def _redraw_drive_message(self):
+        if self._drive_note_frames > 0:
+            self._drive_note_frames -= 1
+            return
+        self.lbl_drive_note.setText(self._STANDING_DRIVE_MESSAGE)
+        self.lbl_drive_note.setStyleSheet(
+            theme.status_label(theme.NEUTRAL, bold=False) + "font-size: 10px;")
+
     def _redraw_amps(self):
         amps = self._amps
-        for amp, spark in self.hv.items():
+        for amp, bar in self.hv_bars.items():
             ch = amps.channels.get(amp)
-            peak = ch.peak_kv if ch is not None else None
-            spark.push(peak)
-            self.hv_bars[amp].set(peak, stale=not amps.connected)
+            bar.set(ch.peak_kv if ch is not None else None, stale=not amps.connected)
+
+        for axis, trace in self.hv_traces.items():
+            plus = amps.channels.get(f"{axis}+")
+            minus = amps.channels.get(f"{axis}-")
+            wave_p = plus.wave_kv if plus is not None else ()
+            wave_m = minus.wave_kv if minus is not None else ()
+            trace.set_pair(wave_p, wave_m)
+            self._redraw_phase_label(axis, wave_p, wave_m, amps.connected)
+
         self.pills["amps"].setStyleSheet(theme.pill(amps.connected))
+
+    def _redraw_phase_label(self, axis: str, wave_p, wave_m, connected: bool):
+        """Put a number on what the overlaid traces show.
+
+        The picture answers "are these mirror images?" faster than any number
+        can, but only while someone is looking at it. The correlation is the
+        same question in a form you can glance at, and it is the same for any
+        amplitude or frequency — so it says "phase", not "amplitude".
+        """
+        lbl = self.hv_phase[axis]
+        if not connected:
+            lbl.setText("—")
+            lbl.setStyleSheet(f"color: {theme.NEUTRAL}; font-size: 9px;")
+            return
+
+        corr = pair_correlation(wave_p, wave_m)
+        if math.isnan(corr):
+            lbl.setText("no waveform on this profile")
+            lbl.setStyleSheet(f"color: {theme.NEUTRAL}; font-size: 9px;")
+            return
+
+        if corr <= self._ANTIPHASE_OK:
+            text, role = f"push-pull locked  (r {corr:+.2f})", theme.OK
+        elif corr <= self._ANTIPHASE_WARN:
+            text, role = f"phase slipping  (r {corr:+.2f})", theme.WARN
+        else:
+            text, role = f"NOT anti-phase  (r {corr:+.2f})", theme.FAULT
+        lbl.setText(text)
+        lbl.setStyleSheet(theme.status_label(role, bold=False) + "font-size: 9px;")

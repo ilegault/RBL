@@ -3,11 +3,16 @@ slit_control.py
 One slit's position bar chart plus the controls to move it.
 
 Modelled on the "DESIRE / MOVE" pairs on the Michigan overview screen: the
-live position sits in a scaled track, the operator types (or nudges) where
-they want it, and a caret on the same track shows where that target is before
-anything moves. Seeing the commanded position and the actual position on one
-scale is the whole point — two separate number boxes make you do the
-comparison in your head.
+live position sits in a scaled track, the operator types where they want it,
+and a caret on the same track shows where that target is before anything
+moves. Seeing the commanded position and the actual position on one scale is
+the whole point — two separate number boxes make you do the comparison in your
+head.
+
+Deliberately target-only: no step size and no -/+ nudge buttons. An absolute
+target is the whole interaction, and the spinbox's own arrows still step it for
+anyone who wants to creep up on a number. Relative jogging lives on the Stepper
+Motors tab, which has the limit-switch context that makes it safe.
 
 This widget commands nothing itself. It emits `move_requested(slit, mm)` and
 lets its owner decide whether that reaches hardware — every path to the
@@ -17,7 +22,7 @@ widget holding a driver.
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QDoubleSpinBox,
-    QComboBox, QSizePolicy,
+    QSizePolicy,
 )
 
 from rbl.config import hardware_config as SC
@@ -54,14 +59,6 @@ class SlitControl(QWidget):
         row = QHBoxLayout()
         row.setSpacing(3)
 
-        self.btn_minus = QPushButton("−")
-        self.btn_plus = QPushButton("+")
-        for btn in (self.btn_minus, self.btn_plus):
-            btn.setFixedWidth(26)
-            btn.setToolTip("Move one step from the current position")
-        self.btn_minus.clicked.connect(lambda: self._nudge(-1))
-        self.btn_plus.clicked.connect(lambda: self._nudge(+1))
-
         self.spn_target = QDoubleSpinBox()
         self.spn_target.setDecimals(3)
         self.spn_target.setRange(SC.SLIT_DISPLAY_MIN_MM, SC.SLIT_DISPLAY_MAX_MM)
@@ -76,13 +73,6 @@ class SlitControl(QWidget):
         self.spn_target.valueChanged.connect(self.bar.set_target)
         self.bar.set_target(self.spn_target.value())
 
-        self.cbo_step = QComboBox()
-        for step in SC.SLIT_STEP_CHOICES_MM:
-            self.cbo_step.addItem(f"{step:g} mm", step)
-        self.cbo_step.setCurrentIndex(
-            SC.SLIT_STEP_CHOICES_MM.index(SC.SLIT_DEFAULT_STEP_MM))
-        self.cbo_step.setToolTip("Step size for the − / + buttons")
-
         self.btn_move = QPushButton("Move")
         self.btn_move.setMinimumHeight(26)
         self.btn_move.setStyleSheet(
@@ -92,10 +82,7 @@ class SlitControl(QWidget):
         )
         self.btn_move.clicked.connect(self._move_to_target)
 
-        row.addWidget(self.btn_minus)
         row.addWidget(self.spn_target, stretch=1)
-        row.addWidget(self.btn_plus)
-        row.addWidget(self.cbo_step)
         row.addWidget(self.btn_move)
         lay.addLayout(row)
 
@@ -139,30 +126,10 @@ class SlitControl(QWidget):
             self.spn_target.setValue(self._position_mm)
 
     def set_enabled(self, on: bool):
-        for w in (self.btn_minus, self.btn_plus, self.spn_target,
-                  self.cbo_step, self.btn_move):
+        for w in (self.spn_target, self.btn_move):
             w.setEnabled(on)
 
     # ---- Control out ---------------------------------------------------------
 
-    @property
-    def step_mm(self) -> float:
-        return float(self.cbo_step.currentData())
-
     def _move_to_target(self):
         self.move_requested.emit(self.slit, self.spn_target.value())
-
-    def _nudge(self, direction: int):
-        """Step from where the slit actually IS, not from the target box.
-
-        Nudging off the target box would compound: two clicks after a move
-        that is still in flight would command twice the step from a position
-        the slit never reached.
-        """
-        base = self._position_mm
-        if base is None:
-            base = self.spn_target.value()
-        target = base + direction * self.step_mm
-        target = min(SC.SLIT_DISPLAY_MAX_MM, max(SC.SLIT_DISPLAY_MIN_MM, target))
-        self.spn_target.setValue(target)
-        self.move_requested.emit(self.slit, target)

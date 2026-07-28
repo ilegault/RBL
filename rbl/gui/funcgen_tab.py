@@ -16,7 +16,7 @@ import logging
 
 log = logging.getLogger(__name__)
 
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout,
@@ -30,6 +30,7 @@ from rbl.hardware.funcgen_safety import (
     channel_peak_volts, PEAK_MAX_VOLTS, PEAK_WARN_VOLTS, _AMP_GAIN, CHANNEL_ROLE,
 )
 from rbl.config.persistence import load_config as _load_config, save_config as _save_config
+from rbl.state.setpoints import START_PHASE_DEFAULTS
 from rbl.state.snapshots import ChannelParams
 from rbl.gui import theme
 from rbl.gui.widgets.command_console import LogPane
@@ -42,10 +43,19 @@ class ChannelPanel(QGroupBox):
 
     SHAPES = ["Sine", "Triangle", "Square", "Pulse", "DC"]
 
+    # Any control on this panel moved. The owner turns that into a write to the
+    # shared FuncGenSetpoints, which is what keeps this panel and the Overview
+    # tab's per-axis boxes showing the same numbers.
+    edited = Signal()
+
     def __init__(self, label: str, parent=None, phase_default: float = 0.0):
         super().__init__(label, parent)
         self._label = label
         self._phase_default = phase_default
+        # Suppresses `edited` while a setpoint sync is writing INTO the panel,
+        # so an update arriving from the Overview tab is not echoed straight
+        # back out as though the operator had typed it here.
+        self._syncing = False
         self._setup_ui()
 
     def _setup_ui(self):
@@ -182,7 +192,19 @@ class ChannelPanel(QGroupBox):
         self.spn_offset.valueChanged.connect(self._update_hv_label)
         self._on_shape_changed(self.cbo_shape.currentText())
 
+        # Every input feeds the one `edited` signal, so the owner has a single
+        # place to push this panel's state into the shared setpoint model.
+        self.cbo_shape.currentTextChanged.connect(self._on_edited)
+        self.le_load.textChanged.connect(self._on_edited)
+        self.btn_output.toggled.connect(self._on_edited)
+        for spin in (self.spn_freq, self.spn_amp, self.spn_offset, self.spn_phase):
+            spin.valueChanged.connect(self._on_edited)
+
         self.set_connected(False)
+
+    def _on_edited(self, *_):
+        if not self._syncing:
+            self.edited.emit()
 
     def _on_output_toggled(self, checked: bool):
         self.btn_output.setText("Output ON" if checked else "Output OFF")
@@ -252,6 +274,35 @@ class ChannelPanel(QGroupBox):
             "load":        self.le_load.text().strip() or "INFinity",
             "output":      self.btn_output.isChecked(),
         }
+
+    def channel_params(self) -> ChannelParams:
+        """This panel's state as a setpoint, for the shared model."""
+        p = self.get_params()
+        return ChannelParams(
+            shape=p["shape"], freq_hz=p["freq"], amp_vpp=p["amp"],
+            offset_v=p["offset"], phase_deg=p["phase"],
+            start_phase_deg=p["start_phase"], load=p["load"],
+            output_on=p["output"],
+        )
+
+    def apply_params(self, params: ChannelParams):
+        """Render a setpoint into the controls without emitting `edited`.
+
+        This is the inbound half of the two-way sync: an edit made on the
+        Overview tab lands here. It is a sync, not an edit — echoing it back
+        out would bounce the value between the two screens forever.
+        """
+        self._syncing = True
+        try:
+            self.cbo_shape.setCurrentText(params.shape)
+            self.spn_freq.setValue(params.freq_hz)
+            self.spn_amp.setValue(params.amp_vpp)
+            self.spn_offset.setValue(params.offset_v)
+            self.spn_phase.setValue(params.phase_deg)
+            self.le_load.setText(params.load)
+            self.btn_output.setChecked(params.output_on)
+        finally:
+            self._syncing = False
 
     def update_readback(self, state: dict):
         if "error" in state:
@@ -438,19 +489,31 @@ class FuncGenTab(QWidget):
         # drive.  With 0° on X+ and 180° on X-, when the X+ plate is at its
         # positive peak the X- plate is at its negative peak, giving the full
         # differential swing without a DC offset on either plate.
-        _START_PHASE_DEFAULTS = {"A1": 0.0, "A2": 180.0, "B1": 0.0, "B2": 180.0}
         positions = {"A1": (0, 0), "A2": (0, 1), "B1": (1, 0), "B2": (1, 1)}
         for key, title in panel_labels.items():
-            p = ChannelPanel(title, self, phase_default=_START_PHASE_DEFAULTS[key])
+            p = ChannelPanel(title, self, phase_default=START_PHASE_DEFAULTS[key])
             gen_letter = key[0]
             ch_num     = int(key[1])
             p.btn_apply.clicked.connect(
                 lambda _, g=gen_letter, c=ch_num: self._apply_channel(g, c)
             )
+            p.edited.connect(lambda k=key: self._on_panel_edited(k))
             self.panels[key] = p
             r, col = positions[key]
             grid.addWidget(p, r, col)
         left_layout.addLayout(grid, stretch=1)
+
+        # ── Shared setpoints: this tab and the Overview edit one model ────
+        #
+        # Both directions are wired here. A panel edit writes into the model
+        # (which only signals on a real change), and a model change — whoever
+        # made it — is rendered back into the panel. Without this the two
+        # screens would hold independent copies and an Apply from either would
+        # quietly overwrite the other's numbers.
+        self._setpoints = beamline.funcgen_setpoints
+        for key, panel in self.panels.items():
+            panel.apply_params(self._setpoints.get(key))
+        self._setpoints.changed.connect(self._on_setpoint_changed)
 
         # ── Apply All ─────────────────────────────────────────────────────
         apply_all_row = QHBoxLayout()
@@ -638,112 +701,37 @@ class FuncGenTab(QWidget):
     def _on_ext_ref_toggled(self, checked: bool):
         """Lock/unlock the two units to a shared 10 MHz reference.
 
-        Checked  → Gen A stays INT (master / clock source), Gen B is set to
-                   EXT and verify_external_lock() confirms the PLL actually
-                   locked.  Gen B is ONLY set to EXT — Gen A is never set EXT
-                   here because the [10MHz In/Out] connector is bidirectional:
-                   setting both units to EXT with a cable between them makes
-                   both drive the connector simultaneously, which damages the
-                   instruments.
-        Unchecked → both back to their own internal clocks.
+        The instrument sequence — including the both-EXT guard that keeps two
+        units from driving the bidirectional [10MHz In/Out] connector at once
+        — lives in Beamline.set_shared_timebase, because the Overview tab
+        offers this control too and a guard that protects hardware cannot sit
+        in one of two widgets. What stays here is this tab's own presentation:
+        the SCPI log, the dialog, and putting the checkbox back on a failure.
         """
-        gen_a = self._gen["A"]
-        gen_b = self._gen["B"]
-        if gen_a is None or gen_b is None:
-            self.lbl_ref_status.setText(
-                "Both generators must be connected to share a timebase."
+        if checked:
+            self._log_scpi(
+                "# Timebase: Gen A → INT (master), verifying Gen B EXT lock "
+                f"(settling {self.beamline.SETTLE_S:.1f} s) …"
             )
-            return
-        try:
-            if checked:
-                # Safety guard: Gen A must not already be set to EXT (e.g. via
-                # the SCPI console).  If it is, BOTH ends would be driving the
-                # 10 MHz line against each other — refuse and explain.
-                a_clk = gen_a.get_reference_clock()
-                if a_clk == "EXT":
-                    msg = (
-                        "Gen A is currently set to EXTernal reference.\n\n"
-                        "One unit must drive the 10 MHz reference (INT) and the "
-                        "other must follow it (EXT).  Setting both to EXT causes "
-                        "both instruments to drive the rear-panel [10MHz In/Out] "
-                        "connector simultaneously — this will damage the instruments.\n\n"
-                        "Return Gen A to its internal clock first (send "
-                        ":SYSTem:ROSCillator:SOURce INTernal to Gen A via the "
-                        "SCPI console), then enable sharing."
-                    )
-                    log.warning("_on_ext_ref_toggled: Gen A is EXT — refusing to set Gen B EXT too")
-                    self._log_scpi("! Timebase: refused — Gen A is already EXT; both EXT would collide")
-                    self.lbl_ref_status.setText(
-                        "REFUSED: Gen A is already EXT. Return Gen A to INT first."
-                    )
-                    self.lbl_ref_status.setStyleSheet(
-                        f"color: {theme.FAULT}; font-style: italic; font-size: 10px;"
-                    )
-                    self.chk_ext_ref.blockSignals(True)
-                    self.chk_ext_ref.setChecked(False)
-                    self.chk_ext_ref.blockSignals(False)
-                    QMessageBox.warning(self, "Reference clock — both-EXT refused", msg)
-                    return
+            QApplication.processEvents()
 
-                # Gen A stays INT; set Gen B to EXT and verify the PLL locked.
-                gen_a.set_reference_clock("INTernal")
-                self._log_scpi(
-                    "# Timebase: Gen A → INT (master), verifying Gen B EXT lock "
-                    f"(settling {3.0:.1f} s) …"
-                )
-                QApplication.processEvents()
-                locked, actual = gen_b.verify_external_lock(settle_s=3.0)
-                if not locked:
-                    self._log_scpi(
-                        f"! Gen B: EXTernal set but instrument reports {actual!r} — "
-                        "check 10 MHz cable and reference level"
-                    )
-                    self.lbl_ref_status.setText(
-                        f"Lock FAILED: Gen B reports {actual}. Check cable and level."
-                    )
-                    self.lbl_ref_status.setStyleSheet(
-                        f"color: {theme.FAULT}; font-style: italic; font-size: 10px;"
-                    )
-                    self.chk_ext_ref.blockSignals(True)
-                    self.chk_ext_ref.setChecked(False)
-                    self.chk_ext_ref.blockSignals(False)
-                    QMessageBox.warning(
-                        self, "Reference clock lock failed",
-                        "Gen B was set to external 10 MHz reference but its "
-                        f"readback is {actual!r} — the DG1022Z silently falls "
-                        "back to INT when no valid signal is present.\n\n"
-                        "Checklist:\n"
-                        "  • BNC cable from Gen A [10MHz Out] → Gen B [10MHz In]\n"
-                        "  • Reference level must be 250 mVpp – 5 Vpp\n"
-                        "  • The [10MHz In/Out] connector is BIDIRECTIONAL — its "
-                        "direction is set by the clock source selection.  "
-                        "Both units set to INT will each try to drive the connector "
-                        "simultaneously, which can damage the instruments."
-                    )
-                else:
-                    self._log_scpi("# Gen B: EXTernal reference confirmed (PLL locked)")
-                    self.lbl_ref_status.setText(
-                        "Locked: Gen B follows Gen A's 10 MHz reference."
-                    )
-                    self.lbl_ref_status.setStyleSheet(
-                        "color: #555; font-style: italic; font-size: 10px;"
-                    )
-            else:
-                gen_a.set_reference_clock("INTernal")
-                gen_b.set_reference_clock("INTernal")
-                self._log_scpi("# Timebase: both generators on internal clocks")
-                self.lbl_ref_status.setText(
-                    "Independent internal clocks — X/Y phase will drift across "
-                    "the two units."
-                )
-                self.lbl_ref_status.setStyleSheet(
-                    "color: #555; font-style: italic; font-size: 10px;"
-                )
-            self._refresh_clock_status()
-        except Exception as e:
-            log.exception("_on_ext_ref_toggled failed")
-            self._log_scpi(f"! Timebase set failed: {e}")
-            QMessageBox.warning(self, "Reference clock", str(e))
+        ok, message = self.beamline.set_shared_timebase(checked)
+
+        self._log_scpi(("# " if ok else "! ") + "Timebase: " + message.splitlines()[0])
+        self.lbl_ref_status.setText(message.splitlines()[0])
+        self.lbl_ref_status.setStyleSheet(
+            "color: #555; font-style: italic; font-size: 10px;" if ok
+            else f"color: {theme.FAULT}; font-style: italic; font-size: 10px;"
+        )
+        if not ok:
+            log.warning("_on_ext_ref_toggled: %s", message.splitlines()[0])
+            # Never leave the box showing a lock that is not there.
+            self.chk_ext_ref.blockSignals(True)
+            self.chk_ext_ref.setChecked(False)
+            self.chk_ext_ref.blockSignals(False)
+            if checked:
+                QMessageBox.warning(self, "Reference clock", message)
+        self._refresh_clock_status()
 
     def _refresh_clock_status(self):
         """Query each connected unit's active timebase and update the status labels.
@@ -751,27 +739,16 @@ class FuncGenTab(QWidget):
         Also refreshes the combined lbl_timebase indicator.  Never displays a
         locked state when the readback returned INT.
         """
-        clk: dict[str, str] = {}
+        clk = self.beamline.read_timebase()
         for gen_letter, lbl in (("A", self.lbl_clk_a), ("B", self.lbl_clk_b)):
-            g = self._gen[gen_letter]
-            if g is None:
-                lbl.setText(f"● Gen {gen_letter}: timebase —")
-                lbl.setStyleSheet("color: #555; font-size: 10px;")
-                clk[gen_letter] = "—"
+            src = clk.get(gen_letter, "—")
+            lbl.setText(f"● Gen {gen_letter}: timebase {src}")
+            if src == "EXT":
+                lbl.setStyleSheet("color: #1a7a1a; font-size: 10px;")
+            elif src == "?":
+                lbl.setStyleSheet("color: #888; font-size: 10px;")
             else:
-                try:
-                    src = g.get_reference_clock()
-                    lbl.setText(f"● Gen {gen_letter}: timebase {src}")
-                    if src == "EXT":
-                        lbl.setStyleSheet("color: #1a7a1a; font-size: 10px;")
-                    else:
-                        lbl.setStyleSheet("color: #555; font-size: 10px;")
-                    clk[gen_letter] = src
-                except Exception:
-                    log.exception("_refresh_clock_status: Gen %s query failed", gen_letter)
-                    lbl.setText(f"● Gen {gen_letter}: timebase ?")
-                    lbl.setStyleSheet("color: #888; font-size: 10px;")
-                    clk[gen_letter] = "?"
+                lbl.setStyleSheet("color: #555; font-size: 10px;")
         # Combined indicator — green only when A=INT and B=EXT (locked config).
         clk_a = clk.get("A", "—")
         clk_b = clk.get("B", "—")
@@ -784,6 +761,26 @@ class FuncGenTab(QWidget):
             self.lbl_timebase.setStyleSheet(
                 "color: #333; font-weight: bold; font-size: 10px; padding: 2px;"
             )
+
+    # ---- Shared setpoints ----------------------------------------------------
+
+    def _on_panel_edited(self, key: str):
+        """A control on one panel moved — push it into the shared model."""
+        params = self.panels[key].channel_params()
+        self._setpoints.update(
+            key, shape=params.shape, freq_hz=params.freq_hz,
+            amp_vpp=params.amp_vpp, offset_v=params.offset_v,
+            phase_deg=params.phase_deg, start_phase_deg=params.start_phase_deg,
+            load=params.load, output_on=params.output_on,
+        )
+
+    def _on_setpoint_changed(self, key: str, params: ChannelParams):
+        """The shared model moved — render it, wherever the edit came from.
+
+        Re-rendering a panel's own edit back into itself is a no-op (the
+        controls already hold those values), so this needs no source filter.
+        """
+        self.panels[key].apply_params(params)
 
     # ---- Apply helpers -------------------------------------------------------
     #

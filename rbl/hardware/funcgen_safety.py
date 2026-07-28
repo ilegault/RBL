@@ -42,3 +42,22 @@ def channel_peak_volts(shape: str, amp_vpp: float, offset_v: float) -> float:
     if shape == "DC":
         return abs(offset_v)
     return abs(offset_v) + abs(amp_vpp) / 2.0
+
+
+def peak_status(shape: str, amp_vpp: float, offset_v: float):
+    """Classify a channel against the interlock. Returns (status, peak_volts).
+
+    Status is "ok", "warn" (past the advisory threshold — a caller should ask
+    before applying) or "block" (past the hard ceiling — Beamline refuses it
+    regardless of what any caller decides).
+
+    Lives here rather than in a tab because every screen that can apply a
+    channel has to classify it the same way; two copies of this comparison
+    would eventually disagree about which tier a given peak falls in.
+    """
+    peak = channel_peak_volts(shape, amp_vpp, offset_v)
+    if peak > PEAK_MAX_VOLTS + 1e-9:
+        return "block", peak
+    if peak > PEAK_WARN_VOLTS + 1e-9:
+        return "warn", peak
+    return "ok", peak
