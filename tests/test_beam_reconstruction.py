@@ -1,5 +1,5 @@
 """
-Tests for beam_reconstruction: turning four jaw currents into a beam position.
+Tests for beam_reconstruction: turning four slit currents into a beam position.
 
 The theme running through these is what the measurement can and cannot support.
 A centred beam is solvable without knowing the beam width at all; an off-centre
@@ -56,14 +56,14 @@ class TestSolveAxisCentre:
         """
         assert abs(solve_axis_centre(1e-6, 1e-6, 1.5, -1.5, sigma)) < 1e-6
 
-    def test_equal_currents_on_asymmetric_jaws_find_their_midpoint(self):
+    def test_equal_currents_on_asymmetric_slits_find_their_midpoint(self):
         c = solve_axis_centre(1e-6, 1e-6, 3.0, -1.0, 1.0)
         assert abs(c - 1.0) < 1e-6
 
-    def test_more_current_on_plus_jaw_moves_beam_toward_it(self):
+    def test_more_current_on_plus_slit_moves_beam_toward_it(self):
         assert solve_axis_centre(2e-6, 1e-6, 1.5, -1.5, 1.0) > 0
 
-    def test_more_current_on_minus_jaw_moves_beam_toward_it(self):
+    def test_more_current_on_minus_slit_moves_beam_toward_it(self):
         assert solve_axis_centre(1e-6, 2e-6, 1.5, -1.5, 1.0) < 0
 
     def test_monotonic_in_the_current_ratio(self):
@@ -78,7 +78,7 @@ class TestSolveAxisCentre:
         """Generate the currents a known beam would produce, then invert them."""
         sigma = 0.85
         i_plus  = _gauss_tail(1.5, true_c, sigma)
-        i_minus = _gauss_tail(1.5, -true_c, sigma)   # mirrored for the '-' jaw
+        i_minus = _gauss_tail(1.5, -true_c, sigma)   # mirrored for the '-' slit
         got = solve_axis_centre(i_plus, i_minus, 1.5, -1.5, sigma)
         assert abs(got - true_c) < 1e-6
 
@@ -91,7 +91,7 @@ class TestSolveAxisCentre:
         assert math.isnan(
             solve_axis_centre(NOISE_FLOOR_A * 0.5, 1e-6, 1.5, -1.5, 1.0))
 
-    def test_crossed_jaws_are_rejected(self):
+    def test_crossed_slits_are_rejected(self):
         """A '-' edge on the far side of the '+' edge is not a real aperture."""
         assert math.isnan(solve_axis_centre(1e-6, 1e-6, -1.5, 1.5, 1.0))
 
@@ -160,7 +160,7 @@ class TestReconstruct:
         est = reconstruct(GOOD, EDGES, 0.85)
         assert est.ok
         assert abs(est.x) < 1e-6 and abs(est.y) < 1e-6
-        assert est.bad_jaws == [] and est.reason == ""
+        assert est.bad_slits == [] and est.reason == ""
 
     def test_axes_are_solved_independently(self):
         """X imbalance must not leak into the Y answer."""
@@ -169,28 +169,28 @@ class TestReconstruct:
         assert est.x > 0
         assert abs(est.y) < 1e-6
 
-    def test_one_dead_jaw_invalidates_the_whole_estimate(self):
+    def test_one_dead_slit_invalidates_the_whole_estimate(self):
         """A partial picture is easier to misread than no picture."""
         est = reconstruct({**GOOD, "Y-": 1e-12}, EDGES, 0.85)
         assert not est.ok
-        assert est.bad_jaws == ["Y-"]
+        assert est.bad_slits == ["Y-"]
         assert "Y-" in est.reason
 
-    def test_nan_jaw_is_reported_as_bad(self):
+    def test_nan_slit_is_reported_as_bad(self):
         est = reconstruct({**GOOD, "X+": float("nan")}, EDGES, 0.85)
-        assert not est.ok and est.bad_jaws == ["X+"]
+        assert not est.ok and est.bad_slits == ["X+"]
 
-    def test_every_bad_jaw_is_listed(self):
+    def test_every_bad_slit_is_listed(self):
         est = reconstruct({"X+": 1e-6, "X-": 0.0, "Y+": 0.0, "Y-": 1e-6},
                           EDGES, 0.85)
-        assert est.bad_jaws == ["X-", "Y+"]
+        assert est.bad_slits == ["X-", "Y+"]
 
-    def test_missing_jaw_position_blocks_reconstruction(self):
+    def test_missing_slit_position_blocks_reconstruction(self):
         est = reconstruct(GOOD, {**EDGES, "X+": float("nan")}, 0.85)
         assert not est.ok
         assert "position unknown" in est.reason
 
-    def test_absent_jaw_position_key_blocks_reconstruction(self):
+    def test_absent_slit_position_key_blocks_reconstruction(self):
         edges = {k: v for k, v in EDGES.items() if k != "Y+"}
         est = reconstruct(GOOD, edges, 0.85)
         assert not est.ok and "Y+" in est.reason

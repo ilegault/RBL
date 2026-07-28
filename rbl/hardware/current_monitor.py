@@ -47,9 +47,9 @@ def format_current(current_A: float) -> str:
 def beam_centering(i_plus: float, i_minus: float) -> float:
     """Beam-centering metric: (I+ - I-) / (I+ + I-).
 
-    0   -> beam perfectly centered between the two jaws.
-    >0  -> beam toward the '+' jaw.
-    <0  -> beam toward the '-' jaw.
+    0   -> beam perfectly centered between the two slits.
+    >0  -> beam toward the '+' slit.
+    <0  -> beam toward the '-' slit.
     NaN -> not enough signal to be meaningful."""
     if (i_plus is None or i_minus is None
         or math.isnan(i_plus) or math.isnan(i_minus)):

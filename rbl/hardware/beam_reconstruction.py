@@ -1,6 +1,6 @@
 """
 beam_reconstruction.py
-Infer where the beam sits from four slit-jaw currents and four jaw positions.
+Infer where the beam sits from four slit currents and four slit positions.
 
 Each NEC log amp is wired to a whole slit blade, so its current is the total
 beam flux landing on that blade -- i.e. the integral of the beam profile over
@@ -54,7 +54,7 @@ WIDTH_RANGE_HI = 2.0      # x nominal
 
 # Bisection controls for the centroid solve.
 _BISECT_ITERS = 60
-_SEARCH_PAD   = 10.0      # mm searched beyond the jaw edges
+_SEARCH_PAD   = 10.0      # mm searched beyond the slit edges
 
 # FWHM -> sigma for a Gaussian.  Operators think in spot width, the maths wants
 # sigma, so callers taking a FWHM spinbox value convert with this.
@@ -114,16 +114,16 @@ def _raster_tail(edge_mm: float, centre_mm: float, half_span_mm: float,
 def solve_axis_centre(i_plus: float, i_minus: float,
                       edge_plus_mm: float, edge_minus_mm: float,
                       sigma_mm: float, half_span_mm: float = 0.0) -> float:
-    """Beam centre (mm) on one axis, given both jaw currents and edge positions.
+    """Beam centre (mm) on one axis, given both slit currents and edge positions.
 
-    ``edge_plus_mm`` is the signed position of the '+' jaw edge (positive side
-    of beam centre) and ``edge_minus_mm`` that of the '-' jaw (negative).
+    ``edge_plus_mm`` is the signed position of the '+' slit edge (positive side
+    of beam centre) and ``edge_minus_mm`` that of the '-' slit (negative).
     ``half_span_mm`` > 0 selects the swept-beam model.
 
     Returns NaN when either current is unusable or the geometry is degenerate.
 
     The ratio of predicted currents rises monotonically as the beam moves
-    toward the '+' jaw, so a bisection on the centre position converges without
+    toward the '+' slit, so a bisection on the centre position converges without
     needing a general-purpose optimiser.
     """
     if not _usable(i_plus) or not _usable(i_minus):
@@ -198,14 +198,14 @@ def solve_axis_interval(i_plus: float, i_minus: float,
 # --- Full 2-D reconstruction -------------------------------------------------
 
 class BeamEstimate:
-    """What the four jaw currents say about the beam, and how sure that is.
+    """What the four slit currents say about the beam, and how sure that is.
 
     Attributes
     ----------
     x, y            : centre in mm (NaN if unsolved)
     x_lo/x_hi, y_lo/y_hi : width-ambiguity bounds on each centre, mm
-    ok              : True when both axes solved and every jaw reads cleanly
-    bad_jaws        : jaw labels ("X+", ...) whose current is unusable
+    ok              : True when both axes solved and every slit reads cleanly
+    bad_slits        : slit labels ("X+", ...) whose current is unusable
     reason          : short human-readable explanation when not ``ok``
     """
 
@@ -214,23 +214,23 @@ class BeamEstimate:
         self.x_lo = self.x_hi = float("nan")
         self.y_lo = self.y_hi = float("nan")
         self.ok       = False
-        self.bad_jaws = []
+        self.bad_slits = []
         self.reason   = "no data"
 
     def __repr__(self):
         return (f"BeamEstimate(x={self.x:.3f} [{self.x_lo:.3f},{self.x_hi:.3f}], "
                 f"y={self.y:.3f} [{self.y_lo:.3f},{self.y_hi:.3f}], "
-                f"ok={self.ok}, bad={self.bad_jaws})")
+                f"ok={self.ok}, bad={self.bad_slits})")
 
 
 def reconstruct(currents: dict, edges_mm: dict, sigma_mm: float,
                 half_span_x_mm: float = 0.0,
                 half_span_y_mm: float = 0.0) -> BeamEstimate:
-    """Reconstruct the beam centre from all four jaws.
+    """Reconstruct the beam centre from all four slits.
 
     ``currents``  : {"X+": A, "X-": A, "Y+": A, "Y-": A}
     ``edges_mm``  : {"X+": mm, "X-": mm, "Y+": mm, "Y-": mm}, SIGNED -- the
-                    minus jaws are negative.  The Galil reports unsigned
+                    minus slits are negative.  The Galil reports unsigned
                     distance-from-centre, so the caller must apply the sign.
     ``sigma_mm``  : nominal spot sigma (operator-supplied).
     ``half_span_x_mm`` / ``half_span_y_mm`` : per-axis sweep half-travel for
@@ -238,23 +238,23 @@ def reconstruct(currents: dict, edges_mm: dict, sigma_mm: float,
                     axes generally sweep different distances, so they are
                     independent.
 
-    A single unusable jaw invalidates the whole estimate: the reconstruction is
+    A single unusable slit invalidates the whole estimate: the reconstruction is
     only as good as its weakest edge, and a half-drawn beam is easier to
     misread than no beam at all.
     """
     est = BeamEstimate()
 
-    est.bad_jaws = [j for j in ("X+", "X-", "Y+", "Y-")
+    est.bad_slits = [j for j in ("X+", "X-", "Y+", "Y-")
                     if not _usable(currents.get(j))]
-    if est.bad_jaws:
-        est.reason = "no usable signal on " + ", ".join(est.bad_jaws)
+    if est.bad_slits:
+        est.reason = "no usable signal on " + ", ".join(est.bad_slits)
         return est
 
     missing = [j for j in ("X+", "X-", "Y+", "Y-")
                if edges_mm.get(j) is None
                or math.isnan(edges_mm.get(j, float("nan")))]
     if missing:
-        est.reason = "jaw position unknown for " + ", ".join(missing)
+        est.reason = "slit position unknown for " + ", ".join(missing)
         return est
 
     est.x, est.x_lo, est.x_hi = solve_axis_interval(
@@ -265,7 +265,7 @@ def reconstruct(currents: dict, edges_mm: dict, sigma_mm: float,
         sigma_mm, half_span_y_mm)
 
     if math.isnan(est.x) or math.isnan(est.y):
-        est.reason = "currents inconsistent with jaw geometry"
+        est.reason = "currents inconsistent with slit geometry"
         return est
 
     est.ok     = True
@@ -274,7 +274,7 @@ def reconstruct(currents: dict, edges_mm: dict, sigma_mm: float,
 
 
 def overscan_flags(currents: dict) -> dict:
-    """Which blades the beam is actually reaching, by jaw label.
+    """Which blades the beam is actually reaching, by slit label.
 
     In raster mode the sweep is supposed to carry the beam clear off both ends
     of the aperture so deposition velocity stays constant across the sample.  A
@@ -282,8 +282,8 @@ def overscan_flags(currents: dict) -> dict:
     noise floor is one it is not.  That is a direct qualitative read on
     overscan without needing to know the sweep amplitude.
     """
-    return {jaw: _usable(currents.get(jaw))
-            for jaw in ("X+", "X-", "Y+", "Y-")}
+    return {slit: _usable(currents.get(slit))
+            for slit in ("X+", "X-", "Y+", "Y-")}
 
 
 # --- Internals ---------------------------------------------------------------
@@ -297,7 +297,7 @@ def _tail(edge_mm: float, centre_mm: float, sigma_mm: float,
           half_span_mm: float, sign: int) -> float:
     """Beam fraction past ``edge_mm``, on the side ``sign`` points to.
 
-    The '-' jaw collects everything BELOW its edge, which is the same integral
+    The '-' slit collects everything BELOW its edge, which is the same integral
     mirrored about the beam centre.
     """
     if sign > 0:
@@ -322,7 +322,7 @@ if __name__ == "__main__":
     c = solve_axis_centre(1e-6, 1e-6, 3.0, -1.0, 1.0)
     assert abs(c - 1.0) < 1e-6, c
 
-    # More current on '+' pulls the estimate toward the '+' jaw, and back again.
+    # More current on '+' pulls the estimate toward the '+' slit, and back again.
     assert solve_axis_centre(2e-6, 1e-6, 1.5, -1.5, 1.0) > 0
     assert solve_axis_centre(1e-6, 2e-6, 1.5, -1.5, 1.0) < 0
 
@@ -330,7 +330,7 @@ if __name__ == "__main__":
     for true_c in (-1.0, -0.4, 0.0, 0.4, 1.0):
         sig = 0.85
         ip = _gauss_tail(1.5, true_c, sig)
-        im = _gauss_tail(1.5, -true_c, sig)     # mirrored for the '-' jaw
+        im = _gauss_tail(1.5, -true_c, sig)     # mirrored for the '-' slit
         got = solve_axis_centre(ip, im, 1.5, -1.5, sig)
         assert abs(got - true_c) < 1e-6, (true_c, got)
 
@@ -353,7 +353,7 @@ if __name__ == "__main__":
     got = solve_axis_centre(ip, im, 1.5, -1.5, 0.5, half_span_mm=span)
     assert abs(got - 0.3) < 1e-5, got
 
-    # A jaw at the noise floor invalidates the whole estimate.
+    # A slit at the noise floor invalidates the whole estimate.
     edges = {"X+": 1.5, "X-": -1.5, "Y+": 5.0, "Y-": -5.0}
     good  = {"X+": 1e-6, "X-": 1e-6, "Y+": 1e-6, "Y-": 1e-6}
     e = reconstruct(good, edges, 1.0)
@@ -361,7 +361,7 @@ if __name__ == "__main__":
 
     bad = dict(good, **{"Y-": 1e-12})
     e = reconstruct(bad, edges, 1.0)
-    assert not e.ok and e.bad_jaws == ["Y-"], e
+    assert not e.ok and e.bad_slits == ["Y-"], e
 
     e = reconstruct(good, {**edges, "X+": float("nan")}, 1.0)
     assert not e.ok and "position unknown" in e.reason, e

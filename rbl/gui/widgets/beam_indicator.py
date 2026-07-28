@@ -1,6 +1,6 @@
 """
 beam_indicator.py
-The beam-position indicator: an aperture picture plus jaw-current readouts.
+The beam-position indicator: an aperture picture plus slit-current readouts.
 
 Moved out of logamp_tab.py so the Overview tab can embed the same widget the
 Beam Current tab uses, fed the same ``BeamEstimate`` — the two views must never
@@ -19,8 +19,8 @@ from rbl.hardware import beam_reconstruction as BR
 from rbl.hardware.current_monitor import beam_centering
 from rbl.gui import theme
 
-# Jaw colours reused from the plot / readouts for a consistent palette.
-_JAW_COLORS = theme.JAW_COLORS
+# Slit colours reused from the plot / readouts for a consistent palette.
+_SLIT_COLORS = theme.SLIT_COLORS
 
 
 class _ApertureView(QWidget):
@@ -37,14 +37,14 @@ class _ApertureView(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.edges     = {}      # jaw -> SIGNED mm; empty when Galil unavailable
-        self.currents  = {}      # jaw -> Amps
+        self.edges     = {}      # slit -> SIGNED mm; empty when Galil unavailable
+        self.currents  = {}      # slit -> Amps
         self.est       = None    # BR.BeamEstimate, or None before first data
         self.sigma_mm  = 0.85
         self.span_x    = 0.0     # raster half-travel, 0 in static mode
         self.span_y    = 0.0
         self.raster    = False
-        self.ratio_x   = float("nan")   # fallback when jaw positions are absent
+        self.ratio_x   = float("nan")   # fallback when slit positions are absent
         self.ratio_y   = float("nan")
         self.setMinimumSize(190, 190)
         self.setSizePolicy(QSizePolicy.Policy.Expanding,
@@ -55,7 +55,7 @@ class _ApertureView(QWidget):
     def _fov_mm(self) -> tuple:
         """Half-extent of the field of view per axis, in mm, as (x, y).
 
-        Sized from the jaws themselves so the aperture always fills a useful
+        Sized from the slits themselves so the aperture always fills a useful
         fraction of the frame, with headroom past the blades — that margin is
         where raster overscan shows up, so it has to be visible.
 
@@ -65,8 +65,8 @@ class _ApertureView(QWidget):
         single mm-per-pixel scale, so the picture stays honest — the axes
         differ in how much they SHOW, not in how much a millimetre measures.
         """
-        def reach(jaws, beam_centre, span):
-            r = max((abs(self.edges[j]) for j in jaws if j in self.edges),
+        def reach(slits, beam_centre, span):
+            r = max((abs(self.edges[j]) for j in slits if j in self.edges),
                     default=3.0)
             if self.est is not None and self.est.ok:
                 r = max(r, abs(beam_centre) + span + 2 * self.sigma_mm)
@@ -77,13 +77,13 @@ class _ApertureView(QWidget):
         return (reach(("X+", "X-"), bx, self.span_x),
                 reach(("Y+", "Y-"), by, self.span_y))
 
-    def _tint(self, jaw: str) -> float:
+    def _tint(self, slit: str) -> float:
         """How lit up a blade should be, 0..1, from its current on a log scale.
 
         The log amps span 1 nA to 1 mA — six decades — so a linear tint would
         leave everything below a microamp looking identically dead.
         """
-        i = self.currents.get(jaw)
+        i = self.currents.get(slit)
         if i is None or math.isnan(i) or i <= 1e-9:
             return 0.0
         f = (math.log10(i) + 9.0) / 6.0
@@ -95,7 +95,7 @@ class _ApertureView(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        margin_x, margin_y = 20, 16      # room for the X±/Y± jaw labels
+        margin_x, margin_y = 20, 16      # room for the X±/Y± slit labels
         x0 = float(margin_x)
         y0 = float(margin_y)
         vw = self.width()  - 2 * margin_x
@@ -122,7 +122,7 @@ class _ApertureView(QWidget):
         p.setPen(QPen(QColor("#888"), 1.0))
         p.drawRect(QRectF(x0, y0, vw, vh))
 
-        bad = set(self.est.bad_jaws) if self.est is not None else set()
+        bad = set(self.est.bad_slits) if self.est is not None else set()
         self._paint_blades(p, X, Y, x0, y0, vw, vh, bad)
 
         # Nominal beam axis.
@@ -130,7 +130,7 @@ class _ApertureView(QWidget):
         p.drawLine(QPointF(x0, cy), QPointF(x0 + vw, cy))
         p.drawLine(QPointF(cx, y0), QPointF(cx, y0 + vh))
 
-        self._paint_jaw_labels(p, x0, y0, vw, vh, cx, cy)
+        self._paint_slit_labels(p, x0, y0, vw, vh, cx, cy)
 
         if self.est is not None and self.est.ok:
             self._paint_beam(p, X, Y, s)
@@ -152,32 +152,32 @@ class _ApertureView(QWidget):
             "Y+": lambda e: QRectF(x0, y0, vw, Y(e) - y0),
             "Y-": lambda e: QRectF(x0, Y(e), vw, y0 + vh - Y(e)),
         }
-        for jaw, make in rects.items():
-            e = self.edges.get(jaw)
+        for slit, make in rects.items():
+            e = self.edges.get(slit)
             if e is None or math.isnan(e):
                 continue
             r = make(e).normalized()
-            base = QColor(_JAW_COLORS[jaw])
+            base = QColor(_SLIT_COLORS[slit])
             fill = QColor(base)
             # Blades overlap at the corners, so keep them translucent enough
             # that the overlap reads as overlap rather than as a fifth object.
-            fill.setAlpha(int(35 + 120 * self._tint(jaw)))
+            fill.setAlpha(int(35 + 120 * self._tint(slit)))
             p.setBrush(QBrush(fill))
-            if jaw in bad:
+            if slit in bad:
                 p.setPen(QPen(QColor(theme.FAULT), 2.0, Qt.PenStyle.DashLine))
             else:
                 p.setPen(QPen(base, 1.5))
             p.drawRect(r)
 
-    def _paint_jaw_labels(self, p, x0, y0, vw, vh, cx, cy):
+    def _paint_slit_labels(self, p, x0, y0, vw, vh, cx, cy):
         p.setFont(QFont("Consolas", 8, QFont.Weight.Bold))
-        p.setPen(QPen(QColor(_JAW_COLORS["X-"])))
+        p.setPen(QPen(QColor(_SLIT_COLORS["X-"])))
         p.drawText(int(x0 - 18), int(cy + 4), "X-")
-        p.setPen(QPen(QColor(_JAW_COLORS["X+"])))
+        p.setPen(QPen(QColor(_SLIT_COLORS["X+"])))
         p.drawText(int(x0 + vw + 3), int(cy + 4), "X+")
-        p.setPen(QPen(QColor(_JAW_COLORS["Y+"])))
+        p.setPen(QPen(QColor(_SLIT_COLORS["Y+"])))
         p.drawText(int(cx - 7), int(y0 - 4), "Y+")
-        p.setPen(QPen(QColor(_JAW_COLORS["Y-"])))
+        p.setPen(QPen(QColor(_SLIT_COLORS["Y-"])))
         p.drawText(int(cx - 7), int(y0 + vh + 12), "Y-")
 
     def _paint_beam(self, p, X, Y, s):
@@ -256,7 +256,7 @@ class _ApertureView(QWidget):
         bx = x0 + 6
         by = y0 + vh - 8
         # The bar sits on top of whichever blade happens to be there, so give it
-        # a backing or the label disappears into a saturated jaw colour.
+        # a backing or the label disappears into a saturated slit colour.
         p.setBrush(QBrush(QColor(255, 255, 255, 205)))
         p.setPen(Qt.PenStyle.NoPen)
         p.drawRect(QRectF(bx - 3, by - 17, length + 6, 23))
@@ -268,7 +268,7 @@ class _ApertureView(QWidget):
         p.drawText(QPointF(bx, by - 5), f"{step:g} mm")
 
     def _paint_without_geometry(self, p, x0, y0, vw, vh, cx, cy):
-        """Fallback view for when the Galil is not supplying jaw positions.
+        """Fallback view for when the Galil is not supplying slit positions.
 
         Without mm positions there is no scale and no reconstruction — only the
         raw current imbalance, which is what the old indicator always showed.
@@ -282,13 +282,13 @@ class _ApertureView(QWidget):
         p.setPen(QPen(QColor("#bbb"), 1, Qt.PenStyle.DashLine))
         p.drawLine(QPointF(x0, cy), QPointF(x0 + vw, cy))
         p.drawLine(QPointF(cx, y0), QPointF(cx, y0 + vh))
-        self._paint_jaw_labels(p, x0, y0, vw, vh, cx, cy)
+        self._paint_slit_labels(p, x0, y0, vw, vh, cx, cy)
 
         p.setFont(QFont("Consolas", 7, QFont.Weight.Bold))
         p.setPen(QPen(QColor("#b06000")))
         p.drawText(QRectF(x0, y0 + 3, vw, 26),
                    int(Qt.AlignmentFlag.AlignHCenter) | int(Qt.TextFlag.TextWordWrap),
-                   "NO JAW POSITIONS\nrelative only — not to scale")
+                   "NO SLIT POSITIONS\nrelative only — not to scale")
 
         r = max(4.0, min(vw, vh) * 0.05)
         if math.isnan(self.ratio_x) or math.isnan(self.ratio_y):
@@ -313,9 +313,9 @@ class BeamPositionIndicator(QWidget):
 
     Each NEC log amp reads a whole slit blade, so its current is all the beam
     landing on that blade — the integral of the beam profile past that blade's
-    edge.  Combined with the jaw positions the Galil reports, that makes four
+    edge.  Combined with the slit positions the Galil reports, that makes four
     knife-edge measurements, which is enough to place the beam in millimetres
-    instead of merely nudging a dot toward whichever jaw reads higher.
+    instead of merely nudging a dot toward whichever slit reads higher.
 
     What it cannot do is measure the beam's width.  Beam intensity is not
     measured anywhere in this program, and per axis there are two currents
@@ -423,7 +423,7 @@ class BeamPositionIndicator(QWidget):
         self.lbl_xy.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(self.lbl_xy)
 
-        self.lbl_status = QLabel("Galil not connected — no jaw positions")
+        self.lbl_status = QLabel("Galil not connected — no slit positions")
         self.lbl_status.setWordWrap(True)
         self.lbl_status.setStyleSheet("font-size: 11px; color: #888;")
         self.lbl_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -439,15 +439,15 @@ class BeamPositionIndicator(QWidget):
 
     # ---- Inputs -------------------------------------------------------------
 
-    def set_currents(self, currents_by_jaw: dict):
-        """Latest log-amp current per jaw label, in Amps."""
-        self._currents = dict(currents_by_jaw)
+    def set_currents(self, currents_by_slit: dict):
+        """Latest log-amp current per slit label, in Amps."""
+        self._currents = dict(currents_by_slit)
         self._recompute()
 
-    def set_jaw_state(self, state: dict):
-        """Jaw geometry from the motor tab.
+    def set_slit_state(self, state: dict):
+        """Slit geometry from the motor tab.
 
-        ``state`` carries ``positions`` (jaw label -> UNSIGNED mm from beam
+        ``state`` carries ``positions`` (slit label -> UNSIGNED mm from beam
         centre, exactly as the motor tab displays them), ``zeroed`` (have all
         four axes been homed or zeroed this session) and ``connected``.
         """
@@ -455,14 +455,14 @@ class BeamPositionIndicator(QWidget):
         self._zeroed    = bool(state.get("zeroed", False))
         positions       = state.get("positions") or {}
 
-        # The Galil reports each jaw as a distance from centre with no sign;
-        # the '-' jaws live on the negative side of the axis.  Getting this
+        # The Galil reports each slit as a distance from centre with no sign;
+        # the '-' slits live on the negative side of the axis.  Getting this
         # backwards would silently mirror the whole picture.
         self._edges = {}
-        for jaw, mm in positions.items():
+        for slit, mm in positions.items():
             if mm is None or math.isnan(mm):
                 continue
-            self._edges[jaw] = abs(mm) if jaw.endswith("+") else -abs(mm)
+            self._edges[slit] = abs(mm) if slit.endswith("+") else -abs(mm)
         self._recompute()
 
     # ---- Internals ----------------------------------------------------------
@@ -524,14 +524,14 @@ class BeamPositionIndicator(QWidget):
                 "Galil not connected — showing current imbalance only")
             self.lbl_status.setStyleSheet("font-size: 11px; color: #b06000;")
         elif len(self._edges) < 4:
-            self.lbl_status.setText("Waiting for all four jaw positions")
+            self.lbl_status.setText("Waiting for all four slit positions")
             self.lbl_status.setStyleSheet("font-size: 11px; color: #b06000;")
         elif not self._zeroed:
             self.lbl_status.setText(
                 "⚠ Axes not zeroed this session — mm positions may be wrong")
             self.lbl_status.setStyleSheet(f"font-size: 11px; color: {theme.FAULT};")
         else:
-            self.lbl_status.setText("Jaw positions live and zeroed")
+            self.lbl_status.setText("Slit positions live and zeroed")
             self.lbl_status.setStyleSheet(f"font-size: 11px; color: {theme.OK};")
 
     def _update_overscan(self, raster: bool):
@@ -546,7 +546,7 @@ class BeamPositionIndicator(QWidget):
             self.lbl_overscan.setText("")
             return
         flags = BR.overscan_flags(self._currents)
-        missed = [jaw for jaw, hit in flags.items() if not hit]
+        missed = [slit for slit, hit in flags.items() if not hit]
         if not missed:
             self.lbl_overscan.setText("Overscan: beam reaching all four blades")
             self.lbl_overscan.setStyleSheet(f"font-size: 11px; color: {theme.OK};")

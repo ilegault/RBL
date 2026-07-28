@@ -15,10 +15,10 @@ Why ascending order?
     mentally reversing a list.
 
 AIN assignments (from rbl/config/hardware_config.py):
-    AIN0   NEC log amp — X+ jaw          (log-amp input, T7 body terminals)
-    AIN1   NEC log amp — X- jaw
-    AIN2   NEC log amp — Y+ jaw
-    AIN3   NEC log amp — Y- jaw
+    AIN0   NEC log amp — X+ slit          (log-amp input, T7 body terminals)
+    AIN1   NEC log amp — X- slit
+    AIN2   NEC log amp — Y+ slit
+    AIN3   NEC log amp — Y- slit
     AIN4   spare  (configured in driver but excluded from all profiles)
     AIN5   spare  (configured in driver but excluded from all profiles)
     AIN6   EEL5000 Y-  CURRENT MONITOR   (1 V = 10 mA,  CB37 terminal board)

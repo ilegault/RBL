@@ -3,7 +3,7 @@ hardware_config.py
 Central hardware mapping and calibration constants for the RBL beamline.
 
 Covers:
-  - Galil DMC-4103 slit motor axes (A,B,C,D) -> physical jaws (X+, X-, Y+, Y-)
+  - Galil DMC-4103 slit motor axes (A,B,C,D) -> physical slits (X+, X-, Y+, Y-)
   - NEC log-amp LabJack channel assignments (AIN0-AIN3)
   - EEL5000.20.100 HV amplifier LabJack channel assignments (AIN6-AIN13)
 
@@ -15,7 +15,7 @@ Galil calibration constants from the 2HA075520 slit controller specification ema
   - SP = 1800 steps/s (normal), 900 steps/s (homing)
   - Motor type MT = -2.5, smoothing YB = 2.0, amplifier gain AG = 3
 """
-from rbl.gui.theme import JAW_COLORS
+from rbl.gui.theme import SLIT_COLORS
 
 # Galil axis letter -> human-readable name
 AXIS_NAMES = {
@@ -37,7 +37,7 @@ STEPS_PER_MM: dict[str, float] = {
     "D": 629.92126,
 }
 
-# Zero offset in counts — "where is mechanical zero of the jaw?"
+# Zero offset in counts — "where is mechanical zero of the slit?"
 ZERO_OFFSET_COUNTS: dict[str, int] = {
     "A": 0,
     "B": 0,
@@ -45,8 +45,8 @@ ZERO_OFFSET_COUNTS: dict[str, int] = {
     "D": 0,
 }
 
-# Physical gap offset in mm per jaw: the slits have a ~0.4 mm gap between them
-# when both jaws are at their homed/zeroed position, so each jaw sits 0.2 mm
+# Physical gap offset in mm per slit: the slits have a ~0.4 mm gap between them
+# when both slits are at their homed/zeroed position, so each slit sits 0.2 mm
 # from true centre. After the user zeros (DP=0), counts=0 displays as 0.2 mm.
 MM_ZERO_OFFSET: dict[str, float] = {
     "A": 0.2,
@@ -79,7 +79,7 @@ def counts_to_mm(axis_letter: str, counts: float) -> float:
     """Step counts -> physical position in mm for the given axis.
 
     counts=0 (after user zeros) returns MM_ZERO_OFFSET (0.2 mm) because the
-    jaw sits 0.2 mm from true centre when homed.
+    slit sits 0.2 mm from true centre when homed.
     """
     sps    = STEPS_PER_MM[axis_letter]
     offset = ZERO_OFFSET_COUNTS[axis_letter]
@@ -107,7 +107,7 @@ def mm_per_sec_to_cps(axis_letter: str, mm_per_sec: float) -> int:
 LOG_AMP_V_AT_1NA = 0.0   # V output at 1 nA input
 LOG_AMP_V_AT_1MA = 6.0   # V output at 1 mA input
 
-# LabJack T7 analog input -> human-readable jaw label
+# LabJack T7 analog input -> human-readable slit label
 LABJACK_CHANNEL_MAP = {
     "AIN0": "X+",
     "AIN1": "X-",
@@ -160,9 +160,9 @@ AMP_MAX_MA_DC  = 20.0   # continuous DC rating
 AMP_MAX_MA_PK  = 100.0  # 4 ms peak rating
 
 # Plot colors, matched to the log-amp tab's palette for visual consistency.
-# Single definition lives in rbl.gui.theme.JAW_COLORS; re-exported here so
+# Single definition lives in rbl.gui.theme.SLIT_COLORS; re-exported here so
 # existing SC.AMP_COLORS callers don't need to change.
-AMP_COLORS = JAW_COLORS
+AMP_COLORS = SLIT_COLORS
 
 # The complete channel set the shared poll worker must read every cycle:
 # 4 log amps + 8 amplifier monitors = 12 channels, ONE eReadNames round trip.

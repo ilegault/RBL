@@ -38,7 +38,7 @@ def tab(qapp):
 
 
 def test_no_hardware_actuating_controls():
-    """Phase 9's explicit gate: no control here moves a jaw or raises a
+    """Phase 9's explicit gate: no control here moves a slit or raises a
     voltage until the repo owner signs off. Assert the tab never CALLS one
     of Beamline's command methods (mentioning them in a docstring, as this
     module does to explain the gate, is fine)."""
@@ -46,23 +46,23 @@ def test_no_hardware_actuating_controls():
     from rbl.gui.overview_tab import OverviewTab as OT
 
     source = inspect.getsource(OT)
-    for forbidden in ("move_jaw", "emergency_stop", "set_channel",
+    for forbidden in ("move_slit", "emergency_stop", "set_channel",
                       "apply_all_channels", "all_outputs_off"):
         assert f".{forbidden}(" not in source, f"OverviewTab must not call {forbidden}()"
 
 
-def test_caches_motor_state_and_redraws_jaw_tile(tab):
+def test_caches_motor_state_and_redraws_slit_tile(tab):
     axes = {"X+": AxisSnapshot(pos_counts=1000, pos_mm=2.5, moving=False,
                                 enabled=True, switches={})}
     tab.beamline.motors_changed.emit(MotorState(connected=True, zeroed=True, axes=axes))
     tab._redraw()
-    assert tab.jaws["X+"].lbl_value.text() == "2.500 mm"
+    assert tab.slits["X+"].lbl_value.text() == "2.500 mm"
 
 
-def test_jaw_tile_stale_when_motors_disconnected(tab):
+def test_slit_tile_stale_when_motors_disconnected(tab):
     tab.beamline.motors_changed.emit(MotorState(connected=False, zeroed=False, axes={}))
     tab._redraw()
-    assert tab.jaws["X+"].lbl_value.text() == "—"
+    assert tab.slits["X+"].lbl_value.text() == "—"
 
 
 def test_logamp_state_feeds_the_beam_indicator(tab):
@@ -109,7 +109,7 @@ def test_redraw_is_a_noop_while_hidden(tab):
                                 enabled=True, switches={})}
     tab.beamline.motors_changed.emit(MotorState(connected=True, zeroed=True, axes=axes))
     tab._redraw()
-    assert tab.jaws["X+"].lbl_value.text() == "2.500 mm"
+    assert tab.slits["X+"].lbl_value.text() == "2.500 mm"
 
     # New data arrives while hidden: cached, but not painted.
     tab._visible = False
@@ -117,7 +117,7 @@ def test_redraw_is_a_noop_while_hidden(tab):
                                  enabled=True, switches={})}
     tab.beamline.motors_changed.emit(MotorState(connected=True, zeroed=True, axes=axes2))
     tab._redraw()
-    assert tab.jaws["X+"].lbl_value.text() == "2.500 mm"
+    assert tab.slits["X+"].lbl_value.text() == "2.500 mm"
 
 
 def test_show_event_starts_timer_and_repaints_immediately(tab):
@@ -131,7 +131,7 @@ def test_show_event_starts_timer_and_repaints_immediately(tab):
 
     assert tab._visible is True
     assert tab._redraw_timer.isActive()
-    assert tab.jaws["X+"].lbl_value.text() == "7.000 mm"
+    assert tab.slits["X+"].lbl_value.text() == "7.000 mm"
 
     tab.hideEvent(QHideEvent())
     assert tab._visible is False

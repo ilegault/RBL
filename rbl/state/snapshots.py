@@ -7,7 +7,7 @@ instrument isn't hooked up" apart from "no data yet" — before this, a widget
 had to infer liveness from whether a label happened to still read the
 placeholder text.
 
-Modelled on MotorTab.jaw_state (motor_tab.py), which was already this pattern
+Modelled on MotorTab.slit_state (motor_tab.py), which was already this pattern
 in miniature: a snapshot dict emitted at poll rate and consumed by a widget in
 a different tab. These are that idea generalised, not something new.
 """
@@ -67,13 +67,13 @@ class FuncGenState:
 
 @dataclass(frozen=True)
 class LogAmpState:
-    """Per-jaw beam current plus the reconstructed beam position.
+    """Per-slit beam current plus the reconstructed beam position.
 
     `beam` is a `beam_reconstruction.BeamEstimate` or None (not enough
     geometry/current yet to attempt a reconstruction).
     """
     connected: bool
-    currents: dict[str, float] = field(default_factory=dict)   # jaw label -> Amps
+    currents: dict[str, float] = field(default_factory=dict)   # slit label -> Amps
     beam: object = None
 
 

@@ -29,7 +29,7 @@ from rbl.gui.widgets.command_console import HistoryLineEdit, LogPane
 # ─── Per-axis control groupbox ────────────────────────────────────────────────
 
 class AxisControls(QGroupBox):
-    """One self-contained panel for one slit jaw."""
+    """One self-contained panel for one slit."""
 
     def __init__(self, axis_letter: str, get_galil_fn, log_fn, parent=None):
         super().__init__(f"{SC.AXIS_NAMES[axis_letter]}  (axis {axis_letter})", parent)
@@ -404,18 +404,18 @@ class AxisControls(QGroupBox):
 class MotorTab(QWidget):
     """The "Stepper Motors" outer tab."""
 
-    # Jaw geometry for anything that needs to know where the slits are.  The
+    # Slit geometry for anything that needs to know where the slits are.  The
     # beam-position indicator on the log-amp tab reconstructs the beam from
-    # jaw positions plus currents, so it needs this at poll rate.
+    # slit positions plus currents, so it needs this at poll rate.
     #   {"connected": bool,
     #    "zeroed":    bool,                      # all four axes referenced
     #    "positions": {"X+": mm, ...}}           # UNSIGNED distance from centre
-    jaw_state = Signal(dict)
+    slit_state = Signal(dict)
 
     # Raw per-axis poll snapshot (axis letter -> {pos, moving, switches,
     # enabled}, exactly GalilPollWorker.state's shape) plus the all-axes-zeroed
     # flag. Feeds Beamline.ingest_motor_poll, which has richer per-axis fields
-    # (pos_counts, moving, enabled, switches) than jaw_state carries.
+    # (pos_counts, moving, enabled, switches) than slit_state carries.
     raw_state_changed = Signal(dict, bool)
 
     # Emitted when the Galil link drops. Feeds Beamline.motors_disconnected.
@@ -457,22 +457,22 @@ class MotorTab(QWidget):
         conn.addWidget(self.lbl_model, stretch=1)
         left_layout.addWidget(conn_box)
 
-        # ── Slit jaw offset notice ──────────────────────────────────────────
+        # ── Slit offset notice ──────────────────────────────────────────
         offset_box = QGroupBox("Slit Position Reference — Absolute Distance from Beam Centre")
         offset_outer = QVBoxLayout(offset_box)
         offset_outer.setSpacing(4)
 
         notice_lbl = QLabel(
-            "All position inputs and readouts for each slit jaw are in absolute distance "
-            "from the beam centre (mm). When a jaw is at the homed / zeroed position "
+            "All position inputs and readouts for each slit are in absolute distance "
+            "from the beam centre (mm). When a slit is at the homed / zeroed position "
             "(counts = 0), it physically sits 0.2 mm from centre — giving a 0.4 mm total "
-            "gap between opposing jaws. The software automatically accounts for this 0.2 mm "
+            "gap between opposing slits. The software automatically accounts for this 0.2 mm "
             "hardware offset in every conversion.\n\n"
             "➡  Type the true absolute distance you want, NOT a pre-corrected number. "
             "The 0.2 mm offset is applied for you inside the conversion. "
-            "Example: to place a jaw 1.5 mm from beam centre, enter 1.5 mm in the Target "
+            "Example: to place a slit 1.5 mm from beam centre, enter 1.5 mm in the Target "
             "box (not 1.3 mm). The software subtracts the 0.2 mm offset internally, moves "
-            "the jaw so it ends up exactly 1.5 mm from centre, and the Position readout "
+            "the slit so it ends up exactly 1.5 mm from centre, and the Position readout "
             "then shows 1.5 mm. (Under the hood the extra travel past the homed spot is "
             "1.5 − 0.2 = 1.3 mm, but you never type that corrected value yourself.)\n\n"
             "⚠  The 0.2 mm offset is only valid after each axis has been properly zeroed "
@@ -614,7 +614,7 @@ class MotorTab(QWidget):
         self._log_line("# Disconnected.")
         # Positions go stale the moment the link drops; say so rather than
         # letting consumers keep drawing the last known geometry as if live.
-        self.jaw_state.emit({"connected": False, "zeroed": False, "positions": {}})
+        self.slit_state.emit({"connected": False, "zeroed": False, "positions": {}})
         self.motors_disconnected.emit()
 
     def _set_buttons_connected(self, on: bool):
@@ -671,7 +671,7 @@ class MotorTab(QWidget):
         zeroed = all(p.zeroed for p in self.axes.values())
         positions = {SC.AXIS_NAMES[axis]: SC.counts_to_mm(axis, st["pos"])
                      for axis, st in snapshot.items()}
-        self.jaw_state.emit({
+        self.slit_state.emit({
             "connected": True,
             "zeroed":    zeroed,
             "positions": positions,

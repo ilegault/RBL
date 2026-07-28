@@ -140,7 +140,7 @@ class TestSlitConfig:
 
     def test_zero_counts_is_physical_gap_offset(self):
         # counts=0 (after homing) maps to MM_ZERO_OFFSET (0.2 mm), not 0.0.
-        # The jaws sit 0.2 mm from true centre when homed, by design.
+        # The slits sit 0.2 mm from true centre when homed, by design.
         from rbl.config.hardware_config import MM_ZERO_OFFSET
         for axis in AXIS_LETTERS:
             assert counts_to_mm(axis, 0) == pytest.approx(MM_ZERO_OFFSET[axis])
@@ -155,10 +155,10 @@ class TestSlitConfig:
     def test_default_accel_positive(self):
         assert DEFAULT_ACCEL_COUNTS_PER_SEC2 > 0
 
-    def test_jaw_labels_in_channel_map(self):
-        jaws = set(LABJACK_CHANNEL_MAP.values())
+    def test_slit_labels_in_channel_map(self):
+        slits = set(LABJACK_CHANNEL_MAP.values())
         expected = {"X+", "X-", "Y+", "Y-"}
-        assert jaws == expected
+        assert slits == expected
 
 
 # ── LabJackT7 ─────────────────────────────────────────────────────────────────

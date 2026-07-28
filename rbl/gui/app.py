@@ -100,9 +100,9 @@ class MainWindow(QMainWindow):
         self.amp_tab.single_channel_change_requested.connect(self.beamline.set_stream_channel)
 
         # Motor poll data feeds Beamline, which derives MotorState (typed,
-        # richer than jaw_state) and republishes it. The beam-position
+        # richer than slit_state) and republishes it. The beam-position
         # indicator renders from that: the log-amp currents only become
-        # millimetres once you know where the jaws are.
+        # millimetres once you know where the slits are.
         self.motor_tab.raw_state_changed.connect(self.beamline.ingest_motor_poll)
         self.motor_tab.motors_disconnected.connect(self.beamline.motors_disconnected)
         self.beamline.motors_changed.connect(self.current_tab.on_motor_state)

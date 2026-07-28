@@ -14,10 +14,10 @@ FAULT   = "#c0392b"   # out of spec, limit tripped, or a bad reading
 MUTED   = "#bbbbbb"   # disabled controls
 NEUTRAL = "#555555"   # default secondary text / disconnected status
 
-# Jaw colours reused across the beam-position indicator, the log-amp plot
-# legend, and the amplifier tab so the same jaw always reads as the same
+# Slit colours reused across the beam-position indicator, the log-amp plot
+# legend, and the amplifier tab so the same slit always reads as the same
 # colour everywhere it appears.
-JAW_COLORS = {
+SLIT_COLORS = {
     "X+": "#e74c3c",
     "X-": "#3498db",
     "Y+": WARN,

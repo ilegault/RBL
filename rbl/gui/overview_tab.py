@@ -1,6 +1,6 @@
 """
 overview_tab.py
-Read-only summary of every subsystem on one screen: jaw positions, log-amp
+Read-only summary of every subsystem on one screen: slit positions, log-amp
 beam reconstruction, function-generator amplitudes, and HV amplifier output.
 
 Composition only — no hardware access, no unit conversion, no polling of its
@@ -60,18 +60,18 @@ class OverviewTab(QWidget):
         self.beam = BeamPositionIndicator(compact=True)
         body.addWidget(self.beam)
 
-        # ── Jaws, funcgen amplitudes, HV output ─────────────────────────────
+        # ── Slits, funcgen amplitudes, HV output ─────────────────────────────
         right = QVBoxLayout()
         body.addLayout(right, stretch=1)
 
-        jaw_box = QGroupBox("Jaw Positions")
-        jaw_grid = QGridLayout(jaw_box)
-        self.jaws = {}
-        for col, jaw in enumerate(SC.AXIS_LABELS):
-            tile = ValueTile(jaw, "mm")
-            self.jaws[jaw] = tile
-            jaw_grid.addWidget(tile, 0, col)
-        right.addWidget(jaw_box)
+        slit_box = QGroupBox("Slit Positions")
+        slit_grid = QGridLayout(slit_box)
+        self.slits = {}
+        for col, slit in enumerate(SC.AXIS_LABELS):
+            tile = ValueTile(slit, "mm")
+            self.slits[slit] = tile
+            slit_grid.addWidget(tile, 0, col)
+        right.addWidget(slit_box)
 
         gen_box = QGroupBox("Function Generator Amplitude")
         gen_grid = QGridLayout(gen_box)
@@ -86,7 +86,7 @@ class OverviewTab(QWidget):
         hv_grid = QGridLayout(hv_box)
         self.hv = {}
         for row, amp in enumerate(SC.AMP_LABELS):
-            spark = Sparkline(amp, theme.JAW_COLORS[amp])
+            spark = Sparkline(amp, theme.SLIT_COLORS[amp])
             self.hv[amp] = spark
             hv_grid.addWidget(spark, row, 0)
         right.addWidget(hv_box)
@@ -145,14 +145,14 @@ class OverviewTab(QWidget):
             return
 
         motors = self._motors
-        for jaw, tile in self.jaws.items():
-            axis = motors.axes.get(jaw)
+        for slit, tile in self.slits.items():
+            axis = motors.axes.get(slit)
             tile.set(axis.pos_mm if axis is not None else None, stale=not motors.connected)
 
-        self.beam.set_jaw_state({
+        self.beam.set_slit_state({
             "connected": motors.connected,
             "zeroed": motors.zeroed,
-            "positions": {jaw: axis.pos_mm for jaw, axis in motors.axes.items()},
+            "positions": {slit: axis.pos_mm for slit, axis in motors.axes.items()},
         })
         self.beam.set_currents(dict(self._logamps.currents))
 
