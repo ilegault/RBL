@@ -14,6 +14,14 @@ FAULT   = "#c0392b"   # out of spec, limit tripped, or a bad reading
 MUTED   = "#bbbbbb"   # disabled controls
 NEUTRAL = "#555555"   # default secondary text / disconnected status
 
+# Chrome for the scaled readouts (mini bar charts, sparklines): the groove a
+# value sits in, its outline, tick marks, and the marker drawn at a setpoint.
+# Deliberately low-contrast — the value is the subject, the scale is context.
+TRACK      = "#d4d4d4"
+TRACK_EDGE = "#8a8a8a"
+TICK       = "#7a7a7a"
+MARKER     = "#1a1a1a"
+
 # Slit colours reused across the beam-position indicator, the log-amp plot
 # legend, and the amplifier tab so the same slit always reads as the same
 # colour everywhere it appears.

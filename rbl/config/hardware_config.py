@@ -55,6 +55,19 @@ MM_ZERO_OFFSET: dict[str, float] = {
     "D": 0.2,
 }
 
+# Full-scale span for the Overview tab's slit position bar charts and target
+# entry, in absolute mm from beam centre. A DISPLAY convention only — the
+# Galil's soft limits (BL/FL, read back on connect) remain the authority on how
+# far a slit may actually travel, and a command outside them is refused by the
+# controller, not by this number.
+SLIT_DISPLAY_MIN_MM = 0.0
+SLIT_DISPLAY_MAX_MM = 10.0
+
+# Step sizes offered for nudging a slit from the Overview tab (mm).
+SLIT_STEP_CHOICES_MM = [0.01, 0.05, 0.1, 0.5, 1.0]
+SLIT_DEFAULT_STEP_MM = 0.1
+
+
 # --- Motion parameters (per spec email) --------------------------------------
 DEFAULT_SPEED_COUNTS_PER_SEC   = 1000
 DEFAULT_ACCEL_COUNTS_PER_SEC2  = 25600
@@ -106,6 +119,11 @@ def mm_per_sec_to_cps(axis_letter: str, mm_per_sec: float) -> int:
 # --- Log-amp (2HA032380, positive polarity, 0-6 V) ---------------------------
 LOG_AMP_V_AT_1NA = 0.0   # V output at 1 nA input
 LOG_AMP_V_AT_1MA = 6.0   # V output at 1 mA input
+
+# The calibrated input span, in Amps: six decades, which is why anything
+# plotting a log-amp current against a scale has to do it by decade.
+LOG_AMP_MIN_A = 1e-9
+LOG_AMP_MAX_A = 1e-3
 
 # LabJack T7 analog input -> human-readable slit label
 LABJACK_CHANNEL_MAP = {
