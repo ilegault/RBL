@@ -92,6 +92,13 @@ class AmpChannelSnapshot:
     one channel and index i of another are the same instant to within a scan.
     Comparing two channels sampled any other way would show a phase that is
     an artefact of the resampling.
+
+    `wave_kv` spans `wave_span_s` seconds — NOT a fixed stream window. The
+    span is chosen per pair to hold a whole number of cycles of the measured
+    drive (`wave_freq_hz`, NaN when no repeating waveform was found, in which
+    case the span is just the raw window). A viewer that wants a time axis, or
+    wants to say how much of the waveform it is showing, has to be told: the
+    samples alone no longer imply 0.1 s.
     """
     peak_kv: float
     pkpk_kv: float
@@ -100,6 +107,8 @@ class AmpChannelSnapshot:
     raw_v: float
     raw_i: float
     wave_kv: tuple = ()
+    wave_span_s: float = float("nan")
+    wave_freq_hz: float = float("nan")
 
 
 @dataclass(frozen=True)

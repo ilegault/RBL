@@ -30,7 +30,11 @@ Scope of the controls here:
 The HV amplifiers stay read-only — nothing on this screen commands them. Their
 panels are grouped by axis with each pair's waveforms drawn over each other,
 because the failure worth catching there is a RELATIONSHIP (a pair that has
-stopped being mirror images), which no single channel's readout can show.
+stopped being mirror images), which no single channel's readout can show. Each
+pair's trace window is sized to the drive that pair is MEASURED to be running
+(see Beamline._cycle_traces), not to the 0.1 s stream window, so the picture
+holds a couple of readable cycles at any raster rate; the caption under it
+reads that window back.
 
 Setpoints are shared, not copied: the boxes here and the Function Generators
 tab's panels are two views on one FuncGenSetpoints object, so neither screen
@@ -58,6 +62,23 @@ from rbl.gui.widgets.slit_control import SlitControl
 from rbl.state.beamline import Beamline
 from rbl.state.setpoints import AXIS_CHANNELS, AXIS_GENERATOR
 from rbl.state.snapshots import MotorState, LogAmpState, AmpState, FuncGenState
+
+
+def _format_span(seconds: float) -> str:
+    """A trace window in the unit a person would say it in."""
+    if seconds >= 1.0:
+        return f"{seconds:.2f} s"
+    if seconds >= 1e-3:
+        return f"{seconds * 1e3:.3g} ms"
+    return f"{seconds * 1e6:.3g} µs"
+
+
+def _format_freq(hz: float) -> str:
+    if hz >= 1e6:
+        return f"{hz / 1e6:.3g} MHz"
+    if hz >= 1e3:
+        return f"{hz / 1e3:.3g} kHz"
+    return f"{hz:.3g} Hz"
 
 
 class OverviewTab(QWidget):
@@ -317,6 +338,11 @@ class OverviewTab(QWidget):
         auto-scaled traces in a 2x2 grid show four plausible-looking waves and
         hide the one fault — the two units' clocks drifting apart — that
         nothing else on this screen would catch.
+
+        Each panel's x span comes from the pair's own measured period, so the
+        two panels are free to be at different time scales — which they must
+        be, since a raster runs its fast and slow axes decades apart. The
+        caption is what keeps that honest.
         """
         box = QGroupBox("HV Amplifier Output")
         lay = QVBoxLayout(box)
@@ -325,6 +351,7 @@ class OverviewTab(QWidget):
         self.hv_bars: dict[str, MiniBar] = {}
         self.hv_traces: dict[str, PairTrace] = {}
         self.hv_phase: dict[str, QLabel] = {}
+        self.hv_window: dict[str, QLabel] = {}
         for axis in ("X", "Y"):
             plus, minus = f"{axis}+", f"{axis}-"
             panel = QGroupBox(f"{axis}  —  {plus} / {minus}")
@@ -343,20 +370,36 @@ class OverviewTab(QWidget):
 
             trace = PairTrace(theme.SLIT_COLORS[plus], theme.SLIT_COLORS[minus])
             trace.setToolTip(
-                f"{plus} and {minus} deflection waveforms over one stream "
-                "window (0.1 s), drawn on one shared scale.\n"
+                f"{plus} and {minus} deflection waveforms, drawn on one shared "
+                "scale over a window sized to the measured drive — a couple of "
+                "cycles of whatever this pair is actually doing, triggered on "
+                "the rising edge so it holds still.\n"
                 "Driven push-pull they are mirror images crossing at zero. "
                 "Two traces sliding past each other mean the generators are "
-                "not sharing a timebase."
+                "not sharing a timebase.\n"
+                "The caption below reads back the window it settled on; "
+                "'no cycle found' means one raw stream window, unmeasured."
             )
             self.hv_traces[axis] = trace
             cell.addWidget(trace, stretch=1)
+
+            # Window on the left, phase on the right: the caption says WHAT is
+            # being shown, and a correlation is worth nothing until you know
+            # the trace under it holds a whole cycle.
+            foot = QHBoxLayout()
+            foot.setSpacing(6)
+            win = QLabel("—")
+            win.setStyleSheet(f"color: {theme.NEUTRAL}; font-size: 9px;")
+            self.hv_window[axis] = win
+            foot.addWidget(win)
+            foot.addStretch(1)
 
             lbl = QLabel("—")
             lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
             lbl.setStyleSheet(f"color: {theme.NEUTRAL}; font-size: 9px;")
             self.hv_phase[axis] = lbl
-            cell.addWidget(lbl)
+            foot.addWidget(lbl)
+            cell.addLayout(foot)
 
             lay.addWidget(panel)
         return box
@@ -684,9 +727,36 @@ class OverviewTab(QWidget):
             wave_p = plus.wave_kv if plus is not None else ()
             wave_m = minus.wave_kv if minus is not None else ()
             trace.set_pair(wave_p, wave_m)
+            # Both members of a pair are windowed together, so either one
+            # carries the answer — take whichever actually streamed.
+            timed = next((c for c in (plus, minus)
+                          if c is not None and not math.isnan(c.wave_span_s)), None)
+            self._redraw_window_label(axis, timed, amps.connected)
             self._redraw_phase_label(axis, wave_p, wave_m, amps.connected)
 
         self.pills["amps"].setStyleSheet(theme.pill(amps.connected))
+
+    def _redraw_window_label(self, axis: str, channel, connected: bool):
+        """Say what time window the trace above it is showing.
+
+        The window is no longer a fixed 0.1 s — it is however long two cycles
+        of the measured drive take — so the trace on its own gives no sense of
+        scale, and two panels showing the same-looking wave can be a decade
+        apart in frequency. This is the axis for both of them.
+        """
+        lbl = self.hv_window[axis]
+        if not connected or channel is None or not channel.wave_span_s > 0.0:
+            lbl.setText("—")
+            return
+        span, freq = channel.wave_span_s, channel.wave_freq_hz
+        if math.isnan(freq) or freq <= 0.0:
+            # Nothing periodic to lock onto: this is a raw window, and saying
+            # so is the difference between "undriven" and "measured at 0 Hz".
+            lbl.setText(f"{_format_span(span)} raw window — no cycle found")
+            return
+        cycles = span * freq
+        lbl.setText(f"{cycles:.0f} cycles @ {_format_freq(freq)}  ·  "
+                    f"{_format_span(span)}/window")
 
     def _redraw_phase_label(self, axis: str, wave_p, wave_m, connected: bool):
         """Put a number on what the overlaid traces show.
