@@ -48,13 +48,14 @@ class _ApertureView(QWidget):
         self.ratio_y   = float("nan")
         # The drawing is resolution-independent (one mm-per-pixel scale,
         # computed from whatever size it gets), so a smaller floor costs
-        # detail, never correctness. In compact mode the picture takes
-        # whatever the square panel has left after the controls, which is why
-        # the floor here only has to be "still legible".
+        # detail, never correctness. This is the one place that "square" is
+        # actually enforced — the aperture picture is the thing being read,
+        # so IT gets a square floor, regardless of what the panel around it
+        # (title, controls, readouts) ends up shaped like.
         if compact:
-            self.setMinimumSize(150, 130)
+            self.setMinimumSize(200, 300)
         else:
-            self.setMinimumSize(190, 190)
+            self.setMinimumSize(250, 350)
         self.setSizePolicy(QSizePolicy.Policy.Expanding,
                            QSizePolicy.Policy.Expanding)
 
@@ -340,18 +341,14 @@ class BeamPositionIndicator(QWidget):
 
     ``compact`` shrinks the panel for embedding in the Overview tab, where
     screen real estate is shared with several other subsystems and more are
-    still to come. It caps the panel's HEIGHT as well as its width: left to
-    grow, the aperture picture happily eats a whole column, and on a screen
-    whose job is "every subsystem at once" no single subsystem gets to do
-    that. Everything stays on screen — the picture is simply drawn smaller.
+    still to come. It only floors the panel's size — it does not cap it and
+    does not force the panel itself into a square. The square-aperture idea
+    lives on ``_ApertureView`` alone (the graph/frame of the slits, which is
+    the thing actually being read); the title, mode controls, and readout
+    labels around it are free to make the outer panel whatever rectangle
+    they need, and the whole thing can grow past the floor when its
+    container has room to give it.
     """
-
-    # Compact mode is a SQUARE panel. The aperture picture inside it is the
-    # thing being read, and a square frame gives the drawing the most usable
-    # area for a given footprint — a tall narrow frame wastes most of its
-    # height on a picture that is scale-limited by its width, and a short wide
-    # one wastes its width the same way.
-    _COMPACT_SIDE = 300
 
     def __init__(self, parent=None, compact: bool = False):
         super().__init__(parent)
@@ -362,10 +359,13 @@ class BeamPositionIndicator(QWidget):
         self._compact  = compact
 
         if compact:
-            self.setFixedSize(self._COMPACT_SIDE, self._COMPACT_SIDE)
-            # Fixed both ways: the panel neither grows into its column's slack
-            # nor shrinks out of square when a neighbour wants room.
-            self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+            # No fixed/minimum size set here on purpose: the panel's floor
+            # falls out of its children's own minimums (title, combo, form
+            # rows, the aperture view's square floor, readout labels) via the
+            # layout below. Expanding lets it grow past that floor when the
+            # Overview tab's layout has slack to give it.
+            self.setSizePolicy(QSizePolicy.Policy.Expanding,
+                               QSizePolicy.Policy.Expanding)
         else:
             self.setFixedWidth(288)
             self.setSizePolicy(QSizePolicy.Policy.Fixed,
