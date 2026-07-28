@@ -27,6 +27,7 @@ from rbl.hardware.labjack_driver import LabJackT7
 from rbl.hardware.labjack_stream_worker import LabJackStreamWorker
 from rbl.hardware.galil_driver import GalilController
 from rbl.hardware.funcgen_safety import channel_peak_volts, PEAK_MAX_VOLTS
+from rbl.state.setpoints import FuncGenSetpoints
 from rbl.state.snapshots import (
     AxisSnapshot, MotorState, ChannelSnapshot, ChannelParams, FuncGenState,
     LogAmpState, AmpChannelSnapshot, AmpState,
@@ -84,6 +85,12 @@ class Beamline(QObject):
         # string at construction time, unlike Galil/LabJack).
         self.dg_a = None
         self.dg_b = None
+
+        # The four channels' commanded parameters, shared by every screen that
+        # edits them (Function Generators per channel, Overview per axis). One
+        # model, so the two can never show different setpoints for the same
+        # channel and an Apply from either cannot silently overwrite the other.
+        self.funcgen_setpoints = FuncGenSetpoints(self)
 
         # Last-resort safety net: if the process is torn down without a clean
         # closeEvent (e.g. an unhandled exit), still stop the LabJack stream

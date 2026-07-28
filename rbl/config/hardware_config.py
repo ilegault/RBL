@@ -63,8 +63,9 @@ MM_ZERO_OFFSET: dict[str, float] = {
 SLIT_DISPLAY_MIN_MM = 0.0
 SLIT_DISPLAY_MAX_MM = 10.0
 
-# Step sizes offered for nudging a slit from the Overview tab (mm).
-SLIT_STEP_CHOICES_MM = [0.01, 0.05, 0.1, 0.5, 1.0]
+# Increment the Overview target spinbox's own arrow keys apply (mm). The
+# Overview is target-only — there are no separate step buttons — so this sizes
+# nothing but the spinbox's own stepping.
 SLIT_DEFAULT_STEP_MM = 0.1
 
 

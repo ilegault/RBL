@@ -16,7 +16,7 @@ import logging
 
 log = logging.getLogger(__name__)
 
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout,
@@ -30,6 +30,7 @@ from rbl.hardware.funcgen_safety import (
     channel_peak_volts, PEAK_MAX_VOLTS, PEAK_WARN_VOLTS, _AMP_GAIN, CHANNEL_ROLE,
 )
 from rbl.config.persistence import load_config as _load_config, save_config as _save_config
+from rbl.state.setpoints import START_PHASE_DEFAULTS
 from rbl.state.snapshots import ChannelParams
 from rbl.gui import theme
 from rbl.gui.widgets.command_console import LogPane
@@ -42,10 +43,19 @@ class ChannelPanel(QGroupBox):
 
     SHAPES = ["Sine", "Triangle", "Square", "Pulse", "DC"]
 
+    # Any control on this panel moved. The owner turns that into a write to the
+    # shared FuncGenSetpoints, which is what keeps this panel and the Overview
+    # tab's per-axis boxes showing the same numbers.
+    edited = Signal()
+
     def __init__(self, label: str, parent=None, phase_default: float = 0.0):
         super().__init__(label, parent)
         self._label = label
         self._phase_default = phase_default
+        # Suppresses `edited` while a setpoint sync is writing INTO the panel,
+        # so an update arriving from the Overview tab is not echoed straight
+        # back out as though the operator had typed it here.
+        self._syncing = False
         self._setup_ui()
 
     def _setup_ui(self):
@@ -182,7 +192,19 @@ class ChannelPanel(QGroupBox):
         self.spn_offset.valueChanged.connect(self._update_hv_label)
         self._on_shape_changed(self.cbo_shape.currentText())
 
+        # Every input feeds the one `edited` signal, so the owner has a single
+        # place to push this panel's state into the shared setpoint model.
+        self.cbo_shape.currentTextChanged.connect(self._on_edited)
+        self.le_load.textChanged.connect(self._on_edited)
+        self.btn_output.toggled.connect(self._on_edited)
+        for spin in (self.spn_freq, self.spn_amp, self.spn_offset, self.spn_phase):
+            spin.valueChanged.connect(self._on_edited)
+
         self.set_connected(False)
+
+    def _on_edited(self, *_):
+        if not self._syncing:
+            self.edited.emit()
 
     def _on_output_toggled(self, checked: bool):
         self.btn_output.setText("Output ON" if checked else "Output OFF")
@@ -252,6 +274,35 @@ class ChannelPanel(QGroupBox):
             "load":        self.le_load.text().strip() or "INFinity",
             "output":      self.btn_output.isChecked(),
         }
+
+    def channel_params(self) -> ChannelParams:
+        """This panel's state as a setpoint, for the shared model."""
+        p = self.get_params()
+        return ChannelParams(
+            shape=p["shape"], freq_hz=p["freq"], amp_vpp=p["amp"],
+            offset_v=p["offset"], phase_deg=p["phase"],
+            start_phase_deg=p["start_phase"], load=p["load"],
+            output_on=p["output"],
+        )
+
+    def apply_params(self, params: ChannelParams):
+        """Render a setpoint into the controls without emitting `edited`.
+
+        This is the inbound half of the two-way sync: an edit made on the
+        Overview tab lands here. It is a sync, not an edit — echoing it back
+        out would bounce the value between the two screens forever.
+        """
+        self._syncing = True
+        try:
+            self.cbo_shape.setCurrentText(params.shape)
+            self.spn_freq.setValue(params.freq_hz)
+            self.spn_amp.setValue(params.amp_vpp)
+            self.spn_offset.setValue(params.offset_v)
+            self.spn_phase.setValue(params.phase_deg)
+            self.le_load.setText(params.load)
+            self.btn_output.setChecked(params.output_on)
+        finally:
+            self._syncing = False
 
     def update_readback(self, state: dict):
         if "error" in state:
@@ -438,19 +489,31 @@ class FuncGenTab(QWidget):
         # drive.  With 0° on X+ and 180° on X-, when the X+ plate is at its
         # positive peak the X- plate is at its negative peak, giving the full
         # differential swing without a DC offset on either plate.
-        _START_PHASE_DEFAULTS = {"A1": 0.0, "A2": 180.0, "B1": 0.0, "B2": 180.0}
         positions = {"A1": (0, 0), "A2": (0, 1), "B1": (1, 0), "B2": (1, 1)}
         for key, title in panel_labels.items():
-            p = ChannelPanel(title, self, phase_default=_START_PHASE_DEFAULTS[key])
+            p = ChannelPanel(title, self, phase_default=START_PHASE_DEFAULTS[key])
             gen_letter = key[0]
             ch_num     = int(key[1])
             p.btn_apply.clicked.connect(
                 lambda _, g=gen_letter, c=ch_num: self._apply_channel(g, c)
             )
+            p.edited.connect(lambda k=key: self._on_panel_edited(k))
             self.panels[key] = p
             r, col = positions[key]
             grid.addWidget(p, r, col)
         left_layout.addLayout(grid, stretch=1)
+
+        # ── Shared setpoints: this tab and the Overview edit one model ────
+        #
+        # Both directions are wired here. A panel edit writes into the model
+        # (which only signals on a real change), and a model change — whoever
+        # made it — is rendered back into the panel. Without this the two
+        # screens would hold independent copies and an Apply from either would
+        # quietly overwrite the other's numbers.
+        self._setpoints = beamline.funcgen_setpoints
+        for key, panel in self.panels.items():
+            panel.apply_params(self._setpoints.get(key))
+        self._setpoints.changed.connect(self._on_setpoint_changed)
 
         # ── Apply All ─────────────────────────────────────────────────────
         apply_all_row = QHBoxLayout()
@@ -784,6 +847,26 @@ class FuncGenTab(QWidget):
             self.lbl_timebase.setStyleSheet(
                 "color: #333; font-weight: bold; font-size: 10px; padding: 2px;"
             )
+
+    # ---- Shared setpoints ----------------------------------------------------
+
+    def _on_panel_edited(self, key: str):
+        """A control on one panel moved — push it into the shared model."""
+        params = self.panels[key].channel_params()
+        self._setpoints.update(
+            key, shape=params.shape, freq_hz=params.freq_hz,
+            amp_vpp=params.amp_vpp, offset_v=params.offset_v,
+            phase_deg=params.phase_deg, start_phase_deg=params.start_phase_deg,
+            load=params.load, output_on=params.output_on,
+        )
+
+    def _on_setpoint_changed(self, key: str, params: ChannelParams):
+        """The shared model moved — render it, wherever the edit came from.
+
+        Re-rendering a panel's own edit back into itself is a no-op (the
+        controls already hold those values), so this needs no source filter.
+        """
+        self.panels[key].apply_params(params)
 
     # ---- Apply helpers -------------------------------------------------------
     #

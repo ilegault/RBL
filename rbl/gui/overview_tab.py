@@ -1,26 +1,38 @@
 """
 overview_tab.py
 Every subsystem on one screen: slit positions (with the controls to move
-them), log-amp beam reconstruction, function-generator amplitudes, and HV
-amplifier output.
+them), log-amp beam reconstruction, the raster drive (with the controls to set
+it), and HV amplifier output.
 
 Laid out after the Michigan accelerator overview screen: each live value sits
 in a scaled mini bar chart rather than standing alone as digits, so the screen
-answers "is this where it should be?" at a glance, and the slit controls sit
-directly under the slit bars they act on — the operator adjusts the beam and
-watches the same track it is drawn on.
+answers "is this where it should be?" at a glance, and each control sits
+directly on the bar it acts on — the operator adjusts a value and watches the
+same track it is drawn on.
 
 Composition only — no hardware access, no unit conversion, no polling of its
 own. Every value here already exists somewhere else in the app (Beamline's
-typed snapshots), and every command goes out through Beamline's command
-surface, which is where the interlocks live. This tab never touches a driver.
+typed snapshots and the shared FuncGenSetpoints), and every command goes out
+through Beamline's command surface, which is where the interlocks live. This
+tab never touches a driver.
 
-Scope of the controls here: SLIT MOTION ONLY (move, step, stop). The function
-generators and HV amplifiers stay read-only on this screen — raising a voltage
-is deliberately a trip to the Function Generators tab, where the full
-interlock context is on screen.
+Scope of the controls here:
+  - SLIT MOTION: absolute target + Move, per slit. No step size, no jog, no
+    stop — relative motion and the abort live on the Stepper Motors tab, which
+    has the limit-switch context that makes them safe.
+  - RASTER DRIVE: amplitude and frequency per AXIS, plus output intent and one
+    Apply. Per axis, not per channel, because X+/X- are a push-pull pair that
+    must share both numbers; the 0 deg / 180 deg phase relationship and the
+    triangle shape are held for you and are not editable here. Per-channel
+    editing, offset, shape, load and the 10 MHz timebase lock stay on the
+    Function Generators tab.
+The HV amplifiers stay read-only — nothing on this screen commands them.
+
+Setpoints are shared, not copied: the boxes here and the Function Generators
+tab's panels are two views on one FuncGenSetpoints object, so neither screen
+can show a stale value or silently overwrite what the other has typed.
 """
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel,
     QPushButton, QMessageBox,
@@ -28,13 +40,16 @@ from PySide6.QtWidgets import (
 
 from rbl.config import hardware_config as SC
 from rbl.hardware.current_monitor import format_current
-from rbl.hardware.funcgen_driver import MAX_AMP_VPP
-from rbl.hardware.funcgen_safety import CHANNEL_ROLE
+from rbl.hardware.funcgen_safety import (
+    CHANNEL_ROLE, peak_status, PEAK_WARN_VOLTS, PEAK_MAX_VOLTS,
+)
 from rbl.gui import theme
+from rbl.gui.widgets.axis_drive import AxisDriveControl
 from rbl.gui.widgets.beam_indicator import BeamPositionIndicator
 from rbl.gui.widgets.mini import MiniBar, Sparkline
 from rbl.gui.widgets.slit_control import SlitControl
 from rbl.state.beamline import Beamline
+from rbl.state.setpoints import AXIS_CHANNELS, AXIS_GENERATOR
 from rbl.state.snapshots import MotorState, LogAmpState, AmpState, FuncGenState
 
 
@@ -44,6 +59,12 @@ class OverviewTab(QWidget):
 
     _STANDING_MESSAGE = ("Positions are absolute distance from beam centre; "
                          "the 0.2 mm home offset is applied for you.")
+
+    _STANDING_DRIVE_MESSAGE = (
+        "Triangle, 0 V offset, 0°/180° push-pull. Two separate units drift "
+        "apart on their own clocks — lock X to Y with the 10 MHz timebase "
+        "option on the Function Generators tab."
+    )
 
     def __init__(self, beamline: Beamline, parent=None):
         super().__init__(parent)
@@ -65,9 +86,15 @@ class OverviewTab(QWidget):
         # up, instead of fighting the operator's typing every 100 ms.
         self._motors_were_connected = False
 
-        # Redraws left before the motion line reverts from the operator's last
-        # command note to the standing message.
+        # Redraws left before each status line reverts from the operator's last
+        # command note to its standing message.
         self._note_frames = 0
+        self._drive_note_frames = 0
+
+        # The shared setpoint model (also edited by the Function Generators
+        # tab). This tab owns no setpoint of its own — the boxes below are a
+        # view on this object.
+        self._setpoints = beamline.funcgen_setpoints
 
         outer = QVBoxLayout(self)
 
@@ -76,16 +103,23 @@ class OverviewTab(QWidget):
         body = QHBoxLayout()
         outer.addLayout(body, stretch=1)
 
+        # Every column is pinned to the top rather than sharing the leftover
+        # height. Three panels of different natural heights, each stretched to
+        # match the tallest, is three frames with dead space inside them; this
+        # way the slack collects once, at the bottom, which is also where the
+        # next subsystem will go.
+        top = Qt.AlignmentFlag.AlignTop
+
         # BeamPositionIndicator brings its own titled group box, so it goes in
         # unwrapped — a second frame around it would just nest two identical
         # titles.
         self.beam = BeamPositionIndicator(compact=True)
-        body.addWidget(self.beam)
-        body.addWidget(self._build_slit_box(), stretch=1)
+        body.addWidget(self.beam, alignment=top)
+        body.addWidget(self._build_slit_box(), stretch=1, alignment=top)
 
         right = QVBoxLayout()
-        right.addWidget(self._build_funcgen_box())
-        right.addWidget(self._build_hv_box())
+        right.addWidget(self._build_funcgen_box(), alignment=top)
+        right.addWidget(self._build_hv_box(), alignment=top)
         right.addStretch(1)
         body.addLayout(right, stretch=1)
 
@@ -94,6 +128,12 @@ class OverviewTab(QWidget):
         beamline.amps_changed.connect(self._on_amps)
         beamline.funcgens_changed.connect(self._on_funcgens)
         beamline.command_failed.connect(self._on_failure)
+
+        # Setpoint edits are applied immediately, not on the redraw timer: they
+        # are the operator's own keystrokes and must never lag behind them.
+        self._setpoints.changed.connect(self._on_setpoint_changed)
+        for axis in self.drives:
+            self._sync_axis_from_setpoints(axis)
 
         self._redraw_timer = QTimer(self)
         self._redraw_timer.setInterval(self._REDRAW_INTERVAL_MS)
@@ -144,23 +184,6 @@ class OverviewTab(QWidget):
         self.lbl_motion.setStyleSheet(theme.status_label(theme.NEUTRAL, bold=False))
         lay.addWidget(self.lbl_motion)
 
-        # The controls keep their natural height at the top of the column; the
-        # slack goes here so STOP stays pinned at the bottom edge, where a hand
-        # reaching for it lands.
-        lay.addStretch(1)
-
-        self.btn_stop = QPushButton("STOP ALL SLIT MOTION")
-        self.btn_stop.setMinimumHeight(38)
-        self.btn_stop.setStyleSheet(
-            "QPushButton { background:#aa0000; color:white; font-size:14px;"
-            f" font-weight:bold; border:2px solid {theme.FAULT}; }}"
-            f"QPushButton:hover {{ background:{theme.FAULT}; }}"
-            "QPushButton:disabled { background:#c0c0c0; color:#888;"
-            " border:2px solid #a0a0a0; }"
-        )
-        self.btn_stop.clicked.connect(self._on_stop_clicked)
-        self.btn_stop.setEnabled(False)
-        lay.addWidget(self.btn_stop)
         return box
 
     def _build_current_box(self) -> QGroupBox:
@@ -184,15 +207,49 @@ class OverviewTab(QWidget):
         return box
 
     def _build_funcgen_box(self) -> QGroupBox:
-        box = QGroupBox("Function Generator Amplitude")
-        grid = QGridLayout(box)
-        self.amps = {}
-        for i, key in enumerate(CHANNEL_ROLE):
-            role = CHANNEL_ROLE[key]
-            bar = MiniBar(f"{key} ({role})", 0.0, MAX_AMP_VPP, unit="Vpp",
-                          color=theme.SLIT_COLORS.get(role))
-            self.amps[key] = bar
-            grid.addWidget(bar, i // 2, i % 2)
+        """Raster drive: one amplitude and one frequency per steering axis.
+
+        Per axis rather than per channel because X+ and X- are one push-pull
+        pair — driving them at different amplitudes or frequencies does not
+        steer the beam differently, it just stops the pair being differential.
+        The 0 deg / 180 deg phase split that makes it differential is held
+        automatically and is deliberately not editable here.
+        """
+        box = QGroupBox("Raster Drive — Function Generators")
+        lay = QVBoxLayout(box)
+        lay.setSpacing(4)
+
+        self.drives: dict[str, AxisDriveControl] = {}
+        for axis in AXIS_CHANNELS:
+            ctrl = AxisDriveControl(axis)
+            ctrl.params_edited.connect(self._on_axis_params_edited)
+            ctrl.output_toggled.connect(self._on_axis_output_toggled)
+            self.drives[axis] = ctrl
+            lay.addWidget(ctrl)
+
+        self.btn_apply_all = QPushButton("Apply All — X && Y")
+        self.btn_apply_all.setMinimumHeight(34)
+        self.btn_apply_all.setStyleSheet(
+            "QPushButton { background:#004e8c; color:white; font-weight:bold;"
+            " font-size:13px; }"
+            "QPushButton:hover { background:#0063b1; }"
+            "QPushButton:disabled { background:#c0c0c0; color:#888; }"
+        )
+        self.btn_apply_all.setToolTip(
+            "Configure all four channels with outputs untouched, then enable "
+            "the outputs back-to-back, then phase-synchronise each unit — the "
+            "same sequence as the Function Generators tab's Apply All, and the "
+            "only ordering that brings the raster up aligned."
+        )
+        self.btn_apply_all.setEnabled(False)
+        self.btn_apply_all.clicked.connect(self._on_apply_all)
+        lay.addWidget(self.btn_apply_all)
+
+        self.lbl_drive_note = QLabel(self._STANDING_DRIVE_MESSAGE)
+        self.lbl_drive_note.setWordWrap(True)
+        self.lbl_drive_note.setStyleSheet(
+            theme.status_label(theme.NEUTRAL, bold=False) + "font-size: 10px;")
+        lay.addWidget(self.lbl_drive_note)
         return box
 
     def _build_hv_box(self) -> QGroupBox:
@@ -267,10 +324,82 @@ class OverviewTab(QWidget):
         )
         return answer == QMessageBox.StandardButton.Yes
 
-    def _on_stop_clicked(self):
-        """Abort all slit motion. No confirmation — a stop must be instant."""
-        self.beamline.emergency_stop()
-        self._note("STOP sent — all slit motion aborted", theme.FAULT)
+    # ---- Raster drive: setpoint edits and Apply --------------------------------
+    #
+    # Editing a box changes the SHARED setpoint and nothing else; nothing
+    # reaches an instrument until Apply. That is the Function Generators tab's
+    # behaviour too, and keeping it identical is the point — an operator who
+    # learned "typing is safe, Apply is the commit" on one screen must not
+    # discover the other screen energises plates on a keystroke.
+
+    def _on_axis_params_edited(self, axis: str, amp_vpp: float, freq_hz: float):
+        self._setpoints.update_axis(axis, amp_vpp=amp_vpp, freq_hz=freq_hz)
+
+    def _on_axis_output_toggled(self, axis: str, on: bool):
+        self._setpoints.update_axis(axis, output_on=on)
+
+    def _on_setpoint_changed(self, key: str, params):
+        """A setpoint moved — here or on the Function Generators tab."""
+        for axis, keys in AXIS_CHANNELS.items():
+            if key in keys:
+                self._sync_axis_from_setpoints(axis)
+
+    def _sync_axis_from_setpoints(self, axis: str):
+        params = self._setpoints.axis_params(axis)
+        self.drives[axis].set_setpoint(
+            params.amp_vpp, params.freq_hz, params.output_on,
+            matched=self._setpoints.axis_matched(axis),
+        )
+
+    def _on_apply_all(self):
+        """Push every channel's setpoint through Beamline's Apply-All sequence.
+
+        Beamline does the configure -> enable outputs -> phase-synchronise
+        ordering and enforces the ±5 V combined-peak interlock; what is left
+        here is the advisory tier Beamline has no way to ask about — a peak
+        past the warn threshold but under the ceiling gets one confirmation.
+        """
+        params_by_key = self._setpoints.all()
+
+        warned = []
+        for key, params in params_by_key.items():
+            if not self._funcgens.connected.get(key[0], False):
+                continue
+            status, peak = peak_status(params.shape, params.amp_vpp, params.offset_v)
+            if status == "warn":
+                warned.append((CHANNEL_ROLE[key], peak))
+        if warned and not self._confirm_high_peak(warned):
+            self._note_drive("Apply cancelled at the high-peak confirmation")
+            return
+
+        if self.beamline.apply_all_channels(params_by_key):
+            self._note_drive("Applied — outputs enabled together, phase synchronised",
+                             theme.OK)
+
+    def _confirm_high_peak(self, warned: list) -> bool:
+        """Ask before applying a peak above the advisory threshold.
+
+        Its own method so tests can drive both answers without a live dialog,
+        exactly as _confirm_unzeroed_move does for slit motion.
+        """
+        lines = "\n".join(f"  {slit}: peak {peak:.4g} V" for slit, peak in warned)
+        answer = QMessageBox.question(
+            self, "High peak voltage",
+            f"These channels are above the {PEAK_WARN_VOLTS:.0f} V advisory "
+            f"threshold (hard ceiling {PEAK_MAX_VOLTS:.0f} V):\n\n{lines}\n\n"
+            f"Apply anyway?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return answer == QMessageBox.StandardButton.Yes
+
+    def _note_drive(self, text: str, role: str = theme.NEUTRAL):
+        """Show the result of the operator's last Apply, briefly, then let the
+        standing drive message come back (see _redraw_funcgens)."""
+        self.lbl_drive_note.setText(text)
+        self.lbl_drive_note.setStyleSheet(
+            theme.status_label(role, bold=False) + "font-size: 10px;")
+        self._drive_note_frames = self._NOTE_FRAMES
 
     def _note(self, text: str, role: str = theme.NEUTRAL):
         """Show the operator's own last action, briefly outranking the
@@ -330,7 +459,6 @@ class OverviewTab(QWidget):
                 ctrl.sync_target_to_position()
         self._motors_were_connected = motors.connected
 
-        self.btn_stop.setEnabled(motors.connected)
         self._redraw_gaps()
         self._redraw_motion_message()
         self.pills["motors"].setStyleSheet(theme.pill(motors.connected))
@@ -381,18 +509,31 @@ class OverviewTab(QWidget):
         self.pills["logamps"].setStyleSheet(theme.pill(logamps.connected))
 
     def _redraw_funcgens(self):
+        """Readback only — the setpoint boxes are driven by FuncGenSetpoints.
+
+        Keeping the two apart is what stops a 10 Hz redraw from overwriting a
+        half-typed amplitude: nothing on this path ever writes a spinbox.
+        """
         funcgens = self._funcgens
-        for key, bar in self.amps.items():
-            ch = funcgens.channels.get(key)
-            connected = funcgens.connected.get(key[0], False)
-            output_on = bool(ch is not None and ch.output_on)
-            bar.set(ch.amp_vpp if ch is not None else None,
-                    stale=not connected,
-                    role=None if output_on else theme.NEUTRAL)
-            state = "OUT ON" if output_on else "OUT OFF"
-            bar.lbl_name.setText(f"{key} ({CHANNEL_ROLE[key]}) · {state}")
+        any_connected = False
+        for axis, ctrl in self.drives.items():
+            connected = funcgens.connected.get(AXIS_GENERATOR[axis], False)
+            any_connected = any_connected or connected
+            ctrl.set_readback(funcgens.channels, connected)
+            ctrl.set_connected(connected)
+
+        self.btn_apply_all.setEnabled(any_connected)
+        self._redraw_drive_message()
         for gen in ("A", "B"):
             self.pills[gen].setStyleSheet(theme.pill(funcgens.connected.get(gen, False)))
+
+    def _redraw_drive_message(self):
+        if self._drive_note_frames > 0:
+            self._drive_note_frames -= 1
+            return
+        self.lbl_drive_note.setText(self._STANDING_DRIVE_MESSAGE)
+        self.lbl_drive_note.setStyleSheet(
+            theme.status_label(theme.NEUTRAL, bold=False) + "font-size: 10px;")
 
     def _redraw_amps(self):
         amps = self._amps

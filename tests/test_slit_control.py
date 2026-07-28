@@ -1,6 +1,11 @@
 """
-SlitControl: the per-slit position bar + target entry + move controls used on
+SlitControl: the per-slit position bar + target entry + Move button used on
 the Overview tab.
+
+Target-only by design: there is no step size and no -/+ nudge. Relative
+motion lives on the Stepper Motors tab, which has the limit-switch context
+that makes it safe, so the absence of those controls is asserted here rather
+than merely untested.
 
 The widget commands nothing itself — it only emits move_requested(slit, mm).
 These tests therefore capture that signal rather than any hardware call.
@@ -43,42 +48,11 @@ def test_move_requests_the_target_box_value(ctrl, requests):
     assert requests == [("X+", pytest.approx(1.5))]
 
 
-def test_step_buttons_move_relative_to_the_live_position(ctrl, requests):
-    """Not relative to the target box: two clicks during a move in flight
-    would otherwise command twice the step from a position never reached."""
-    ctrl.set_position(2.0)
-    ctrl.spn_target.setValue(9.0)      # stale target the operator typed earlier
-    ctrl.cbo_step.setCurrentIndex(SC.SLIT_STEP_CHOICES_MM.index(0.1))
-
-    ctrl.btn_plus.click()
-    ctrl.btn_minus.click()
-
-    assert requests[0] == ("X+", pytest.approx(2.1))
-    # The second click starts from the live position again (still 2.0 — the
-    # slit has not reported a new one), not from the 2.1 just commanded.
-    assert requests[1] == ("X+", pytest.approx(1.9))
-
-
-def test_step_button_updates_the_target_box_to_match(ctrl, requests):
-    ctrl.set_position(2.0)
-    ctrl.cbo_step.setCurrentIndex(SC.SLIT_STEP_CHOICES_MM.index(0.5))
-    ctrl.btn_plus.click()
-    assert ctrl.spn_target.value() == pytest.approx(2.5)
-
-
-def test_step_is_clamped_to_the_display_range(ctrl, requests):
-    ctrl.set_position(SC.SLIT_DISPLAY_MIN_MM)
-    ctrl.cbo_step.setCurrentIndex(SC.SLIT_STEP_CHOICES_MM.index(1.0))
-    ctrl.btn_minus.click()
-    assert requests == [("X+", pytest.approx(SC.SLIT_DISPLAY_MIN_MM))]
-
-
-def test_step_falls_back_to_the_target_box_when_position_unknown(ctrl, requests):
-    ctrl.set_position(None, stale=True)
-    ctrl.spn_target.setValue(3.0)
-    ctrl.cbo_step.setCurrentIndex(SC.SLIT_STEP_CHOICES_MM.index(0.1))
-    ctrl.btn_plus.click()
-    assert requests == [("X+", pytest.approx(3.1))]
+def test_no_step_controls_on_this_widget(ctrl):
+    """The Overview is target-only. Nudge buttons and a step-size box would
+    put relative motion on a screen with no limit-switch readout."""
+    for attr in ("btn_plus", "btn_minus", "cbo_step", "step_mm"):
+        assert not hasattr(ctrl, attr), f"SlitControl still exposes {attr}"
 
 
 def test_position_drives_the_bar(ctrl):
@@ -115,7 +89,6 @@ def test_controls_start_disabled(qapp):
     fresh = SlitControl("Y-")
     assert not fresh.btn_move.isEnabled()
     assert not fresh.spn_target.isEnabled()
-    assert not fresh.btn_plus.isEnabled()
 
 
 def test_sync_target_preloads_the_live_position(ctrl):
