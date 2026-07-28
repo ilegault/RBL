@@ -304,7 +304,7 @@ class TestCurrentTab:
         assert abs(v - 1e-6) < 1e-9
         assert "µA" in current.lbl_i["AIN0"].text()
 
-    # With no Galil attached the indicator has no jaw positions and falls back
+    # With no Galil attached the indicator has no slit positions and falls back
     # to the raw current imbalance, which is what these assert on.
     def test_balanced_beam_reads_zero_imbalance(self, current):
         current._on_reading(1.0, {"AIN0": 3.0, "AIN1": 3.0, "AIN2": 3.0, "AIN3": 3.0})
@@ -315,16 +315,16 @@ class TestCurrentTab:
         current._on_reading(1.0, {"AIN0": 4.0, "AIN1": 3.0, "AIN2": 3.0, "AIN3": 3.0})
         assert current.beam_indicator.view.ratio_x > 0
 
-    def test_jaw_positions_enable_mm_reconstruction(self, current):
-        """With jaw geometry supplied, the indicator solves a real position."""
-        current.set_jaw_state({
+    def test_slit_positions_enable_mm_reconstruction(self, current):
+        """With slit geometry supplied, the indicator solves a real position."""
+        current.set_slit_state({
             "connected": True, "zeroed": True,
             "positions": {"X+": 1.5, "X-": 1.5, "Y+": 5.0, "Y-": 5.0},
         })
         current._on_reading(1.0, {"AIN0": 3.0, "AIN1": 3.0, "AIN2": 3.0, "AIN3": 3.0})
         est = current.beam_indicator.view.est
         assert est is not None and est.ok
-        # Equal currents on symmetric jaws -> beam on the axis.
+        # Equal currents on symmetric slits -> beam on the axis.
         assert abs(est.x) < 1e-6 and abs(est.y) < 1e-6
 
     def test_starts_in_live_mode(self, current):

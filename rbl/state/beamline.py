@@ -51,10 +51,10 @@ class Beamline(QObject):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        # Last-seen jaw edges (SIGNED mm) and log-amp currents (Amps), cached
+        # Last-seen slit edges (SIGNED mm) and log-amp currents (Amps), cached
         # so reconstruct_beam() can be called on demand with whatever spot
         # size the caller currently has selected, without re-deriving them.
-        self._jaw_edges_mm: dict[str, float] = {}
+        self._slit_edges_mm: dict[str, float] = {}
         self._log_amp_currents: dict[str, float] = {}
 
         # ── LabJack T7 + stream worker ──────────────────────────────────────
@@ -98,23 +98,23 @@ class Beamline(QObject):
         axes = {}
         edges = {}
         for axis_letter, st in snapshot.items():
-            jaw = SC.AXIS_NAMES[axis_letter]
+            slit = SC.AXIS_NAMES[axis_letter]
             pos_mm = SC.counts_to_mm(axis_letter, st["pos"])
-            axes[jaw] = AxisSnapshot(
+            axes[slit] = AxisSnapshot(
                 pos_counts=st["pos"],
                 pos_mm=pos_mm,
                 moving=st["moving"],
                 enabled=st.get("enabled", True),
                 switches=st["switches"],
             )
-            # The Galil reports each jaw as a distance from centre with no
-            # sign; the '-' jaws live on the negative side of the axis.
-            edges[jaw] = abs(pos_mm) if jaw.endswith("+") else -abs(pos_mm)
-        self._jaw_edges_mm = edges
+            # The Galil reports each slit as a distance from centre with no
+            # sign; the '-' slits live on the negative side of the axis.
+            edges[slit] = abs(pos_mm) if slit.endswith("+") else -abs(pos_mm)
+        self._slit_edges_mm = edges
         self.motors_changed.emit(MotorState(connected=True, zeroed=zeroed, axes=axes))
 
     def motors_disconnected(self):
-        self._jaw_edges_mm = {}
+        self._slit_edges_mm = {}
         self.motors_changed.emit(MotorState(connected=False, zeroed=False, axes={}))
 
     # ---- Log amps + HV amplifiers (one LabJack window feeds both) -------------
@@ -129,13 +129,13 @@ class Beamline(QObject):
         channels = payload["channels"]
 
         currents = {}
-        for ain, jaw in SC.LABJACK_CHANNEL_MAP.items():
+        for ain, slit in SC.LABJACK_CHANNEL_MAP.items():
             ch = channels.get(ain)
             if ch is None:
                 # WAVEFORM profile: log amps not sampled this window.
-                currents[jaw] = float("nan")
+                currents[slit] = float("nan")
                 continue
-            currents[jaw] = voltage_to_current(
+            currents[slit] = voltage_to_current(
                 ch["mean"], SC.LOG_AMP_V_AT_1NA, SC.LOG_AMP_V_AT_1MA
             )
         self._log_amp_currents = currents
@@ -319,19 +319,19 @@ class Beamline(QObject):
 
     def reconstruct_beam(self, sigma_mm: float, span_x_mm: float = 0.0,
                           span_y_mm: float = 0.0):
-        """Beam position from the last-seen currents + jaw edges.
+        """Beam position from the last-seen currents + slit edges.
 
         The one call site every consumer (the log-amp tab's beam indicator,
         and later the Overview tab) uses, so they read the same currents and
         edges and can never disagree about where the beam is — only the
         assumed spot size stays a per-caller / operator setting.
 
-        Returns None if fewer than all four jaw edges are known yet.
+        Returns None if fewer than all four slit edges are known yet.
         """
-        if len(self._jaw_edges_mm) < 4:
+        if len(self._slit_edges_mm) < 4:
             return None
         return BR.reconstruct(
-            self._log_amp_currents, self._jaw_edges_mm, sigma_mm, span_x_mm, span_y_mm
+            self._log_amp_currents, self._slit_edges_mm, sigma_mm, span_x_mm, span_y_mm
         )
 
     # ---- Function generators ---------------------------------------------------
@@ -507,24 +507,24 @@ class Beamline(QObject):
                 except Exception as e:
                     self.command_failed.emit("funcgen", f"{gen_letter}{channel}: {e}")
 
-    def move_jaw(self, jaw: str, mm: float) -> bool:
-        """Move one jaw to an absolute position in mm.
+    def move_slit(self, slit: str, mm: float) -> bool:
+        """Move one slit to an absolute position in mm.
 
-        `jaw` is a jaw label ("X+", "X-", "Y+", "Y-"), not a Galil axis
+        `slit` is a slit label ("X+", "X-", "Y+", "Y-"), not a Galil axis
         letter — callers shouldn't need to know the axis mapping.
         """
-        axis_letter = next((a for a, j in SC.AXIS_NAMES.items() if j == jaw), None)
+        axis_letter = next((a for a, j in SC.AXIS_NAMES.items() if j == slit), None)
         if axis_letter is None:
-            self.command_failed.emit("motors", f"{jaw}: not a valid jaw label")
+            self.command_failed.emit("motors", f"{slit}: not a valid slit label")
             return False
         if not self.galil.connected:
-            self.command_failed.emit("motors", f"{jaw}: Galil not connected")
+            self.command_failed.emit("motors", f"{slit}: Galil not connected")
             return False
         try:
             self.galil.move_absolute(axis_letter, SC.mm_to_counts(axis_letter, mm))
             return True
         except Exception as e:
-            self.command_failed.emit("motors", f"{jaw}: {e}")
+            self.command_failed.emit("motors", f"{slit}: {e}")
             return False
 
     def emergency_stop(self):

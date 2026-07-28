@@ -25,7 +25,7 @@ class TestMotorIngestion:
         sw.update(switches)
         return {"pos": pos, "moving": moving, "switches": sw, "enabled": enabled}
 
-    def test_emits_motor_state_keyed_by_jaw_label(self, beamline):
+    def test_emits_motor_state_keyed_by_slit_label(self, beamline):
         received = []
         beamline.motors_changed.connect(received.append)
         snapshot = {axis: self._snapshot(pos=1000) for axis in SC.AXIS_LETTERS}
@@ -59,8 +59,8 @@ class TestMotorIngestion:
 class TestLabjackIngestion:
     def _payload(self, logamp_volts=None, amp_channels=None):
         channels = {}
-        for ain, jaw in SC.LABJACK_CHANNEL_MAP.items():
-            v = (logamp_volts or {}).get(jaw)
+        for ain, slit in SC.LABJACK_CHANNEL_MAP.items():
+            v = (logamp_volts or {}).get(slit)
             channels[ain] = None if v is None else {"mean": v}
         for amp in SC.AMP_LABELS:
             v_ain = SC.AMP_CHANNEL_MAP[amp]["voltage"]
@@ -375,20 +375,20 @@ class TestCommandSurface:
         assert gen_a.output_off.call_count == 2
         assert gen_b.output_off.call_count == 2
 
-    def test_move_jaw_converts_label_to_axis_and_mm_to_counts(self, beamline):
+    def test_move_slit_converts_label_to_axis_and_mm_to_counts(self, beamline):
         from unittest.mock import MagicMock
         beamline.galil = MagicMock(connected=True)
-        ok = beamline.move_jaw("X+", 5.0)
+        ok = beamline.move_slit("X+", 5.0)
         assert ok is True
         axis_letter = beamline.galil.move_absolute.call_args.args[0]
         assert SC.AXIS_NAMES[axis_letter] == "X+"
 
-    def test_move_jaw_fails_when_galil_not_connected(self, beamline):
+    def test_move_slit_fails_when_galil_not_connected(self, beamline):
         from unittest.mock import MagicMock
         beamline.galil = MagicMock(connected=False)
         failures = []
         beamline.command_failed.connect(lambda subsystem, msg: failures.append((subsystem, msg)))
-        assert beamline.move_jaw("X+", 5.0) is False
+        assert beamline.move_slit("X+", 5.0) is False
         assert failures[0][0] == "motors"
 
     def test_emergency_stop_calls_abort(self, beamline):

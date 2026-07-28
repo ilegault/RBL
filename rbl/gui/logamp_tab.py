@@ -72,8 +72,8 @@ class CurrentTab(QWidget):
         ro.setContentsMargins(4, 2, 4, 2)
         self.lbl_v = {}
         self.lbl_i = {}
-        for col, (ain, jaw) in enumerate(SC.LABJACK_CHANNEL_MAP.items()):
-            hdr = QLabel(f"{jaw}  ({ain})")
+        for col, (ain, slit) in enumerate(SC.LABJACK_CHANNEL_MAP.items()):
+            hdr = QLabel(f"{slit}  ({ain})")
             hdr.setStyleSheet("font-size: 15px; color: #444;")
             ro.addWidget(hdr, 0, col)
             self.lbl_v[ain] = QLabel("—")
@@ -158,8 +158,8 @@ class CurrentTab(QWidget):
         self.ax.set_yscale("log")
         self.ax.grid(True, which="both", alpha=0.3)
         self._lines = {}
-        for ain, jaw in SC.LABJACK_CHANNEL_MAP.items():
-            line, = self.ax.plot([], [], color=theme.JAW_COLORS.get(jaw, "k"), lw=1.5)
+        for ain, slit in SC.LABJACK_CHANNEL_MAP.items():
+            line, = self.ax.plot([], [], color=theme.SLIT_COLORS.get(slit, "k"), lw=1.5)
             self._lines[ain] = line
         self.plot.fig.tight_layout()
 
@@ -172,13 +172,13 @@ class CurrentTab(QWidget):
         _leg_title = QLabel("Legend")
         _leg_title.setStyleSheet("font-size: 15px; color: #555; font-weight: bold;")
         _leg_lay.addWidget(_leg_title)
-        for _ain, _jaw in SC.LABJACK_CHANNEL_MAP.items():
+        for _ain, _slit in SC.LABJACK_CHANNEL_MAP.items():
             _row = QHBoxLayout()
             _swatch = QLabel("━")
             _swatch.setStyleSheet(
-                f"color: {theme.JAW_COLORS.get(_jaw, '#000')}; font-weight: bold; font-size: 13px;"
+                f"color: {theme.SLIT_COLORS.get(_slit, '#000')}; font-weight: bold; font-size: 13px;"
             )
-            _lbl = QLabel(f"{_jaw}  ({_ain})")
+            _lbl = QLabel(f"{_slit}  ({_ain})")
             _lbl.setStyleSheet("font-size: 15px;")
             _row.addWidget(_swatch)
             _row.addWidget(_lbl)
@@ -244,25 +244,25 @@ class CurrentTab(QWidget):
     # ---- Slots ---------------------------------------------------------------
 
     @staticmethod
-    def _by_jaw(currents_by_ain: dict) -> dict:
-        """Re-key AIN -> current as jaw label -> current for the indicator."""
-        return {jaw: currents_by_ain.get(ain, float("nan"))
-                for ain, jaw in SC.LABJACK_CHANNEL_MAP.items()}
+    def _by_slit(currents_by_ain: dict) -> dict:
+        """Re-key AIN -> current as slit label -> current for the indicator."""
+        return {slit: currents_by_ain.get(ain, float("nan"))
+                for ain, slit in SC.LABJACK_CHANNEL_MAP.items()}
 
-    def set_jaw_state(self, state: dict):
-        """Jaw geometry pushed over from the motor tab (see MotorTab.jaw_state)."""
-        self.beam_indicator.set_jaw_state(state)
+    def set_slit_state(self, state: dict):
+        """Slit geometry pushed over from the motor tab (see MotorTab.slit_state)."""
+        self.beam_indicator.set_slit_state(state)
 
     def on_motor_state(self, state):
-        """Jaw geometry from Beamline.motors_changed (a state.MotorState).
+        """Slit geometry from Beamline.motors_changed (a state.MotorState).
 
         Adapts to the dict shape BeamPositionIndicator already expects rather
         than changing that widget's interface.
         """
-        self.set_jaw_state({
+        self.set_slit_state({
             "connected": state.connected,
             "zeroed":    state.zeroed,
-            "positions": {jaw: axis.pos_mm for jaw, axis in state.axes.items()},
+            "positions": {slit: axis.pos_mm for slit, axis in state.axes.items()},
         })
 
     def _on_window(self, payload: dict):
@@ -300,7 +300,7 @@ class CurrentTab(QWidget):
             self.lbl_i[ain].setStyleSheet(theme.status_label(theme.OK))
             self.buffers[ain].append(t, I)
 
-        self.beam_indicator.set_currents(self._by_jaw(currents))
+        self.beam_indicator.set_currents(self._by_slit(currents))
 
         if self.plot.is_live:
             self.plot.force_to_live()
@@ -322,7 +322,7 @@ class CurrentTab(QWidget):
             self.lbl_i[ain].setText(format_current(I))
             self.buffers[ain].append(t, I)
 
-        self.beam_indicator.set_currents(self._by_jaw(currents))
+        self.beam_indicator.set_currents(self._by_slit(currents))
 
         # Auto-advance slider to live edge when in live mode
         if self.plot.is_live:
