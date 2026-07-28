@@ -39,6 +39,7 @@ class Beamline(QObject):
     logamps_changed  = Signal(object)   # LogAmpState
     amps_changed     = Signal(object)   # AmpState
     funcgens_changed = Signal(object)   # FuncGenState
+    timebase_changed = Signal(dict)     # {"A": "INT"/"EXT"/"?"/"—", "B": ...}
     command_failed   = Signal(str, str)  # subsystem, message
 
     # LabJack connection lifecycle. Re-emitted here (rather than reaching into
@@ -91,6 +92,10 @@ class Beamline(QObject):
         # model, so the two can never show different setpoints for the same
         # channel and an Apply from either cannot silently overwrite the other.
         self.funcgen_setpoints = FuncGenSetpoints(self)
+
+        # Last-read clock source per unit, refreshed by read_timebase() and
+        # republished on every FuncGenState — see that method's docstring.
+        self._timebase = {"A": "—", "B": "—"}
 
         # Last-resort safety net: if the process is torn down without a clean
         # closeEvent (e.g. an unhandled exit), still stop the LabJack stream
@@ -157,12 +162,14 @@ class Beamline(QObject):
 
             peak_kv = pkpk_kv = rms_kv = raw_v = float("nan")
             rms_ma = raw_i = float("nan")
+            wave_kv = ()
             if v_ch is not None:
                 peak_kv = monitor_to_kv(v_ch["peak"])
                 pkpk_kv = v_ch["pk_pk"] * SC.VOLTAGE_MONITOR_KV_PER_VOLT
                 rms_kv  = monitor_to_kv(v_ch["rms"])
                 wave = v_ch.get("waveform")
                 raw_v = float(sum(wave) / len(wave)) if wave is not None and len(wave) else v_ch["rms"]
+                wave_kv = self._decimate_wave(wave)
             if i_ch is not None:
                 rms_ma = monitor_to_ma(i_ch["rms"])
                 wave = i_ch.get("waveform")
@@ -170,10 +177,34 @@ class Beamline(QObject):
 
             amp_channels[amp] = AmpChannelSnapshot(
                 peak_kv=peak_kv, pkpk_kv=pkpk_kv, rms_kv=rms_kv,
-                rms_ma=rms_ma, raw_v=raw_v, raw_i=raw_i,
+                rms_ma=rms_ma, raw_v=raw_v, raw_i=raw_i, wave_kv=wave_kv,
             )
         self.amps_changed.emit(
             AmpState(connected=True, channels=amp_channels, active_profile=active_profile)
+        )
+
+    # Points kept per channel per window for the Overview's overlaid pair
+    # trace. Enough to read a triangle's shape at a glance; small enough that
+    # four of them crossing a Qt signal at 10 Hz costs nothing.
+    _WAVE_POINTS = 120
+
+    @staticmethod
+    def _decimate_wave(wave) -> tuple:
+        """Thin a stream window down to _WAVE_POINTS on a UNIFORM grid.
+
+        Uniform striding, deliberately, not the envelope-preserving min/max
+        binning the amplifier tab's plot uses: min/max emits each point at its
+        own sample position, so two channels decimated that way no longer
+        share an x grid — and a pair drawn on two different grids shows a
+        phase difference that is pure resampling artefact. Peaks matter on a
+        plot you read values off; a shared time base matters here.
+        """
+        if wave is None or len(wave) == 0:
+            return ()
+        step = max(1, len(wave) // Beamline._WAVE_POINTS)
+        return tuple(
+            float(v) * SC.VOLTAGE_MONITOR_KV_PER_VOLT
+            for v in wave[::step][:Beamline._WAVE_POINTS]
         )
 
     def _mark_labjack_disconnected(self):
@@ -360,13 +391,20 @@ class Beamline(QObject):
                 phase_deg=state["phase"],
                 output_on=state["output"],
             )
+        # An empty `timebase` means "no fresh reading" — carry the cached one
+        # rather than publishing blanks that would flicker a second screen's
+        # lock indicator off and on between clock reads.
         self.funcgens_changed.emit(FuncGenState(
-            connected=dict(connected), timebase=dict(timebase), channels=channels,
+            connected=dict(connected),
+            timebase=dict(timebase) if timebase else dict(self._timebase),
+            channels=channels,
         ))
 
     def funcgens_disconnected(self):
+        self._timebase = {"A": "—", "B": "—"}
         self.funcgens_changed.emit(FuncGenState(
-            connected={"A": False, "B": False}, timebase={}, channels={},
+            connected={"A": False, "B": False}, timebase=dict(self._timebase),
+            channels={},
         ))
 
     # ---- Command surface ---------------------------------------------------------
@@ -496,6 +534,105 @@ class Beamline(QObject):
                     self.command_failed.emit("funcgen", f"Gen {gen_letter}: align phase failed: {e}")
 
         return True
+
+    # ---- Cross-unit timebase (10 MHz reference) --------------------------------
+    #
+    # Lives here, not in a tab, for the same reason the peak interlock does:
+    # more than one screen offers the control now, and the both-EXT guard below
+    # protects the instruments, so it must sit on the single path to the
+    # drivers rather than in whichever widget happens to be on top.
+
+    SETTLE_S = 3.0   # PLL settling time before the lock readback is trusted
+
+    def read_timebase(self) -> dict:
+        """Each unit's active clock source: "INT", "EXT", "?" or "—".
+
+        Queries the instruments and caches the answer. The cache is what gets
+        published on every FuncGenState, so a second screen can show the lock
+        state without either polling the clock source at readback rate (two
+        extra VISA round trips every 500 ms for a value that only changes when
+        somebody changes it) or reaching for a driver of its own.
+        """
+        clocks = {}
+        for letter in ("A", "B"):
+            gen = self._gen_for(letter)
+            if gen is None:
+                clocks[letter] = "—"
+                continue
+            try:
+                clocks[letter] = gen.get_reference_clock()
+            except Exception:
+                clocks[letter] = "?"
+        self._timebase = clocks
+        return dict(clocks)
+
+    @property
+    def timebase_locked(self) -> bool:
+        """True only for the one configuration that actually shares a clock."""
+        return self._timebase.get("A") == "INT" and self._timebase.get("B") == "EXT"
+
+    def set_shared_timebase(self, enabled: bool):
+        """Lock (or unlock) Gen B to Gen A's 10 MHz reference.
+
+        Returns (ok, message): ok is True when the REQUESTED state was
+        actually reached — a failed lock returns False so the caller can put
+        its checkbox back rather than showing a lock that isn't there.
+
+        Only Gen B is ever set to EXT. The rear-panel [10MHz In/Out] connector
+        is BIDIRECTIONAL and its direction follows the clock-source setting,
+        so two units both driving it is not a misconfiguration to warn about
+        afterwards — it damages the instruments. Hence the guard below runs
+        before anything is written.
+        """
+        gen_a, gen_b = self._gen_for("A"), self._gen_for("B")
+        if gen_a is None or gen_b is None:
+            return False, "Both generators must be connected to share a timebase."
+
+        try:
+            if not enabled:
+                gen_a.set_reference_clock("INTernal")
+                gen_b.set_reference_clock("INTernal")
+                self.timebase_changed.emit(self.read_timebase())  # refreshes cache
+                return True, ("Independent internal clocks — X/Y phase will "
+                              "drift across the two units.")
+
+            if gen_a.get_reference_clock() == "EXT":
+                msg = (
+                    "Gen A is currently set to EXTernal reference.\n\n"
+                    "One unit must drive the 10 MHz reference (INT) and the "
+                    "other must follow it (EXT). Setting both to EXT causes "
+                    "both instruments to drive the rear-panel [10MHz In/Out] "
+                    "connector simultaneously — this will damage the "
+                    "instruments.\n\n"
+                    "Return Gen A to its internal clock first (send "
+                    ":SYSTem:ROSCillator:SOURce INTernal to Gen A via the SCPI "
+                    "console), then enable sharing."
+                )
+                self.command_failed.emit(
+                    "funcgen",
+                    "Timebase refused — Gen A is already EXT; both EXT would collide")
+                return False, msg
+
+            gen_a.set_reference_clock("INTernal")
+            locked, actual = gen_b.verify_external_lock(settle_s=self.SETTLE_S)
+            self.timebase_changed.emit(self.read_timebase())
+            if locked:
+                return True, "Locked: Gen B follows Gen A's 10 MHz reference."
+            return False, (
+                f"Gen B was set to external 10 MHz reference but its readback "
+                f"is {actual!r} — the DG1022Z silently falls back to INT when "
+                f"no valid signal is present.\n\n"
+                "Checklist:\n"
+                "  • BNC cable from Gen A [10MHz Out] → Gen B [10MHz In]\n"
+                "  • Reference level must be 250 mVpp – 5 Vpp\n"
+                "  • The [10MHz In/Out] connector is BIDIRECTIONAL — its "
+                "direction is set by the clock source selection. Both units "
+                "set to INT will each try to drive the connector "
+                "simultaneously, which can damage the instruments."
+            )
+        except Exception as e:
+            self.command_failed.emit("funcgen", f"timebase: {e}")
+            return False, str(e)
 
     def all_outputs_off(self):
         """Turn off every function-generator channel's output.

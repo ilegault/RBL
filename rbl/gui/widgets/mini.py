@@ -18,7 +18,9 @@ import math
 
 from PySide6.QtCore import Qt, QRectF, QPointF
 from PySide6.QtGui import QColor, QPainter, QPen, QBrush, QPolygonF
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSizePolicy,
+)
 
 from rbl.gui import theme
 
@@ -276,6 +278,198 @@ class MiniBar(QWidget):
         """Mark a commanded setpoint on the scale, or clear it with None."""
         self.track.set_target_fraction(
             self._position(value) if _is_number(value) else None)
+
+
+class VBarTrack(QWidget):
+    """BarTrack rotated: the fill grows upward from the bottom.
+
+    A vertical track beside a column of number boxes costs a fraction of the
+    width a horizontal one costs beneath them, which is what lets two axis
+    panels sit side by side instead of stacked.
+    """
+
+    _GROOVE_W = 13
+    _TICK_W   = 3
+
+    def __init__(self, ticks: int = 5, parent=None):
+        super().__init__(parent)
+        self._frac   = None
+        self._target = None
+        self._color  = theme.OK
+        self._ticks  = max(2, ticks)
+        self.setFixedWidth(self._GROOVE_W + self._TICK_W + 2)
+        # Tall enough that a fill fraction is still readable as a fraction —
+        # beside a two-row form the track would otherwise be squeezed to the
+        # form's height minus its own labels, which is about 30 px.
+        self.setMinimumHeight(58)
+
+    def set_fraction(self, frac, color: str = None):
+        self._frac = None if frac is None else min(1.0, max(0.0, float(frac)))
+        if color is not None:
+            self._color = color
+        self.update()
+
+    def set_target_fraction(self, frac):
+        self._target = None if frac is None else min(1.0, max(0.0, float(frac)))
+        self.update()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        h = self.height() - 1
+        groove = QRectF(0.5, 0.5, self._GROOVE_W, h)
+        p.setPen(QPen(QColor(theme.TRACK_EDGE), 1))
+        p.setBrush(QBrush(QColor(theme.TRACK)))
+        p.drawRoundedRect(groove, 2, 2)
+
+        if self._frac is not None and self._frac > 0.0:
+            fh = max(2.0, h * self._frac)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(QColor(self._color)))
+            p.drawRoundedRect(QRectF(0.5, 0.5 + h - fh, self._GROOVE_W, fh), 2, 2)
+
+        p.setPen(QPen(QColor(theme.TICK), 1))
+        x0 = self._GROOVE_W + 1
+        for i in range(self._ticks):
+            y = 0.5 + h * (i / (self._ticks - 1))
+            p.drawLine(QPointF(x0, y), QPointF(x0 + self._TICK_W, y))
+
+        if self._target is not None:
+            y = 0.5 + h * (1.0 - self._target)
+            p.setPen(QPen(QColor(theme.MARKER), 1))
+            p.setBrush(QBrush(QColor(theme.MARKER)))
+            p.drawLine(QPointF(0.0, y), QPointF(float(self._GROOVE_W), y))
+            p.drawPolygon(QPolygonF([
+                QPointF(float(self._GROOVE_W + self._TICK_W), y - 3.0),
+                QPointF(float(self._GROOVE_W + self._TICK_W), y + 3.0),
+                QPointF(float(self._GROOVE_W), y),
+            ]))
+        p.end()
+
+
+class VMiniBar(QWidget):
+    """A vertical mini bar chart: value on top, scaled track below.
+
+    Same contract as MiniBar — set() for the measured value, set_target() for
+    the commanded one on the same scale — in a column instead of a row.
+    """
+
+    def __init__(self, name: str, minimum: float, maximum: float,
+                 unit: str = "", color: str = None, decimals: int = 2,
+                 ticks: int = 5, parent=None):
+        super().__init__(parent)
+        self._min      = float(minimum)
+        self._max      = float(maximum)
+        self._unit     = unit
+        self._color    = color or theme.OK
+        self._decimals = decimals
+        self._value    = None
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(2, 0, 2, 0)
+        lay.setSpacing(1)
+
+        self.lbl_value = QLabel("—")
+        self.lbl_value.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        self.lbl_value.setStyleSheet("font-weight: bold; font-size: 11px;")
+        lay.addWidget(self.lbl_value)
+
+        self.track = VBarTrack(ticks=ticks)
+        lay.addWidget(self.track, stretch=1, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        self.lbl_name = QLabel(name)
+        self.lbl_name.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        self.lbl_name.setStyleSheet(f"color: {theme.NEUTRAL}; font-size: 9px;")
+        lay.addWidget(self.lbl_name)
+
+    def _position(self, value):
+        if self._max <= self._min:
+            return None
+        return (value - self._min) / (self._max - self._min)
+
+    def fraction(self):
+        if not _is_number(self._value):
+            return None
+        frac = self._position(self._value)
+        return None if frac is None else min(1.0, max(0.0, frac))
+
+    def set(self, value: float, stale: bool = False, role: str = None):
+        self._value = value if _is_number(value) else None
+        self.track.set_fraction(self.fraction(),
+                                theme.MUTED if stale else (role or self._color))
+        if self._value is None:
+            self.lbl_value.setText("—")
+        else:
+            text = f"{self._value:.{self._decimals}f}"
+            self.lbl_value.setText(f"{text} {self._unit}".strip())
+        self.lbl_value.setStyleSheet(
+            "font-weight: bold; font-size: 11px;"
+            + (f" color: {theme.MUTED};" if stale else ""))
+
+    def set_target(self, value: float):
+        self.track.set_target_fraction(
+            self._position(value) if _is_number(value) else None)
+
+
+class PairTrace(QWidget):
+    """Two waveforms drawn over each other on one shared scale.
+
+    The point is the RELATIONSHIP, not either trace's values: a push-pull pair
+    driven correctly is two mirror-image traces crossing at zero, and a pair
+    whose generators have drifted apart is two traces sliding past each other.
+    Neither is visible on two separate plots with independent auto-scales, so
+    both series share one symmetric-about-zero scale and one x grid here.
+
+    Both series must be sampled on the SAME grid — same window, same length —
+    or the phase they appear to have is an artefact of the resampling.
+    """
+
+    _ZERO = QColor("#999")
+
+    def __init__(self, color_a: str, color_b: str, parent=None):
+        super().__init__(parent)
+        self._a: list = []
+        self._b: list = []
+        self._color_a = color_a
+        self._color_b = color_b
+        self.setMinimumHeight(52)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding,
+                           QSizePolicy.Policy.Expanding)
+
+    def set_pair(self, a, b):
+        self._a = [v for v in (a or []) if _is_number(v)]
+        self._b = [v for v in (b or []) if _is_number(v)]
+        self.update()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        w = self.width() - 1
+        h = self.height() - 2
+
+        # Symmetric about zero so the crossing point is the vertical centre —
+        # an auto-scaled pair would put "zero" wherever the data happened to
+        # average, and anti-phase would stop looking like anti-phase.
+        span = max((abs(v) for v in self._a + self._b), default=0.0)
+        p.setPen(QPen(self._ZERO, 1, Qt.PenStyle.DashLine))
+        p.drawLine(QPointF(0, 1 + h / 2.0), QPointF(w, 1 + h / 2.0))
+        if span <= 0.0 or len(self._a) < 2:
+            p.end()
+            return
+        span *= 1.10   # a little headroom so peaks don't sit on the frame
+
+        for values, color in ((self._a, self._color_a), (self._b, self._color_b)):
+            if len(values) < 2:
+                continue
+            poly = QPolygonF()
+            step = w / (len(values) - 1)
+            for i, v in enumerate(values):
+                poly.append(QPointF(i * step, 1 + h / 2.0 - (v / span) * (h / 2.0)))
+            p.setPen(QPen(QColor(color), 1.3))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawPolyline(poly)
+        p.end()
 
 
 class TraceArea(QWidget):

@@ -79,24 +79,39 @@ def test_defaults_are_a_safe_triangle_at_no_volts():
 # ---- Both screens on one model ----------------------------------------------
 
 def test_overview_edit_reaches_the_funcgen_panels(tabs):
+    """The Overview edits in PEAK volts and the FG tab shows peak-to-peak, so
+    the same setpoint has to arrive doubled — and only once."""
     fg, ov = tabs
-    ov.drives["X"].spn_amp.setValue(4.0)
+    ov.drives["X"].spn_amp.setValue(2.0)      # 2 V peak
     ov.drives["X"].spn_freq.setValue(25.0)
 
     for key in AXIS_CHANNELS["X"]:
-        assert fg.panels[key].spn_amp.value() == pytest.approx(4.0)
+        assert fg.panels[key].spn_amp.value() == pytest.approx(4.0)   # 4 Vpp
         assert fg.panels[key].spn_freq.value() == pytest.approx(25.0)
 
 
 def test_funcgen_edit_reaches_the_overview_boxes(tabs):
     fg, ov = tabs
-    fg.panels["B1"].spn_amp.setValue(6.0)
+    fg.panels["B1"].spn_amp.setValue(6.0)     # 6 Vpp
     fg.panels["B2"].spn_amp.setValue(6.0)
     fg.panels["B1"].spn_freq.setValue(0.5)
     fg.panels["B2"].spn_freq.setValue(0.5)
 
-    assert ov.drives["Y"].spn_amp.value() == pytest.approx(6.0)
+    assert ov.drives["Y"].spn_amp.value() == pytest.approx(3.0)       # 3 V peak
     assert ov.drives["Y"].spn_freq.value() == pytest.approx(0.5)
+
+
+def test_the_unit_conversion_round_trips(tabs):
+    """A value typed on either screen must survive the trip to the other and
+    back unchanged — a conversion applied twice, or in the wrong direction,
+    would show up here as a factor of four."""
+    fg, ov = tabs
+    ov.drives["X"].spn_amp.setValue(1.75)
+    assert fg.panels["A1"].spn_amp.value() == pytest.approx(3.5)
+    assert ov.drives["X"].spn_amp.value() == pytest.approx(1.75)
+
+    fg.panels["A1"].spn_amp.setValue(3.5)
+    assert ov.drives["X"].spn_amp.value() == pytest.approx(1.75)
 
 
 def test_a_sync_does_not_echo_back_as_an_edit(tabs):
@@ -119,7 +134,7 @@ def test_offset_and_shape_survive_an_overview_edit(tabs):
     fg.panels["A1"].cbo_shape.setCurrentText("Sine")
     fg.panels["A1"].spn_offset.setValue(1.0)
 
-    ov.drives["X"].spn_amp.setValue(2.0)
+    ov.drives["X"].spn_amp.setValue(1.0)
 
     assert fg.beamline.funcgen_setpoints.get("A1").shape == "Sine"
     assert fg.beamline.funcgen_setpoints.get("A1").offset_v == pytest.approx(1.0)
@@ -133,4 +148,4 @@ def test_funcgen_tab_still_applies_from_its_own_widgets(tabs):
     ov.drives["Y"].spn_amp.setValue(3.0)
 
     params = fg.panels["B1"].get_params()
-    assert params["amp"] == pytest.approx(3.0)
+    assert params["amp"] == pytest.approx(6.0)   # native Vpp

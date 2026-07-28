@@ -11,8 +11,8 @@ import math
 from PySide6.QtCore import Qt, QPointF, QRectF
 from PySide6.QtGui import QFont, QPainter, QColor, QPen, QBrush
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QLabel, QSizePolicy, QComboBox, QDoubleSpinBox,
-    QFormLayout,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSizePolicy, QComboBox,
+    QDoubleSpinBox, QFormLayout,
 )
 
 from rbl.hardware import beam_reconstruction as BR
@@ -46,15 +46,13 @@ class _ApertureView(QWidget):
         self.raster    = False
         self.ratio_x   = float("nan")   # fallback when slit positions are absent
         self.ratio_y   = float("nan")
-        # The picture is the tallest thing in the panel, so on the Overview it
-        # is what has to give: the drawing is resolution-independent (one
-        # mm-per-pixel scale, computed from whatever size it gets), so a
-        # smaller floor costs detail, never correctness. The compact floor is
-        # set so the panel lands exactly on its height cap in RASTER mode,
-        # where two extra sweep rows make it tallest — static mode then gets
-        # the same size picture rather than one that changes with the mode.
+        # The drawing is resolution-independent (one mm-per-pixel scale,
+        # computed from whatever size it gets), so a smaller floor costs
+        # detail, never correctness. In compact mode the picture takes
+        # whatever the square panel has left after the controls, which is why
+        # the floor here only has to be "still legible".
         if compact:
-            self.setMinimumSize(150, 124)
+            self.setMinimumSize(150, 130)
         else:
             self.setMinimumSize(190, 190)
         self.setSizePolicy(QSizePolicy.Policy.Expanding,
@@ -348,7 +346,12 @@ class BeamPositionIndicator(QWidget):
     that. Everything stays on screen — the picture is simply drawn smaller.
     """
 
-    _COMPACT_MAX_HEIGHT = 300
+    # Compact mode is a SQUARE panel. The aperture picture inside it is the
+    # thing being read, and a square frame gives the drawing the most usable
+    # area for a given footprint — a tall narrow frame wastes most of its
+    # height on a picture that is scale-limited by its width, and a short wide
+    # one wastes its width the same way.
+    _COMPACT_SIDE = 300
 
     def __init__(self, parent=None, compact: bool = False):
         super().__init__(parent)
@@ -359,13 +362,10 @@ class BeamPositionIndicator(QWidget):
         self._compact  = compact
 
         if compact:
-            self.setFixedWidth(200)
-            self.setMaximumHeight(self._COMPACT_MAX_HEIGHT)
-            # Maximum, not Expanding: the panel takes the height it needs up to
-            # the cap and leaves the rest of the column's slack to its
-            # neighbours, instead of claiming an equal share of it.
-            self.setSizePolicy(QSizePolicy.Policy.Fixed,
-                               QSizePolicy.Policy.Maximum)
+            self.setFixedSize(self._COMPACT_SIDE, self._COMPACT_SIDE)
+            # Fixed both ways: the panel neither grows into its column's slack
+            # nor shrinks out of square when a neighbour wants room.
+            self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         else:
             self.setFixedWidth(288)
             self.setSizePolicy(QSizePolicy.Policy.Fixed,
@@ -424,7 +424,6 @@ class BeamPositionIndicator(QWidget):
         self.spn_span_x.valueChanged.connect(self._recompute)
         self.lbl_span_x = QLabel("Sweep X ±")
         self.lbl_span_x.setStyleSheet(f"font-size: {label_px}px; color: #555;")
-        form.addRow(self.lbl_span_x, self.spn_span_x)
 
         self.spn_span_y = QDoubleSpinBox()
         self.spn_span_y.setRange(0.0, 50.0)
@@ -436,7 +435,22 @@ class BeamPositionIndicator(QWidget):
         self.spn_span_y.valueChanged.connect(self._recompute)
         self.lbl_span_y = QLabel("Sweep Y ±")
         self.lbl_span_y.setStyleSheet(f"font-size: {label_px}px; color: #555;")
-        form.addRow(self.lbl_span_y, self.spn_span_y)
+
+        if compact:
+            # Both sweep boxes on ONE row. Every row these controls take is a
+            # row the aperture picture loses inside a fixed square, and the two
+            # sweep numbers are read together anyway.
+            self.lbl_span_x.setText("Sweep ±")
+            self.lbl_span_y.setText("")
+            sweeps = QHBoxLayout()
+            sweeps.setContentsMargins(0, 0, 0, 0)
+            sweeps.setSpacing(3)
+            sweeps.addWidget(self.spn_span_x)
+            sweeps.addWidget(self.spn_span_y)
+            form.addRow(self.lbl_span_x, sweeps)
+        else:
+            form.addRow(self.lbl_span_x, self.spn_span_x)
+            form.addRow(self.lbl_span_y, self.spn_span_y)
 
         lay.addLayout(form)
 
