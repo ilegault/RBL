@@ -11,6 +11,7 @@ their existing call sites don't change, but construction and final teardown
 happen here, once.
 """
 import atexit
+import math
 import time
 
 from PySide6.QtCore import QObject, Signal
@@ -18,10 +19,12 @@ from PySide6.QtCore import QObject, Signal
 from rbl.config import hardware_config as SC
 from rbl.config.labjack_stream_config import (
     DEFAULT_PROFILE, STREAM_PROFILES, DEFAULT_SINGLE_CHANNEL,
-    SINGLE_CHANNEL_CHOICES, is_single_channel,
+    SINGLE_CHANNEL_CHOICES, GUI_REFRESH_HZ, is_single_channel,
 )
 from rbl.hardware.current_monitor import voltage_to_current
 from rbl.hardware.amp_monitor import monitor_to_kv, monitor_to_ma
+from rbl.hardware.waveform_ring import AlignedWaveHistory
+from rbl.hardware.waveform_period import estimate_period_samples, cycle_slice
 from rbl.hardware import beam_reconstruction as BR
 from rbl.hardware.labjack_driver import LabJackT7
 from rbl.hardware.labjack_stream_worker import LabJackStreamWorker
@@ -77,6 +80,12 @@ class Beamline(QObject):
         # Set on connect so payload timestamps stay continuous across the
         # stop/reconfigure/start cycles that profile and channel switches need.
         self._stream_t0         = None
+        # Recent raw HV VOLTAGE monitor windows, kept so the Overview's pair
+        # trace can still show a whole cycle when the drive is slower than one
+        # stream window. Cleared whenever the stream restarts: a new profile
+        # means a new sample rate, and stitching across that seam would put two
+        # different time bases in one trace.
+        self._amp_waves = AlignedWaveHistory(self._WAVE_HISTORY_SAMPLES)
 
         # ── Galil DMC-4103 ───────────────────────────────────────────────────
         self.galil = GalilController()
@@ -153,6 +162,9 @@ class Beamline(QObject):
         self._log_amp_currents = currents
         self.logamps_changed.emit(LogAmpState(connected=True, currents=dict(currents)))
 
+        self._store_amp_waves(channels)
+        traces = self._cycle_traces(payload)
+
         amp_channels = {}
         for amp in SC.AMP_LABELS:
             v_ain = SC.AMP_CHANNEL_MAP[amp]["voltage"]
@@ -162,14 +174,14 @@ class Beamline(QObject):
 
             peak_kv = pkpk_kv = rms_kv = raw_v = float("nan")
             rms_ma = raw_i = float("nan")
-            wave_kv = ()
+            wave_kv, span_s, freq_hz = traces.get(
+                amp, ((), float("nan"), float("nan")))
             if v_ch is not None:
                 peak_kv = monitor_to_kv(v_ch["peak"])
                 pkpk_kv = v_ch["pk_pk"] * SC.VOLTAGE_MONITOR_KV_PER_VOLT
                 rms_kv  = monitor_to_kv(v_ch["rms"])
                 wave = v_ch.get("waveform")
                 raw_v = float(sum(wave) / len(wave)) if wave is not None and len(wave) else v_ch["rms"]
-                wave_kv = self._decimate_wave(wave)
             if i_ch is not None:
                 rms_ma = monitor_to_ma(i_ch["rms"])
                 wave = i_ch.get("waveform")
@@ -178,6 +190,7 @@ class Beamline(QObject):
             amp_channels[amp] = AmpChannelSnapshot(
                 peak_kv=peak_kv, pkpk_kv=pkpk_kv, rms_kv=rms_kv,
                 rms_ma=rms_ma, raw_v=raw_v, raw_i=raw_i, wave_kv=wave_kv,
+                wave_span_s=span_s, wave_freq_hz=freq_hz,
             )
         self.amps_changed.emit(
             AmpState(connected=True, channels=amp_channels, active_profile=active_profile)
@@ -188,9 +201,135 @@ class Beamline(QObject):
     # four of them crossing a Qt signal at 10 Hz costs nothing.
     _WAVE_POINTS = 120
 
+    # Cycles of the measured drive to put in that trace. Two, not one: one
+    # cycle drawn edge to edge gives nothing to compare its start against, and
+    # a pair whose members repeat at slightly different rates only separates
+    # visibly over more than a single period.
+    _WAVE_TARGET_CYCLES = 2
+
+    # Cycles the period is measured over, when that many are on hand. Well
+    # above the two the estimator needs, because accuracy near its floor is
+    # poor (a 20 Hz drive measured from a single 0.1 s window — two cycles —
+    # came out 5% high) and the caption quotes this number as a frequency.
+    _WAVE_RATE_CYCLES = 8
+
+    # Raw samples kept per voltage channel. The bound is samples rather than
+    # seconds because that is what costs memory and FFT time; what it buys in
+    # seconds depends on the profile (~4 s on FULL, ~0.33 s on SINGLE_FAST),
+    # and that in turn sets the slowest drive whose period can be measured —
+    # roughly 0.5 Hz on FULL. Slower than that, the trace falls back to one
+    # raw window and says so rather than pretending to have found a cycle.
+    _WAVE_HISTORY_SAMPLES = 32768
+
+    def _store_amp_waves(self, channels: dict):
+        """File this window's raw HV voltage monitors into the history."""
+        window = {}
+        for amp in SC.AMP_LABELS:
+            ch = channels.get(SC.AMP_CHANNEL_MAP[amp]["voltage"])
+            wave = ch.get("waveform") if ch is not None else None
+            if wave is not None and len(wave):
+                window[SC.AMP_CHANNEL_MAP[amp]["voltage"]] = wave
+        self._amp_waves.push(window)
+
+    def _measure_group(self, ains: list, latest: int, available: int) -> tuple:
+        """(samples, reference channel, period in samples) for one trace group.
+
+        Starts from the newest window alone — at any raster rate above a few Hz
+        the cycles are already in there, and keeping the transform small is
+        what lets this run on every frame — and reaches back into the history
+        only when that record is too short to measure a period well from.
+        """
+        seg = self._amp_waves.aligned_tail(ains, min(latest, available))
+        if not seg:
+            return {}, None, float("nan")
+        # The harder-driven plate is the cleaner trigger: a plate sitting near
+        # zero is mostly monitor noise, and triggering on noise moves BOTH
+        # traces, since the pair shares the window by design.
+        ref = max(ains, key=lambda a: float(seg[a].max() - seg[a].min()))
+
+        period = estimate_period_samples(seg[ref])
+        # A period measured from a record barely longer than itself is a poor
+        # one — the autocorrelation has only a few samples of overlap left at
+        # that lag — and a 5% error on the frequency is the difference between
+        # a caption you can trust and one you cannot. Widen the record until it
+        # holds a comfortable number of cycles; when nothing repeated inside
+        # one window at all, widen it to everything and try again.
+        wanted = (available if math.isnan(period)
+                  else min(available, int(period * self._WAVE_RATE_CYCLES) + 2))
+        if wanted > len(seg[ref]):
+            longer = self._amp_waves.aligned_tail(ains, wanted)
+            refined = estimate_period_samples(longer[ref])
+            if not math.isnan(refined):
+                return longer, ref, refined
+            if not math.isnan(period):
+                # The longer record disagrees (the drive changed inside it, or
+                # it spans a settling transient). Keep the estimate that worked
+                # and the longer record with it — the extra samples are the
+                # room the trigger needs to hold the trace still.
+                return longer, ref, period
+        return seg, ref, period
+
+    def _trace_groups(self, axis: str) -> list:
+        """The amplifiers that share one trace window on *axis*.
+
+        Normally the pair, together: the window is chosen once, from whichever
+        plate is driven harder, and applied to both. Choosing it per channel
+        would align each plate to its own zero crossing and delete the phase
+        relationship the pair trace exists to show.
+
+        A window can only be shared by channels sampled in the SAME stream
+        windows, though, and a single-channel profile samples one plate of the
+        pair. The survivor then gets a window of its own — half a picture, but
+        the trace is what tells you that profile is running.
+        """
+        pair = [f"{axis}+", f"{axis}-"]
+        ains = [SC.AMP_CHANNEL_MAP[a]["voltage"] for a in pair]
+        if self._amp_waves.aligned_length(ains) >= 2:
+            return [pair]
+        return [[amp] for amp, ain in zip(pair, ains)
+                if self._amp_waves.aligned_length([ain]) >= 2]
+
+    def _cycle_traces(self, payload: dict) -> dict:
+        """Per amplifier: (wave_kv, span_s, freq_hz) for the Overview trace."""
+        dt = payload.get("sample_period")
+        if not dt:
+            # Pure-math callers (tests, the self-test) omit it; the nominal
+            # window duration over its sample count is the same number to
+            # within the device's rate rounding.
+            n = payload.get("window_samples") or 0
+            dt = (1.0 / GUI_REFRESH_HZ) / n if n else float("nan")
+
+        traces = {}
+        for axis in ("X", "Y"):
+            for amps in self._trace_groups(axis):
+                ains = [SC.AMP_CHANNEL_MAP[a]["voltage"] for a in amps]
+                available = self._amp_waves.aligned_length(ains)
+                latest = payload.get("window_samples") or available
+                seg, ref, period = self._measure_group(ains, latest, available)
+                if not seg:
+                    continue
+
+                bounds = cycle_slice(seg[ref], period, self._WAVE_TARGET_CYCLES)
+                if bounds is None:
+                    # No cycle to lock to (flat, noise, or slower than the
+                    # history): show the newest raw window, which is what this
+                    # trace always showed before it could measure anything.
+                    start = max(0, len(seg[ref]) - latest)
+                    stop = len(seg[ref])
+                    freq_hz = float("nan")
+                else:
+                    start, stop = bounds
+                    freq_hz = 1.0 / (period * dt) if dt else float("nan")
+
+                span_s = (stop - start) * dt
+                for amp, ain in zip(amps, ains):
+                    traces[amp] = (self._decimate_wave(seg[ain][start:stop]),
+                                   span_s, freq_hz)
+        return traces
+
     @staticmethod
     def _decimate_wave(wave) -> tuple:
-        """Thin a stream window down to _WAVE_POINTS on a UNIFORM grid.
+        """Thin a slice of raw samples down to _WAVE_POINTS on a UNIFORM grid.
 
         Uniform striding, deliberately, not the envelope-preserving min/max
         binning the amplifier tab's plot uses: min/max emits each point at its
@@ -198,6 +337,11 @@ class Beamline(QObject):
         share an x grid — and a pair drawn on two different grids shows a
         phase difference that is pure resampling artefact. Peaks matter on a
         plot you read values off; a shared time base matters here.
+
+        Striding is only safe because the caller hands over a couple of cycles
+        rather than a whole window: at ~60 points per cycle the shape survives.
+        Striding 200 cycles down to 120 points, which is what this used to be
+        given, is aliasing — it drew a beat pattern of the decimation.
         """
         if wave is None or len(wave) == 0:
             return ()
@@ -209,6 +353,7 @@ class Beamline(QObject):
 
     def _mark_labjack_disconnected(self):
         self._log_amp_currents = {}
+        self._amp_waves.clear()
         self.logamps_changed.emit(LogAmpState(connected=False))
         self.amps_changed.emit(AmpState(connected=False))
 
@@ -318,6 +463,10 @@ class Beamline(QObject):
             self._lj_worker.stop()
             self._lj_worker.wait(5000)
             self._lj_worker = None
+        # Samples either side of this restart were taken at different rates
+        # (and, for a single-channel switch, on different plates). Stitching
+        # across the seam would measure a period that never existed.
+        self._amp_waves.clear()
         self._start_stream_worker(profile_name)
 
     def disconnect_labjack(self):

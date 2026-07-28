@@ -120,6 +120,88 @@ class WaveformRing:
         return tmpl
 
 
+class AlignedWaveHistory:
+    """Recent raw windows for several channels, kept aligned by SAMPLE INDEX.
+
+    `WaveformRing` above answers "what did this channel do between t1 and t2".
+    This answers a different question — "give me the last N samples of these
+    channels, on one grid" — and the difference matters: the Overview's pair
+    trace is a comparison, so its two series must be the same samples, not two
+    time-masked selections that a rounding could leave one sample apart.
+
+    Windows are pushed whole and stored whole. A tail is only ever built from a
+    CONSECUTIVE run of windows in which every requested channel was present, so
+    a profile switch that drops a channel (or a paused one) truncates the run
+    instead of silently splicing across the gap.
+    """
+
+    def __init__(self, max_samples: int):
+        self._windows: collections.deque = collections.deque()
+        self._max_samples = int(max_samples)
+        self._samples = 0        # longest channel's total, the memory bound
+
+    def clear(self):
+        self._windows.clear()
+        self._samples = 0
+
+    def push(self, window: dict):
+        """Store one stream window: {channel -> raw sample array}.
+
+        Channels absent from *window* are absent for that window, which is what
+        breaks the run for anything asking about them.
+        """
+        window = {ch: np.asarray(v, dtype=float)
+                  for ch, v in window.items() if v is not None and len(v)}
+        if not window:
+            # An empty window still breaks continuity: pushing nothing would
+            # let the next window stitch straight onto a stale one. One marker
+            # is enough — a profile that never samples these channels would
+            # otherwise pile up empty windows at the stream rate forever.
+            if not self._windows or self._windows[-1]:
+                self._windows.append({})
+            return
+        self._windows.append(window)
+        self._samples += max(len(v) for v in window.values())
+        while self._windows and self._samples > self._max_samples:
+            oldest = self._windows.popleft()
+            if oldest:
+                self._samples -= max(len(v) for v in oldest.values())
+
+    def _run(self, channels) -> list:
+        """Newest-first list of windows in which every channel is present."""
+        run = []
+        for window in reversed(self._windows):
+            if any(ch not in window for ch in channels):
+                break
+            run.append(window)
+        return run
+
+    def aligned_length(self, channels) -> int:
+        """Samples available to all of *channels* on one contiguous grid."""
+        return sum(len(w[channels[0]]) for w in self._run(channels))
+
+    def aligned_tail(self, channels, n: int) -> dict:
+        """{channel -> last min(n, available) samples}, one shared grid.
+
+        Empty dict if the channels have no common history yet.
+        """
+        run = self._run(channels)
+        if not run or n <= 0:
+            return {}
+        take, total = [], 0
+        for window in run:                     # newest first
+            take.append(window)
+            total += len(window[channels[0]])
+            if total >= n:
+                break
+        take.reverse()                         # back into time order
+        out = {}
+        for ch in channels:
+            joined = np.concatenate([w[ch] for w in take])
+            out[ch] = joined[-n:] if joined.size > n else joined
+        return out
+
+
 def decimate_minmax(x: np.ndarray, y: np.ndarray, max_points: int):
     """Envelope-preserving decimation: bin the series and keep min+max/bin.
 

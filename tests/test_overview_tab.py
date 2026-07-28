@@ -100,10 +100,11 @@ def test_current_bar_blank_for_an_unsampled_channel(tab):
     assert tab.currents["X+"].lbl_value.text() == "—"
 
 
-def _amp(peak_kv, wave=()):
+def _amp(peak_kv, wave=(), span_s=float("nan"), freq_hz=float("nan")):
     return AmpChannelSnapshot(peak_kv=peak_kv, pkpk_kv=2 * peak_kv,
                               rms_kv=peak_kv * 0.7, rms_ma=0.5,
-                              raw_v=peak_kv, raw_i=0.1, wave_kv=tuple(wave))
+                              raw_v=peak_kv, raw_i=0.1, wave_kv=tuple(wave),
+                              wave_span_s=span_s, wave_freq_hz=freq_hz)
 
 
 def _triangle(peak, n=48, invert=False):
@@ -158,6 +159,38 @@ def test_no_waveform_is_reported_as_absent_not_as_a_fault(tab):
     }))
     tab._redraw()
     assert "no waveform" in tab.hv_phase["X"].text()
+
+
+def test_trace_caption_reads_back_the_window_it_settled_on(tab):
+    """The window is no longer a fixed 0.1 s, so the trace alone gives no
+    sense of scale — two panels showing the same-looking wave can be a decade
+    apart in frequency."""
+    tab.beamline.amps_changed.emit(AmpState(connected=True, channels={
+        "X+": _amp(2.0, _triangle(2.0), span_s=2e-3, freq_hz=1000.0),
+        "X-": _amp(2.0, _triangle(2.0, invert=True), span_s=2e-3, freq_hz=1000.0),
+    }))
+    tab._redraw()
+    text = tab.hv_window["X"].text()
+    assert "2 cycles" in text and "1 kHz" in text and "2 ms" in text
+
+
+def test_trace_caption_says_when_no_cycle_was_found(tab):
+    """An unmeasured raw window and a measured 0 Hz are different states."""
+    tab.beamline.amps_changed.emit(AmpState(connected=True, channels={
+        "X+": _amp(0.0, [0.0] * 48, span_s=0.1),
+        "X-": _amp(0.0, [0.0] * 48, span_s=0.1),
+    }))
+    tab._redraw()
+    assert "no cycle found" in tab.hv_window["X"].text()
+    assert "100 ms" in tab.hv_window["X"].text()
+
+
+def test_trace_caption_is_blank_without_a_window(tab):
+    tab.beamline.amps_changed.emit(AmpState(connected=True, channels={
+        "X+": _amp(2.0), "X-": _amp(2.0),
+    }))
+    tab._redraw()
+    assert tab.hv_window["X"].text() == "—"
 
 
 def test_pair_trace_gets_both_channels_on_one_scale(tab):
