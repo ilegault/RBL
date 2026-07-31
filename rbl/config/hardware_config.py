@@ -110,10 +110,45 @@ LOW_CURRENT_ON  = 1     # LC: reduced holding current (0=off, 1=on)
 AMP_GAIN        = 3     # AG: amplifier gain setting
 MOTOR_SMOOTHING = 2.0   # YB
 
-# CN (switch config): 1,1,-1,0,0
-# Arg1=1 (latch), Arg2=1 (forward limit NC), Arg3=-1 (home switch active-low),
-# Arg4=0, Arg5=0
+# CN (switch config) — arguments per the CN reference, which are NOT what the
+# comment here used to claim (it had the latch first and called arg2 a limit
+# polarity; arg2 is neither a polarity nor about the limits):
+#
+#   m = 1   LIMIT switches active HIGH        (-1 = active low)
+#   n = 1   HOME switch drives the motor FORWARD when the input is high
+#           (-1 = reverse when high). A DIRECTION, not a polarity: it is what
+#           HM and FE use to decide which way to search, which is why HM needs
+#           no direction argument of its own.
+#   o = -1  Latch input active low
+#   p = 0   Inputs 5-8/13-16 are general-purpose, not selective-abort
+#   q = 0   Abort input terminates program execution
+#
+# Controller default is -1,-1,-1,0,0, so m=1 here is a deliberate departure:
+# these limits are ACTIVE HIGH.
 CN_CONFIG = "1,1,-1,0,0"
+
+_CN_ARGS = [int(a) for a in CN_CONFIG.split(",")]
+
+# What a limit operand READS when the switch is tripped, which follows directly
+# from CN's first argument. Per the _LF/_LR reference:
+#     CN m=1  ->  _LFn/_LRn = 1 when active, 0 when inactive
+#     CN m=-1 ->  _LFn/_LRn = 0 when active, 1 when inactive
+# The driver used to test both against "< 0.5" unconditionally — correct only
+# for m=-1, and this app sends m=1. Derived from CN_CONFIG rather than written
+# out again so the two can never drift apart.
+LIMIT_SWITCHES_ACTIVE_HIGH = _CN_ARGS[0] == 1
+
+# The home switch is NOT covered by the above: CN's n argument sets a search
+# DIRECTION, not the polarity of the _HM operand, and the reference says only
+# that "_HMn contains the state of the home switch". So what a tripped home
+# switch reads is a property of how the switch is WIRED (NO vs NC, sourcing vs
+# sinking), which no manual can settle.
+#
+# UNVERIFIED — this preserves the app's long-standing assumption rather than
+# asserting a new one. To check it on the bench, with the slits clear of their
+# limits, run `MG _HMA` in the Command Console: it should read 1 while OFF the
+# home switch if this is right, and 0 if this needs to become True.
+HOME_SWITCH_ACTIVE_HIGH = False
 
 
 # --- Unit helpers -------------------------------------------------------------

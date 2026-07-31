@@ -167,20 +167,55 @@ class TestReads:
         assert lim["forward_counts"] == 500000
         assert lim["back_counts"] == -500000
 
-    def test_switches_are_active_low(self):
-        # Galil reports 0 when a switch is tripped, 1 when open.
-        g = make_galil({"MG _LFA": "0", "MG _LRA": "1", "MG _HMA": "0"})
+    def test_limits_follow_the_cn_polarity_not_a_constant(self):
+        """CN's first argument sets what a tripped limit READS: with m=1
+        (this app's configuration) _LF/_LR are 1 when ACTIVE. Testing both
+        against '< 0.5' was the m=-1 reading, so every limit came out
+        backwards and a clear axis looked like one on its limit."""
+        assert SC.LIMIT_SWITCHES_ACTIVE_HIGH is True    # from CN_CONFIG "1,..."
+        g = make_galil({"MG _LFA": "1", "MG _LRA": "0", "MG _HMA": "1"})
         sw = g.get_switch_states("A")
-        assert sw["forward_switch"] is True    # 0 -> tripped
-        assert sw["reverse_switch"] is False   # 1 -> open
-        assert sw["home_switch"] is True       # 0 -> tripped
+        assert sw["forward_switch"] is True     # 1 -> tripped, CN m=1
+        assert sw["reverse_switch"] is False    # 0 -> open
+
+    def test_limits_read_the_other_way_when_the_controller_says_so(self):
+        """The polarity comes from the controller's own _CN0 when it has been
+        read, so a controller that did not take our CN is still read
+        correctly."""
+        g = make_galil({"MG _LFA": "1", "MG _LRA": "0"})
+        g.limits_active_high = False            # as if _CN0 reported -1
+        sw = g.get_switch_states("A")
+        assert sw["forward_switch"] is False
+        assert sw["reverse_switch"] is True
+
+    def test_home_switch_keeps_its_own_polarity(self):
+        """CN's n argument is a search DIRECTION, not the _HM polarity, so the
+        home switch is not swept along with the limits."""
+        assert SC.HOME_SWITCH_ACTIVE_HIGH is False
+        g = make_galil({"MG _LFA": "0", "MG _LRA": "0", "MG _HMA": "0"})
+        assert g.get_switch_states("A")["home_switch"] is True
+        g = make_galil({"MG _LFA": "0", "MG _LRA": "0", "MG _HMA": "1"})
+        assert g.get_switch_states("A")["home_switch"] is False
 
     def test_switches_all_open(self):
-        g = make_galil({"MG _LFD": "1", "MG _LRD": "1", "MG _HMD": "1"})
+        # Limits active high -> 0 is open; home active low -> 1 is open.
+        g = make_galil({"MG _LFD": "0", "MG _LRD": "0", "MG _HMD": "1"})
         sw = g.get_switch_states("D")
         assert sw == {"forward_switch": False,
                       "reverse_switch": False,
                       "home_switch": False}
+
+    def test_limit_polarity_is_read_back_from_the_controller(self):
+        g = make_galil({"MG _CN0": "1"})
+        assert g.read_limit_polarity() is True
+        g = make_galil({"MG _CN0": "-1"})
+        assert g.read_limit_polarity() is False
+
+    def test_an_unanswered_polarity_read_is_not_fatal(self):
+        """A controller that will not answer _CN0 must still connect; the
+        configured value covers it."""
+        g = make_galil({"MG _CN0": ("?", "1 unrecognized command")})
+        assert g.read_limit_polarity() is None
 
 
 # ── Motion command builders (exact wire format) ──────────────────────────────
@@ -299,8 +334,17 @@ class TestStartupSequence:
             "MO",
             "AG 3,3,3,3",
             "SH ABCD",
+            # Ask the controller what limit polarity it ACTUALLY has rather
+            # than trusting that it took the CN we opened with.
+            "MG _CN0",
         ]
         assert g.sock.sent == expected
+
+    def test_startup_learns_the_limit_polarity(self):
+        g = make_galil({"MG _CN0": "1"})
+        assert g.limits_active_high is None      # nothing known before connect
+        g.startup_sequence(axes="ABCD", speed=1000, accel=25600)
+        assert g.limits_active_high is True
 
     def test_sequence_scales_to_two_axes(self):
         g = make_galil()
