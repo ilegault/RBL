@@ -167,13 +167,40 @@ class TestReads:
         assert lim["forward_counts"] == 500000
         assert lim["back_counts"] == -500000
 
-    def test_switches_are_active_low(self):
-        # Galil reports 0 when a switch is tripped, 1 when open.
+    def test_a_tripped_switch_reads_low(self):
+        """Not derivable from CN's m=1 on its own, and that is the trap: the
+        _LF/_LR reference defines "active" ELECTRICALLY (>=1 mA flowing), and
+        these switches are NORMALLY CLOSED, so current flows while the axis is
+        CLEAR. Clear reads 1; tripped breaks the circuit and reads 0.
+
+        The home switch is the same, and that one is measured rather than
+        argued: MG _HMC reads 0 with C on its home switch, MG _HMB reads 1
+        with B off it.
+        """
+        assert SC.LIMIT_SWITCH_TRIPPED_IS_LOW is True
+        assert SC.HOME_SWITCH_TRIPPED_IS_LOW is True
         g = make_galil({"MG _LFA": "0", "MG _LRA": "1", "MG _HMA": "0"})
         sw = g.get_switch_states("A")
-        assert sw["forward_switch"] is True    # 0 -> tripped
-        assert sw["reverse_switch"] is False   # 1 -> open
-        assert sw["home_switch"] is True       # 0 -> tripped
+        assert sw["forward_switch"] is True    # 0 -> no current -> tripped
+        assert sw["reverse_switch"] is False   # 1 -> current -> clear
+        assert sw["home_switch"] is True
+
+    def test_a_clear_axis_reads_clear_on_every_switch(self):
+        """The observation that caught reading this backwards: with the slits
+        clear the bench shows "Idle", never "FWD LIMIT active"."""
+        g = make_galil({"MG _LFA": "1", "MG _LRA": "1", "MG _HMA": "1"})
+        assert g.get_switch_states("A") == {"forward_switch": False,
+                                            "reverse_switch": False,
+                                            "home_switch": False}
+
+    def test_the_polarity_is_configurable_not_hard_coded(self, monkeypatch):
+        """Wiring is a property of the machine, so re-wiring to normally-open
+        switches must be a constant to change, not a driver edit."""
+        monkeypatch.setattr(SC, "LIMIT_SWITCH_TRIPPED_IS_LOW", False)
+        g = make_galil({"MG _LFA": "1", "MG _LRA": "0", "MG _HMA": "1"})
+        sw = g.get_switch_states("A")
+        assert sw["forward_switch"] is True
+        assert sw["reverse_switch"] is False
 
     def test_switches_all_open(self):
         g = make_galil({"MG _LFD": "1", "MG _LRD": "1", "MG _HMD": "1"})
@@ -239,10 +266,26 @@ class TestMotionCommands:
     def test_begin_home_sequence(self):
         g = make_galil()
         g.begin_home("A", 900)
-        # SP, JG (negative = toward home), HM, BG  — in that order
-        assert g.sock.sent == ["SP 900", "JG -900", "HM A", "BG A"]
+        # SP (stage 1), HV (stage 2), JG, HM, BG — in that order.
+        assert g.sock.sent == ["SP 900", "HV 900", "JG -900", "HM A", "BG A"]
 
-    def test_begin_home_direction_is_negative(self):
+    def test_begin_home_sets_the_two_stages_separately(self):
+        """HM's stage 1 searches at SP; stage 2 re-approaches at HV and is what
+        fixes where the zero lands. A homing routine turns HV down for
+        repeatability while leaving SP fast enough to cover the distance."""
+        g = make_galil()
+        g.begin_home("B", 900, fine_speed=58)
+        assert g.sock.sent[:2] == ["SP ,900", "HV ,58"]
+
+    def test_home_velocity_is_positional_per_axis(self):
+        g = make_galil()
+        g.set_home_velocity("C", 58)
+        assert g.sock.sent == ["HV ,,58"]
+
+    def test_begin_home_jog_is_negative(self):
+        """The JG does not steer the search — HM picks its stage-1 direction
+        from the initial state of the home input. It is here to leave the axis
+        in a known jog mode before HM replaces the profile."""
         g = make_galil()
         g.begin_home("B", 450)
         jg = [c for c in g.sock.sent if c.startswith("JG")][0]
@@ -359,3 +402,70 @@ class TestLifecycle:
             t.join()
 
         assert g.sock.max_active == 1, "commands interleaved — lock failed"
+
+
+# ── Multi-axis (vector) command builders ─────────────────────────────────────
+
+class TestAxisVector:
+    """Galil addresses axes by POSITION in the argument list, so a value for C
+    is the third slot and the slots before it must exist even when empty."""
+
+    def test_all_four_axes(self):
+        assert GalilController.axis_vector("ABCD", 225) == "225,225,225,225"
+
+    def test_a_subset_keeps_its_positions(self):
+        assert GalilController.axis_vector("AC", 225) == "225,,225"
+        assert GalilController.axis_vector("B", 225) == ",225"
+        assert GalilController.axis_vector("D", 225) == ",,,225"
+
+    def test_negative_values(self):
+        assert GalilController.axis_vector("ABCD", -500) == "-500,-500,-500,-500"
+
+
+class TestMultiAxisMotion:
+    def test_begin_home_multi_is_one_hm_and_one_bg(self):
+        """The HM reference's own idiom: set homing mode for the axes, then
+        one BG starts them all. Four axes under the CONTROLLER's sequencer
+        rather than four host threads on one socket."""
+        g = make_galil()
+        g.begin_home_multi("ABCD", 225, fine_speed=58)
+        assert g.sock.sent == [
+            "SP 225,225,225,225",
+            "HV 58,58,58,58",
+            "JG -225,-225,-225,-225",
+            "HM ABCD",
+            "BG ABCD",
+        ]
+
+    def test_begin_home_multi_defaults_hv_to_the_search_speed(self):
+        g = make_galil()
+        g.begin_home_multi("AB", 225)
+        assert g.sock.sent[:2] == ["SP 225,225", "HV 225,225"]
+
+    def test_jog_start_multi(self):
+        g = make_galil()
+        g.jog_start_multi("ABCD", -500)
+        assert g.sock.sent == ["JG -500,-500,-500,-500", "BG ABCD"]
+
+    def test_move_relative_multi(self):
+        g = make_galil()
+        g.move_relative_multi("ABCD", 1000)
+        assert g.sock.sent == ["PR 1000,1000,1000,1000", "BG ABCD"]
+
+    def test_define_zero_multi(self):
+        g = make_galil()
+        g.define_zero_multi("ABCD")
+        assert g.sock.sent == ["DP 0,0,0,0"]
+
+    def test_speed_restores_are_vectors_too(self):
+        g = make_galil()
+        g.set_speed_multi("ABCD", 1000)
+        g.set_home_velocity_multi("ABCD", 256)
+        assert g.sock.sent == ["SP 1000,1000,1000,1000", "HV 256,256,256,256"]
+
+    def test_stop_takes_an_axis_mask(self):
+        """One ST for several axes — how the multi-axis seek stops whatever is
+        still moving when it is cancelled."""
+        g = make_galil()
+        g.stop("ABCD")
+        assert g.sock.sent == ["ST ABCD"]

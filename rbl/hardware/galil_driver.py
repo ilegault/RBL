@@ -143,13 +143,29 @@ class GalilController:
     def get_switch_states(self, axis: str) -> dict:
         """Hardware limit + home switch states (True = active/tripped).
 
-        All three inputs are active-low: the Galil reports 0 when a switch
-        is triggered and 1 when it is open, so active = value < 0.5.
+        All three read LOW when tripped, which is the composition of two
+        separate facts and is why it is not derivable from CN alone:
+
+          - CN's m=1 makes the limit inputs "active high", where ACTIVE is
+            defined electrically (>=1 mA flowing), not as "the slit reached its
+            limit"; and
+          - the switches are NORMALLY CLOSED, so current flows while the axis
+            is CLEAR and reaching the limit breaks the circuit.
+
+        Clear axis -> closed -> current -> reads 1. Tripped -> open -> no
+        current -> reads 0. See LIMIT_SWITCH_TRIPPED_IS_LOW, which is where
+        that conclusion is written down and argued.
         """
+        from rbl.config import hardware_config as SC
+
+        def tripped(operand: str, tripped_is_low: bool) -> bool:
+            value = float(self.cmd(f"MG {operand}{axis}"))
+            return value < 0.5 if tripped_is_low else value > 0.5
+
         return {
-            "forward_switch": float(self.cmd(f"MG _LF{axis}")) < 0.5,
-            "reverse_switch": float(self.cmd(f"MG _LR{axis}")) < 0.5,
-            "home_switch":    float(self.cmd(f"MG _HM{axis}")) < 0.5,
+            "forward_switch": tripped("_LF", SC.LIMIT_SWITCH_TRIPPED_IS_LOW),
+            "reverse_switch": tripped("_LR", SC.LIMIT_SWITCH_TRIPPED_IS_LOW),
+            "home_switch":    tripped("_HM", SC.HOME_SWITCH_TRIPPED_IS_LOW),
         }
 
     def is_motor_off(self, axis: str) -> bool:
@@ -158,6 +174,25 @@ class GalilController:
 
     def model_info(self) -> str:
         return self.cmd("TH")
+
+    # ---- Multi-axis argument builder --------------------------------------
+
+    @staticmethod
+    def axis_vector(axes: str, value) -> str:
+        """Galil's positional argument list over ABCD, for a command sent to
+        several axes at once.
+
+        Galil addresses axes by POSITION in the argument list, not by name, so
+        a value for C is the third slot and the slots before it must exist even
+        when empty: `SP ,,225` is C only. Building that here — once, from an
+        axis set — is what lets the multi-axis routine send one `SP` for four
+        axes instead of four, without any caller doing comma arithmetic.
+
+            axis_vector("ABCD", 225) -> "225,225,225,225"
+            axis_vector("AC",   225) -> "225,,225"
+        """
+        slots = [str(value) if a in axes else "" for a in "ABCD"]
+        return ",".join(slots).rstrip(",")
 
     # ---- Motion ----------------------------------------------------------
 
@@ -211,19 +246,87 @@ class GalilController:
         self.cmd(f"AC {prefix}{accel_counts_per_sec2}")
         self.cmd(f"DC {prefix}{accel_counts_per_sec2}")
 
-    def begin_home(self, axis: str, speed: int):
-        """Issue the Galil HM (home) command sequence at the given speed.
+    def begin_home(self, axis: str, speed: int, fine_speed: int = None):
+        """Issue the Galil HM (home) sequence, then BG to run it.
 
         Returns immediately — motion runs asynchronously. Call is_moving() to
-        poll completion, then define_zero() once the home switch is confirmed.
+        poll completion, then define_zero(): on a STEPPER, HM does not set
+        position 0 itself. Per the HM reference, the third stage — the one that
+        latches an encoder index pulse and defines it as zero — is servo-only,
+        and "for stepper mode operation, the sequence consists of the first two
+        stages". So the zero is ours to define, and DP is how.
 
-        Direction is negative (toward 0) — set via JG before HM.
+        TWO SPEEDS, because HM's two stages use two different ones:
+          SP  sets stage 1, the fast search that runs until the home input
+              CHANGES STATE, then decelerates to a stop.
+          HV  sets stage 2, where the motor reverses and re-approaches that
+              same transition slowly, stopping instantaneously on it.
+        Stage 2 is the one that fixes where "home" ends up, so HV — not SP —
+        is what a homing routine has to turn down for repeatability. It
+        defaults to `speed` here only so a caller that does not care still gets
+        a defined value rather than whatever HV was left at.
+
+        DIRECTION IS NOT OURS TO CHOOSE. The reference is explicit: "the
+        direction for this first stage is determined by the initial state of
+        the homing input", i.e. HM works out for itself which way home is from
+        whether the axis is currently on the switch. The JG below therefore
+        does NOT steer the search — it is left in only because it puts the axis
+        in a known jog mode before HM replaces the profile, which is the idiom
+        the rest of this driver was written against.
         """
         prefix = "," * "ABCD".index(axis)
-        self.cmd(f"SP {prefix}{speed}")
-        self.cmd(f"JG {prefix}{-speed}")   # set homing direction: negative
+        fine = speed if fine_speed is None else fine_speed
+        self.cmd(f"SP {prefix}{speed}")   # stage 1: fast search
+        self.cmd(f"HV {prefix}{fine}")    # stage 2: slow re-approach — sets the zero
+        self.cmd(f"JG {prefix}{-speed}")
         self.cmd(f"HM {axis}")
         self.cmd(f"BG {axis}")
+
+    def set_home_velocity(self, axis: str, speed_counts_per_sec: int):
+        """HV — the speed of HM's second stage (the slow re-approach)."""
+        prefix = "," * "ABCD".index(axis)
+        self.cmd(f"HV {prefix}{speed_counts_per_sec}")
+
+    # ---- Multi-axis motion -------------------------------------------------
+    #
+    # The HM reference's own idiom: "HM Set Homing Mode for all axes / BG Home
+    # all axes". One HM and one BG start every axis together, sequenced by the
+    # CONTROLLER, instead of four host threads interleaving their own HM/BG
+    # pairs on a single socket and hoping the ordering survives the trip.
+
+    def begin_home_multi(self, axes: str, speed: int, fine_speed: int = None):
+        """HM + BG across `axes` — every axis homing under one command.
+
+        Same five commands as begin_home, with every argument a positional
+        vector instead of a single slot, so the axes are configured and then
+        released together rather than one after another. See begin_home for
+        what SP and HV each do to HM's two stages, and why direction is not
+        ours to pick.
+        """
+        fine = speed if fine_speed is None else fine_speed
+        self.cmd(f"SP {self.axis_vector(axes, speed)}")
+        self.cmd(f"HV {self.axis_vector(axes, fine)}")
+        self.cmd(f"JG {self.axis_vector(axes, -speed)}")
+        self.cmd(f"HM {axes}")
+        self.cmd(f"BG {axes}")
+
+    def jog_start_multi(self, axes: str, signed_speed: int):
+        """Begin a jog on every axis in `axes` at one signed speed."""
+        self.cmd(f"JG {self.axis_vector(axes, signed_speed)}")
+        self.cmd(f"BG {axes}")
+
+    def move_relative_multi(self, axes: str, delta_counts: int):
+        self.cmd(f"PR {self.axis_vector(axes, delta_counts)}")
+        self.cmd(f"BG {axes}")
+
+    def define_zero_multi(self, axes: str):
+        self.cmd(f"DP {self.axis_vector(axes, 0)}")
+
+    def set_speed_multi(self, axes: str, speed_counts_per_sec: int):
+        self.cmd(f"SP {self.axis_vector(axes, speed_counts_per_sec)}")
+
+    def set_home_velocity_multi(self, axes: str, speed_counts_per_sec: int):
+        self.cmd(f"HV {self.axis_vector(axes, speed_counts_per_sec)}")
 
 
 # --- Self-test (no hardware) -------------------------------------------------

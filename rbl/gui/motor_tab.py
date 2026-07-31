@@ -6,8 +6,39 @@ Features:
   - Per-axis jog/move/stop/zero controls.
   - Jog speed and target position in cps OR mm/s / mm (unit toggle).
   - Per-axis Enable (SH) / Disable (MO) buttons; also single-axis and all-axis.
-  - Automated homing with progressive speed retry (900 → 450 → 225 cps).
+  - Automated homing with progressive speed retry (225 → 112 → 58 cps), per
+    axis and for the whole set.
   - Big red EMERGENCY STOP always visible.
+
+HOMING, AND THE EIGHT CLICKS IT USED TO TAKE
+--------------------------------------------
+On a stepper HM is a two-stage search — a fast pass at SP until the home input
+changes state, then a slow re-approach at HV that is what actually fixes the
+zero. The routine runs it three times at 225 / 112 / 58 cps for repeatability,
+but from the far end of the travel that last pass would take minutes and time
+out, so the working procedure was always to jog the axis down onto its limit by
+hand FIRST, then press Home. Two gestures per axis, eight before the slits were
+usable, at the start of every session.
+
+Three buttons now cover that — seek the limit, three HM passes, DP=0:
+
+  - "Seek + Home {axis}" on each panel: that axis's two gestures, one click.
+    (AxisHomeRoutine, HM A / BG A.)
+  - "Auto-Home All — One at a Time": all four, sequentially, on one thread.
+    One axis in motion and one command on the wire at any moment; a failure
+    stops the run with the untried axes untouched. This is the one to press.
+    (AutoHomeAllWorker.)
+  - "Auto-Home All — Together": one HM ABCD and one BG ABCD, every argument a
+    positional vector, so the CONTROLLER sequences the four axes rather than
+    four host threads interleaving their command setups on one socket. This is
+    the idiom the HM reference itself gives ("HM Set Homing Mode for all axes /
+    BG Home all axes"). (MultiAxisHomeWorker.)
+
+Any homing run locks its axis's jog/move/zero controls (a second command on a
+homing axis is the thing to prevent) but never its Stop, its Home buttons —
+which read Cancel while running — or the EMERGENCY STOP, which additionally
+cancels every run in progress, because an abort that the next pass undoes a
+second later is not a stop.
 """
 import time
 
@@ -15,16 +46,18 @@ from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel,
-    QPushButton, QFormLayout, QComboBox,
+    QPushButton, QFormLayout,
     QMessageBox, QLineEdit,
 )
 
 from rbl.hardware.galil_driver import GalilController, GalilError
-from rbl.hardware.galil_workers import GalilPollWorker, HomingWorker
+from rbl.hardware.galil_workers import (
+    AutoHomeAllWorker, GalilPollWorker, HomingWorker, MultiAxisHomeWorker,
+)
 from rbl.config import hardware_config as SC
 from rbl.gui import theme
 from rbl.gui.widgets.command_console import HistoryLineEdit, LogPane
-from rbl.gui.widgets.inputs import QuietDoubleSpinBox
+from rbl.gui.widgets.inputs import NoScrollComboBox, QuietDoubleSpinBox
 
 
 # ─── Per-axis control groupbox ────────────────────────────────────────────────
@@ -44,6 +77,12 @@ class AxisControls(QGroupBox):
         # — and one made there also reaches this panel. See Beamline.move_slit.
         self.beamline  = beamline
         self._homing_worker: HomingWorker | None = None
+        # A status line held by something outside this panel — the all-axes
+        # auto-home sequencer, which drives this axis without owning one of
+        # this panel's workers. While it is set, the 5 Hz poll must not paint
+        # over it with "Idle", which is what update_state would otherwise do
+        # between two of the sequencer's commands.
+        self._external_status: str | None = None
         # Has this axis had its zero established since the app started?  The
         # controller does not remember, and every mm figure downstream is wrong
         # without it, so consumers get told rather than left to assume.
@@ -90,7 +129,7 @@ class AxisControls(QGroupBox):
         self.spn_speed = QuietDoubleSpinBox()
         self.spn_speed.setDecimals(2)
         self.spn_speed.setMaximumWidth(100)
-        self.cbo_speed_unit = QComboBox()
+        self.cbo_speed_unit = NoScrollComboBox()
         self.cbo_speed_unit.addItems(["cps", "mm/s"])
         self.cbo_speed_unit.currentIndexChanged.connect(self._on_speed_unit_changed)
         speed_row.addWidget(self.spn_speed, stretch=1)
@@ -140,7 +179,7 @@ class AxisControls(QGroupBox):
         self.spn_target = QuietDoubleSpinBox()
         self.spn_target.setDecimals(3)
         self.spn_target.setMaximumWidth(100)
-        self.cbo_target_unit = QComboBox()
+        self.cbo_target_unit = NoScrollComboBox()
         self.cbo_target_unit.addItems(["counts", "mm"])
         self.cbo_target_unit.setCurrentIndex(1)          # default to mm
         self.cbo_target_unit.currentIndexChanged.connect(self._on_target_unit_changed)
@@ -154,15 +193,49 @@ class AxisControls(QGroupBox):
         main_layout.addLayout(target_form)
         self._set_target_unit_range("mm")
 
-        # --- Home button (always visible) --------------------------------
+        # --- Home buttons (always visible) -------------------------------
+        #
+        # Two, because they are two different starting assumptions, not two
+        # levels of a setting. "Home" is HM from wherever the axis already is,
+        # which is right when it is already near the switch. "Seek + Home"
+        # jogs it down onto the limit first, which is the pair of gestures the
+        # procedure has always required from cold — and doing it in one click
+        # is the whole reason this panel grew a second button.
+        home_row = QHBoxLayout()
+        home_row.setSpacing(4)
+
         self.btn_home = QPushButton(f"Home {axis_letter}")
         self.btn_home.setStyleSheet(
             "QPushButton { background:#004e8c; color:white; font-weight:bold; }"
             "QPushButton:hover { background:#0063b1; }"
             "QPushButton:disabled { background:#c0c0c0; color:#888; }"
         )
-        self.btn_home.clicked.connect(self._start_homing)
-        main_layout.addWidget(self.btn_home)
+        self.btn_home.setToolTip(
+            f"HM from wherever axis {axis_letter} is now: three passes "
+            "(225 / 112 / 58 cps), then DP=0.\n"
+            "Use this when the axis is already near its home switch — from "
+            "the far end of the travel the 58 cps pass will time out."
+        )
+        self.btn_home.clicked.connect(lambda: self._start_homing(seek_first=False))
+        home_row.addWidget(self.btn_home)
+
+        self.btn_seek_home = QPushButton(f"Seek + Home {axis_letter}")
+        self.btn_seek_home.setStyleSheet(
+            "QPushButton { background:#00607a; color:white; font-weight:bold; }"
+            "QPushButton:hover { background:#00758f; }"
+            "QPushButton:disabled { background:#c0c0c0; color:#888; }"
+        )
+        self.btn_seek_home.setToolTip(
+            f"The two-step procedure in one click: jog {axis_letter} negative "
+            f"at {SC.HOME_SEEK_SPEED_COUNTS_PER_SEC} cps until the home limit "
+            "trips, then the same three-pass HM and DP=0 as Home.\n"
+            "This is what to press from cold. One command at a time, and the "
+            "button becomes Cancel while it runs."
+        )
+        self.btn_seek_home.clicked.connect(lambda: self._start_homing(seek_first=True))
+        home_row.addWidget(self.btn_seek_home)
+
+        main_layout.addLayout(home_row)
 
         self.set_enabled(False)
 
@@ -244,7 +317,7 @@ class AxisControls(QGroupBox):
         for w in (self.btn_jog_neg, self.btn_jog_pos, self.btn_stop,
                   self.btn_move, self.btn_zero, self.spn_target,
                   self.spn_speed, self.btn_enable_axis,
-                  self.btn_disable_axis, self.btn_home):
+                  self.btn_disable_axis, self.btn_home, self.btn_seek_home):
             w.setEnabled(on)
 
     # ---- GUI -> Galil action handlers ----------------------------------------
@@ -272,7 +345,7 @@ class AxisControls(QGroupBox):
             lbl.setFont(label_font)
         self.lbl_status.setFont(status_font)
 
-        for btn in (self.btn_move, self.btn_home):
+        for btn in (self.btn_move, self.btn_home, self.btn_seek_home):
             btn.setFont(btn_font)
             btn.setMinimumHeight(btn_h)
 
@@ -360,27 +433,73 @@ class AxisControls(QGroupBox):
         except (GalilError, ConnectionError) as e:
             self.log(f"! {e}")
 
-    def _start_homing(self):
+    def homing_active(self) -> bool:
+        """Is this axis inside a homing run — its own, or the tab's sequencer?"""
+        if self._external_status is not None:
+            return True
+        return self._homing_worker is not None and self._homing_worker.isRunning()
+
+    def cancel_homing(self):
+        """Stop this panel's own homing run, if one is going.
+
+        Cooperative: the routine checks between commands, so this stops the
+        NEXT command rather than the motion already underway. That is what
+        makes an EMERGENCY STOP stick instead of being undone by the next pass.
+        """
+        if self._homing_worker is not None and self._homing_worker.isRunning():
+            self._homing_worker.cancel()
+
+    def set_motion_controls_enabled(self, on: bool):
+        """Everything that could put a SECOND command on this axis.
+
+        Deliberately not the home buttons: while a run is going they read
+        Cancel, and locking the operator out of their own way to stop it is
+        the opposite of safe. Stop stays live for the same reason.
+        """
+        for w in (self.btn_jog_neg, self.btn_jog_pos, self.btn_move,
+                  self.btn_zero, self.spn_target, self.spn_speed,
+                  self.btn_enable_axis, self.btn_disable_axis):
+            w.setEnabled(on)
+
+    def _start_homing(self, seek_first: bool = False):
+        """Start (or cancel) this axis's homing run."""
         g = self.get_galil()
         if g is None or not g.connected:
             return
         if self._homing_worker is not None and self._homing_worker.isRunning():
             self._homing_worker.cancel()
-            self.btn_home.setText(f"Home {self.axis}")
+            self._reset_home_buttons()
             return
+        if self._external_status is not None:
+            return   # the tab's sequencer owns this axis right now
 
-        self.log(f"# Starting auto-home for axis {self.axis}…")
-        self.btn_home.setText("Cancel Home")
-        self.lbl_status.setText("Homing…")
+        what = "seek + home" if seek_first else "home"
+        self.log(f"# Starting auto-{what} for axis {self.axis}…")
+        (self.btn_seek_home if seek_first else self.btn_home).setText("Cancel")
+        self.lbl_status.setText("Seeking limit…" if seek_first else "Homing…")
         self.lbl_status.setStyleSheet("color: #c07000; font-weight: bold;")
 
-        self._homing_worker = HomingWorker(g, self.axis, self)
+        # A jog or a Move on this axis mid-run would collide with the routine's
+        # own motion. The home buttons stay live — they are the Cancel.
+        self.set_motion_controls_enabled(False)
+
+        self._homing_worker = HomingWorker(g, self.axis, self,
+                                           seek_first=seek_first)
         self._homing_worker.progress.connect(self.log)
         self._homing_worker.done.connect(self._on_homing_done)
         self._homing_worker.start()
 
-    def _on_homing_done(self, success: bool, msg: str):
+    def _reset_home_buttons(self):
         self.btn_home.setText(f"Home {self.axis}")
+        self.btn_seek_home.setText(f"Seek + Home {self.axis}")
+
+    def _on_homing_done(self, success: bool, msg: str):
+        self._reset_home_buttons()
+        g = self.get_galil()
+        # Only hand the controls back if there is still something to command:
+        # the link may have dropped underneath the run, which is one of the
+        # ways it ends.
+        self.set_motion_controls_enabled(bool(g is not None and g.connected))
         if success:
             # Homing ends on DP=0, so the axis is now referenced.
             self.zeroed = True
@@ -388,14 +507,32 @@ class AxisControls(QGroupBox):
         if not success:
             QMessageBox.warning(self, "Homing failed", msg)
 
+    # ---- Status held from outside -------------------------------------------
+
+    def set_external_status(self, text: str | None, role: str = None):
+        """Hold this panel's status line while the tab's sequencer drives it.
+
+        `None` releases it, and the next poll repaints the real state. Without
+        this the 5 Hz poll would overwrite "Queued for auto-home" with "Idle"
+        200 ms later, and an axis waiting its turn would look identical to one
+        nobody intends to touch.
+        """
+        self._external_status = text
+        if text is None:
+            return
+        self.lbl_status.setText(text)
+        self.lbl_status.setStyleSheet(
+            theme.status_label(role) if role else "color: #c07000; font-weight: bold;")
+
     # ---- State update slot --------------------------------------------------
 
     def update_state(self, axis_state: dict):
         pos = axis_state["pos"]
         self.lbl_pos.setText(f"{pos:,} cts  /  {SC.counts_to_mm(self.axis, pos):+.4f} mm")
 
-        # Don't overwrite "Homing…" while worker is running
-        if self._homing_worker is None or not self._homing_worker.isRunning():
+        # Don't overwrite "Homing…" while a homing run owns this axis — its
+        # own worker, or the tab's all-axes sequencer.
+        if not self.homing_active():
             enabled = axis_state.get("enabled", True)
             sw      = axis_state["switches"]
             if axis_state["moving"]:
@@ -462,6 +599,11 @@ class MotorTab(QWidget):
         # below don't need touching. MotorTab does not construct or own it.
         self.beamline = beamline
         self.worker = None
+
+        # The two all-axes workers, while one is running. Only ever one at a
+        # time — each start path refuses while the other is going.
+        self._auto_worker: AutoHomeAllWorker | None = None          # sequential
+        self._parallel_worker: MultiAxisHomeWorker | None = None    # together
 
         outer_layout = QHBoxLayout(self)
         outer_layout.setContentsMargins(8, 8, 8, 8)
@@ -557,6 +699,9 @@ class MotorTab(QWidget):
         estop_row.addWidget(self.btn_simple_mode, stretch=1)
         left_layout.addLayout(estop_row)
 
+        # ── Automatic homing (all four axes) ────────────────────────────────
+        left_layout.addWidget(self._build_auto_home_box())
+
         # ── 4 axis panels in 2×2 grid ────────────────────────────────────────
         grid = QGridLayout()
         grid.setSpacing(6)
@@ -598,6 +743,223 @@ class MotorTab(QWidget):
         beamline.slit_target_changed.connect(self._on_slit_target_changed)
 
         self._set_buttons_connected(False)
+
+    # ---- Automatic homing, all four axes -------------------------------------
+    #
+    # Bringing the slits up used to be eight deliberate gestures — jog each
+    # axis onto its limit, then press its Home button — before any other
+    # calibration could start. Both buttons here do that whole set from one
+    # click; they differ only in whether the axes take turns.
+
+    _AUTO_HOME_STANDING = (
+        "Homes all four slits from cold: jog each axis onto its home limit, "
+        "then the three-pass HM and DP=0. Sequential is the one to use — start "
+        "it and work on another tab."
+    )
+
+    def _build_auto_home_box(self) -> QGroupBox:
+        box = QGroupBox("Automatic Homing — All Four Slits")
+        lay = QVBoxLayout(box)
+        lay.setSpacing(4)
+
+        row = QHBoxLayout()
+        row.setSpacing(6)
+
+        self.btn_auto_home_seq = QPushButton("Auto-Home All — One at a Time")
+        self.btn_auto_home_seq.setMinimumHeight(40)
+        self.btn_auto_home_seq.setStyleSheet(
+            "QPushButton { background:#004e8c; color:white; font-weight:bold;"
+            " font-size:14px; }"
+            "QPushButton:hover { background:#0063b1; }"
+            "QPushButton:disabled { background:#c0c0c0; color:#888; }"
+        )
+        self.btn_auto_home_seq.setToolTip(
+            "A, B, C, D in order. Each axis is jogged onto its home limit, "
+            "homed in three passes and zeroed before the next one is touched, "
+            "so only one axis is ever moving and only one command is ever on "
+            "the wire.\n\n"
+            "If an axis fails, the sequence stops there and the remaining axes "
+            "are left untouched — you get one clear failure instead of four "
+            "half-homed slits.\n\n"
+            "Safe to leave running while you work on another tab. Press again "
+            "to cancel."
+        )
+        self.btn_auto_home_seq.clicked.connect(self._start_auto_home)
+        row.addWidget(self.btn_auto_home_seq, stretch=2)
+
+        self.btn_auto_home_par = QPushButton("Auto-Home All — Together")
+        self.btn_auto_home_par.setMinimumHeight(40)
+        self.btn_auto_home_par.setStyleSheet(
+            "QPushButton { background:#7a4a00; color:white; font-weight:bold;"
+            " font-size:14px; }"
+            "QPushButton:hover { background:#8f5800; }"
+            "QPushButton:disabled { background:#c0c0c0; color:#888; }"
+        )
+        self.btn_auto_home_par.setToolTip(
+            "The same routine on all four axes AT ONCE, sent the way the HM "
+            "reference describes it: one HM ABCD and one BG ABCD, with every "
+            "argument a positional vector. The CONTROLLER sequences the four "
+            "axes — this program issues one command, not four.\n\n"
+            "Faster, but all four slits move together, so there is more in "
+            "motion at once to watch. If anything looks wrong, EMERGENCY STOP "
+            "and use the sequential button.\n\n"
+            "Press again to cancel."
+        )
+        self.btn_auto_home_par.clicked.connect(self._start_auto_home_parallel)
+        row.addWidget(self.btn_auto_home_par, stretch=1)
+        lay.addLayout(row)
+
+        self.lbl_auto_home = QLabel(self._AUTO_HOME_STANDING)
+        self.lbl_auto_home.setWordWrap(True)
+        self.lbl_auto_home.setStyleSheet(
+            theme.status_label(theme.NEUTRAL, bold=False) + "font-size: 12px;")
+        lay.addWidget(self.lbl_auto_home)
+        return box
+
+    def _set_auto_home_note(self, text: str, role: str = theme.NEUTRAL):
+        self.lbl_auto_home.setText(text)
+        self.lbl_auto_home.setStyleSheet(
+            theme.status_label(role, bold=False) + "font-size: 12px;")
+
+    def _confirm_auto_home(self, title: str, body: str) -> bool:
+        """One overridable confirmation for both buttons.
+
+        Homing drives every slit into its limit switch, so it is not something
+        to start by brushing a button — but it is also the routine an operator
+        runs at the top of every session, so it gets one Yes/No, not a form.
+        Its own method so tests can drive both answers without a live dialog.
+        """
+        return QMessageBox.question(
+            self, title, body,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        ) == QMessageBox.StandardButton.Yes
+
+    def _start_auto_home(self):
+        """Sequential: one axis, start to finish, then the next."""
+        if self._auto_worker is not None and self._auto_worker.isRunning():
+            self._auto_worker.cancel()
+            self._set_auto_home_note("Cancelling after the current step…",
+                                     theme.WARN)
+            return
+        if not self.galil.connected or self._parallel_worker_running():
+            return
+        if not self._confirm_auto_home(
+                "Auto-home all four slits",
+                "Each axis will be jogged onto its home limit, homed in three "
+                "passes and zeroed — A, then B, then C, then D.\n\n"
+                "Only one axis moves at a time. Make sure the slits are clear "
+                "to travel.\n\nStart?"):
+            return
+
+        self._lock_axes_for_auto_home(True, "Queued for auto-home")
+        self.btn_auto_home_seq.setText("Cancel Auto-Home")
+        self.btn_auto_home_par.setEnabled(False)
+        self._set_auto_home_note("Auto-homing all four axes, one at a time…",
+                                 theme.WARN)
+        self._log_line("# Auto-home ALL — sequential, one command at a time.")
+
+        self._auto_worker = AutoHomeAllWorker(self.galil, SC.AXIS_LETTERS, self)
+        self._auto_worker.progress.connect(self._log_line)
+        self._auto_worker.axis_started.connect(self._on_auto_axis_started)
+        self._auto_worker.axis_finished.connect(self._on_auto_axis_finished)
+        self._auto_worker.done.connect(self._on_auto_home_done)
+        self._auto_worker.start()
+
+    def _on_auto_axis_started(self, axis: str):
+        panel = self.axes.get(axis)
+        if panel is not None:
+            panel.set_external_status("Auto-homing…")
+        self._set_auto_home_note(
+            f"Auto-homing axis {axis} [{SC.AXIS_NAMES.get(axis, axis)}]…",
+            theme.WARN)
+
+    def _on_auto_axis_finished(self, axis: str, ok: bool, msg: str):
+        panel = self.axes.get(axis)
+        if panel is None:
+            return
+        if ok:
+            # The routine ends on DP=0, so this axis is now referenced — the
+            # same flag the panel's own Home button sets, and what the rest of
+            # the app reads as "mm figures mean something on this axis".
+            panel.zeroed = True
+        panel.set_external_status("Homed ✓" if ok else "Home FAILED",
+                                  theme.OK if ok else theme.FAULT)
+
+    def _on_auto_home_done(self, ok: bool, summary: str):
+        self._lock_axes_for_auto_home(False)
+        self.btn_auto_home_seq.setText("Auto-Home All — One at a Time")
+        self.btn_auto_home_par.setEnabled(self.galil.connected)
+        self._log_line(f"{'✓' if ok else '✗'} {summary}")
+        self._set_auto_home_note(summary, theme.OK if ok else theme.FAULT)
+        if not ok:
+            QMessageBox.warning(self, "Auto-home did not complete", summary)
+
+    def _lock_axes_for_auto_home(self, locked: bool, status: str = None):
+        """Take the per-axis controls out of reach while the sequencer runs.
+
+        A jog or a Move issued mid-sequence would put a second command on an
+        axis the sequencer believes it has to itself. EMERGENCY STOP stays
+        live — it is the one control that must never be locked out — and so
+        does the Cancel on the button that started this.
+        """
+        for panel in self.axes.values():
+            panel.set_enabled(not locked and self.galil.connected)
+            panel.set_external_status(status if locked else None)
+
+    def _start_auto_home_parallel(self):
+        """Simultaneous: HM ABCD / BG ABCD — one command, every axis.
+
+        Not four workers. The HM reference's own idiom is one HM and one BG
+        for the whole set, which puts the four axes under the CONTROLLER's
+        sequencer instead of four host threads interleaving five-command HM
+        setups on a single socket.
+        """
+        if self._parallel_worker_running():
+            self._parallel_worker.cancel()
+            self._set_auto_home_note("Cancelling after the current step…",
+                                     theme.WARN)
+            return
+        if not self.galil.connected or self._auto_worker_running():
+            return
+        if not self._confirm_auto_home(
+                "Auto-home all four slits TOGETHER",
+                "All four axes will jog onto their home limits and home AT "
+                "THE SAME TIME, under one HM ABCD / BG ABCD — the controller "
+                "sequences them, not this program.\n\n"
+                "All four slits move at once. Make sure they are clear to "
+                "travel, and if anything looks wrong hit EMERGENCY STOP.\n\n"
+                "Start all four?"):
+            return
+
+        axes = "".join(SC.AXIS_LETTERS)
+        self._lock_axes_for_auto_home(True, "Homing together…")
+        self.btn_auto_home_par.setText("Cancel All Homing")
+        self.btn_auto_home_seq.setEnabled(False)
+        self._set_auto_home_note("Homing all four axes together…", theme.WARN)
+        self._log_line(f"# Auto-home ALL — together. HM {axes} ; BG {axes}.")
+
+        self._parallel_worker = MultiAxisHomeWorker(self.galil, axes, self)
+        self._parallel_worker.progress.connect(self._log_line)
+        self._parallel_worker.axis_finished.connect(self._on_auto_axis_finished)
+        self._parallel_worker.done.connect(self._on_parallel_home_done)
+        self._parallel_worker.start()
+
+    def _auto_worker_running(self) -> bool:
+        return self._auto_worker is not None and self._auto_worker.isRunning()
+
+    def _parallel_worker_running(self) -> bool:
+        return (self._parallel_worker is not None
+                and self._parallel_worker.isRunning())
+
+    def _on_parallel_home_done(self, ok: bool, summary: str):
+        self._lock_axes_for_auto_home(False)
+        self.btn_auto_home_par.setText("Auto-Home All — Together")
+        self.btn_auto_home_seq.setEnabled(self.galil.connected)
+        self._log_line(f"{'✓' if ok else '✗'} {summary}")
+        self._set_auto_home_note(summary, theme.OK if ok else theme.FAULT)
+        if not ok:
+            QMessageBox.warning(self, "Auto-home did not complete", summary)
 
     def _on_slit_target_changed(self, slit: str, mm: float):
         """Some screen commanded *slit* to *mm* — show it on that axis panel."""
@@ -652,6 +1014,10 @@ class MotorTab(QWidget):
             QMessageBox.critical(self, "Galil connection failed", str(e))
 
     def _do_disconnect(self):
+        # A homing run outlives the socket it was talking to: dropping the link
+        # under one leaves it raising ConnectionError on every poll until it
+        # gives up. Tell it to stop before taking the socket away.
+        self._cancel_all_homing()
         if self.worker is not None:
             self.worker.stop()
             self.worker.wait(2000)
@@ -674,6 +1040,8 @@ class MotorTab(QWidget):
         self.btn_disable_all.setEnabled(on)
         self.btn_send.setEnabled(on)
         self.manual_cmd.setEnabled(on)
+        self.btn_auto_home_seq.setEnabled(on)
+        self.btn_auto_home_par.setEnabled(on)
         for panel in self.axes.values():
             panel.set_enabled(on)
 
@@ -693,10 +1061,28 @@ class MotorTab(QWidget):
         self.btn_simple_mode.setText("Full Mode" if simple else "Simple Mode")
 
     def _emergency_stop(self):
+        # Cancel FIRST, and unconditionally. An abort with a homing run still
+        # going is not a stop — the worker's next pass would begin the motion
+        # again a second later, and the operator would be watching a slit they
+        # just E-stopped start moving on its own.
+        self._cancel_all_homing()
         if not self.galil.connected:
             return
         self._log_line("> AB  (EMERGENCY STOP)")
         self.galil.abort()
+
+    def _cancel_all_homing(self):
+        """Tell every homing run in progress to stop — sequencer and panels.
+
+        Cancellation is cooperative: each routine checks between commands, so
+        this does not itself stop motion. It is what stops the NEXT command,
+        and it is why the abort above is worth anything.
+        """
+        for worker in (self._auto_worker, self._parallel_worker):
+            if worker is not None and worker.isRunning():
+                worker.cancel()
+        for panel in self.axes.values():
+            panel.cancel_homing()
 
     def _send_manual(self):
         cmd = self.manual_cmd.text().strip().upper()
@@ -742,4 +1128,18 @@ class MotorTab(QWidget):
                 self.galil.abort()
         except Exception:
             pass
-        self._do_disconnect()
+        self._do_disconnect()          # cancels every homing run on the way
+        self._wait_for_homing_threads()
+
+    def _wait_for_homing_threads(self, timeout_ms: int = 3000):
+        """Let the cancelled homing runs unwind before the widgets go away.
+
+        A QThread still running when its object is destroyed takes the process
+        with it. The cancel has already gone in — this is the join, and it is
+        bounded so a wedged socket read cannot hang the close.
+        """
+        threads = ([self._auto_worker, self._parallel_worker]
+                   + [p._homing_worker for p in self.axes.values()])
+        for thread in threads:
+            if thread is not None and thread.isRunning():
+                thread.wait(timeout_ms)

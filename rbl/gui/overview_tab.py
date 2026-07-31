@@ -217,13 +217,12 @@ class OverviewTab(QWidget):
             grid.addWidget(ctrl, i // 2, i % 2)
         lay.addLayout(grid)
 
-        self.lbl_gaps = QLabel("Gap  X: —   Y: —")
-        self.lbl_gaps.setStyleSheet(
-            f"font-weight: bold; font-size: {theme.FS_BIG}px;")
-        lay.addWidget(self.lbl_gaps)
-
-        lay.addWidget(self._build_current_box())
-
+        # The standing note sits ABOVE the gap readout, not under the whole
+        # panel: it says what the numbers directly below it MEAN (absolute from
+        # centre, 0.2 mm offset already applied), and a caption that explains a
+        # figure has to be read before the figure, not after it. It is also
+        # where the "not zeroed" warning lands, which is worth meeting on the
+        # way down to the gap rather than after having believed it.
         self.lbl_motion = QLabel(self._STANDING_MESSAGE)
         self.lbl_motion.setWordWrap(True)
         self.lbl_motion.setStyleSheet(
@@ -231,19 +230,35 @@ class OverviewTab(QWidget):
             + f"font-size: {theme.FS_LABEL}px;")
         lay.addWidget(self.lbl_motion)
 
+        self.lbl_gaps = QLabel("Gap  X: —   Y: —")
+        self.lbl_gaps.setStyleSheet(
+            f"font-weight: bold; font-size: {theme.FS_BIG}px;")
+        lay.addWidget(self.lbl_gaps)
+
+        lay.addWidget(self._build_current_box())
+
         return box
 
-    # Where each slit's current bar sits in the diamond: (row, column) on a
-    # 3x2 grid. Y+ on top, Y- on the bottom, X- left of X+ — the slits laid
-    # out the way they are in the beam, not in reading order. A 2x2 grid put
-    # X+ and X- side by side and Y+ under X+, which reads as a table of four
-    # unrelated numbers; this reads as an aperture, so "the beam is high and
-    # left" is a shape rather than four comparisons done in your head.
+    # Where each slit's current bar sits in the diamond: (row, col, row span,
+    # col span) on a 3x4 grid of equal-stretch columns. Y+ on top, Y- on the
+    # bottom, X- left of X+ — the slits laid out the way they are in the beam,
+    # not in reading order. A 2x2 grid put X+ and X- side by side and Y+ under
+    # X+, which reads as a table of four unrelated numbers; this reads as an
+    # aperture, so "the beam is high and left" is a shape rather than four
+    # comparisons done in your head.
+    #
+    # FOUR columns, each bar two of them wide, rather than two columns with the
+    # Y bars spanning both. Every bar is then the same width as every other —
+    # which is what makes the four readings COMPARABLE at a glance, since a
+    # decade bar's meaning is entirely in how far along its own track the fill
+    # sits. Spanning columns 1-2 also centres the Y bars over the X pair
+    # exactly, because their offset (one column) is the same on both sides.
+    _DIAMOND_COLUMNS = 4
     _DIAMOND_CELLS = {
-        "Y+": (0, 0, 1, 2),   # row, col, row span, col span
-        "X-": (1, 0, 1, 1),
-        "X+": (1, 1, 1, 1),
-        "Y-": (2, 0, 1, 2),
+        "Y+": (0, 1, 1, 2),   # row, col, row span, col span
+        "X-": (1, 0, 1, 2),
+        "X+": (1, 2, 1, 2),
+        "Y-": (2, 1, 1, 2),
     }
 
     def _build_current_box(self) -> QGroupBox:
@@ -269,10 +284,12 @@ class OverviewTab(QWidget):
             self.currents[slit] = bar
             row, col, row_span, col_span = self._DIAMOND_CELLS[slit]
             grid.addWidget(bar, row, col, row_span, col_span)
-        # The two horizontal cells share the width evenly, so X- and X+ stay
-        # mirror images of each other rather than sizing to their own captions.
-        grid.setColumnStretch(0, 1)
-        grid.setColumnStretch(1, 1)
+        # Every column shares the width evenly, which is what makes all four
+        # bars come out the same size: each spans two columns, so X-/X+ stay
+        # mirror images of each other and Y+/Y- are the same width as them
+        # rather than sizing to their own captions.
+        for col in range(self._DIAMOND_COLUMNS):
+            grid.setColumnStretch(col, 1)
         return box
 
     def _build_funcgen_box(self) -> QGroupBox:

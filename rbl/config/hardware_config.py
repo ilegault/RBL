@@ -81,6 +81,28 @@ DEFAULT_SPEED_COUNTS_PER_SEC   = 1000
 DEFAULT_ACCEL_COUNTS_PER_SEC2  = 25600
 DEFAULT_JOG_SPEED              = 500   # cps
 
+# --- Automatic homing: the seek phase ----------------------------------------
+# The jog that puts an axis onto its home limit before HM runs — the "-Jog
+# until it hits the limit" an operator does by hand before pressing Home.
+#
+# Fast, because it is a coarse approach and nothing about it sets the zero: the
+# three HM passes that follow do that, and their slowest pass is 58 cps. Homing
+# from the far end of the travel at 58 cps would take minutes and time the pass
+# out; at 500 cps (0.79 mm/s) the whole travel is well under a minute.
+HOME_SEEK_SPEED_COUNTS_PER_SEC = 500
+
+# Ceiling on that jog. Generous — it has to cover the full travel from the
+# forward limit, several times over, on the slowest axis. It is a fault
+# detector ("the switch never tripped"), not a schedule.
+HOME_SEEK_TIMEOUT_S = 180.0
+
+# What HV is put back to once homing is done. HM's second stage — the slow
+# re-approach that fixes where the zero lands — runs at HV, and the homing
+# routine turns it down to 58 cps for the final pass. Restoring it matters for
+# the same reason restoring SP does: the next home should start from a known
+# value rather than inherit the last run's fine-approach speed.
+DEFAULT_HOME_VELOCITY_COUNTS_PER_SEC = 256
+
 # --- Amplifier / motor configuration (2HA075520 amplifier) -------------------
 MOTOR_TYPE      = -2.5  # MT: step motor, active-high step pulse
 STEP_RESOLUTION = 2     # YA: 1=full, 2=half, 4=quarter, 8=eighth
@@ -88,10 +110,57 @@ LOW_CURRENT_ON  = 1     # LC: reduced holding current (0=off, 1=on)
 AMP_GAIN        = 3     # AG: amplifier gain setting
 MOTOR_SMOOTHING = 2.0   # YB
 
-# CN (switch config): 1,1,-1,0,0
-# Arg1=1 (latch), Arg2=1 (forward limit NC), Arg3=-1 (home switch active-low),
-# Arg4=0, Arg5=0
+# CN (switch config) — arguments per the CN reference. The ARGUMENT ORDER here
+# is what the old comment got wrong (it listed the latch first and called arg2
+# a limit polarity; arg2 is neither a polarity nor about the limits):
+#
+#   m = 1   LIMIT switch inputs active HIGH   (-1 = active low)
+#   n = 1   HOME switch drives the motor FORWARD when the input is high
+#           (-1 = reverse when high). A DIRECTION, not a polarity: it is what
+#           HM and FE use to decide which way to search, which is why HM needs
+#           no direction argument of its own.
+#   o = -1  Latch input active low
+#   p = 0   Inputs 5-8/13-16 are general-purpose, not selective-abort
+#   q = 0   Abort input terminates program execution
 CN_CONFIG = "1,1,-1,0,0"
+
+# WHAT A TRIPPED SWITCH READS — and why CN alone does not tell you.
+#
+# It is tempting to read "CN m=1 -> limits active high" and conclude that a
+# tripped limit reads 1. It does not, and the trap is the word ACTIVE. The
+# _LF/_LR reference defines it electrically: "the condition when at least 1 mA
+# of current is flowing through the input circuitry". That is a property of the
+# CIRCUIT, not of whether the slit has reached its limit — and which way round
+# those two sit depends on the switch WIRING, which no manual can tell you.
+#
+# These limits are NORMALLY CLOSED, so the circuit carries current while the
+# axis is clear and reaching the limit BREAKS it. Composing that with m=1:
+#
+#     axis clear    -> switch closed -> current flows -> _LF/_LR read 1
+#     limit tripped -> switch opens  -> no current    -> _LF/_LR read 0
+#
+# so a tripped limit reads LOW. NC is also the safe way round for exactly this
+# reason: a cut cable stops the current and therefore reads as a tripped limit,
+# not as a clear axis.
+#
+# Confirmed by three years of the bench reading "Idle" rather than "FWD LIMIT
+# active" with the slits clear — which is the observation that caught an
+# earlier attempt to derive these from CN's first argument alone.
+LIMIT_SWITCH_TRIPPED_IS_LOW = True
+
+# The home switch is a separate input with its own wiring, and CN's n argument
+# is a search direction rather than a polarity, so nothing above determines
+# this one. It was MEASURED on the controller instead:
+#
+#     MG _HMC  ->  0    with C sitting on its home switch
+#     MG _HMB  ->  1    with B off its home switch
+#
+# Same reading as the limits, and the same NC logic behind it. Recorded here
+# because it is the one value on this page that no manual can give you — the
+# _HM operand's reference says only that it "contains the state of the home
+# switch", and the state a switch is in when it is tripped is a fact about the
+# wiring. Re-measure with those two commands if the slits are ever re-wired.
+HOME_SWITCH_TRIPPED_IS_LOW = True
 
 
 # --- Unit helpers -------------------------------------------------------------

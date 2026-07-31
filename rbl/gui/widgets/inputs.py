@@ -38,11 +38,48 @@ editable text, which means the cursor can land after it, a select-all-and-type
 wipes it, and the validator has to re-parse it on every keystroke. `unit_row()`
 puts the unit in a QLabel beside the box instead, where it cannot be typed
 into. Nothing in this app should call setSuffix().
+
+THE MOUSE WHEEL DOES NOT EDIT ANYTHING. Qt's default is that a wheel event
+over a spin box or a combo box changes its value — focused or not, just from
+the pointer being over it. Scrolling a tab is a READING gesture, so that turns
+"scroll past a control" into "silently re-command it", and on these screens the
+controls in question are slit targets in mm, jog speeds, drive amplitudes in
+kV-per-plate, and the unit dropdowns that decide how the box beside them is
+read. Nothing on screen announces the change, and on a setpoint that is
+Applied later there is no moment where it looks wrong.
+
+Both classes below therefore ignore the wheel, and both `ignore()` rather than
+swallow it so the gesture still reaches a scroll area above them. Values change
+by typing, by the arrow keys, or by a spin box's own up/down buttons — all of
+which are deliberate, aimed at one control, and already committed correctly by
+the keyboardTracking fix above.
 """
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QDoubleSpinBox, QHBoxLayout, QLabel, QWidget,
+    QComboBox, QDoubleSpinBox, QHBoxLayout, QLabel, QWidget,
 )
+
+
+class NoScrollComboBox(QComboBox):
+    """A QComboBox that cannot be changed with the mouse wheel.
+
+    Qt's default selects the next or previous item on a wheel notch, focused
+    or not. The dropdowns here pick units (cps vs mm/s, counts vs mm), waveform
+    shape, and which instrument a command is addressed to, so a wheel that
+    lands on one is not merely cosmetic: the next number typed into the box
+    beside it is then interpreted in whatever unit the wheel chose.
+
+    Selecting an item stays a two-part deliberate gesture — click to open,
+    click to choose — and the wheel is left to do the one thing it should do
+    over a long tab, which is scroll it.
+    """
+
+    def wheelEvent(self, event):
+        # ignore(), not accept(): an ignored wheel event propagates to the
+        # parent, so a dropdown inside a scroll area scrolls the AREA rather
+        # than eating the gesture. Swallowing it would trade a surprise for a
+        # dead spot.
+        event.ignore()
 
 
 class QuietDoubleSpinBox(QDoubleSpinBox):
@@ -68,6 +105,22 @@ class QuietDoubleSpinBox(QDoubleSpinBox):
         # The fix itself. Everything else in this class supports it.
         self.setKeyboardTracking(False)
         self._pending_sync = None
+
+    def wheelEvent(self, event):
+        """The wheel does not edit a number. See the module docstring.
+
+        Qt's default steps the value by singleStep per notch — and unlike the
+        half-typed-number problem this class was built for, that change is
+        COMMITTED: it goes straight out as valueChanged, into the shared
+        setpoint model, and from there onto the other tab showing the same
+        number. A slit target nudged 0.1 mm on the way past looks like a
+        number somebody typed, and the next Move goes there.
+
+        Ignored rather than swallowed, so the scroll still reaches whatever is
+        above this box. The arrows and the up/down buttons still step it —
+        those are aimed at one control on purpose.
+        """
+        event.ignore()
 
     def focusInEvent(self, event):
         """Select the whole value on focus, so typing REPLACES it.
