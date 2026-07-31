@@ -20,7 +20,7 @@ from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout,
-    QGroupBox, QLabel, QPushButton, QDoubleSpinBox, QComboBox,
+    QGroupBox, QLabel, QPushButton, QComboBox,
     QLineEdit, QCheckBox, QMessageBox, QSizePolicy,
     QScrollArea, QApplication,
 )
@@ -30,10 +30,11 @@ from rbl.hardware.funcgen_safety import (
     channel_peak_volts, PEAK_MAX_VOLTS, PEAK_WARN_VOLTS, _AMP_GAIN, CHANNEL_ROLE,
 )
 from rbl.config.persistence import load_config as _load_config, save_config as _save_config
-from rbl.state.setpoints import START_PHASE_DEFAULTS
+from rbl.state.setpoints import START_PHASE_DEFAULTS, AXIS_CHANNELS
 from rbl.state.snapshots import ChannelParams
 from rbl.gui import theme
 from rbl.gui.widgets.command_console import LogPane
+from rbl.gui.widgets.inputs import QuietDoubleSpinBox, unit_row
 
 
 # ─── Per-channel panel ────────────────────────────────────────────────────────
@@ -43,25 +44,76 @@ class ChannelPanel(QGroupBox):
 
     SHAPES = ["Sine", "Triangle", "Square", "Pulse", "DC"]
 
+    # Panel shape name -> what :SOURce:APPLy? reports back. The instrument
+    # answers in four-letter SCPI abbreviations, so a readback can only be
+    # compared against a setpoint through this map.
+    SHAPE_CODES = {"Sine": "SIN", "Triangle": "TRI", "Square": "SQU",
+                   "Pulse": "PULS", "DC": "DC"}
+
     # Any control on this panel moved. The owner turns that into a write to the
     # shared FuncGenSetpoints, which is what keeps this panel and the Overview
     # tab's per-axis boxes showing the same numbers.
     edited = Signal()
 
-    def __init__(self, label: str, parent=None, phase_default: float = 0.0):
+    # "Copy MY amplitude and frequency onto my partner channel." The owner
+    # performs the copy, because the setpoint model is what has to change —
+    # writing into the other panel's widgets directly would leave the model
+    # holding the old value.
+    mirror_requested = Signal()
+
+    def __init__(self, label: str, parent=None, phase_default: float = 0.0,
+                 mirror_target: str = ""):
         super().__init__(label, parent)
         self._label = label
         self._phase_default = phase_default
+        # The channel this panel's Mirror button copies TO, as a human label
+        # ("X-"). Empty disables the button entirely.
+        self._mirror_target = mirror_target
         # Suppresses `edited` while a setpoint sync is writing INTO the panel,
         # so an update arriving from the Overview tab is not echoed straight
         # back out as though the operator had typed it here.
         self._syncing = False
+        # Last readback dict from the instrument, or None when there has been
+        # no successful read since the last connect. This is what the "output
+        # is ON" dot and the "edited, not applied" badge are both derived from
+        # — the panel's own controls say what was ASKED for, which is exactly
+        # the thing that was misleading.
+        self._readback = None
         self._setup_ui()
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
         layout.setSpacing(4)
         layout.setContentsMargins(6, 6, 6, 6)
+
+        # ── Live status strip, top of the panel ──────────────────────────────
+        #
+        # The Output button below says what has been ASKED for. Nothing said
+        # what the instrument was actually DOING, so fiddling with the button
+        # without pressing Apply left no way to tell an armed channel from a
+        # dark one — on a panel that drives ±5 kV at a plate. These two
+        # indicators are both read from the instrument's own readback:
+        #   the dot   — is this output relay closed RIGHT NOW?
+        #   the badge — do the boxes differ from what the instrument holds?
+        head = QHBoxLayout()
+        head.setContentsMargins(0, 0, 0, 0)
+        head.setSpacing(6)
+        self.lbl_pending = QLabel("")
+        self.lbl_pending.setStyleSheet(
+            f"color: {theme.WARN}; font-size: 10px; font-weight: bold;")
+        head.addWidget(self.lbl_pending)
+        head.addStretch(1)
+        self.lbl_output_state = QLabel("● no readback")
+        self.lbl_output_state.setAlignment(Qt.AlignmentFlag.AlignRight
+                                           | Qt.AlignmentFlag.AlignVCenter)
+        self.lbl_output_state.setToolTip(
+            "The instrument's own output state, polled twice a second — not "
+            "the Output button's position.\n"
+            "Green = this channel is driving its plate now."
+        )
+        head.addWidget(self.lbl_output_state)
+        layout.addLayout(head)
+        self._refresh_output_indicator()
 
         form = QFormLayout()
         form.setSpacing(3)
@@ -73,35 +125,27 @@ class ChannelPanel(QGroupBox):
         form.addRow("Shape:", self.cbo_shape)
 
         # Frequency — default 10 Hz
-        self.spn_freq = QDoubleSpinBox()
+        self.spn_freq = QuietDoubleSpinBox()
         self.spn_freq.setRange(0.0001, 25_000_000.0)
         self.spn_freq.setValue(10.0)
         self.spn_freq.setDecimals(4)
         self.spn_freq.setMinimumWidth(80)
         self.spn_freq.setMaximumWidth(110)
         self.lbl_freq = QLabel("Frequency:")
-        freq_row = QHBoxLayout()
-        freq_row.setContentsMargins(0, 0, 0, 0)
-        freq_row.setSpacing(4)
-        freq_row.addWidget(self.spn_freq, stretch=1)
-        freq_row.addWidget(QLabel("Hz"))
+        freq_row = unit_row(self.spn_freq, "Hz")
         form.addRow(self.lbl_freq, freq_row)
 
         # Amplitude — peak-to-peak (RIGOL native). A centred 10 Vpp sine reaches
         # the full ±5 V (±5 kV) rail, so amplitude alone is allowed up to 10 Vpp;
         # the combined-peak interlock (below) still limits |offset| + amp/2 ≤ 5 V.
-        self.spn_amp = QDoubleSpinBox()
+        self.spn_amp = QuietDoubleSpinBox()
         self.spn_amp.setRange(0.0, MAX_AMP_VPP)
         self.spn_amp.setValue(0.0)
         self.spn_amp.setDecimals(4)
         self.spn_amp.setMinimumWidth(80)
         self.spn_amp.setMaximumWidth(110)
         self.lbl_amp = QLabel("Amplitude:")
-        amp_row = QHBoxLayout()
-        amp_row.setContentsMargins(0, 0, 0, 0)
-        amp_row.setSpacing(4)
-        amp_row.addWidget(self.spn_amp, stretch=1)
-        amp_row.addWidget(QLabel("Vpp"))
+        amp_row = unit_row(self.spn_amp, "Vpp")
         form.addRow(self.lbl_amp, amp_row)
 
         # HV consequence label (updates live)
@@ -110,34 +154,26 @@ class ChannelPanel(QGroupBox):
         form.addRow("", self.lbl_hv)
 
         # Offset
-        self.spn_offset = QDoubleSpinBox()
+        self.spn_offset = QuietDoubleSpinBox()
         self.spn_offset.setRange(-MAX_GEN_VOLTS, MAX_GEN_VOLTS)
         self.spn_offset.setValue(0.0)
         self.spn_offset.setDecimals(4)
         self.spn_offset.setMinimumWidth(80)
         self.spn_offset.setMaximumWidth(110)
         self.lbl_offset = QLabel("Offset:")
-        offset_row = QHBoxLayout()
-        offset_row.setContentsMargins(0, 0, 0, 0)
-        offset_row.setSpacing(4)
-        offset_row.addWidget(self.spn_offset, stretch=1)
-        offset_row.addWidget(QLabel("V"))
+        offset_row = unit_row(self.spn_offset, "V")
         form.addRow(self.lbl_offset, offset_row)
 
         # Phase — 0° for X+/Y+, 180° for X-/Y- (push-pull differential drive).
         # This value is sent via both the :APPLy command and :PHASe:SYNChronize.
-        self.spn_phase = QDoubleSpinBox()
+        self.spn_phase = QuietDoubleSpinBox()
         self.spn_phase.setRange(-360.0, 360.0)
         self.spn_phase.setValue(self._phase_default)
         self.spn_phase.setDecimals(1)
         self.spn_phase.setMinimumWidth(80)
         self.spn_phase.setMaximumWidth(110)
         self.lbl_phase = QLabel("Phase:")
-        phase_row = QHBoxLayout()
-        phase_row.setContentsMargins(0, 0, 0, 0)
-        phase_row.setSpacing(4)
-        phase_row.addWidget(self.spn_phase, stretch=1)
-        phase_row.addWidget(QLabel("°"))
+        phase_row = unit_row(self.spn_phase, "°")
         form.addRow(self.lbl_phase, phase_row)
 
         # Load
@@ -150,6 +186,33 @@ class ChannelPanel(QGroupBox):
         form.addRow("Load:", self.le_load)
 
         layout.addLayout(form)
+
+        # ── Mirror ───────────────────────────────────────────────────────────
+        #
+        # A push-pull pair must run at ONE amplitude and ONE frequency; the two
+        # panels that hold them are edited separately, so keeping them equal
+        # meant typing e.g. 517 Hz and 4 Vpp twice and hoping. This copies this
+        # panel's two numbers onto its partner in one click.
+        #
+        # Amplitude and frequency ONLY. Phase is deliberately not copied: 0° on
+        # the '+' channel and 180° on the '-' one is what makes the pair
+        # differential, and mirroring it would collapse the pair onto one phase
+        # — the exact opposite of what a raster needs.
+        self.btn_mirror = QPushButton(
+            f"Mirror amp + freq → {self._mirror_target}"
+            if self._mirror_target else "Mirror")
+        self.btn_mirror.setMinimumHeight(26)
+        self.btn_mirror.setToolTip(
+            f"Copy this channel's amplitude and frequency onto "
+            f"{self._mirror_target or 'its partner channel'}.\n"
+            "Phase, shape, offset and load are left alone — the 0°/180° split "
+            "is what makes the pair push-pull.\n"
+            "Like every other control here this only changes the setpoint; it "
+            "reaches the instrument on the next Apply."
+        )
+        self.btn_mirror.clicked.connect(self.mirror_requested)
+        self.btn_mirror.setEnabled(bool(self._mirror_target))
+        layout.addWidget(self.btn_mirror)
 
         # Output toggle
         btn_row = QHBoxLayout()
@@ -203,6 +266,10 @@ class ChannelPanel(QGroupBox):
         self.set_connected(False)
 
     def _on_edited(self, *_):
+        # Even a sync moves the boxes, so the badge is refreshed either way —
+        # a value pushed in from the Overview tab is just as unapplied as one
+        # typed here.
+        self._refresh_pending_badge()
         if not self._syncing:
             self.edited.emit()
 
@@ -211,10 +278,12 @@ class ChannelPanel(QGroupBox):
 
     def _on_shape_changed(self, shape: str):
         dc = (shape == "DC")
-        # In DC mode: freq, amp, and phase don't apply; offset becomes the hold voltage
-        for w in (self.lbl_freq, self.spn_freq,
-                  self.lbl_amp, self.spn_amp,
-                  self.lbl_phase, self.spn_phase):
+        # In DC mode: freq, amp, and phase don't apply; offset becomes the hold
+        # voltage. Each box's unit label goes with it — a "Hz" left floating in
+        # an empty row is what happens otherwise.
+        for w in (self.lbl_freq, self.spn_freq, self.spn_freq.unit_label,
+                  self.lbl_amp, self.spn_amp, self.spn_amp.unit_label,
+                  self.lbl_phase, self.spn_phase, self.spn_phase.unit_label):
             w.setVisible(not dc)
         self.lbl_offset.setText("Hold voltage (V):" if dc else "Offset:")
         self._update_hv_label()
@@ -256,10 +325,85 @@ class ChannelPanel(QGroupBox):
         else:
             self.lbl_hv.setStyleSheet("color: #7a2000; font-size: 10px;")
 
+    # ---- Live status: what the INSTRUMENT is doing --------------------------
+
+    def _refresh_output_indicator(self):
+        """Green dot when the instrument reports this output ON.
+
+        Sourced from the readback, never from btn_output — the button is an
+        intent that has not necessarily been applied, and treating it as truth
+        is what made an armed channel indistinguishable from a dark one.
+        """
+        if self._readback is None or "error" in self._readback:
+            self.lbl_output_state.setText("● no readback")
+            self.lbl_output_state.setStyleSheet(
+                f"color: {theme.MUTED}; font-size: 11px; font-weight: bold;")
+        elif self._readback.get("output"):
+            self.lbl_output_state.setText("● OUTPUT ON")
+            self.lbl_output_state.setStyleSheet(
+                f"color: {theme.OK}; font-size: 11px; font-weight: bold;")
+        else:
+            self.lbl_output_state.setText("○ output off")
+            self.lbl_output_state.setStyleSheet(
+                f"color: {theme.NEUTRAL}; font-size: 11px;")
+
+    @staticmethod
+    def _same_number(a: float, b: float, tol: float = 1e-4) -> bool:
+        """Equal to within what the DG1022Z's own rounding can produce.
+
+        A relative tolerance, because the instrument reports a 5 MHz frequency
+        to the same number of significant figures as a 0.5 Hz one; an absolute
+        epsilon would call every high frequency a mismatch.
+        """
+        return abs(a - b) <= tol * max(1.0, abs(a), abs(b))
+
+    def _pending_fields(self) -> list:
+        """Which setpoint fields the instrument does NOT currently hold.
+
+        Empty means the boxes and the instrument agree — i.e. what is on
+        screen is what is being driven.
+        """
+        rb = self._readback
+        if rb is None or "error" in rb:
+            return []       # nothing to compare against; say nothing
+        p = self.get_params()
+        dc = (p["shape"] == "DC")
+        differs = []
+        if self.SHAPE_CODES.get(p["shape"], p["shape"]).upper() \
+                != str(rb.get("shape", "")).upper():
+            differs.append("shape")
+        if not dc:
+            # Frequency, amplitude and phase are meaningless in DC mode, and
+            # the instrument reports whatever it held before the switch.
+            if not self._same_number(p["freq"], rb.get("freq", 0.0)):
+                differs.append("frequency")
+            if not self._same_number(p["amp"], rb.get("amp", 0.0)):
+                differs.append("amplitude")
+            if not self._same_number(p["phase"], rb.get("phase", 0.0), 1e-3):
+                differs.append("phase")
+        if not self._same_number(p["offset"], rb.get("offset", 0.0)):
+            differs.append("offset")
+        if bool(p["output"]) != bool(rb.get("output")):
+            differs.append("output")
+        return differs
+
+    def _refresh_pending_badge(self):
+        differs = self._pending_fields()
+        if not differs:
+            self.lbl_pending.setText("")
+            return
+        self.lbl_pending.setText("⚠ not applied: " + ", ".join(differs))
+
     def set_connected(self, on: bool):
+        if not on:
+            # A dropped session tells us nothing about the instrument, and a
+            # stale green dot on a disconnected channel is worse than no dot.
+            self._readback = None
+            self._refresh_output_indicator()
+            self._refresh_pending_badge()
         for w in (self.btn_apply, self.btn_output, self.spn_freq,
                   self.spn_amp, self.spn_offset, self.spn_phase,
-                  self.le_load, self.cbo_shape):
+                  self.le_load, self.cbo_shape, self.btn_mirror):
             w.setEnabled(on)
 
     def get_params(self) -> dict:
@@ -295,16 +439,23 @@ class ChannelPanel(QGroupBox):
         self._syncing = True
         try:
             self.cbo_shape.setCurrentText(params.shape)
-            self.spn_freq.setValue(params.freq_hz)
-            self.spn_amp.setValue(params.amp_vpp)
-            self.spn_offset.setValue(params.offset_v)
-            self.spn_phase.setValue(params.phase_deg)
+            # sync_value, not setValue: this is the path an Overview edit (or a
+            # Mirror click on the partner panel) arrives on, and it must not
+            # reformat a number somebody is part-way through typing here.
+            self.spn_freq.sync_value(params.freq_hz)
+            self.spn_amp.sync_value(params.amp_vpp)
+            self.spn_offset.sync_value(params.offset_v)
+            self.spn_phase.sync_value(params.phase_deg)
             self.le_load.setText(params.load)
             self.btn_output.setChecked(params.output_on)
         finally:
             self._syncing = False
+        self._refresh_pending_badge()
 
     def update_readback(self, state: dict):
+        self._readback = dict(state)
+        self._refresh_output_indicator()
+        self._refresh_pending_badge()
         if "error" in state:
             self.lbl_readback.setText(f"Read error: {state['error']}")
             return
@@ -491,13 +642,16 @@ class FuncGenTab(QWidget):
         # differential swing without a DC offset on either plate.
         positions = {"A1": (0, 0), "A2": (0, 1), "B1": (1, 0), "B2": (1, 1)}
         for key, title in panel_labels.items():
-            p = ChannelPanel(title, self, phase_default=START_PHASE_DEFAULTS[key])
+            partner = self._partner_key(key)
+            p = ChannelPanel(title, self, phase_default=START_PHASE_DEFAULTS[key],
+                             mirror_target=CHANNEL_ROLE[partner])
             gen_letter = key[0]
             ch_num     = int(key[1])
             p.btn_apply.clicked.connect(
                 lambda _, g=gen_letter, c=ch_num: self._apply_channel(g, c)
             )
             p.edited.connect(lambda k=key: self._on_panel_edited(k))
+            p.mirror_requested.connect(lambda k=key: self._mirror_channel(k))
             self.panels[key] = p
             r, col = positions[key]
             grid.addWidget(p, r, col)
@@ -763,6 +917,42 @@ class FuncGenTab(QWidget):
             )
 
     # ---- Shared setpoints ----------------------------------------------------
+
+    @staticmethod
+    def _partner_key(key: str) -> str:
+        """The other channel of *key*'s push-pull pair ("A1" -> "A2").
+
+        Both channels of an axis always live on the same generator (see
+        AXIS_CHANNELS), so the partner is the other channel of that unit.
+        """
+        for channels in AXIS_CHANNELS.values():
+            if key in channels:
+                return channels[1] if key == channels[0] else channels[0]
+        return key
+
+    def _mirror_channel(self, key: str):
+        """Copy *key*'s amplitude and frequency onto its partner channel.
+
+        Written into the shared setpoint model rather than into the other
+        panel's widgets: the model is what Apply reads and what the Overview
+        tab renders, so a mirror that only moved spinboxes would be undone by
+        the next sync. The partner panel updates from the model change, the
+        same way it would for any other edit.
+
+        Phase is not copied — see ChannelPanel's Mirror button. Nothing is sent
+        to the instrument; this is a setpoint edit like any other.
+        """
+        partner = self._partner_key(key)
+        if partner == key:
+            return
+        source = self.panels[key].channel_params()
+        changed = self._setpoints.update(
+            partner, amp_vpp=source.amp_vpp, freq_hz=source.freq_hz)
+        self._log_scpi(
+            f"# Mirror {CHANNEL_ROLE[key]} → {CHANNEL_ROLE[partner]}: "
+            f"{source.amp_vpp:.4g} Vpp @ {source.freq_hz:.4g} Hz"
+            + ("" if changed else "  (already matched)")
+        )
 
     def _on_panel_edited(self, key: str):
         """A control on one panel moved — push it into the shared model."""

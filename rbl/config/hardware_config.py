@@ -60,8 +60,15 @@ MM_ZERO_OFFSET: dict[str, float] = {
 # Galil's soft limits (BL/FL, read back on connect) remain the authority on how
 # far a slit may actually travel, and a command outside them is refused by the
 # controller, not by this number.
+#
+# 25 mm, not 10: the real travel is well past 10 mm, so a 10 mm full scale both
+# misdrew every position (a slit two-thirds out looked pinned at the rail) and
+# — because this same number is the Overview target spinbox's maximum — refused
+# to accept a target the Stepper Motors tab would take without complaint. A
+# display convention that silently caps what can be commanded is not a display
+# convention.
 SLIT_DISPLAY_MIN_MM = 0.0
-SLIT_DISPLAY_MAX_MM = 10.0
+SLIT_DISPLAY_MAX_MM = 25.0
 
 # Increment the Overview target spinbox's own arrow keys apply (mm). The
 # Overview is target-only — there are no separate step buttons — so this sizes

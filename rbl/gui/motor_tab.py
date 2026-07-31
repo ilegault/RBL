@@ -15,7 +15,7 @@ from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel,
-    QPushButton, QDoubleSpinBox, QFormLayout, QComboBox,
+    QPushButton, QFormLayout, QComboBox,
     QMessageBox, QLineEdit,
 )
 
@@ -24,6 +24,7 @@ from rbl.hardware.galil_workers import GalilPollWorker, HomingWorker
 from rbl.config import hardware_config as SC
 from rbl.gui import theme
 from rbl.gui.widgets.command_console import HistoryLineEdit, LogPane
+from rbl.gui.widgets.inputs import QuietDoubleSpinBox
 
 
 # ─── Per-axis control groupbox ────────────────────────────────────────────────
@@ -31,11 +32,17 @@ from rbl.gui.widgets.command_console import HistoryLineEdit, LogPane
 class AxisControls(QGroupBox):
     """One self-contained panel for one slit."""
 
-    def __init__(self, axis_letter: str, get_galil_fn, log_fn, parent=None):
+    def __init__(self, axis_letter: str, get_galil_fn, log_fn, beamline,
+                 parent=None):
         super().__init__(f"{SC.AXIS_NAMES[axis_letter]}  (axis {axis_letter})", parent)
         self.axis      = axis_letter
+        self.slit      = SC.AXIS_NAMES[axis_letter]
         self.get_galil = get_galil_fn
         self.log       = log_fn
+        # Motion is logged and published through Beamline rather than straight
+        # to this tab's console, so a move made here also reaches the Overview
+        # — and one made there also reaches this panel. See Beamline.move_slit.
+        self.beamline  = beamline
         self._homing_worker: HomingWorker | None = None
         # Has this axis had its zero established since the app started?  The
         # controller does not remember, and every mm figure downstream is wrong
@@ -80,7 +87,7 @@ class AxisControls(QGroupBox):
 
         # Jog speed with unit toggle
         speed_row = QHBoxLayout()
-        self.spn_speed = QDoubleSpinBox()
+        self.spn_speed = QuietDoubleSpinBox()
         self.spn_speed.setDecimals(2)
         self.spn_speed.setMaximumWidth(100)
         self.cbo_speed_unit = QComboBox()
@@ -130,7 +137,7 @@ class AxisControls(QGroupBox):
         target_form = QFormLayout()
         target_form.setSpacing(2)
         move_row = QHBoxLayout()
-        self.spn_target = QDoubleSpinBox()
+        self.spn_target = QuietDoubleSpinBox()
         self.spn_target.setDecimals(3)
         self.spn_target.setMaximumWidth(100)
         self.cbo_target_unit = QComboBox()
@@ -215,6 +222,22 @@ class AxisControls(QGroupBox):
             return SC.mm_to_counts(self.axis, v)
         return int(round(v))
 
+    def set_target_mm(self, mm: float):
+        """Show a target commanded from anywhere — here, or the Overview tab.
+
+        Converted into whatever unit this panel is currently displaying, so an
+        Overview move made in mm still lands correctly in a box switched to
+        counts. Written through sync_value() so it defers rather than
+        overwriting a target somebody is part-way through typing.
+        """
+        if self.cbo_target_unit.currentText() == "counts":
+            value = float(SC.mm_to_counts(self.axis, mm))
+        else:
+            value = float(mm)
+        if abs(self.spn_target.value() - value) < 1e-9:
+            return
+        self.spn_target.sync_value(value)
+
     # ---- Enable state -------------------------------------------------------
 
     def set_enabled(self, on: bool):
@@ -287,8 +310,15 @@ class AxisControls(QGroupBox):
             return
         target = self._target_in_counts()
         target_mm = SC.counts_to_mm(self.axis, target)
+        # The driver call stays here — this panel owns the counts/mm unit
+        # toggle and the soft-limit dialog below, neither of which the
+        # Overview has. Only the log line and the commanded target go through
+        # Beamline, which is what puts them on both screens.
+        self.beamline.log_motor(
+            f"> PA {self.axis}={target} ({target_mm:+.3f} mm) ; "
+            f"BG {self.axis}   [{self.slit}]")
+        self.beamline.note_slit_target(self.slit, target_mm)
         try:
-            self.log(f"> PA {self.axis}={target} ({target_mm:+.3f} mm) ; BG {self.axis}")
             g.move_absolute(self.axis, target)
         except GalilError as e:
             self.log(f"! {e}")
@@ -532,7 +562,8 @@ class MotorTab(QWidget):
         grid.setSpacing(6)
         self.axes: dict[str, AxisControls] = {}
         for i, axis in enumerate(SC.AXIS_LETTERS):
-            panel = AxisControls(axis, lambda: self.galil, self._log_line, self)
+            panel = AxisControls(axis, lambda: self.galil, self._log_line,
+                                 beamline, self)
             self.axes[axis] = panel
             grid.addWidget(panel, i // 2, i % 2)
         left_layout.addLayout(grid, stretch=1)
@@ -556,7 +587,24 @@ class MotorTab(QWidget):
         outer_layout.addLayout(left_layout, stretch=2)
         outer_layout.addWidget(cons_box, stretch=1)
 
+        # ── Cross-screen motion (see Beamline.move_slit) ──────────────────
+        #
+        # A move commanded on the Overview tab reaches the Galil through
+        # Beamline, not through this tab, so without these two connections it
+        # was invisible here: nothing in the console, and a Target box still
+        # showing whatever was in it before. Both screens now render every
+        # move, whichever one issued it.
+        beamline.motor_logged.connect(self._log_line)
+        beamline.slit_target_changed.connect(self._on_slit_target_changed)
+
         self._set_buttons_connected(False)
+
+    def _on_slit_target_changed(self, slit: str, mm: float):
+        """Some screen commanded *slit* to *mm* — show it on that axis panel."""
+        axis_letter = self.beamline.axis_letter_for(slit)
+        panel = self.axes.get(axis_letter)
+        if panel is not None:
+            panel.set_target_mm(mm)
 
     # ---- Connection lifecycle ------------------------------------------------
 

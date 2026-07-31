@@ -21,12 +21,12 @@ widget holding a driver.
 """
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QDoubleSpinBox,
-    QSizePolicy,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy,
 )
 
 from rbl.config import hardware_config as SC
 from rbl.gui import theme
+from rbl.gui.widgets.inputs import QuietDoubleSpinBox, unit_row
 from rbl.gui.widgets.mini import MiniBar
 
 
@@ -59,11 +59,12 @@ class SlitControl(QWidget):
         row = QHBoxLayout()
         row.setSpacing(3)
 
-        self.spn_target = QDoubleSpinBox()
+        self.spn_target = QuietDoubleSpinBox()
         self.spn_target.setDecimals(3)
         self.spn_target.setRange(SC.SLIT_DISPLAY_MIN_MM, SC.SLIT_DISPLAY_MAX_MM)
         self.spn_target.setSingleStep(SC.SLIT_DEFAULT_STEP_MM)
-        self.spn_target.setSuffix(" mm")
+        self.spn_target.setMinimumHeight(30)
+        self.spn_target.setStyleSheet(f"font-size: {theme.FS_LABEL}px;")
         self.spn_target.setToolTip(
             "Absolute distance from beam centre. The 0.2 mm home offset is "
             "applied for you — type the true distance you want."
@@ -74,21 +75,27 @@ class SlitControl(QWidget):
         self.bar.set_target(self.spn_target.value())
 
         self.btn_move = QPushButton("Move")
-        self.btn_move.setMinimumHeight(26)
+        self.btn_move.setMinimumHeight(30)
         self.btn_move.setStyleSheet(
-            "QPushButton { background:#004e8c; color:white; font-weight:bold; }"
+            "QPushButton { background:#004e8c; color:white; font-weight:bold;"
+            f" font-size:{theme.FS_LABEL}px; padding: 2px 10px; }}"
             "QPushButton:hover { background:#0063b1; }"
             "QPushButton:disabled { background:#c0c0c0; color:#888; }"
         )
         self.btn_move.clicked.connect(self._move_to_target)
 
-        row.addWidget(self.spn_target, stretch=1)
+        # The unit sits in a label beside the box, never inside it as a
+        # spinbox suffix — see rbl/gui/widgets/inputs.py for what a suffix
+        # does to a value being typed.
+        row.addLayout(unit_row(self.spn_target, "mm", font_size=theme.FS_LABEL),
+                      stretch=1)
         row.addWidget(self.btn_move)
         lay.addLayout(row)
 
         self.lbl_state = QLabel("—")
         self.lbl_state.setAlignment(Qt.AlignmentFlag.AlignRight)
-        self.lbl_state.setStyleSheet(f"color: {theme.NEUTRAL}; font-size: 9px;")
+        self.lbl_state.setStyleSheet(
+            f"color: {theme.NEUTRAL}; font-size: {theme.FS_CAPTION}px;")
         lay.addWidget(self.lbl_state)
 
         self.set_enabled(False)
@@ -104,16 +111,23 @@ class SlitControl(QWidget):
 
         if stale:
             self.lbl_state.setText("no position — Galil not connected")
-            self.lbl_state.setStyleSheet(f"color: {theme.NEUTRAL}; font-size: 9px;")
+            self.lbl_state.setStyleSheet(
+                f"color: {theme.NEUTRAL}; font-size: {theme.FS_CAPTION}px;")
         elif moving:
             self.lbl_state.setText("moving")
-            self.lbl_state.setStyleSheet(theme.status_label(theme.WARN) + "font-size: 9px;")
+            self.lbl_state.setStyleSheet(theme.status_label(theme.WARN) + f"font-size: {theme.FS_CAPTION}px;")
         elif not enabled:
             self.lbl_state.setText("motor disabled")
-            self.lbl_state.setStyleSheet(theme.status_label(theme.MUTED) + "font-size: 9px;")
+            self.lbl_state.setStyleSheet(theme.status_label(theme.MUTED) + f"font-size: {theme.FS_CAPTION}px;")
         else:
             self.lbl_state.setText("idle")
-            self.lbl_state.setStyleSheet(theme.status_label(theme.OK) + "font-size: 9px;")
+            self.lbl_state.setStyleSheet(theme.status_label(theme.OK) + f"font-size: {theme.FS_CAPTION}px;")
+
+    def set_target_mm(self, mm: float):
+        """Show a target commanded from anywhere — here, or the Stepper Motors
+        tab. Deferred while this box has focus so it cannot eat live typing."""
+        self.spn_target.sync_value(mm)
+        self.bar.set_target(mm)
 
     def sync_target_to_position(self):
         """Preload the target box with where the slit already is.

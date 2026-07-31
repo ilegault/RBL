@@ -17,6 +17,7 @@ pytest.importorskip("PySide6.QtWidgets")
 from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QShowEvent, QHideEvent
 
+from rbl.config import hardware_config as SC
 from rbl.state.beamline import Beamline
 from rbl.state.snapshots import (
     MotorState, AxisSnapshot, LogAmpState, AmpState, AmpChannelSnapshot,
@@ -280,10 +281,48 @@ def test_move_goes_through_beamline(tab):
 
 
 def test_move_marks_the_commanded_target_on_the_bar(tab):
-    tab.beamline.move_slit = lambda slit, mm: True
+    """The caret is driven by Beamline's published target, not set locally.
+
+    That is precisely what puts the same target on the Stepper Motors tab: a
+    caret this tab set for itself would be the one path the other screen never
+    heard about, which is the bug this wiring exists to fix.
+    """
+    tab.beamline.move_slit = lambda slit, mm: (
+        tab.beamline.slit_target_changed.emit(slit, mm) or True)
     _connect_motors(tab, **{"X+": 1.0})
     tab._on_move_requested("X+", 5.0)
-    assert tab.slits["X+"].bar.track._target == pytest.approx(0.5)
+    assert tab.slits["X+"].bar.track._target == pytest.approx(
+        5.0 / SC.SLIT_DISPLAY_MAX_MM)
+
+
+def test_target_published_by_another_screen_lands_on_this_one(tab):
+    """A move made on the Stepper Motors tab shows up here, box and caret."""
+    _connect_motors(tab, **{"Y-": 1.0})
+    tab.beamline.slit_target_changed.emit("Y-", 7.5)
+    assert tab.slits["Y-"].spn_target.value() == pytest.approx(7.5)
+    assert tab.slits["Y-"].bar.track._target == pytest.approx(
+        7.5 / SC.SLIT_DISPLAY_MAX_MM)
+
+
+def test_target_beyond_the_old_ten_mm_ceiling_is_accepted(tab):
+    """The Overview used to refuse anything past 10 mm the other tab allowed."""
+    _connect_motors(tab, **{"X-": 1.0})
+    tab.slits["X-"].spn_target.setValue(18.0)
+    assert tab.slits["X-"].spn_target.value() == pytest.approx(18.0)
+
+
+def test_current_bars_are_laid_out_as_a_diamond(tab):
+    """Y+ above, Y- below, X- left of X+ — the slits as they sit in the beam."""
+    grid = tab.currents["X+"].parentWidget().layout()
+    cells = {slit: grid.getItemPosition(grid.indexOf(bar))
+             for slit, bar in tab.currents.items()}
+    y_plus_row, _, _, _ = cells["Y+"]
+    y_minus_row, _, _, _ = cells["Y-"]
+    x_minus_row, x_minus_col, _, _ = cells["X-"]
+    x_plus_row, x_plus_col, _, _ = cells["X+"]
+    assert y_plus_row < x_plus_row < y_minus_row
+    assert x_minus_row == x_plus_row
+    assert x_minus_col < x_plus_col
 
 
 def test_move_refused_and_reported_while_disconnected(tab):

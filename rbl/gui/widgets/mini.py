@@ -46,11 +46,13 @@ class ValueTile(QWidget):
         lay.setSpacing(0)
 
         self.lbl_name = QLabel(name)
-        self.lbl_name.setStyleSheet(f"color: {theme.NEUTRAL}; font-size: 10px;")
+        self.lbl_name.setStyleSheet(
+            f"color: {theme.NEUTRAL}; font-size: {theme.FS_CAPTION}px;")
         lay.addWidget(self.lbl_name)
 
         self.lbl_value = QLabel("—")
-        self.lbl_value.setStyleSheet("font-weight: bold; font-size: 14px;")
+        self.lbl_value.setStyleSheet(
+            f"font-weight: bold; font-size: {theme.FS_BIG}px;")
         lay.addWidget(self.lbl_value)
 
     def set(self, value: float, stale: bool = False, fmt: str = "{:.3f}"):
@@ -60,7 +62,7 @@ class ValueTile(QWidget):
             text = fmt.format(value)
             self.lbl_value.setText(f"{text} {self._unit}".strip())
         self.lbl_value.setStyleSheet(
-            "font-weight: bold; font-size: 14px;"
+            f"font-weight: bold; font-size: {theme.FS_BIG}px;"
             + (f" color: {theme.MUTED};" if stale else "")
         )
 
@@ -73,9 +75,12 @@ class BarTrack(QWidget):
     can disagree about units only in one place instead of two.
     """
 
-    _GROOVE_H = 11
-    _TICK_H   = 4
-    _LABEL_H  = 12
+    # Sized to the Overview type scale, not to itself: the groove has to keep
+    # holding its own against a 17 px value beside it, and _LABEL_H has to fit
+    # a theme.FS_TINY caption or the scale numbers get clipped.
+    _GROOVE_H = 14
+    _TICK_H   = 5
+    _LABEL_H  = 16
 
     def __init__(self, ticks: int = 5, parent=None):
         super().__init__(parent)
@@ -85,7 +90,7 @@ class BarTrack(QWidget):
         self._ticks  = max(2, ticks)
         self._tick_labels: list[str] = []
         self.setFixedHeight(self._GROOVE_H + self._TICK_H + self._LABEL_H)
-        self.setMinimumWidth(80)
+        self.setMinimumWidth(100)
 
     # ---- State ---------------------------------------------------------------
 
@@ -148,7 +153,7 @@ class BarTrack(QWidget):
         if self._tick_labels:
             p.setPen(QPen(QColor(theme.NEUTRAL)))
             font = p.font()
-            font.setPointSize(7)
+            font.setPixelSize(theme.FS_TINY)
             p.setFont(font)
             y = self._GROOVE_H + self._TICK_H
             h = self._LABEL_H
@@ -203,12 +208,14 @@ class MiniBar(QWidget):
         header = QHBoxLayout()
         header.setSpacing(4)
         self.lbl_name = QLabel(name)
-        self.lbl_name.setStyleSheet(f"color: {theme.NEUTRAL}; font-size: 10px;")
+        self.lbl_name.setStyleSheet(
+            f"color: {theme.NEUTRAL}; font-size: {theme.FS_CAPTION}px;")
         header.addWidget(self.lbl_name)
         self.lbl_value = QLabel("—")
         self.lbl_value.setAlignment(Qt.AlignmentFlag.AlignRight
                                     | Qt.AlignmentFlag.AlignVCenter)
-        self.lbl_value.setStyleSheet("font-weight: bold; font-size: 12px;")
+        self.lbl_value.setStyleSheet(
+            f"font-weight: bold; font-size: {theme.FS_VALUE}px;")
         header.addWidget(self.lbl_value, stretch=1)
         lay.addLayout(header)
 
@@ -270,7 +277,7 @@ class MiniBar(QWidget):
             text = f"{self._value:.{self._decimals}f}"
             self.lbl_value.setText(f"{text} {self._unit}".strip())
         self.lbl_value.setStyleSheet(
-            "font-weight: bold; font-size: 12px;"
+            f"font-weight: bold; font-size: {theme.FS_VALUE}px;"
             + (f" color: {theme.MUTED};" if stale else "")
         )
 
@@ -288,8 +295,8 @@ class VBarTrack(QWidget):
     panels sit side by side instead of stacked.
     """
 
-    _GROOVE_W = 13
-    _TICK_W   = 3
+    _GROOVE_W = 16
+    _TICK_W   = 4
 
     def __init__(self, ticks: int = 5, parent=None):
         super().__init__(parent)
@@ -301,7 +308,7 @@ class VBarTrack(QWidget):
         # Tall enough that a fill fraction is still readable as a fraction —
         # beside a two-row form the track would otherwise be squeezed to the
         # form's height minus its own labels, which is about 30 px.
-        self.setMinimumHeight(58)
+        self.setMinimumHeight(70)
 
     def set_fraction(self, frac, color: str = None):
         self._frac = None if frac is None else min(1.0, max(0.0, float(frac)))
@@ -372,7 +379,13 @@ class VMiniBar(QWidget):
 
         self.lbl_value = QLabel("—")
         self.lbl_value.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        self.lbl_value.setStyleSheet("font-weight: bold; font-size: 11px;")
+        # One step below the horizontal bars' value size, and deliberately so:
+        # this label carries its unit ("2.40 V pk") across a column only wide
+        # enough for a vertical groove, and at FS_VALUE it clipped to ".40 V p"
+        # — a bigger font that cannot show the number is worse than a smaller
+        # one that can.
+        self.lbl_value.setStyleSheet(
+            f"font-weight: bold; font-size: {theme.FS_LABEL}px;")
         lay.addWidget(self.lbl_value)
 
         self.track = VBarTrack(ticks=ticks)
@@ -380,7 +393,8 @@ class VMiniBar(QWidget):
 
         self.lbl_name = QLabel(name)
         self.lbl_name.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        self.lbl_name.setStyleSheet(f"color: {theme.NEUTRAL}; font-size: 9px;")
+        self.lbl_name.setStyleSheet(
+            f"color: {theme.NEUTRAL}; font-size: {theme.FS_CAPTION}px;")
         lay.addWidget(self.lbl_name)
 
     def _position(self, value):
@@ -404,7 +418,7 @@ class VMiniBar(QWidget):
             text = f"{self._value:.{self._decimals}f}"
             self.lbl_value.setText(f"{text} {self._unit}".strip())
         self.lbl_value.setStyleSheet(
-            "font-weight: bold; font-size: 11px;"
+            f"font-weight: bold; font-size: {theme.FS_LABEL}px;"
             + (f" color: {theme.MUTED};" if stale else ""))
 
     def set_target(self, value: float):
@@ -433,7 +447,7 @@ class PairTrace(QWidget):
         self._b: list = []
         self._color_a = color_a
         self._color_b = color_b
-        self.setMinimumHeight(52)
+        self.setMinimumHeight(72)
         self.setSizePolicy(QSizePolicy.Policy.Expanding,
                            QSizePolicy.Policy.Expanding)
 
@@ -479,8 +493,8 @@ class TraceArea(QWidget):
         super().__init__(parent)
         self._color = color or theme.OK
         self._values: list = []
-        self.setFixedHeight(26)
-        self.setMinimumWidth(60)
+        self.setFixedHeight(32)
+        self.setMinimumWidth(70)
 
     def set_values(self, values: list):
         self._values = values
@@ -538,13 +552,14 @@ class Sparkline(QWidget):
         header.setSpacing(4)
         self.lbl_name = QLabel(name)
         self.lbl_name.setStyleSheet(
-            f"color: {self._color}; font-size: 10px; font-weight: bold;")
+            f"color: {self._color}; font-size: {theme.FS_CAPTION}px; "
+            "font-weight: bold;")
         header.addWidget(self.lbl_name)
 
         self.lbl_value = QLabel("—")
         self.lbl_value.setAlignment(Qt.AlignmentFlag.AlignRight
                                     | Qt.AlignmentFlag.AlignVCenter)
-        self.lbl_value.setStyleSheet("font-size: 10px;")
+        self.lbl_value.setStyleSheet(f"font-size: {theme.FS_CAPTION}px;")
         header.addWidget(self.lbl_value, stretch=1)
         lay.addLayout(header)
 

@@ -33,6 +33,23 @@ SLIT_COLORS = {
 }
 
 
+# ── Overview type scale ───────────────────────────────────────────────────────
+#
+# The Overview is read from across the room — it is the "is the beamline OK?"
+# screen, not a screen anyone sits at to type. Everything on it was sized for
+# a seated operator (9-12 px) and is illegible from a few feet away, so it gets
+# its own scale, ~1.4x the old sizes, defined once here rather than as a hex of
+# hard-coded px values scattered through four widget files.
+#
+# Sizes are px (Qt stylesheet units), not pt, because that is what the
+# stylesheets around them already used; the ratios are what matter.
+FS_TINY    = 12   # scale captions under a bar's tick marks
+FS_CAPTION = 13   # a widget's name, a footnote under a trace
+FS_LABEL   = 14   # form labels, standing help text
+FS_VALUE   = 17   # a live number inside a bar chart
+FS_BIG     = 19   # a headline number or a group total
+
+
 def status_label(role: str, bold: bool = True) -> str:
     """Stylesheet string for a label whose colour encodes OK/WARN/FAULT/etc.
 

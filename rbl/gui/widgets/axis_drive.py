@@ -28,12 +28,13 @@ generator still goes through Beamline.
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtWidgets import (
     QGroupBox, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel, QPushButton,
-    QDoubleSpinBox, QSizePolicy, QSpacerItem,
+    QSizePolicy, QSpacerItem,
 )
 
 from rbl.hardware.funcgen_driver import MAX_AMP_VPP
 from rbl.hardware.funcgen_safety import peak_status, _AMP_GAIN, PEAK_MAX_VOLTS
 from rbl.gui import theme
+from rbl.gui.widgets.inputs import QuietDoubleSpinBox, unit_row
 from rbl.gui.widgets.mini import VMiniBar
 from rbl.state.setpoints import AXIS_CHANNELS, AXIS_GENERATOR
 
@@ -87,14 +88,18 @@ class AxisDriveControl(QGroupBox):
 
         form = QFormLayout()
         form.setContentsMargins(0, 0, 0, 0)
-        form.setSpacing(4)
+        form.setSpacing(6)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight
+                               | Qt.AlignmentFlag.AlignVCenter)
 
-        self.spn_amp = QDoubleSpinBox()
+        self.spn_amp = QuietDoubleSpinBox()
         self.spn_amp.setRange(0.0, MAX_AMP_PEAK_V)
         self.spn_amp.setDecimals(3)
         self.spn_amp.setSingleStep(0.05)
-        self.spn_amp.setSuffix(" V pk")
-        self.spn_amp.setMaximumWidth(120)
+        self.spn_amp.setMinimumWidth(90)
+        self.spn_amp.setMaximumWidth(130)
+        self.spn_amp.setMinimumHeight(30)
+        self.spn_amp.setStyleSheet(f"font-size: {theme.FS_LABEL}px;")
         self.spn_amp.setToolTip(
             f"Peak drive on both {self.slits[0]} and {self.slits[1]}, in volts "
             "at the amplifier input.\n"
@@ -106,19 +111,29 @@ class AxisDriveControl(QGroupBox):
             "(twice this)."
         )
         self.spn_amp.valueChanged.connect(self._on_edited)
-        form.addRow("Amplitude:", self.spn_amp)
+        # Units go in a label beside each box, never in the box as a spinbox
+        # suffix: a suffix is part of the editable text, so the cursor can land
+        # behind it and a select-all-and-retype takes it with it. That is the
+        # "weird bugs" the units inside these boxes were causing.
+        form.addRow(self._form_label("Amplitude:"),
+                    unit_row(self.spn_amp, "V pk", font_size=theme.FS_LABEL))
 
-        self.spn_freq = QDoubleSpinBox()
+        self.spn_freq = QuietDoubleSpinBox()
         self.spn_freq.setRange(0.0001, 25_000_000.0)
         self.spn_freq.setDecimals(4)
-        self.spn_freq.setSuffix(" Hz")
-        self.spn_freq.setMaximumWidth(120)
+        self.spn_freq.setMinimumWidth(90)
+        self.spn_freq.setMaximumWidth(130)
+        self.spn_freq.setMinimumHeight(30)
+        self.spn_freq.setStyleSheet(f"font-size: {theme.FS_LABEL}px;")
         self.spn_freq.setToolTip(
             f"Sweep rate on this axis. Both {self.slits[0]} and {self.slits[1]} "
-            "run at the same frequency — a mismatched pair is not a raster."
+            "run at the same frequency — a mismatched pair is not a raster.\n"
+            "Sub-hertz rates are typed in full (e.g. 0.514) — the box no "
+            "longer commits the first digit you type."
         )
         self.spn_freq.valueChanged.connect(self._on_edited)
-        form.addRow("Frequency:", self.spn_freq)
+        form.addRow(self._form_label("Frequency:"),
+                    unit_row(self.spn_freq, "Hz", font_size=theme.FS_LABEL))
         form.addItem(QSpacerItem(0, 0, QSizePolicy.Policy.Minimum,
                                  QSizePolicy.Policy.Expanding))
 
@@ -130,7 +145,10 @@ class AxisDriveControl(QGroupBox):
         self.bar = VMiniBar(f"{self.slits[0]}/{self.slits[1]}", 0.0, MAX_AMP_PEAK_V,
                             unit="V pk", color=theme.SLIT_COLORS[self.slits[0]],
                             decimals=2)
-        self.bar.setFixedWidth(58)
+        # Wide enough for the widest thing this bar ever shows —
+        # "2.40 V pk" at the Overview type scale. Sized to the text,
+        # because a clipped readout is not a readout.
+        self.bar.setFixedWidth(84)
         row.addWidget(self.bar)
         lay.addLayout(row)
 
@@ -140,14 +158,16 @@ class AxisDriveControl(QGroupBox):
         # the form does not reserve, and the second line lands under the
         # button below it.
         self.lbl_hv = QLabel("")
-        self.lbl_hv.setStyleSheet("color: #7a2000; font-size: 10px;")
+        self.lbl_hv.setStyleSheet(
+            f"color: #7a2000; font-size: {theme.FS_CAPTION}px;")
         lay.addWidget(self.lbl_hv)
 
         self.btn_output = QPushButton("Output OFF")
         self.btn_output.setCheckable(True)
-        self.btn_output.setMinimumHeight(26)
+        self.btn_output.setMinimumHeight(34)
         self.btn_output.setStyleSheet(
-            "QPushButton { background:#8c0000; color:white; font-weight:bold; }"
+            "QPushButton { background:#8c0000; color:white; font-weight:bold;"
+            f" font-size:{theme.FS_LABEL}px; }}"
             "QPushButton:checked { background:#1a7000; color:white; font-weight:bold; }"
             "QPushButton:hover { background:#a00000; }"
             "QPushButton:checked:hover { background:#228a00; }"
@@ -163,8 +183,8 @@ class AxisDriveControl(QGroupBox):
 
         self.lbl_readback = QLabel("—")
         self.lbl_readback.setStyleSheet(
-            "font-family: Consolas, 'Courier New', monospace; font-size: 9px;"
-            f" color: {theme.NEUTRAL};"
+            "font-family: Consolas, 'Courier New', monospace; "
+            f"font-size: {theme.FS_CAPTION}px; color: {theme.NEUTRAL};"
         )
         self.lbl_readback.setAlignment(Qt.AlignmentFlag.AlignRight)
         lay.addWidget(self.lbl_readback)
@@ -172,16 +192,27 @@ class AxisDriveControl(QGroupBox):
         self.set_connected(False)
         self._update_hv_label()
 
+    @staticmethod
+    def _form_label(text: str) -> QLabel:
+        lbl = QLabel(text)
+        lbl.setStyleSheet(f"font-size: {theme.FS_LABEL}px;")
+        return lbl
+
     # ---- Setpoint in / out -----------------------------------------------------
 
     def set_setpoint(self, amp_vpp: float, freq_hz: float, output_on: bool,
                      matched: bool = True):
-        """Render the shared setpoint. Never emits — this is a sync, not an edit."""
+        """Render the shared setpoint. Never emits — this is a sync, not an edit.
+
+        Written through sync_value() rather than setValue(): this is the path a
+        Function Generators tab edit arrives on, and it must not reformat a
+        number the operator is part-way through typing in these boxes.
+        """
         peak = vpp_to_peak(amp_vpp)
         self._syncing = True
         try:
-            self.spn_amp.setValue(peak)
-            self.spn_freq.setValue(freq_hz)
+            self.spn_amp.sync_value(peak)
+            self.spn_freq.sync_value(freq_hz)
             self.btn_output.setChecked(output_on)
         finally:
             self._syncing = False
@@ -216,7 +247,7 @@ class AxisDriveControl(QGroupBox):
                      stale=not connected)
 
         style = ("font-family: Consolas, 'Courier New', monospace; "
-                 "font-size: 9px; color: {};")
+                 f"font-size: {theme.FS_CAPTION}px; color: {{}};")
         if not connected:
             self.lbl_readback.setText(f"Gen {AXIS_GENERATOR[self.axis]} not connected")
             self.lbl_readback.setStyleSheet(style.format(theme.NEUTRAL))
@@ -281,5 +312,5 @@ class AxisDriveControl(QGroupBox):
         else:
             role = None
         self.lbl_hv.setStyleSheet(
-            f"color: {role}; font-size: 10px; font-weight: bold;" if role
-            else "color: #7a2000; font-size: 10px;")
+            f"color: {role}; font-size: {theme.FS_CAPTION}px; font-weight: bold;"
+            if role else f"color: #7a2000; font-size: {theme.FS_CAPTION}px;")

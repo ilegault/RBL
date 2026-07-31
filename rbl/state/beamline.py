@@ -45,6 +45,19 @@ class Beamline(QObject):
     timebase_changed = Signal(dict)     # {"A": "INT"/"EXT"/"?"/"—", "B": ...}
     command_failed   = Signal(str, str)  # subsystem, message
 
+    # Motion commanded from ANY screen, published so every screen sees it.
+    #
+    # There is one Command Console (Stepper Motors tab) and there are two
+    # places a slit can be moved from (that tab and the Overview). Before
+    # these signals, a move commanded on the Overview reached the Galil
+    # without ever appearing in the console and without moving the Stepper
+    # Motors tab's Target box — the operator's own action was invisible on the
+    # screen that exists to show it. Both are emitted by move_slit(), which is
+    # the single path to the controller, so neither screen can miss a command
+    # the other made.
+    motor_logged     = Signal(str)        # one console line, already formatted
+    slit_target_changed = Signal(str, float)   # slit label, absolute mm
+
     # LabJack connection lifecycle. Re-emitted here (rather than reaching into
     # widgets directly) so this class stays Qt-signal-only, no GUI knowledge.
     labjack_connected    = Signal(str)    # serial
@@ -800,23 +813,65 @@ class Beamline(QObject):
                 except Exception as e:
                     self.command_failed.emit("funcgen", f"{gen_letter}{channel}: {e}")
 
+    def axis_letter_for(self, slit: str):
+        """Galil axis letter for a slit label ("X+" -> "A"), or None."""
+        return next((a for a, j in SC.AXIS_NAMES.items() if j == slit), None)
+
+    def log_motor(self, line: str):
+        """Put one line on the Stepper Motors tab's Command Console.
+
+        Anything that reaches the Galil should say so here, whichever screen
+        it came from — that console is the app's record of what was sent, and
+        a command missing from it reads as a command that never happened.
+        """
+        self.motor_logged.emit(line)
+
+    def note_slit_target(self, slit: str, mm: float):
+        """Publish a commanded slit target so every screen shows the same one.
+
+        Separate from move_slit() because the Stepper Motors tab issues its
+        own move through the driver (it has the soft-limit dialog and the
+        counts/mm unit toggle that the Overview deliberately does not), and
+        the Overview still has to learn the target that move set.
+        """
+        self.slit_target_changed.emit(slit, float(mm))
+
     def move_slit(self, slit: str, mm: float) -> bool:
         """Move one slit to an absolute position in mm.
 
         `slit` is a slit label ("X+", "X-", "Y+", "Y-"), not a Galil axis
         letter — callers shouldn't need to know the axis mapping.
+
+        Logs to the Command Console and publishes the new target BEFORE
+        touching the driver, and does so even when the move is refused: an
+        attempt that failed is exactly the thing an operator needs to find in
+        the console afterwards.
         """
-        axis_letter = next((a for a, j in SC.AXIS_NAMES.items() if j == slit), None)
+        axis_letter = self.axis_letter_for(slit)
         if axis_letter is None:
             self.command_failed.emit("motors", f"{slit}: not a valid slit label")
             return False
         if not self.galil.connected:
+            self.log_motor(f"! {slit}: move to {mm:+.3f} mm ignored — not connected")
             self.command_failed.emit("motors", f"{slit}: Galil not connected")
             return False
+
+        # Publish the ACHIEVABLE target, not the typed one. A stepper lands on
+        # whole counts, so 6.000 mm is commanded as 3653 counts and the slit
+        # stops at 6.001 mm. Marking the typed number on the bars would leave
+        # every caret sitting a fraction of a step off the position that
+        # eventually arrives under it, and would disagree with the Stepper
+        # Motors tab, which has always worked in counts.
+        counts = SC.mm_to_counts(axis_letter, mm)
+        reachable_mm = SC.counts_to_mm(axis_letter, counts)
+        self.log_motor(f"> PA {axis_letter}={counts} ({reachable_mm:+.3f} mm) ; "
+                       f"BG {axis_letter}   [{slit}]")
+        self.note_slit_target(slit, reachable_mm)
         try:
-            self.galil.move_absolute(axis_letter, SC.mm_to_counts(axis_letter, mm))
+            self.galil.move_absolute(axis_letter, counts)
             return True
         except Exception as e:
+            self.log_motor(f"! {slit}: {e}")
             self.command_failed.emit("motors", f"{slit}: {e}")
             return False
 

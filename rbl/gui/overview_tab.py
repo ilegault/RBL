@@ -158,6 +158,12 @@ class OverviewTab(QWidget):
         right.addStretch(1)
         body.addLayout(right, stretch=1)
 
+        # A move commanded on the Stepper Motors tab publishes its target
+        # through Beamline; render it here so the caret and the target box on
+        # this screen agree with that one. The reverse direction (a move made
+        # here) travels the same wire — see Beamline.move_slit.
+        beamline.slit_target_changed.connect(self._on_slit_target_changed)
+
         beamline.motors_changed.connect(self._on_motors)
         beamline.logamps_changed.connect(self._on_logamps)
         beamline.amps_changed.connect(self._on_amps)
@@ -183,13 +189,15 @@ class OverviewTab(QWidget):
         for key, caption in (("motors", "Slits"), ("logamps", "Log amps"),
                              ("amps", "HV amps"), ("A", "Gen A"), ("B", "Gen B")):
             pill = QLabel(f"● {caption}")
-            pill.setStyleSheet(theme.pill(False))
+            pill.setStyleSheet(theme.pill(False) + f"font-size: {theme.FS_VALUE}px;")
             self.pills[key] = pill
             strip.addWidget(pill)
 
         self.lbl_failure = QLabel("")
         self.lbl_failure.setWordWrap(True)
-        self.lbl_failure.setStyleSheet(theme.status_label(theme.NEUTRAL, bold=False))
+        self.lbl_failure.setStyleSheet(
+            theme.status_label(theme.NEUTRAL, bold=False)
+            + f"font-size: {theme.FS_LABEL}px;")
         strip.addWidget(self.lbl_failure, stretch=1)
         return strip
 
@@ -210,28 +218,48 @@ class OverviewTab(QWidget):
         lay.addLayout(grid)
 
         self.lbl_gaps = QLabel("Gap  X: —   Y: —")
-        self.lbl_gaps.setStyleSheet("font-weight: bold;")
+        self.lbl_gaps.setStyleSheet(
+            f"font-weight: bold; font-size: {theme.FS_BIG}px;")
         lay.addWidget(self.lbl_gaps)
 
         lay.addWidget(self._build_current_box())
 
         self.lbl_motion = QLabel(self._STANDING_MESSAGE)
         self.lbl_motion.setWordWrap(True)
-        self.lbl_motion.setStyleSheet(theme.status_label(theme.NEUTRAL, bold=False))
+        self.lbl_motion.setStyleSheet(
+            theme.status_label(theme.NEUTRAL, bold=False)
+            + f"font-size: {theme.FS_LABEL}px;")
         lay.addWidget(self.lbl_motion)
 
         return box
+
+    # Where each slit's current bar sits in the diamond: (row, column) on a
+    # 3x2 grid. Y+ on top, Y- on the bottom, X- left of X+ — the slits laid
+    # out the way they are in the beam, not in reading order. A 2x2 grid put
+    # X+ and X- side by side and Y+ under X+, which reads as a table of four
+    # unrelated numbers; this reads as an aperture, so "the beam is high and
+    # left" is a shape rather than four comparisons done in your head.
+    _DIAMOND_CELLS = {
+        "Y+": (0, 0, 1, 2),   # row, col, row span, col span
+        "X-": (1, 0, 1, 1),
+        "X+": (1, 1, 1, 1),
+        "Y-": (2, 0, 1, 2),
+    }
 
     def _build_current_box(self) -> QGroupBox:
         """Log-amp current per slit — which blade the beam is actually hitting.
 
         Decade-scaled: the log amps span 1 nA to 1 mA, so on a linear bar every
         reading below ~10 µA would sit invisibly against the left edge.
+
+        Laid out as a diamond (see _DIAMOND_CELLS): each bar sits in the
+        direction of the slit it reads.
         """
         box = QGroupBox("Beam Current on Slits")
         grid = QGridLayout(box)
+        grid.setSpacing(4)
         self.currents = {}
-        for i, slit in enumerate(SC.AXIS_LABELS):
+        for slit in SC.AXIS_LABELS:
             bar = MiniBar(
                 f"{slit} current", SC.LOG_AMP_MIN_A, SC.LOG_AMP_MAX_A,
                 color=theme.SLIT_COLORS[slit], ticks=7, log_scale=True,
@@ -239,7 +267,12 @@ class OverviewTab(QWidget):
                 scale_captions=["1 nA", "1 µA", "1 mA"],
             )
             self.currents[slit] = bar
-            grid.addWidget(bar, i // 2, i % 2)
+            row, col, row_span, col_span = self._DIAMOND_CELLS[slit]
+            grid.addWidget(bar, row, col, row_span, col_span)
+        # The two horizontal cells share the width evenly, so X- and X+ stay
+        # mirror images of each other rather than sizing to their own captions.
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
         return box
 
     def _build_funcgen_box(self) -> QGroupBox:
@@ -272,10 +305,10 @@ class OverviewTab(QWidget):
         lay.addLayout(self._build_timebase_row())
 
         self.btn_apply_all = QPushButton("Apply All — X && Y")
-        self.btn_apply_all.setMinimumHeight(34)
+        self.btn_apply_all.setMinimumHeight(42)
         self.btn_apply_all.setStyleSheet(
             "QPushButton { background:#004e8c; color:white; font-weight:bold;"
-            " font-size:13px; }"
+            f" font-size:{theme.FS_VALUE}px; }}"
             "QPushButton:hover { background:#0063b1; }"
             "QPushButton:disabled { background:#c0c0c0; color:#888; }"
         )
@@ -292,7 +325,8 @@ class OverviewTab(QWidget):
         self.lbl_drive_note = QLabel(self._STANDING_DRIVE_MESSAGE)
         self.lbl_drive_note.setWordWrap(True)
         self.lbl_drive_note.setStyleSheet(
-            theme.status_label(theme.NEUTRAL, bold=False) + "font-size: 10px;")
+            theme.status_label(theme.NEUTRAL, bold=False)
+            + f"font-size: {theme.FS_CAPTION}px;")
         lay.addWidget(self.lbl_drive_note)
         return box
 
@@ -309,6 +343,7 @@ class OverviewTab(QWidget):
         row.setSpacing(6)
 
         self.chk_ext_ref = QCheckBox("Share 10 MHz timebase")
+        self.chk_ext_ref.setStyleSheet(f"font-size: {theme.FS_LABEL}px;")
         self.chk_ext_ref.setToolTip(
             "Two separate DG1022Z units drift on their own clocks, so their "
             "X/Y phase relationship will not stay fixed.\n\n"
@@ -323,7 +358,8 @@ class OverviewTab(QWidget):
 
         self.lbl_timebase = QLabel("A: —  B: —")
         self.lbl_timebase.setStyleSheet(
-            f"color: {theme.NEUTRAL}; font-weight: bold; font-size: 10px;")
+            f"color: {theme.NEUTRAL}; font-weight: bold; "
+            f"font-size: {theme.FS_LABEL}px;")
         row.addWidget(self.lbl_timebase)
         row.addStretch(1)
         return row
@@ -389,14 +425,16 @@ class OverviewTab(QWidget):
             foot = QHBoxLayout()
             foot.setSpacing(6)
             win = QLabel("—")
-            win.setStyleSheet(f"color: {theme.NEUTRAL}; font-size: 9px;")
+            win.setStyleSheet(
+                f"color: {theme.NEUTRAL}; font-size: {theme.FS_CAPTION}px;")
             self.hv_window[axis] = win
             foot.addWidget(win)
             foot.addStretch(1)
 
             lbl = QLabel("—")
             lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
-            lbl.setStyleSheet(f"color: {theme.NEUTRAL}; font-size: 9px;")
+            lbl.setStyleSheet(
+                f"color: {theme.NEUTRAL}; font-size: {theme.FS_CAPTION}px;")
             self.hv_phase[axis] = lbl
             foot.addWidget(lbl)
             cell.addLayout(foot)
@@ -418,9 +456,17 @@ class OverviewTab(QWidget):
     def _on_funcgens(self, state: FuncGenState):
         self._funcgens = state
 
+    def _on_slit_target_changed(self, slit: str, mm: float):
+        """Some screen commanded *slit* to *mm* — show it on that slit's bar."""
+        ctrl = self.slits.get(slit)
+        if ctrl is not None:
+            ctrl.set_target_mm(mm)
+
     def _on_failure(self, subsystem: str, msg: str):
         self.lbl_failure.setText(f"! {subsystem}: {msg}")
-        self.lbl_failure.setStyleSheet(theme.status_label(theme.FAULT, bold=False))
+        self.lbl_failure.setStyleSheet(
+            theme.status_label(theme.FAULT, bold=False)
+            + f"font-size: {theme.FS_LABEL}px;")
 
     # ---- Commands out ----------------------------------------------------------
     #
@@ -435,8 +481,10 @@ class OverviewTab(QWidget):
             return
         if not self._motors.zeroed and not self._confirm_unzeroed_move(slit, mm):
             return
+        # move_slit publishes the target itself, to every screen at once —
+        # this one included, via _on_slit_target_changed. Setting the caret
+        # here as well would be the one path that skipped the other tab.
         if self.beamline.move_slit(slit, mm):
-            self.slits[slit].bar.set_target(mm)
             self._note(f"Commanded {slit} → {mm:.3f} mm")
 
     def _confirm_unzeroed_move(self, slit: str, mm: float) -> bool:
@@ -521,7 +569,8 @@ class OverviewTab(QWidget):
         locked = clocks.get("A") == "INT" and clocks.get("B") == "EXT"
         self.lbl_timebase.setText(f"A: {clocks.get('A', '—')}  B: {clocks.get('B', '—')}")
         self.lbl_timebase.setStyleSheet(
-            theme.status_label(theme.OK if locked else theme.NEUTRAL) + "font-size: 10px;")
+            theme.status_label(theme.OK if locked else theme.NEUTRAL)
+            + f"font-size: {theme.FS_LABEL}px;")
         self.chk_ext_ref.blockSignals(True)
         self.chk_ext_ref.setChecked(locked)
         self.chk_ext_ref.blockSignals(False)
@@ -573,7 +622,7 @@ class OverviewTab(QWidget):
         standing drive message come back (see _redraw_funcgens)."""
         self.lbl_drive_note.setText(text)
         self.lbl_drive_note.setStyleSheet(
-            theme.status_label(role, bold=False) + "font-size: 10px;")
+            theme.status_label(role, bold=False) + f"font-size: {theme.FS_CAPTION}px;")
         self._drive_note_frames = self._NOTE_FRAMES
 
     def _note(self, text: str, role: str = theme.NEUTRAL):
@@ -584,7 +633,8 @@ class OverviewTab(QWidget):
 
     def _set_motion_text(self, text: str, role: str):
         self.lbl_motion.setText(text)
-        self.lbl_motion.setStyleSheet(theme.status_label(role, bold=False))
+        self.lbl_motion.setStyleSheet(
+            theme.status_label(role, bold=False) + f"font-size: {theme.FS_LABEL}px;")
 
     # ---- Visibility (QStackedWidget hides the non-current tab) ----------------
     #
@@ -713,7 +763,8 @@ class OverviewTab(QWidget):
             return
         self.lbl_drive_note.setText(self._STANDING_DRIVE_MESSAGE)
         self.lbl_drive_note.setStyleSheet(
-            theme.status_label(theme.NEUTRAL, bold=False) + "font-size: 10px;")
+            theme.status_label(theme.NEUTRAL, bold=False)
+            + f"font-size: {theme.FS_CAPTION}px;")
 
     def _redraw_amps(self):
         amps = self._amps
@@ -769,13 +820,15 @@ class OverviewTab(QWidget):
         lbl = self.hv_phase[axis]
         if not connected:
             lbl.setText("—")
-            lbl.setStyleSheet(f"color: {theme.NEUTRAL}; font-size: 9px;")
+            lbl.setStyleSheet(
+                f"color: {theme.NEUTRAL}; font-size: {theme.FS_CAPTION}px;")
             return
 
         corr = pair_correlation(wave_p, wave_m)
         if math.isnan(corr):
             lbl.setText("no waveform on this profile")
-            lbl.setStyleSheet(f"color: {theme.NEUTRAL}; font-size: 9px;")
+            lbl.setStyleSheet(
+                f"color: {theme.NEUTRAL}; font-size: {theme.FS_CAPTION}px;")
             return
 
         if corr <= self._ANTIPHASE_OK:
@@ -785,4 +838,5 @@ class OverviewTab(QWidget):
         else:
             text, role = f"NOT anti-phase  (r {corr:+.2f})", theme.FAULT
         lbl.setText(text)
-        lbl.setStyleSheet(theme.status_label(role, bold=False) + "font-size: 9px;")
+        lbl.setStyleSheet(theme.status_label(role, bold=False)
+                          + f"font-size: {theme.FS_CAPTION}px;")
