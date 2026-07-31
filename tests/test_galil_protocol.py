@@ -239,10 +239,26 @@ class TestMotionCommands:
     def test_begin_home_sequence(self):
         g = make_galil()
         g.begin_home("A", 900)
-        # SP, JG (negative = toward home), HM, BG  — in that order
-        assert g.sock.sent == ["SP 900", "JG -900", "HM A", "BG A"]
+        # SP (stage 1), HV (stage 2), JG, HM, BG — in that order.
+        assert g.sock.sent == ["SP 900", "HV 900", "JG -900", "HM A", "BG A"]
 
-    def test_begin_home_direction_is_negative(self):
+    def test_begin_home_sets_the_two_stages_separately(self):
+        """HM's stage 1 searches at SP; stage 2 re-approaches at HV and is what
+        fixes where the zero lands. A homing routine turns HV down for
+        repeatability while leaving SP fast enough to cover the distance."""
+        g = make_galil()
+        g.begin_home("B", 900, fine_speed=58)
+        assert g.sock.sent[:2] == ["SP ,900", "HV ,58"]
+
+    def test_home_velocity_is_positional_per_axis(self):
+        g = make_galil()
+        g.set_home_velocity("C", 58)
+        assert g.sock.sent == ["HV ,,58"]
+
+    def test_begin_home_jog_is_negative(self):
+        """The JG does not steer the search — HM picks its stage-1 direction
+        from the initial state of the home input. It is here to leave the axis
+        in a known jog mode before HM replaces the profile."""
         g = make_galil()
         g.begin_home("B", 450)
         jg = [c for c in g.sock.sent if c.startswith("JG")][0]

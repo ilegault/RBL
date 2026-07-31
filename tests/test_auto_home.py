@@ -171,6 +171,51 @@ class TestRoutineEndToEnd:
         g.begin_home.assert_not_called()
         g.define_zero.assert_not_called()
 
+    def test_each_pass_turns_down_both_of_hm_s_stages(self):
+        """On a stepper HM has two stages: a fast search at SP, then a slow
+        re-approach at HV that is what actually fixes where the zero lands.
+        HV was never set at all before, so turning SP down pass by pass was
+        tuning the stage that does not determine the answer."""
+        g = _galil(moving=False)
+        ok, _ = AxisHomeRoutine(g, "A").run(seek_first=False)
+        assert ok
+
+        passes = [(c.args[1], c.kwargs["fine_speed"])
+                  for c in g.begin_home.call_args_list]
+        assert passes == [(225, 225), (112, 112), (58, 58)]
+
+    def test_it_puts_both_speeds_back(self):
+        """Every pass left SP and HV turned down to homing speeds; a Move
+        issued afterwards would otherwise crawl."""
+        g = _galil(moving=False)
+        AxisHomeRoutine(g, "A").run(seek_first=False)
+        g.set_speed.assert_called_with("A", SC.DEFAULT_SPEED_COUNTS_PER_SEC)
+        g.set_home_velocity.assert_called_with(
+            "A", SC.DEFAULT_HOME_VELOCITY_COUNTS_PER_SEC)
+
+    def test_the_speeds_go_back_after_a_failure_too(self, monkeypatch):
+        # The routine's timeouts are wall-clock deadlines, and `no_sleep` only
+        # removes the pauses BETWEEN polls — without a fake clock this test
+        # spins for a real 60 s waiting for the first pass to give up.
+        clock = iter(range(0, 100_000))
+        monkeypatch.setattr(galil_workers.time, "time", lambda: float(next(clock)))
+
+        g = _galil(moving=True)     # never goes idle -> every pass times out
+        g.get_switch_states.return_value = _switches()
+        ok, _ = AxisHomeRoutine(g, "A").run(seek_first=False)
+        assert not ok
+        g.set_speed.assert_called_with("A", SC.DEFAULT_SPEED_COUNTS_PER_SEC)
+        g.set_home_velocity.assert_called_with(
+            "A", SC.DEFAULT_HOME_VELOCITY_COUNTS_PER_SEC)
+
+    def test_zero_is_defined_because_hm_does_not_do_it_on_a_stepper(self):
+        """HM's index-latch stage — the one that would define position 0 — is
+        servo-only. On a stepper the sequence stops after stage 2, so this DP
+        is the only thing that makes the zero exist."""
+        g = _galil(moving=False)
+        AxisHomeRoutine(g, "A").run(seek_first=False)
+        g.define_zero.assert_called_once_with("A")
+
     def test_without_seek_it_is_the_old_routine(self):
         g = _galil(moving=False)
         ok, _ = AxisHomeRoutine(g, "A").run(seek_first=False)
@@ -222,7 +267,7 @@ class TestAutoHomeAllWorker:
         never started until the previous one has been zeroed."""
         g = _galil(moving=False)
         order = []
-        g.begin_home.side_effect = lambda axis, speed: order.append(("HM", axis))
+        g.begin_home.side_effect = lambda axis, speed, **kw: order.append(("HM", axis))
         g.define_zero.side_effect = lambda axis: order.append(("DP", axis))
 
         w = AutoHomeAllWorker(g, ["A", "B"], seek_first=False)

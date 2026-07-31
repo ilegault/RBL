@@ -96,6 +96,13 @@ HOME_SEEK_SPEED_COUNTS_PER_SEC = 500
 # detector ("the switch never tripped"), not a schedule.
 HOME_SEEK_TIMEOUT_S = 180.0
 
+# What HV is put back to once homing is done. HM's second stage — the slow
+# re-approach that fixes where the zero lands — runs at HV, and the homing
+# routine turns it down to 58 cps for the final pass. Restoring it matters for
+# the same reason restoring SP does: the next home should start from a known
+# value rather than inherit the last run's fine-approach speed.
+DEFAULT_HOME_VELOCITY_COUNTS_PER_SEC = 256
+
 # --- Amplifier / motor configuration (2HA075520 amplifier) -------------------
 MOTOR_TYPE      = -2.5  # MT: step motor, active-high step pulse
 STEP_RESOLUTION = 2     # YA: 1=full, 2=half, 4=quarter, 8=eighth

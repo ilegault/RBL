@@ -8,14 +8,27 @@ testable and constructible without a widget, matching labjack_stream_worker.py.
 
 WHAT HOMING ACTUALLY TAKES, AND WHY THERE IS A SEEK PHASE
 ---------------------------------------------------------
-HM is a *search*: the controller creeps the axis along looking for the home
-switch, at the speed it was given. The three-pass routine below runs it at 225,
-112 and 58 cps precisely because a slow final approach is what makes the zero
-repeatable — but at 58 cps an axis parked at the far end of its travel would
-take many minutes to arrive, and would run out the pass timeout long before it
-did. So the working procedure has always been: jog the axis down onto the limit
-by hand first, THEN press Home. Two gestures per axis, eight for a set of
-slits, every time the program starts.
+On a stepper, HM is a TWO-stage sequence (the HM reference: the third stage,
+which latches an encoder index pulse, is servo-only):
+
+  1. move at SP until the home input CHANGES STATE, then decelerate to a stop;
+  2. reverse and re-approach that same transition at HV, stopping on it
+     instantaneously.
+
+Stage 2 is where the zero actually lands, so HV is the number that buys
+repeatability — which is why each pass below sets BOTH, and why the passes get
+slower together. Neither stage defines position 0 on a stepper, so DP=0 at the
+end is not a nicety, it is the only thing that makes the zero exist.
+
+Stage 1 still has to cross the whole distance to home, though, and at 58 cps an
+axis parked at the far end of its travel takes many minutes to arrive — long
+enough to run out the pass timeout. So the working procedure has always been:
+jog the axis down onto the limit by hand first, THEN press Home. Two gestures
+per axis, eight for a set of slits, every time the program starts.
+
+(HM picks its own stage-1 DIRECTION from the initial state of the home input,
+so the seek below is not steering it — the seek exists to shorten stage 1, not
+to aim it.)
 
 `AxisHomeRoutine` is those two gestures as one thing — SEEK (a fast jog until
 the home limit trips) followed by HOME (the three-pass HM, then DP=0) — and
@@ -90,6 +103,13 @@ class AxisHomeRoutine:
     # Speeds and matching back-off distances for each successive HM pass
     # (coarse -> fine). Slower each time: the last pass is what sets the zero,
     # and a slow final approach is the only thing that makes it repeatable.
+    #
+    # Each speed is applied to BOTH of HM's stages — SP for the fast search and
+    # HV for the slow re-approach that actually fixes the zero (see
+    # GalilController.begin_home). HV was previously never set at all, so every
+    # pass's second stage ran at whatever the controller had it at, and turning
+    # SP down pass by pass was tuning the stage that does not determine the
+    # answer.
     SPEEDS   = [225, 112, 58]
     BACKOFFS = [1000, 500, 250]   # counts to back off before each pass
 
@@ -224,29 +244,45 @@ class AxisHomeRoutine:
 
             self._progress(
                 f"{axis}: pass {pass_num+1}/{n} — "
-                f"HM at {speed} cps "
+                f"HM at SP/HV {speed} cps "
                 f"({SC.cps_to_mm_per_sec(axis, speed):.2f} mm/s)…"
             )
-            g.begin_home(axis, speed)
+            g.begin_home(axis, speed, fine_speed=speed)
             time.sleep(0.5)   # let motion start
 
             if not self.wait_idle(timeout=60.0):
                 self._progress(f"{axis}: HM timeout on pass {pass_num+1}")
                 g.stop(axis)
                 time.sleep(0.3)
-                # Restore speed and report failure — don't continue further passes
-                try:
-                    g.set_speed(axis, SC.DEFAULT_SPEED_COUNTS_PER_SEC)
-                except Exception:
-                    pass
+                self._restore_speeds()
                 return False, f"{axis}: homing timed out on pass {pass_num+1}/{n}"
 
             self._progress(f"{axis}: pass {pass_num+1}/{n} complete")
 
-        # All passes done — define zero on the final fine-speed position
+        # All passes done. HM leaves a stepper's position untouched — there is
+        # no index-latch stage on a stepper — so this DP is what makes the zero
+        # exist at all, not a tidy-up after it.
         g.define_zero(axis)
-        g.set_speed(axis, SC.DEFAULT_SPEED_COUNTS_PER_SEC)
-        return True, f"{axis}: homed ({n} passes), DP=0, SP restored"
+        self._restore_speeds()
+        return True, f"{axis}: homed ({n} passes), DP=0, SP/HV restored"
+
+    def _restore_speeds(self):
+        """Put SP and HV back where the rest of the app expects them.
+
+        Every pass left both turned down to homing speeds; a Move issued after
+        a home would otherwise crawl. Best-effort on purpose — this runs on the
+        failure path too, where the link may be exactly what went wrong, and a
+        raise here would replace a useful message with a connection error.
+        """
+        for call in (
+            lambda: self.galil.set_speed(self.axis, SC.DEFAULT_SPEED_COUNTS_PER_SEC),
+            lambda: self.galil.set_home_velocity(
+                self.axis, SC.DEFAULT_HOME_VELOCITY_COUNTS_PER_SEC),
+        ):
+            try:
+                call()
+            except Exception:
+                pass
 
     # ---- Shared wait ---------------------------------------------------------
 

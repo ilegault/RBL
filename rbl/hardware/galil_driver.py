@@ -211,19 +211,46 @@ class GalilController:
         self.cmd(f"AC {prefix}{accel_counts_per_sec2}")
         self.cmd(f"DC {prefix}{accel_counts_per_sec2}")
 
-    def begin_home(self, axis: str, speed: int):
-        """Issue the Galil HM (home) command sequence at the given speed.
+    def begin_home(self, axis: str, speed: int, fine_speed: int = None):
+        """Issue the Galil HM (home) sequence, then BG to run it.
 
         Returns immediately — motion runs asynchronously. Call is_moving() to
-        poll completion, then define_zero() once the home switch is confirmed.
+        poll completion, then define_zero(): on a STEPPER, HM does not set
+        position 0 itself. Per the HM reference, the third stage — the one that
+        latches an encoder index pulse and defines it as zero — is servo-only,
+        and "for stepper mode operation, the sequence consists of the first two
+        stages". So the zero is ours to define, and DP is how.
 
-        Direction is negative (toward 0) — set via JG before HM.
+        TWO SPEEDS, because HM's two stages use two different ones:
+          SP  sets stage 1, the fast search that runs until the home input
+              CHANGES STATE, then decelerates to a stop.
+          HV  sets stage 2, where the motor reverses and re-approaches that
+              same transition slowly, stopping instantaneously on it.
+        Stage 2 is the one that fixes where "home" ends up, so HV — not SP —
+        is what a homing routine has to turn down for repeatability. It
+        defaults to `speed` here only so a caller that does not care still gets
+        a defined value rather than whatever HV was left at.
+
+        DIRECTION IS NOT OURS TO CHOOSE. The reference is explicit: "the
+        direction for this first stage is determined by the initial state of
+        the homing input", i.e. HM works out for itself which way home is from
+        whether the axis is currently on the switch. The JG below therefore
+        does NOT steer the search — it is left in only because it puts the axis
+        in a known jog mode before HM replaces the profile, which is the idiom
+        the rest of this driver was written against.
         """
         prefix = "," * "ABCD".index(axis)
-        self.cmd(f"SP {prefix}{speed}")
-        self.cmd(f"JG {prefix}{-speed}")   # set homing direction: negative
+        fine = speed if fine_speed is None else fine_speed
+        self.cmd(f"SP {prefix}{speed}")   # stage 1: fast search
+        self.cmd(f"HV {prefix}{fine}")    # stage 2: slow re-approach — sets the zero
+        self.cmd(f"JG {prefix}{-speed}")
         self.cmd(f"HM {axis}")
         self.cmd(f"BG {axis}")
+
+    def set_home_velocity(self, axis: str, speed_counts_per_sec: int):
+        """HV — the speed of HM's second stage (the slow re-approach)."""
+        prefix = "," * "ABCD".index(axis)
+        self.cmd(f"HV {prefix}{speed_counts_per_sec}")
 
 
 # --- Self-test (no hardware) -------------------------------------------------
