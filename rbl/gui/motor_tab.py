@@ -12,25 +12,27 @@ Features:
 
 HOMING, AND THE EIGHT CLICKS IT USED TO TAKE
 --------------------------------------------
-HM is a search at the speed it is given, and the last of the three passes runs
-at 58 cps precisely because a slow final approach is what makes the zero
-repeatable. From the far end of the travel that pass would take minutes and
-time out — so the working procedure was always to jog the axis down onto its
-limit by hand FIRST, then press Home. Two gestures per axis, eight before the
-slits were usable, at the start of every session.
+On a stepper HM is a two-stage search — a fast pass at SP until the home input
+changes state, then a slow re-approach at HV that is what actually fixes the
+zero. The routine runs it three times at 225 / 112 / 58 cps for repeatability,
+but from the far end of the travel that last pass would take minutes and time
+out, so the working procedure was always to jog the axis down onto its limit by
+hand FIRST, then press Home. Two gestures per axis, eight before the slits were
+usable, at the start of every session.
 
-Three buttons now cover that, all of them running the same routine
-(rbl/hardware/galil_workers.AxisHomeRoutine — seek the limit, then the three
-HM passes, then DP=0):
+Three buttons now cover that — seek the limit, three HM passes, DP=0:
 
   - "Seek + Home {axis}" on each panel: that axis's two gestures, one click.
+    (AxisHomeRoutine, HM A / BG A.)
   - "Auto-Home All — One at a Time": all four, sequentially, on one thread.
     One axis in motion and one command on the wire at any moment; a failure
     stops the run with the untried axes untouched. This is the one to press.
-  - "Auto-Home All — Together": the same four runs started at once, on four
-    threads sharing the socket. Deliberately the second button — it is the
-    experiment, offered because the only way to learn whether this controller
-    tolerates it is to try it.
+    (AutoHomeAllWorker.)
+  - "Auto-Home All — Together": one HM ABCD and one BG ABCD, every argument a
+    positional vector, so the CONTROLLER sequences the four axes rather than
+    four host threads interleaving their command setups on one socket. This is
+    the idiom the HM reference itself gives ("HM Set Homing Mode for all axes /
+    BG Home all axes"). (MultiAxisHomeWorker.)
 
 Any homing run locks its axis's jog/move/zero controls (a second command on a
 homing axis is the thing to prevent) but never its Stop, its Home buttons —
@@ -50,7 +52,7 @@ from PySide6.QtWidgets import (
 
 from rbl.hardware.galil_driver import GalilController, GalilError
 from rbl.hardware.galil_workers import (
-    AutoHomeAllWorker, GalilPollWorker, HomingWorker,
+    AutoHomeAllWorker, GalilPollWorker, HomingWorker, MultiAxisHomeWorker,
 )
 from rbl.config import hardware_config as SC
 from rbl.gui import theme
@@ -62,12 +64,6 @@ from rbl.gui.widgets.inputs import NoScrollComboBox, QuietDoubleSpinBox
 
 class AxisControls(QGroupBox):
     """One self-contained panel for one slit."""
-
-    # This axis finished a homing run started FROM THIS PANEL. MotorTab listens
-    # so the "all together" button knows when its four parallel runs are done
-    # — that button starts the panels' own workers rather than a fifth one, so
-    # each axis keeps its own Cancel and its own status line.
-    homing_finished = Signal(str, bool, str)   # axis letter, success, message
 
     def __init__(self, axis_letter: str, get_galil_fn, log_fn, beamline,
                  parent=None):
@@ -87,9 +83,6 @@ class AxisControls(QGroupBox):
         # over it with "Idle", which is what update_state would otherwise do
         # between two of the sequencer's commands.
         self._external_status: str | None = None
-        # Set while the tab's simultaneous button owns this panel's run, so a
-        # failure is reported once by the tab rather than as four modal boxes.
-        self._quiet_homing = False
         # Has this axis had its zero established since the app started?  The
         # controller does not remember, and every mm figure downstream is wrong
         # without it, so consumers get told rather than left to assume.
@@ -468,13 +461,8 @@ class AxisControls(QGroupBox):
                   self.btn_enable_axis, self.btn_disable_axis):
             w.setEnabled(on)
 
-    def _start_homing(self, seek_first: bool = False, quiet: bool = False):
-        """Start (or cancel) this axis's homing run.
-
-        `quiet` is set when the all-axes simultaneous button started this run:
-        the failure dialog then belongs to the tab, which can report all four
-        outcomes at once instead of stacking up to four modal boxes.
-        """
+    def _start_homing(self, seek_first: bool = False):
+        """Start (or cancel) this axis's homing run."""
         g = self.get_galil()
         if g is None or not g.connected:
             return
@@ -487,7 +475,6 @@ class AxisControls(QGroupBox):
 
         what = "seek + home" if seek_first else "home"
         self.log(f"# Starting auto-{what} for axis {self.axis}…")
-        self._quiet_homing = quiet
         (self.btn_seek_home if seek_first else self.btn_home).setText("Cancel")
         self.lbl_status.setText("Seeking limit…" if seek_first else "Homing…")
         self.lbl_status.setStyleSheet("color: #c07000; font-weight: bold;")
@@ -501,11 +488,6 @@ class AxisControls(QGroupBox):
         self._homing_worker.progress.connect(self.log)
         self._homing_worker.done.connect(self._on_homing_done)
         self._homing_worker.start()
-
-    # Public entry point for the tab-level "all together" button. Named rather
-    # than reaching into _start_homing so the tab is not calling a private.
-    def start_auto_home(self, seek_first: bool = True, quiet: bool = True):
-        self._start_homing(seek_first=seek_first, quiet=quiet)
 
     def _reset_home_buttons(self):
         self.btn_home.setText(f"Home {self.axis}")
@@ -522,8 +504,7 @@ class AxisControls(QGroupBox):
             # Homing ends on DP=0, so the axis is now referenced.
             self.zeroed = True
         self.log(f"{'✓' if success else '✗'} {msg}")
-        self.homing_finished.emit(self.axis, success, msg)
-        if not success and not getattr(self, "_quiet_homing", False):
+        if not success:
             QMessageBox.warning(self, "Homing failed", msg)
 
     # ---- Status held from outside -------------------------------------------
@@ -619,13 +600,10 @@ class MotorTab(QWidget):
         self.beamline = beamline
         self.worker = None
 
-        # The all-axes sequencer, while one is running (see _start_auto_home).
-        self._auto_worker: AutoHomeAllWorker | None = None
-        # Axes still running under the simultaneous button. Tracked as a set
-        # rather than a counter so a late duplicate `done` cannot end the run
-        # early, and so the log line can name what is still moving.
-        self._parallel_axes: set[str] = set()
-        self._parallel_failures: list[str] = []
+        # The two all-axes workers, while one is running. Only ever one at a
+        # time — each start path refuses while the other is going.
+        self._auto_worker: AutoHomeAllWorker | None = None          # sequential
+        self._parallel_worker: MultiAxisHomeWorker | None = None    # together
 
         outer_layout = QHBoxLayout(self)
         outer_layout.setContentsMargins(8, 8, 8, 8)
@@ -731,7 +709,6 @@ class MotorTab(QWidget):
         for i, axis in enumerate(SC.AXIS_LETTERS):
             panel = AxisControls(axis, lambda: self.galil, self._log_line,
                                  beamline, self)
-            panel.homing_finished.connect(self._on_panel_homing_finished)
             self.axes[axis] = panel
             grid.addWidget(panel, i // 2, i % 2)
         left_layout.addLayout(grid, stretch=1)
@@ -819,13 +796,14 @@ class MotorTab(QWidget):
             "QPushButton:disabled { background:#c0c0c0; color:#888; }"
         )
         self.btn_auto_home_par.setToolTip(
-            "The same routine on all four axes AT ONCE — four moving slits and "
-            "four threads interleaving commands on one socket.\n\n"
-            "Faster if the controller keeps up, and this is the way to find "
-            "out whether it does. Untested against this hardware, which is why "
-            "it is the second button and not the first: if anything looks "
-            "wrong, EMERGENCY STOP and use the sequential one.\n\n"
-            "Press again to cancel all four."
+            "The same routine on all four axes AT ONCE, sent the way the HM "
+            "reference describes it: one HM ABCD and one BG ABCD, with every "
+            "argument a positional vector. The CONTROLLER sequences the four "
+            "axes — this program issues one command, not four.\n\n"
+            "Faster, but all four slits move together, so there is more in "
+            "motion at once to watch. If anything looks wrong, EMERGENCY STOP "
+            "and use the sequential button.\n\n"
+            "Press again to cancel."
         )
         self.btn_auto_home_par.clicked.connect(self._start_auto_home_parallel)
         row.addWidget(self.btn_auto_home_par, stretch=1)
@@ -864,7 +842,7 @@ class MotorTab(QWidget):
             self._set_auto_home_note("Cancelling after the current step…",
                                      theme.WARN)
             return
-        if not self.galil.connected or self._parallel_axes:
+        if not self.galil.connected or self._parallel_worker_running():
             return
         if not self._confirm_auto_home(
                 "Auto-home all four slits",
@@ -930,69 +908,58 @@ class MotorTab(QWidget):
             panel.set_external_status(status if locked else None)
 
     def _start_auto_home_parallel(self):
-        """Simultaneous: all four axes at once, each on its own worker."""
-        if self._parallel_axes:
-            self._log_line("# Cancelling all four homing runs…")
-            for axis in list(self._parallel_axes):
-                self.axes[axis].cancel_homing()
-            self._set_auto_home_note("Cancelling all four…", theme.WARN)
+        """Simultaneous: HM ABCD / BG ABCD — one command, every axis.
+
+        Not four workers. The HM reference's own idiom is one HM and one BG
+        for the whole set, which puts the four axes under the CONTROLLER's
+        sequencer instead of four host threads interleaving five-command HM
+        setups on a single socket.
+        """
+        if self._parallel_worker_running():
+            self._parallel_worker.cancel()
+            self._set_auto_home_note("Cancelling after the current step…",
+                                     theme.WARN)
             return
         if not self.galil.connected or self._auto_worker_running():
             return
         if not self._confirm_auto_home(
                 "Auto-home all four slits TOGETHER",
                 "All four axes will jog onto their home limits and home AT "
-                "THE SAME TIME, with four threads sharing one connection to "
-                "the controller.\n\n"
-                "This is the experimental path — it has not been proven "
-                "against this controller. If anything looks wrong, hit "
-                "EMERGENCY STOP and use the sequential button instead.\n\n"
+                "THE SAME TIME, under one HM ABCD / BG ABCD — the controller "
+                "sequences them, not this program.\n\n"
+                "All four slits move at once. Make sure they are clear to "
+                "travel, and if anything looks wrong hit EMERGENCY STOP.\n\n"
                 "Start all four?"):
             return
 
+        axes = "".join(SC.AXIS_LETTERS)
+        self._lock_axes_for_auto_home(True, "Homing together…")
         self.btn_auto_home_par.setText("Cancel All Homing")
         self.btn_auto_home_seq.setEnabled(False)
-        self._parallel_failures = []
-        self._parallel_axes = set(SC.AXIS_LETTERS)
-        self._set_auto_home_note("Homing all four axes simultaneously…",
-                                 theme.WARN)
-        self._log_line("# Auto-home ALL — simultaneous. Four axes, one socket.")
-        for axis in SC.AXIS_LETTERS:
-            self.axes[axis].start_auto_home(seek_first=True, quiet=True)
+        self._set_auto_home_note("Homing all four axes together…", theme.WARN)
+        self._log_line(f"# Auto-home ALL — together. HM {axes} ; BG {axes}.")
+
+        self._parallel_worker = MultiAxisHomeWorker(self.galil, axes, self)
+        self._parallel_worker.progress.connect(self._log_line)
+        self._parallel_worker.axis_finished.connect(self._on_auto_axis_finished)
+        self._parallel_worker.done.connect(self._on_parallel_home_done)
+        self._parallel_worker.start()
 
     def _auto_worker_running(self) -> bool:
         return self._auto_worker is not None and self._auto_worker.isRunning()
 
-    def _on_panel_homing_finished(self, axis: str, ok: bool, msg: str):
-        """One axis of a simultaneous run reported in.
+    def _parallel_worker_running(self) -> bool:
+        return (self._parallel_worker is not None
+                and self._parallel_worker.isRunning())
 
-        Panels also emit this for a run the operator started on that panel
-        alone; the guard is what keeps those out of the parallel tally.
-        """
-        if axis not in self._parallel_axes:
-            return
-        self._parallel_axes.discard(axis)
-        if not ok:
-            self._parallel_failures.append(axis)
-        if self._parallel_axes:
-            self._set_auto_home_note(
-                "Homing simultaneously — still running: "
-                + ", ".join(sorted(self._parallel_axes)), theme.WARN)
-            return
-
-
+    def _on_parallel_home_done(self, ok: bool, summary: str):
+        self._lock_axes_for_auto_home(False)
         self.btn_auto_home_par.setText("Auto-Home All — Together")
         self.btn_auto_home_seq.setEnabled(self.galil.connected)
-        if self._parallel_failures:
-            summary = ("Simultaneous auto-home finished with failures on: "
-                       + ", ".join(sorted(self._parallel_failures)))
-            self._set_auto_home_note(summary, theme.FAULT)
-            self._log_line(f"✗ {summary}")
+        self._log_line(f"{'✓' if ok else '✗'} {summary}")
+        self._set_auto_home_note(summary, theme.OK if ok else theme.FAULT)
+        if not ok:
             QMessageBox.warning(self, "Auto-home did not complete", summary)
-        else:
-            summary = "Simultaneous auto-home complete — all four axes homed."
-            self._set_auto_home_note(summary, theme.OK)
-            self._log_line(f"✓ {summary}")
 
     def _on_slit_target_changed(self, slit: str, mm: float):
         """Some screen commanded *slit* to *mm* — show it on that axis panel."""
@@ -1111,8 +1078,9 @@ class MotorTab(QWidget):
         this does not itself stop motion. It is what stops the NEXT command,
         and it is why the abort above is worth anything.
         """
-        if self._auto_worker is not None and self._auto_worker.isRunning():
-            self._auto_worker.cancel()
+        for worker in (self._auto_worker, self._parallel_worker):
+            if worker is not None and worker.isRunning():
+                worker.cancel()
         for panel in self.axes.values():
             panel.cancel_homing()
 
@@ -1170,7 +1138,8 @@ class MotorTab(QWidget):
         with it. The cancel has already gone in — this is the join, and it is
         bounded so a wedged socket read cannot hang the close.
         """
-        threads = [self._auto_worker] + [p._homing_worker for p in self.axes.values()]
+        threads = ([self._auto_worker, self._parallel_worker]
+                   + [p._homing_worker for p in self.axes.values()])
         for thread in threads:
             if thread is not None and thread.isRunning():
                 thread.wait(timeout_ms)

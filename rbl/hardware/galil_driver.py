@@ -205,6 +205,25 @@ class GalilController:
     def model_info(self) -> str:
         return self.cmd("TH")
 
+    # ---- Multi-axis argument builder --------------------------------------
+
+    @staticmethod
+    def axis_vector(axes: str, value) -> str:
+        """Galil's positional argument list over ABCD, for a command sent to
+        several axes at once.
+
+        Galil addresses axes by POSITION in the argument list, not by name, so
+        a value for C is the third slot and the slots before it must exist even
+        when empty: `SP ,,225` is C only. Building that here — once, from an
+        axis set — is what lets the multi-axis routine send one `SP` for four
+        axes instead of four, without any caller doing comma arithmetic.
+
+            axis_vector("ABCD", 225) -> "225,225,225,225"
+            axis_vector("AC",   225) -> "225,,225"
+        """
+        slots = [str(value) if a in axes else "" for a in "ABCD"]
+        return ",".join(slots).rstrip(",")
+
     # ---- Motion ----------------------------------------------------------
 
     def move_absolute(self, axis: str, position_counts: int):
@@ -297,6 +316,47 @@ class GalilController:
         """HV — the speed of HM's second stage (the slow re-approach)."""
         prefix = "," * "ABCD".index(axis)
         self.cmd(f"HV {prefix}{speed_counts_per_sec}")
+
+    # ---- Multi-axis motion -------------------------------------------------
+    #
+    # The HM reference's own idiom: "HM Set Homing Mode for all axes / BG Home
+    # all axes". One HM and one BG start every axis together, sequenced by the
+    # CONTROLLER, instead of four host threads interleaving their own HM/BG
+    # pairs on a single socket and hoping the ordering survives the trip.
+
+    def begin_home_multi(self, axes: str, speed: int, fine_speed: int = None):
+        """HM + BG across `axes` — every axis homing under one command.
+
+        Same five commands as begin_home, with every argument a positional
+        vector instead of a single slot, so the axes are configured and then
+        released together rather than one after another. See begin_home for
+        what SP and HV each do to HM's two stages, and why direction is not
+        ours to pick.
+        """
+        fine = speed if fine_speed is None else fine_speed
+        self.cmd(f"SP {self.axis_vector(axes, speed)}")
+        self.cmd(f"HV {self.axis_vector(axes, fine)}")
+        self.cmd(f"JG {self.axis_vector(axes, -speed)}")
+        self.cmd(f"HM {axes}")
+        self.cmd(f"BG {axes}")
+
+    def jog_start_multi(self, axes: str, signed_speed: int):
+        """Begin a jog on every axis in `axes` at one signed speed."""
+        self.cmd(f"JG {self.axis_vector(axes, signed_speed)}")
+        self.cmd(f"BG {axes}")
+
+    def move_relative_multi(self, axes: str, delta_counts: int):
+        self.cmd(f"PR {self.axis_vector(axes, delta_counts)}")
+        self.cmd(f"BG {axes}")
+
+    def define_zero_multi(self, axes: str):
+        self.cmd(f"DP {self.axis_vector(axes, 0)}")
+
+    def set_speed_multi(self, axes: str, speed_counts_per_sec: int):
+        self.cmd(f"SP {self.axis_vector(axes, speed_counts_per_sec)}")
+
+    def set_home_velocity_multi(self, axes: str, speed_counts_per_sec: int):
+        self.cmd(f"HV {self.axis_vector(axes, speed_counts_per_sec)}")
 
 
 # --- Self-test (no hardware) -------------------------------------------------

@@ -419,3 +419,70 @@ class TestLifecycle:
             t.join()
 
         assert g.sock.max_active == 1, "commands interleaved — lock failed"
+
+
+# ── Multi-axis (vector) command builders ─────────────────────────────────────
+
+class TestAxisVector:
+    """Galil addresses axes by POSITION in the argument list, so a value for C
+    is the third slot and the slots before it must exist even when empty."""
+
+    def test_all_four_axes(self):
+        assert GalilController.axis_vector("ABCD", 225) == "225,225,225,225"
+
+    def test_a_subset_keeps_its_positions(self):
+        assert GalilController.axis_vector("AC", 225) == "225,,225"
+        assert GalilController.axis_vector("B", 225) == ",225"
+        assert GalilController.axis_vector("D", 225) == ",,,225"
+
+    def test_negative_values(self):
+        assert GalilController.axis_vector("ABCD", -500) == "-500,-500,-500,-500"
+
+
+class TestMultiAxisMotion:
+    def test_begin_home_multi_is_one_hm_and_one_bg(self):
+        """The HM reference's own idiom: set homing mode for the axes, then
+        one BG starts them all. Four axes under the CONTROLLER's sequencer
+        rather than four host threads on one socket."""
+        g = make_galil()
+        g.begin_home_multi("ABCD", 225, fine_speed=58)
+        assert g.sock.sent == [
+            "SP 225,225,225,225",
+            "HV 58,58,58,58",
+            "JG -225,-225,-225,-225",
+            "HM ABCD",
+            "BG ABCD",
+        ]
+
+    def test_begin_home_multi_defaults_hv_to_the_search_speed(self):
+        g = make_galil()
+        g.begin_home_multi("AB", 225)
+        assert g.sock.sent[:2] == ["SP 225,225", "HV 225,225"]
+
+    def test_jog_start_multi(self):
+        g = make_galil()
+        g.jog_start_multi("ABCD", -500)
+        assert g.sock.sent == ["JG -500,-500,-500,-500", "BG ABCD"]
+
+    def test_move_relative_multi(self):
+        g = make_galil()
+        g.move_relative_multi("ABCD", 1000)
+        assert g.sock.sent == ["PR 1000,1000,1000,1000", "BG ABCD"]
+
+    def test_define_zero_multi(self):
+        g = make_galil()
+        g.define_zero_multi("ABCD")
+        assert g.sock.sent == ["DP 0,0,0,0"]
+
+    def test_speed_restores_are_vectors_too(self):
+        g = make_galil()
+        g.set_speed_multi("ABCD", 1000)
+        g.set_home_velocity_multi("ABCD", 256)
+        assert g.sock.sent == ["SP 1000,1000,1000,1000", "HV 256,256,256,256"]
+
+    def test_stop_takes_an_axis_mask(self):
+        """One ST for several axes — how the multi-axis seek stops whatever is
+        still moving when it is cancelled."""
+        g = make_galil()
+        g.stop("ABCD")
+        assert g.sock.sent == ["ST ABCD"]

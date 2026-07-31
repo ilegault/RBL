@@ -343,6 +343,241 @@ class HomingWorker(QThread):
         ).wait_idle(timeout)
 
 
+# ─── The all-axes-at-once routine ─────────────────────────────────────────────
+
+class MultiAxisHomeRoutine:
+    """The same home, driven as ONE motion across several axes.
+
+    Where AxisHomeRoutine issues `HM A` / `BG A`, this issues `HM ABCD` /
+    `BG ABCD` — the HM reference's own idiom ("HM Set Homing Mode for all axes
+    / BG Home all axes"). Every argument becomes a positional vector, so four
+    axes are configured and released together and then sequenced by the
+    CONTROLLER.
+
+    That is the whole reason this class exists rather than four
+    AxisHomeRoutines on four threads. Four threads interleave five-command HM
+    setups on one socket, and while GalilController's lock keeps any single
+    command intact, nothing keeps one axis's `SP`/`HV`/`JG`/`HM`/`BG` together
+    — another thread's `SP` can land in the middle of it. Sending one vector
+    of each removes the interleaving instead of hoping it is benign.
+
+    Per-axis outcomes are reported through `axis_done` as they land, because
+    "all four together" still finishes one axis at a time — they reach their
+    switches at different moments.
+    """
+
+    SPEEDS   = AxisHomeRoutine.SPEEDS
+    BACKOFFS = AxisHomeRoutine.BACKOFFS
+
+    _SEEK_SETTLE_S = AxisHomeRoutine._SEEK_SETTLE_S
+    _SEEK_POLL_S   = AxisHomeRoutine._SEEK_POLL_S
+    _IDLE_POLL_S   = AxisHomeRoutine._IDLE_POLL_S
+
+    def __init__(self, galil: GalilController, axes=None,
+                 progress=None, cancelled=None, axis_done=None):
+        self.galil      = galil
+        self.axes       = "".join(axes if axes is not None else SC.AXIS_LETTERS)
+        self._progress  = progress or (lambda _msg: None)
+        self._cancelled = cancelled or (lambda: False)
+        self._axis_done = axis_done or (lambda _axis, _ok, _msg: None)
+
+    # ---- The whole routine ---------------------------------------------------
+
+    def run(self, seek_first: bool = True) -> tuple[bool, str]:
+        """Home every axis together. Returns (success, message), never raises."""
+        try:
+            if seek_first:
+                ok, msg = self.seek_home_limits()
+                if not ok:
+                    return False, msg
+            return self.home_passes()
+        except Exception as e:
+            return False, f"{self.axes}: homing error — {e}"
+        finally:
+            self._restore_speeds()
+
+    # ---- Phase 1: seek, all axes at once -------------------------------------
+
+    def seek_home_limits(self, timeout: float = None) -> tuple[bool, str]:
+        """Jog every axis toward its home limit under one JG/BG.
+
+        Each axis is stopped INDIVIDUALLY as its own switch trips (`ST A`),
+        because they will not arrive together — starting together is what is
+        shared here, not finishing.
+        """
+        g = self.galil
+        timeout = SC.HOME_SEEK_TIMEOUT_S if timeout is None else timeout
+
+        if self._cancelled():
+            return False, "Cancelled before seeking the home limits"
+
+        pending = [a for a in self.axes if not self._at_home_limit(a)]
+        already = [a for a in self.axes if a not in pending]
+        if already:
+            self._progress(f"{','.join(already)}: already on the home limit")
+        if not pending:
+            return True, ""
+
+        speed = SC.HOME_SEEK_SPEED_COUNTS_PER_SEC
+        moving = "".join(pending)
+        self._progress(
+            f"{moving}: seeking home limits together — JG -{speed} cps, "
+            f"BG {moving}…"
+        )
+        g.jog_start_multi(moving, -speed)
+        time.sleep(self._SEEK_SETTLE_S)
+
+        failed: dict[str, str] = {}
+        deadline = time.time() + timeout
+        while pending and time.time() < deadline:
+            if self._cancelled():
+                g.stop("".join(pending))
+                return False, "Cancelled while seeking the home limits"
+
+            for axis in list(pending):
+                if self._at_home_limit(axis):
+                    g.stop(axis)
+                    pending.remove(axis)
+                    self._progress(f"{axis}: home limit reached")
+                elif not g.is_moving(axis):
+                    if self._at_home_limit(axis):
+                        pending.remove(axis)
+                        self._progress(f"{axis}: home limit reached")
+                        continue
+                    pending.remove(axis)
+                    failed[axis] = (
+                        f"{axis}: jog stopped before reaching the home limit — "
+                        f"check the axis is energised (SH {axis})")
+                    self._progress(failed[axis])
+
+            time.sleep(self._SEEK_POLL_S)
+
+        if pending:
+            g.stop("".join(pending))
+            for axis in pending:
+                failed[axis] = f"{axis}: timed out seeking the home limit"
+        if failed:
+            for axis, msg in failed.items():
+                self._axis_done(axis, False, msg)
+            return False, ("Seek failed on " + ", ".join(sorted(failed))
+                           + " — no axis was homed")
+
+        if not self.wait_idle(self.axes, timeout=15.0):
+            return False, "Timeout coming to rest on the home limits"
+        return True, ""
+
+    def _at_home_limit(self, axis: str) -> bool:
+        sw = self.galil.get_switch_states(axis)
+        return bool(sw["home_switch"] or sw["reverse_switch"])
+
+    # ---- Phase 2: the three HM passes, all axes at once ----------------------
+
+    def home_passes(self) -> tuple[bool, str]:
+        g = self.galil
+        axes = self.axes
+        n = len(self.SPEEDS)
+
+        on_switch = "".join(a for a in axes
+                            if g.get_switch_states(a)["home_switch"])
+        if on_switch:
+            self._progress(f"{on_switch}: on home switch — backing off "
+                           f"{self.BACKOFFS[0]} counts…")
+            g.move_relative_multi(on_switch, self.BACKOFFS[0])
+            if not self.wait_idle(on_switch, timeout=15.0):
+                return False, "Timeout while backing off the home switches"
+
+        for pass_num, (speed, backoff) in enumerate(zip(self.SPEEDS, self.BACKOFFS)):
+            if self._cancelled():
+                return False, "Homing cancelled by user"
+
+            if pass_num > 0:
+                self._progress(f"{axes}: pass {pass_num+1}/{n} — backing off "
+                               f"{backoff} counts…")
+                g.move_relative_multi(axes, backoff)
+                if not self.wait_idle(axes, timeout=15.0):
+                    return False, f"Timeout on back-off before pass {pass_num+1}"
+
+            self._progress(
+                f"{axes}: pass {pass_num+1}/{n} — HM {axes} ; BG {axes} at "
+                f"SP/HV {speed} cps…")
+            g.begin_home_multi(axes, speed, fine_speed=speed)
+            time.sleep(0.5)   # let motion start
+
+            if not self.wait_idle(axes, timeout=60.0):
+                self._progress(f"{axes}: HM timeout on pass {pass_num+1}")
+                g.stop(axes)
+                time.sleep(0.3)
+                return False, f"Homing timed out on pass {pass_num+1}/{n}"
+
+            self._progress(f"{axes}: pass {pass_num+1}/{n} complete")
+
+        # HM leaves a stepper's position untouched, so this DP is what makes
+        # the zero exist — one command for every axis.
+        g.define_zero_multi(axes)
+        for axis in axes:
+            self._axis_done(axis, True, f"{axis}: homed ({n} passes), DP=0")
+        return True, (f"{axes}: homed together ({n} passes), DP=0, "
+                      f"SP/HV restored")
+
+    # ---- Shared -------------------------------------------------------------
+
+    def wait_idle(self, axes: str, timeout: float = 30.0) -> bool:
+        """Wait until EVERY axis in `axes` has stopped."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self._cancelled():
+                return False
+            try:
+                if not any(self.galil.is_moving(a) for a in axes):
+                    return True
+            except Exception:
+                return False
+            time.sleep(self._IDLE_POLL_S)
+        return False
+
+    def _restore_speeds(self):
+        """Put SP and HV back for every axis. Best-effort, as in the
+        single-axis routine — this also runs when the link is what failed."""
+        for call in (
+            lambda: self.galil.set_speed_multi(
+                self.axes, SC.DEFAULT_SPEED_COUNTS_PER_SEC),
+            lambda: self.galil.set_home_velocity_multi(
+                self.axes, SC.DEFAULT_HOME_VELOCITY_COUNTS_PER_SEC),
+        ):
+            try:
+                call()
+            except Exception:
+                pass
+
+
+class MultiAxisHomeWorker(QThread):
+    """`MultiAxisHomeRoutine` on its own thread — ONE thread, not four."""
+    progress      = Signal(str)
+    axis_finished = Signal(str, bool, str)
+    done          = Signal(bool, str)
+
+    def __init__(self, galil: GalilController, axes=None, parent=None,
+                 seek_first: bool = True):
+        super().__init__(parent)
+        self.galil      = galil
+        self.axes       = "".join(axes if axes is not None else SC.AXIS_LETTERS)
+        self.seek_first = seek_first
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
+
+    def run(self):
+        routine = MultiAxisHomeRoutine(
+            self.galil, self.axes,
+            progress=self.progress.emit,
+            cancelled=lambda: self._cancelled,
+            axis_done=self.axis_finished.emit,
+        )
+        ok, msg = routine.run(seek_first=self.seek_first)
+        self.done.emit(ok, msg)
+
+
 # ─── Auto-homing worker (all axes, one at a time) ─────────────────────────────
 
 class AutoHomeAllWorker(QThread):
