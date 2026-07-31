@@ -54,7 +54,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel,
-    QPushButton, QMessageBox, QSizePolicy, QComboBox,
+    QPushButton, QMessageBox, QSizePolicy,
 )
 
 from rbl.hardware.labjack_driver import LJM_AVAILABLE
@@ -70,6 +70,7 @@ from rbl.config.labjack_stream_config import (
     is_single_channel, DEFAULT_SINGLE_CHANNEL,
 )
 from rbl.gui.widgets.connection_bar import LabJackPanel
+from rbl.gui.widgets.inputs import NoScrollComboBox
 from rbl.gui.widgets.live_plot import LivePlotPanel
 from rbl.gui import theme
 
@@ -299,7 +300,7 @@ class AmpTab(QWidget):
 
         mode_row = QHBoxLayout()
         mode_row.addWidget(QLabel("Mode:"))
-        self._profile_combo = QComboBox()
+        self._profile_combo = NoScrollComboBox()
         for pname, pdata in STREAM_PROFILES.items():
             self._profile_combo.addItem(pdata["description"], userData=pname)
         self._profile_combo.setCurrentIndex(
@@ -311,7 +312,7 @@ class AmpTab(QWidget):
 
         target_row = QHBoxLayout()
         target_row.addWidget(QLabel("Target:"))
-        self._single_combo = QComboBox()
+        self._single_combo = NoScrollComboBox()
         for amp in SC.AMP_LABELS:
             for kind in ("voltage", "current"):
                 ain = SC.AMP_CHANNEL_MAP[amp][kind]

@@ -656,3 +656,75 @@ def test_lock_state_arrives_on_the_funcgen_snapshot(tab):
         timebase={"A": "INT", "B": "EXT"}, channels={}))
     tab._redraw()
     assert tab.chk_ext_ref.isChecked()
+
+
+# ---- Slit panel layout -------------------------------------------------------
+#
+# Two arrangement bugs on this panel, both of the kind that only a person
+# looking at the screen notices and only a geometry assertion keeps fixed.
+
+
+def _slit_box(tab):
+    """The 'Slits — Position && Control' group box, via one of its children."""
+    return tab.lbl_gaps.parent()
+
+
+def test_the_absolute_position_note_sits_above_the_gap_readout(tab):
+    """The note says what the numbers under it MEAN — absolute from centre,
+    0.2 mm offset already applied. A caption that explains a figure has to be
+    read before the figure, not after the whole panel."""
+    lay = _slit_box(tab).layout()
+    assert lay.indexOf(tab.lbl_motion) < lay.indexOf(tab.lbl_gaps)
+
+
+def test_every_current_bar_is_the_same_width(tab):
+    """A decade bar's meaning is entirely in how far along its OWN track the
+    fill sits, so four bars of different widths cannot be compared at a
+    glance. Y+ and Y- used to span the full panel while X-/X+ split it."""
+    box = tab.currents["X+"].parent()
+    grid = box.layout()
+    spans = {slit: grid.getItemPosition(grid.indexOf(bar))[3]
+             for slit, bar in tab.currents.items()}
+    assert len(set(spans.values())) == 1, spans
+
+
+def test_the_y_bars_are_centred_over_the_x_pair(tab):
+    """Same offset from both sides — which is what 'centred' has to mean in a
+    grid, since equal column stretch does the rest."""
+    box = tab.currents["Y+"].parent()
+    grid = box.layout()
+
+    def cell(slit):
+        row, col, _row_span, col_span = grid.getItemPosition(
+            grid.indexOf(tab.currents[slit]))
+        return col, col + col_span
+
+    x_left, _ = cell("X-")
+    _, x_right = cell("X+")
+    for y in ("Y+", "Y-"):
+        left, right = cell(y)
+        assert left - x_left == x_right - right, f"{y} is off centre"
+        assert left > x_left, f"{y} spans the whole panel"
+
+
+def test_the_bars_come_out_equal_once_laid_out(tab, qapp):
+    """The grid arithmetic above is only worth anything if it survives an
+    actual layout pass at a real width — so this one measures pixels."""
+    tab.resize(1400, 900)
+    tab.show()               # nothing is laid out until it is on a screen
+    qapp.processEvents()
+    try:
+        widths = {slit: bar.width() for slit, bar in tab.currents.items()}
+        assert min(widths.values()) > 0, "layout never ran — test proves nothing"
+        assert len(set(widths.values())) == 1, widths
+
+        # And each Y bar sits as far from the panel's left edge as from its
+        # right edge, which is what "centred" means once the widths match.
+        box = tab.currents["Y+"].parent()
+        for y in ("Y+", "Y-"):
+            geo = tab.currents[y].geometry()
+            left_gap = geo.left()
+            right_gap = box.width() - geo.right()
+            assert abs(left_gap - right_gap) <= 2, (y, left_gap, right_gap)
+    finally:
+        tab.hide()

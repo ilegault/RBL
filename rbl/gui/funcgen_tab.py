@@ -20,7 +20,7 @@ from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout,
-    QGroupBox, QLabel, QPushButton, QComboBox,
+    QGroupBox, QLabel, QPushButton,
     QLineEdit, QCheckBox, QMessageBox, QSizePolicy,
     QScrollArea, QApplication,
 )
@@ -34,7 +34,7 @@ from rbl.state.setpoints import START_PHASE_DEFAULTS, AXIS_CHANNELS
 from rbl.state.snapshots import ChannelParams
 from rbl.gui import theme
 from rbl.gui.widgets.command_console import LogPane
-from rbl.gui.widgets.inputs import QuietDoubleSpinBox, unit_row
+from rbl.gui.widgets.inputs import NoScrollComboBox, QuietDoubleSpinBox, unit_row
 
 
 # ─── Per-channel panel ────────────────────────────────────────────────────────
@@ -119,7 +119,7 @@ class ChannelPanel(QGroupBox):
         form.setSpacing(3)
 
         # Shape — default to Triangle
-        self.cbo_shape = QComboBox()
+        self.cbo_shape = NoScrollComboBox()
         self.cbo_shape.addItems(self.SHAPES)
         self.cbo_shape.setCurrentText("Triangle")
         form.addRow("Shape:", self.cbo_shape)
@@ -541,8 +541,8 @@ class FuncGenTab(QWidget):
 
         assign_form = QFormLayout()
         assign_form.setSpacing(4)
-        self.cbo_gen_a = QComboBox()
-        self.cbo_gen_b = QComboBox()
+        self.cbo_gen_a = NoScrollComboBox()
+        self.cbo_gen_b = NoScrollComboBox()
         self.cbo_gen_a.setMinimumWidth(260)
         self.cbo_gen_b.setMinimumWidth(260)
         self.cbo_gen_a.addItem("— not selected —")
@@ -691,7 +691,7 @@ class FuncGenTab(QWidget):
 
         tgt_row = QHBoxLayout()
         tgt_row.addWidget(QLabel("Target:"))
-        self.cbo_scpi_target = QComboBox()
+        self.cbo_scpi_target = NoScrollComboBox()
         self.cbo_scpi_target.addItems(["Gen A", "Gen B"])
         tgt_row.addWidget(self.cbo_scpi_target)
         tgt_row.addStretch()

@@ -9,10 +9,11 @@ T7.
 """
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QLabel, QHBoxLayout, QGroupBox, QPushButton, QLineEdit, QComboBox,
+    QLabel, QHBoxLayout, QGroupBox, QPushButton, QLineEdit,
 )
 
 from rbl.gui import theme
+from rbl.gui.widgets.inputs import NoScrollComboBox
 
 
 class StatusPill(QLabel):
@@ -50,7 +51,7 @@ class LabJackPanel(QGroupBox):
         lay = QHBoxLayout(self)
 
         lay.addWidget(QLabel("Connection:"))
-        self.cbo_conn = QComboBox()
+        self.cbo_conn = NoScrollComboBox()
         self.cbo_conn.addItems(["USB", "ETHERNET", "ANY"])
         lay.addWidget(self.cbo_conn)
 

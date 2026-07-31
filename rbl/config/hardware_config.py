@@ -81,6 +81,21 @@ DEFAULT_SPEED_COUNTS_PER_SEC   = 1000
 DEFAULT_ACCEL_COUNTS_PER_SEC2  = 25600
 DEFAULT_JOG_SPEED              = 500   # cps
 
+# --- Automatic homing: the seek phase ----------------------------------------
+# The jog that puts an axis onto its home limit before HM runs — the "-Jog
+# until it hits the limit" an operator does by hand before pressing Home.
+#
+# Fast, because it is a coarse approach and nothing about it sets the zero: the
+# three HM passes that follow do that, and their slowest pass is 58 cps. Homing
+# from the far end of the travel at 58 cps would take minutes and time the pass
+# out; at 500 cps (0.79 mm/s) the whole travel is well under a minute.
+HOME_SEEK_SPEED_COUNTS_PER_SEC = 500
+
+# Ceiling on that jog. Generous — it has to cover the full travel from the
+# forward limit, several times over, on the slowest axis. It is a fault
+# detector ("the switch never tripped"), not a schedule.
+HOME_SEEK_TIMEOUT_S = 180.0
+
 # --- Amplifier / motor configuration (2HA075520 amplifier) -------------------
 MOTOR_TYPE      = -2.5  # MT: step motor, active-high step pulse
 STEP_RESOLUTION = 2     # YA: 1=full, 2=half, 4=quarter, 8=eighth

@@ -11,14 +11,14 @@ import math
 from PySide6.QtCore import Qt, QPointF, QRectF
 from PySide6.QtGui import QFont, QPainter, QColor, QPen, QBrush
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSizePolicy, QComboBox,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSizePolicy,
     QFormLayout,
 )
 
 from rbl.hardware import beam_reconstruction as BR
 from rbl.hardware.current_monitor import beam_centering
 from rbl.gui import theme
-from rbl.gui.widgets.inputs import QuietDoubleSpinBox
+from rbl.gui.widgets.inputs import NoScrollComboBox, QuietDoubleSpinBox
 
 # Slit colours reused from the plot / readouts for a consistent palette.
 _SLIT_COLORS = theme.SLIT_COLORS
@@ -385,7 +385,7 @@ class BeamPositionIndicator(QWidget):
         lay.addWidget(title)
 
         # ── Mode + assumptions ────────────────────────────────────────────
-        self.cmb_mode = QComboBox()
+        self.cmb_mode = NoScrollComboBox()
         self.cmb_mode.addItems(["Static beam", "Rastering"])
         self.cmb_mode.setToolTip(
             "Static: a stationary spot.\n"

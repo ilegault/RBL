@@ -38,11 +38,41 @@ editable text, which means the cursor can land after it, a select-all-and-type
 wipes it, and the validator has to re-parse it on every keystroke. `unit_row()`
 puts the unit in a QLabel beside the box instead, where it cannot be typed
 into. Nothing in this app should call setSuffix().
+
+`NoScrollComboBox` is the same idea applied to the dropdowns — see its
+docstring for why a wheel over a combo box must not change what it says.
 """
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QDoubleSpinBox, QHBoxLayout, QLabel, QWidget,
+    QComboBox, QDoubleSpinBox, QHBoxLayout, QLabel, QWidget,
 )
+
+
+class NoScrollComboBox(QComboBox):
+    """A QComboBox that cannot be changed with the mouse wheel.
+
+    Qt's default is that a wheel event over a combo box selects the next or
+    previous item, focused or not. That makes scrolling a tab — which is a
+    reading gesture, not an editing one — silently re-select whichever
+    dropdown the pointer happened to be over on the way past. In this app the
+    dropdowns pick units (cps vs mm/s, counts vs mm), waveform shape, and
+    which instrument a command is addressed to, so the change is not merely
+    cosmetic: the next number typed into the box beside it is interpreted in
+    whatever unit the wheel landed on, and nothing about the screen announces
+    that it moved.
+
+    Selecting an item stays a two-part deliberate gesture — click to open,
+    click to choose — and the wheel is left to do the one thing it should do
+    over a long tab, which is scroll it.
+
+    `ignore()` rather than swallowing the event: an ignored wheel event
+    propagates to the parent, so a combo box inside a scroll area scrolls the
+    AREA instead of eating the gesture. Suppressing it entirely would trade a
+    surprise for a dead spot.
+    """
+
+    def wheelEvent(self, event):
+        event.ignore()
 
 
 class QuietDoubleSpinBox(QDoubleSpinBox):
