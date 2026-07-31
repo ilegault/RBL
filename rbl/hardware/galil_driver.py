@@ -40,11 +40,6 @@ class GalilController:
         self.lock = threading.Lock()
         self.ip   = None
         self.port = self.DEFAULT_PORT
-        # Limit-switch polarity as the CONTROLLER reports it (_CN0), learned in
-        # startup_sequence. None until then — get_switch_states falls back to
-        # the configured value, which is all there is to go on before the link
-        # has been set up.
-        self.limits_active_high = None
 
     # ---- Lifecycle -------------------------------------------------------
 
@@ -128,23 +123,6 @@ class GalilController:
         self.cmd("MO")
         self.cmd(f"AG {rep(SC.AMP_GAIN)}")
         self.cmd(f"SH {axes}")
-        self.limits_active_high = self.read_limit_polarity()
-
-    def read_limit_polarity(self):
-        """What the controller says its limit switches are (`_CN0`), or None.
-
-        `_CN0` holds the limit-switch configuration: 1 for active high, -1 for
-        active low. Asking beats assuming — the reading is what
-        get_switch_states interprets every operand against, and the one case
-        worth catching is a controller that did not take the CN we sent.
-
-        Returns None rather than raising: a controller that will not answer
-        this should still connect, and the configured value covers it.
-        """
-        try:
-            return float(self.cmd("MG _CN0")) > 0.0
-        except Exception:
-            return None
 
     # ---- Reads -----------------------------------------------------------
 
@@ -165,37 +143,29 @@ class GalilController:
     def get_switch_states(self, axis: str) -> dict:
         """Hardware limit + home switch states (True = active/tripped).
 
-        The limit operands' polarity is set by CN's first argument, so it is
-        not a constant and must not be written as one: with `CN m=1` (this
-        app's configuration) `_LFn`/`_LRn` read 1 when the switch is ACTIVE,
-        and with `m=-1` they read 0. This used to test both against "< 0.5"
-        unconditionally, which is the m=-1 reading — so every limit was
-        reported exactly backwards, and a clear axis looked like one sitting on
-        its limit.
+        All three read LOW when tripped, which is the composition of two
+        separate facts and is why it is not derivable from CN alone:
 
-        `limits_active_high` is what the CONTROLLER reported at startup
-        (`_CN0`), falling back to what the config says we sent. Reading it back
-        rather than assuming it is the point: a controller that rejected or
-        never received the CN is exactly the case where the two disagree.
+          - CN's m=1 makes the limit inputs "active high", where ACTIVE is
+            defined electrically (>=1 mA flowing), not as "the slit reached its
+            limit"; and
+          - the switches are NORMALLY CLOSED, so current flows while the axis
+            is CLEAR and reaching the limit breaks the circuit.
 
-        The home switch is separate — CN's n argument is a search direction,
-        not a polarity — so its reading comes from a config constant that
-        records how the switch is wired. See HOME_SWITCH_ACTIVE_HIGH.
+        Clear axis -> closed -> current -> reads 1. Tripped -> open -> no
+        current -> reads 0. See LIMIT_SWITCH_TRIPPED_IS_LOW, which is where
+        that conclusion is written down and argued.
         """
         from rbl.config import hardware_config as SC
 
-        limits_high = (SC.LIMIT_SWITCHES_ACTIVE_HIGH
-                       if self.limits_active_high is None
-                       else self.limits_active_high)
-
-        def active(operand: str, active_high: bool) -> bool:
+        def tripped(operand: str, tripped_is_low: bool) -> bool:
             value = float(self.cmd(f"MG {operand}{axis}"))
-            return value > 0.5 if active_high else value < 0.5
+            return value < 0.5 if tripped_is_low else value > 0.5
 
         return {
-            "forward_switch": active("_LF", limits_high),
-            "reverse_switch": active("_LR", limits_high),
-            "home_switch":    active("_HM", SC.HOME_SWITCH_ACTIVE_HIGH),
+            "forward_switch": tripped("_LF", SC.LIMIT_SWITCH_TRIPPED_IS_LOW),
+            "reverse_switch": tripped("_LR", SC.LIMIT_SWITCH_TRIPPED_IS_LOW),
+            "home_switch":    tripped("_HM", SC.HOME_SWITCH_TRIPPED_IS_LOW),
         }
 
     def is_motor_off(self, axis: str) -> bool:

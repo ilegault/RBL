@@ -151,28 +151,28 @@ class TestSeekHomeLimit:
 
 
 class TestSeekAgainstTheRealDriver:
-    """The seek reads switches through GalilController, so its polarity is the
-    seek's polarity. Worth one test that does NOT mock get_switch_states."""
+    """The seek reads switches through GalilController, so the driver's
+    polarity is the seek's polarity. Worth pinning without mocking
+    get_switch_states, because reading it backwards does not fail loudly — it
+    makes the seek decide every axis has already arrived and skip the jog."""
 
     def _driver(self, **operands):
         from tests.test_galil_protocol import make_galil
         return make_galil(operands)
 
     def test_a_clear_axis_is_not_mistaken_for_one_on_its_limit(self):
-        """The whole auto-home feature turns on this. Limits are active HIGH
-        under CN m=1, so a clear axis reads _LF/_LR = 0; reading those as
-        active — which the driver did before the CN reference settled it —
-        made every axis look like it was already on its limit, and the seek
-        would return "no seek needed" without jogging at all."""
-        g = self._driver(**{"MG _LFA": "0", "MG _LRA": "0", "MG _HMA": "1"})
+        """Normally-closed switches carry current while the axis is CLEAR, so
+        a clear axis reads 1 on all three. If this ever reads as "at the
+        limit", every auto-home returns "no seek needed" and moves nothing."""
+        g = self._driver(**{"MG _LFA": "1", "MG _LRA": "1", "MG _HMA": "1"})
         assert AxisHomeRoutine(g, "A")._at_home_limit() is False
 
     def test_an_axis_on_its_reverse_limit_is_detected(self):
-        g = self._driver(**{"MG _LFA": "0", "MG _LRA": "1", "MG _HMA": "1"})
+        g = self._driver(**{"MG _LFA": "1", "MG _LRA": "0", "MG _HMA": "1"})
         assert AxisHomeRoutine(g, "A")._at_home_limit() is True
 
     def test_an_axis_on_its_home_switch_is_detected(self):
-        g = self._driver(**{"MG _LFA": "0", "MG _LRA": "0", "MG _HMA": "0"})
+        g = self._driver(**{"MG _LFA": "1", "MG _LRA": "1", "MG _HMA": "0"})
         assert AxisHomeRoutine(g, "A")._at_home_limit() is True
 
 
