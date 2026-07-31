@@ -171,7 +171,12 @@ class TestReads:
         """Not derivable from CN's m=1 on its own, and that is the trap: the
         _LF/_LR reference defines "active" ELECTRICALLY (>=1 mA flowing), and
         these switches are NORMALLY CLOSED, so current flows while the axis is
-        CLEAR. Clear reads 1; tripped breaks the circuit and reads 0."""
+        CLEAR. Clear reads 1; tripped breaks the circuit and reads 0.
+
+        The home switch is the same, and that one is measured rather than
+        argued: MG _HMC reads 0 with C on its home switch, MG _HMB reads 1
+        with B off it.
+        """
         assert SC.LIMIT_SWITCH_TRIPPED_IS_LOW is True
         assert SC.HOME_SWITCH_TRIPPED_IS_LOW is True
         g = make_galil({"MG _LFA": "0", "MG _LRA": "1", "MG _HMA": "0"})

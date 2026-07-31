@@ -150,8 +150,16 @@ LIMIT_SWITCH_TRIPPED_IS_LOW = True
 
 # The home switch is a separate input with its own wiring, and CN's n argument
 # is a search direction rather than a polarity, so nothing above determines
-# this one. Same NC convention, same reading, and likewise borne out by the
-# bench: homing has been landing where it should.
+# this one. It was MEASURED on the controller instead:
+#
+#     MG _HMC  ->  0    with C sitting on its home switch
+#     MG _HMB  ->  1    with B off its home switch
+#
+# Same reading as the limits, and the same NC logic behind it. Recorded here
+# because it is the one value on this page that no manual can give you — the
+# _HM operand's reference says only that it "contains the state of the home
+# switch", and the state a switch is in when it is tripped is a fact about the
+# wiring. Re-measure with those two commands if the slits are ever re-wired.
 HOME_SWITCH_TRIPPED_IS_LOW = True
 
 
