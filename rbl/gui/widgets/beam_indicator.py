@@ -12,12 +12,13 @@ from PySide6.QtCore import Qt, QPointF, QRectF
 from PySide6.QtGui import QFont, QPainter, QColor, QPen, QBrush
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSizePolicy, QComboBox,
-    QDoubleSpinBox, QFormLayout,
+    QFormLayout,
 )
 
 from rbl.hardware import beam_reconstruction as BR
 from rbl.hardware.current_monitor import beam_centering
 from rbl.gui import theme
+from rbl.gui.widgets.inputs import QuietDoubleSpinBox
 
 # Slit colours reused from the plot / readouts for a consistent palette.
 _SLIT_COLORS = theme.SLIT_COLORS
@@ -398,49 +399,46 @@ class BeamPositionIndicator(QWidget):
         form.setContentsMargins(0, 0, 0, 0)
         form.setSpacing(2)
 
-        self.spn_spot = QDoubleSpinBox()
+        self.spn_spot = QuietDoubleSpinBox()
         self.spn_spot.setRange(0.05, 25.0)
         self.spn_spot.setSingleStep(0.1)
         self.spn_spot.setDecimals(2)
         self.spn_spot.setValue(2.0)
-        self.spn_spot.setSuffix(" mm")
         self.spn_spot.setToolTip(
             "Spot size (FWHM) you believe the beam has.\n"
             "The currents cannot measure this — it is an assumption, and the\n"
             "band in the picture shows how much it is moving the answer."
         )
         self.spn_spot.valueChanged.connect(self._recompute)
-        self.lbl_spot = QLabel("Spot FWHM")
+        self.lbl_spot = QLabel("Spot FWHM (mm)")
         self.lbl_spot.setStyleSheet(f"font-size: {label_px}px; color: #555;")
         form.addRow(self.lbl_spot, self.spn_spot)
 
-        self.spn_span_x = QDoubleSpinBox()
+        self.spn_span_x = QuietDoubleSpinBox()
         self.spn_span_x.setRange(0.0, 50.0)
         self.spn_span_x.setSingleStep(0.5)
         self.spn_span_x.setDecimals(2)
         self.spn_span_x.setValue(3.0)
-        self.spn_span_x.setSuffix(" mm")
         self.spn_span_x.setToolTip("Raster half-travel on X (centre to turn-around).")
         self.spn_span_x.valueChanged.connect(self._recompute)
-        self.lbl_span_x = QLabel("Sweep X ±")
+        self.lbl_span_x = QLabel("Sweep X ± (mm)")
         self.lbl_span_x.setStyleSheet(f"font-size: {label_px}px; color: #555;")
 
-        self.spn_span_y = QDoubleSpinBox()
+        self.spn_span_y = QuietDoubleSpinBox()
         self.spn_span_y.setRange(0.0, 50.0)
         self.spn_span_y.setSingleStep(0.5)
         self.spn_span_y.setDecimals(2)
         self.spn_span_y.setValue(8.0)
-        self.spn_span_y.setSuffix(" mm")
         self.spn_span_y.setToolTip("Raster half-travel on Y (centre to turn-around).")
         self.spn_span_y.valueChanged.connect(self._recompute)
-        self.lbl_span_y = QLabel("Sweep Y ±")
+        self.lbl_span_y = QLabel("Sweep Y ± (mm)")
         self.lbl_span_y.setStyleSheet(f"font-size: {label_px}px; color: #555;")
 
         if compact:
             # Both sweep boxes on ONE row. Every row these controls take is a
             # row the aperture picture loses inside a fixed square, and the two
             # sweep numbers are read together anyway.
-            self.lbl_span_x.setText("Sweep ±")
+            self.lbl_span_x.setText("Sweep ± (mm)")
             self.lbl_span_y.setText("")
             sweeps = QHBoxLayout()
             sweeps.setContentsMargins(0, 0, 0, 0)
