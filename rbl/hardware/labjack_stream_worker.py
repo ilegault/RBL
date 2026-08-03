@@ -36,7 +36,9 @@ Emitted once per GUI refresh window (GUI_REFRESH_HZ = 10 Hz).
           "AIN6":  {"waveform": np.ndarray,   # raw volts
                     "peak":     float,         # max(|waveform|) in volts
                     "pk_pk":    float,         # max - min in volts
-                    "rms":      float},        # RMS in volts
+                    "rms":      float,         # RMS in volts
+                    "mean":     float,         # arithmetic mean in volts (DC estimator)
+                    "std":      float},        # standard deviation in volts (noise estimator)
           ...                                  # (one entry per amp channel)
           "AIN0":  {"mean": float},            # mean volts (FULL profile only)
           ...                                  # (one entry per log-amp channel)
@@ -285,6 +287,8 @@ class LabJackStreamWorker(QThread):
                     "peak":   float(np.max(np.abs(col))),
                     "pk_pk":  float(col.max() - col.min()),
                     "rms":    float(np.sqrt(np.mean(col ** 2))),
+                    "mean":   float(np.mean(col)),
+                    "std":    float(np.std(col)),
                 }
             else:
                 # Log-amp channel: mean voltage over the window.
@@ -330,6 +334,8 @@ if __name__ == "__main__":
         assert abs(p_w["channels"][ain]["peak"]  - 2.0) < 1e-9
         assert abs(p_w["channels"][ain]["pk_pk"] - 0.0) < 1e-9
         assert abs(p_w["channels"][ain]["rms"]   - 2.0) < 1e-9
+        assert abs(p_w["channels"][ain]["mean"]  - 2.0) < 1e-9
+        assert abs(p_w["channels"][ain]["std"]   - 0.0) < 1e-9
     for ain in LOGAMP_CHANNELS:
         assert p_w["channels"][ain] is None, f"{ain} should be None in WAVEFORM"
     print(f"  [OK] WAVEFORM: stride={n_w}, window={win_w}, "
