@@ -1,7 +1,7 @@
 """
 Unit tests for rbl.state.beamline.Beamline — no Qt event loop, no hardware.
 Verifies the unit-conversion math that used to live duplicated inside each
-tab's _on_window/_on_reading now happens once here, correctly.
+tab now happens once here, correctly — and is the only copy of it left.
 """
 import math
 
@@ -402,3 +402,112 @@ class TestCommandSurface:
         beamline.galil = MagicMock(connected=False)
         beamline.emergency_stop()
         beamline.galil.abort.assert_not_called()
+
+
+class TestSnapshotsCarryWhatTheTabsNeed:
+    """The tabs stopped converting; these fields are why they can.
+
+    Both hardware tabs used to re-derive their numbers from the raw stream
+    payload — a second copy of the log-amp curve and of the EEL5000 monitor
+    ratios, living in the widgets. They now render snapshots instead, which
+    only works because a snapshot carries everything the screen needs: the
+    window's timestamp for its history buffer, the raw volts beside the
+    converted value, whether a monitor was sampled at all, and the
+    full-resolution samples the scope view draws.
+
+    If a field here goes missing, a tab does not merely lose a number — it
+    has a reason to reach back for the payload and convert it itself.
+    """
+
+    def test_logamp_state_carries_window_time_and_raw_volts(self, beamline):
+        received = []
+        beamline.logamps_changed.connect(received.append)
+        beamline.ingest_labjack_window(
+            {"channels": {ain: {"mean": 3.0}
+                          for ain in SC.LABJACK_CHANNEL_MAP}, "t": 12.5})
+        state = received[0]
+        assert state.t == 12.5
+        assert state.volts["X+"] == pytest.approx(3.0)
+        assert state.currents["X+"] == pytest.approx(1e-6, rel=1e-6)
+
+    def test_unsampled_log_amp_is_absent_from_volts_not_zero(self, beamline):
+        """Paused and faulty must stay distinguishable.
+
+        Both give a NaN current. Only one of them belongs in `volts`, and a
+        readout showing '0.000 V' for a channel that was never scanned would
+        be an invented measurement.
+        """
+        received = []
+        beamline.logamps_changed.connect(received.append)
+        channels = {ain: None for ain in SC.LABJACK_CHANNEL_MAP}
+        channels["AIN0"] = {"mean": 3.0}
+        beamline.ingest_labjack_window({"channels": channels, "t": 1.0})
+        state = received[0]
+        assert SC.LABJACK_CHANNEL_MAP["AIN0"] in state.volts
+        assert SC.LABJACK_CHANNEL_MAP["AIN1"] not in state.volts
+        assert math.isnan(state.currents[SC.LABJACK_CHANNEL_MAP["AIN1"]])
+
+    def test_amp_state_carries_window_time_and_sample_period(self, beamline):
+        received = []
+        beamline.amps_changed.connect(received.append)
+        beamline.ingest_labjack_window(
+            {"channels": {}, "t": 4.25, "sample_period": 1.0 / 8000.0})
+        state = received[0]
+        assert state.t == 4.25
+        assert state.sample_period == pytest.approx(1.0 / 8000.0)
+
+    def test_live_flags_track_which_monitors_were_scanned(self, beamline):
+        received = []
+        beamline.amps_changed.connect(received.append)
+        v_ain = SC.AMP_CHANNEL_MAP["X+"]["voltage"]
+        beamline.ingest_labjack_window({
+            "channels": {v_ain: {"peak": 2.0, "pk_pk": 4.0, "rms": 1.5}},
+            "t": 1.0,
+        })
+        ch = received[0].channels["X+"]
+        assert ch.v_live is True and ch.i_live is False
+        assert math.isnan(ch.rms_ma)          # nothing to report on current
+        assert received[0].channels["Y-"].v_live is False
+
+    def test_full_resolution_window_is_scaled_once_here(self, beamline):
+        """The scope view's samples are converted in this file, not the tab.
+
+        1 V on the voltage monitor is 1 kV out; 1 V on the current monitor is
+        10 mA. The tab receives them already in those units and rings them
+        as-is.
+        """
+        import numpy as np
+        received = []
+        beamline.amps_changed.connect(received.append)
+        v_ain = SC.AMP_CHANNEL_MAP["X+"]["voltage"]
+        i_ain = SC.AMP_CHANNEL_MAP["X+"]["current"]
+        wave_v = np.full(64, 2.0)
+        wave_i = np.full(64, 0.5)
+        beamline.ingest_labjack_window({
+            "channels": {
+                v_ain: {"peak": 2.0, "pk_pk": 0.0, "rms": 2.0, "waveform": wave_v},
+                i_ain: {"peak": 0.5, "pk_pk": 0.0, "rms": 0.5, "waveform": wave_i},
+            },
+            "t": 1.0, "window_samples": 64,
+        })
+        ch = received[0].channels["X+"]
+        assert ch.window_kv is not None and len(ch.window_kv) == 64
+        assert ch.window_kv.max() == pytest.approx(2.0)    # 2 V -> 2 kV
+        assert ch.window_ma.max() == pytest.approx(5.0)    # 0.5 V -> 5 mA
+        # The raw readouts are the window mean, in volts, unscaled.
+        assert ch.raw_v == pytest.approx(2.0)
+        assert ch.raw_i == pytest.approx(0.5)
+
+    def test_no_waveform_leaves_the_full_window_empty(self, beamline):
+        """A payload without samples must not fabricate an array — the scope
+        view has to be able to tell there is nothing to draw."""
+        received = []
+        beamline.amps_changed.connect(received.append)
+        v_ain = SC.AMP_CHANNEL_MAP["X+"]["voltage"]
+        beamline.ingest_labjack_window({
+            "channels": {v_ain: {"peak": 2.0, "pk_pk": 0.0, "rms": 2.0}},
+            "t": 1.0,
+        })
+        ch = received[0].channels["X+"]
+        assert ch.window_kv is None
+        assert ch.raw_v == pytest.approx(2.0)   # falls back to the RMS scalar

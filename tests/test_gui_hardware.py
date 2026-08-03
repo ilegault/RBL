@@ -28,6 +28,11 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from PySide6.QtCore import Qt, QEvent, QObject
 from PySide6.QtGui import QKeyEvent
 
+from tests.payloads import LabJackFeed, window_payload
+
+# 3.0 V on a 0-6 V log amp is the midpoint of its decade range -> 1 µA.
+LOG_AMPS_AT_1UA = {"AIN0": 3.0, "AIN1": 3.0, "AIN2": 3.0, "AIN3": 3.0}
+
 
 @pytest.fixture(scope="session")
 def qapp():
@@ -66,6 +71,35 @@ def win(qapp):
     yield w
     w.close()
     qapp.processEvents()
+
+
+class TestOneWindowReachesBothTabs:
+    """The wiring MainWindow makes, asserted end to end.
+
+    One stream window into the app's own Beamline must land converted on both
+    hardware tabs, each taking only its own half. This covers the connections
+    themselves — nothing else does, and a tab silently wired to nothing shows
+    an empty screen rather than failing.
+    """
+
+    def test_one_window_updates_the_current_and_amp_tabs(self, win, qapp):
+        win.beamline.ingest_labjack_window(window_payload({
+            "AIN0": 3.0, "AIN1": 3.0, "AIN2": 3.0, "AIN3": 3.0,   # 1 µA each
+            "AIN12": 1.0, "AIN13": 3.0,                           # X+: 10 mA, 3 kV
+        }, t=1.0))
+
+        _, i = win.current_tab.buffers["AIN0"].latest()
+        assert abs(i - 1e-6) < 1e-9
+        assert "µA" in win.current_tab.lbl_i["AIN0"].text()
+
+        _, kv = win.amp_tab.buffers["AIN13"].latest()
+        assert abs(kv - 3.0) < 1e-9
+        assert "3.000 kV" in win.amp_tab.lbl_kv["X+"].text()
+
+    def test_neither_tab_sees_the_other_half(self, win, qapp):
+        win.beamline.ingest_labjack_window(
+            window_payload({"AIN0": 3.0, "AIN13": 3.0}, t=1.0))
+        assert set(win.current_tab.buffers) & set(win.amp_tab.buffers) == set()
 
 
 class TestTabNavigation:
@@ -142,9 +176,11 @@ class TestTabStatePersistence:
 
     def test_frozen_current_tab_stays_frozen_after_navigation(self, win, qapp):
         ct = win.current_tab
+        # Through the window's OWN Beamline, so this goes over the same
+        # logamps_changed connection MainWindow makes at construction.
         for i in range(5):
-            ct._on_reading(float(i), {"AIN0": 3.0, "AIN1": 3.0,
-                                      "AIN2": 3.0, "AIN3": 3.0})
+            win.beamline.ingest_labjack_window(
+                window_payload(LOG_AMPS_AT_1UA, t=float(i)))
         ct.plot._on_slider_changed(4000)    # enter frozen mode
         assert ct.plot.is_live is False
         win._on_outer_tab_clicked(0)        # leave current tab
@@ -297,31 +333,48 @@ class TestCurrentTab:
         yield ct
         ct.shutdown()
 
-    def test_reading_updates_buffers_and_labels(self, current):
-        current._on_reading(1.0, {"AIN0": 3.0, "AIN1": 3.0, "AIN2": 3.0, "AIN3": 3.0})
+    @pytest.fixture
+    def feed(self, current):
+        return LabJackFeed(current)
+
+    def test_window_updates_buffers_and_labels(self, current, feed):
+        feed.send(LOG_AMPS_AT_1UA)
         # 0-6 V model: 3.0 V -> 1 µA
         _, v = current.buffers["AIN0"].latest()
         assert abs(v - 1e-6) < 1e-9
         assert "µA" in current.lbl_i["AIN0"].text()
 
+    def test_raw_voltage_is_shown_beside_the_current(self, current, feed):
+        """The tab shows the volts the current was derived from, and takes
+        them from the snapshot rather than re-reading the payload."""
+        feed.send(LOG_AMPS_AT_1UA)
+        assert "3.000 V" in current.lbl_v["AIN0"].text()
+
+    def test_unsampled_channel_shows_paused_not_stale(self, current, feed):
+        """The WAVEFORM profile does not scan the log amps: their readouts
+        must say so instead of holding the last good number."""
+        feed.send(LOG_AMPS_AT_1UA)
+        feed.send({})                      # nothing sampled this window
+        assert "Waveform mode" in current.lbl_i["AIN0"].text()
+
     # With no Galil attached the indicator has no slit positions and falls back
     # to the raw current imbalance, which is what these assert on.
-    def test_balanced_beam_reads_zero_imbalance(self, current):
-        current._on_reading(1.0, {"AIN0": 3.0, "AIN1": 3.0, "AIN2": 3.0, "AIN3": 3.0})
+    def test_balanced_beam_reads_zero_imbalance(self, current, feed):
+        feed.send(LOG_AMPS_AT_1UA)
         assert abs(current.beam_indicator.view.ratio_x) < 1e-9
 
-    def test_imbalanced_beam_positive(self, current):
+    def test_imbalanced_beam_positive(self, current, feed):
         # X+ (AIN0) larger than X- (AIN1) -> positive imbalance
-        current._on_reading(1.0, {"AIN0": 4.0, "AIN1": 3.0, "AIN2": 3.0, "AIN3": 3.0})
+        feed.send({"AIN0": 4.0, "AIN1": 3.0, "AIN2": 3.0, "AIN3": 3.0})
         assert current.beam_indicator.view.ratio_x > 0
 
-    def test_slit_positions_enable_mm_reconstruction(self, current):
+    def test_slit_positions_enable_mm_reconstruction(self, current, feed):
         """With slit geometry supplied, the indicator solves a real position."""
         current.set_slit_state({
             "connected": True, "zeroed": True,
             "positions": {"X+": 1.5, "X-": 1.5, "Y+": 5.0, "Y-": 5.0},
         })
-        current._on_reading(1.0, {"AIN0": 3.0, "AIN1": 3.0, "AIN2": 3.0, "AIN3": 3.0})
+        feed.send(LOG_AMPS_AT_1UA)
         est = current.beam_indicator.view.est
         assert est is not None and est.ok
         # Equal currents on symmetric slits -> beam on the axis.
@@ -331,20 +384,18 @@ class TestCurrentTab:
         assert current.plot.is_live is True
         assert current.plot.slider.value() == 10_000
 
-    def test_drag_slider_left_enters_frozen(self, current):
+    def test_drag_slider_left_enters_frozen(self, current, feed):
         for i in range(5):
-            current._on_reading(float(i), {"AIN0": 3.0, "AIN1": 3.0,
-                                           "AIN2": 3.0, "AIN3": 3.0})
+            feed.send(LOG_AMPS_AT_1UA, t=float(i))
         current.plot._on_slider_changed(4000)
         assert current.plot.is_live is False
         assert current.plot.frozen_right_edge is not None
         # isVisibleTo ignores whether the (un-shown) tab itself is on screen.
         assert current.btn_jump_live.isVisibleTo(current)
 
-    def test_jump_to_live_returns_to_live(self, current):
+    def test_jump_to_live_returns_to_live(self, current, feed):
         for i in range(5):
-            current._on_reading(float(i), {"AIN0": 3.0, "AIN1": 3.0,
-                                           "AIN2": 3.0, "AIN3": 3.0})
+            feed.send(LOG_AMPS_AT_1UA, t=float(i))
         current.plot._on_slider_changed(4000)
         current.plot.jump_to_live()
         assert current.plot.is_live is True

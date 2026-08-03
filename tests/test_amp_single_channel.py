@@ -24,6 +24,7 @@ from PySide6.QtWidgets import QApplication
 
 from rbl.config import hardware_config as SC
 from rbl.config.labjack_stream_config import window_samples
+from tests.payloads import LabJackFeed
 
 
 @pytest.fixture(scope="module")
@@ -35,6 +36,13 @@ def qapp():
 def tab(qapp):
     from rbl.gui.amp_tab import AmpTab
     return AmpTab()
+
+
+@pytest.fixture
+def feed(tab):
+    """Windows reach the tab as Beamline converted them, the way they do in
+    the app — the tab no longer scales a monitor voltage itself."""
+    return LabJackFeed(tab)
 
 
 def _single_payload(profile, target_ain, value):
@@ -65,14 +73,14 @@ class TestSingleChannelMode:
         assert tab._single_mode is False
         assert not tab._single_combo.isEnabled()
 
-    def test_streamed_channel_updates_and_others_paused(self, tab):
+    def test_streamed_channel_updates_and_others_paused(self, tab, feed):
         # Target the X- voltage monitor (AIN11).
         target = SC.AMP_CHANNEL_MAP["X-"]["voltage"]   # AIN11
         idx = tab._single_combo.findData(target)
         tab._single_combo.setCurrentIndex(idx)
         tab.on_profile_changed("SINGLE_FAST")
 
-        tab._on_window(_single_payload("SINGLE_FAST", target, 2.0))
+        feed.send_payload(_single_payload("SINGLE_FAST", target, 2.0))
 
         # Target amp voltage readout is live (2 kV) and not the muted color.
         assert "2.000 kV" in tab.lbl_kv["X-"].text()
@@ -81,7 +89,7 @@ class TestSingleChannelMode:
         # A different amplifier's readout is muted (paused).
         assert "#bbb" in tab.lbl_kv["X+"].styleSheet()
 
-    def test_current_target_waveform_follows_selection(self, tab):
+    def test_current_target_waveform_follows_selection(self, tab, feed):
         # Target a CURRENT monitor and confirm the single-plot waveform snapshot
         # picks it up on the current axis.
         target = SC.AMP_CHANNEL_MAP["Y-"]["current"]   # AIN6
@@ -89,7 +97,7 @@ class TestSingleChannelMode:
         tab._single_combo.setCurrentIndex(idx)
         tab.on_profile_changed("SINGLE_HIRES")
 
-        tab._on_window(_single_payload("SINGLE_HIRES", target, 0.5))
+        feed.send_payload(_single_payload("SINGLE_HIRES", target, 0.5))
 
         assert tab._single_target_ain == target
 
@@ -141,10 +149,10 @@ class TestApplyAndSnapshot:
         assert emitted == ["WAVEFORM"]
         assert not tab._apply_btn.isEnabled()     # staged == applied now
 
-    def test_wide_window_is_trend_small_window_is_snapshot(self, tab):
+    def test_wide_window_is_trend_small_window_is_snapshot(self, tab, feed):
         tab.on_profile_changed("FULL")
         target = SC.AMP_CHANNEL_MAP["X+"]["voltage"]
-        tab._on_window(_single_payload("FULL", target, 3.0))
+        feed.send_payload(_single_payload("FULL", target, 3.0))
 
         tab.plot.window_seconds = 120.0
         assert not tab._is_snapshot()

@@ -79,10 +79,11 @@ class MainWindow(QMainWindow):
 
         # ── Shared LabJack T7 ─────────────────────────────────────────────────
         #
-        # ONE physical T7, owned by self.beamline. Both the Beam Current tab
-        # (AIN0-3, log amps) and the HV Amplifier tab (AIN6-13, EEL5000
-        # monitors) subscribe to its window_ready signal and filter for their
-        # own channels.
+        # ONE physical T7, owned by self.beamline, and ONE conversion of each
+        # window it produces. Beamline splits that window into a LogAmpState
+        # (AIN0-3, the log amps) and an AmpState (AIN6-13, the EEL5000
+        # monitors); each tab subscribes to the one it renders. No tab sees
+        # the raw payload, so no tab can convert volts a second way.
         self._lj_tabs = (self.current_tab, self.amp_tab)
 
         for tab in self._lj_tabs:
@@ -90,7 +91,8 @@ class MainWindow(QMainWindow):
             tab.lj_panel.disconnect_requested.connect(self._labjack_disconnect)
         self.beamline.labjack_connected.connect(self._on_labjack_connected)
         self.beamline.labjack_disconnected_evt.connect(self._on_labjack_disconnected)
-        self.beamline.window_ready.connect(self._on_labjack_window)
+        self.beamline.logamps_changed.connect(self.current_tab.on_logamp_state)
+        self.beamline.amps_changed.connect(self.amp_tab.on_amp_state)
         self.beamline.stream_error.connect(self._on_labjack_error)
         self.beamline.profile_changed.connect(self._on_profile_changed)
 
@@ -151,10 +153,6 @@ class MainWindow(QMainWindow):
     def _on_labjack_disconnected(self):
         for tab in self._lj_tabs:
             tab.on_labjack_disconnected()
-
-    def _on_labjack_window(self, payload: dict):
-        for tab in self._lj_tabs:
-            tab._on_window(payload)
 
     def _on_labjack_error(self, msg: str):
         # Beamline has already torn the connection down; just surface it.

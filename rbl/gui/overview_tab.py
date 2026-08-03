@@ -32,7 +32,7 @@ panels are grouped by axis with each pair's waveforms drawn over each other,
 because the failure worth catching there is a RELATIONSHIP (a pair that has
 stopped being mirror images), which no single channel's readout can show. Each
 pair's trace window is sized to the drive that pair is MEASURED to be running
-(see Beamline._cycle_traces), not to the 0.1 s stream window, so the picture
+(see rbl/hardware/amp_trace.py), not to the 0.1 s stream window, so the picture
 holds a couple of readable cycles at any raster rate; the caption under it
 reads that window back.
 
