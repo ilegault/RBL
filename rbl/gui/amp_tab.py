@@ -757,6 +757,27 @@ class AmpTab(QWidget):
         else:
             self._apply_btn.setStyleSheet("")
 
+    def set_profile_controls_enabled(self, on: bool):
+        """Grey out profile/target selection for the duration of a
+        calibration run (rbl/gui/calibration_tab.py).
+
+        A profile switch mid-sweep does a full eStreamStop -> reconfigure ->
+        eStreamStart cycle on the T7 — allowing one here would silently
+        corrupt whatever the calibration run is in the middle of recording.
+        """
+        self._profile_combo.setEnabled(on)
+        if not on:
+            self._single_combo.setEnabled(False)
+            self._apply_btn.setEnabled(False)
+            self._profile_combo.setToolTip(
+                "Disabled during a calibration run — switching the stream "
+                "profile mid-run would corrupt it."
+            )
+        else:
+            self._profile_combo.setToolTip("")
+            self._single_combo.setEnabled(is_single_channel(self._profile_combo.currentData()))
+            self._refresh_apply_state()
+
     def _apply_stream_settings(self):
         """Commit the staged profile/target to the hardware (one atomic action).
 
