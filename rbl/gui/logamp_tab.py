@@ -2,9 +2,15 @@
 logamp_tab.py
 PySide6 widget for the "Beam Current" outer tab.
 
-Reads 4 analog inputs from a LabJack T7 at ~10 Hz, converts each log-amp
-voltage to current, displays numerically + on a live rolling plot, and shows
-a beam-centering indicator.
+Renders the four NEC log amps at ~10 Hz: each slit current numerically, on a
+live rolling plot, and as a beam-centering indicator.
+
+This tab owns no LabJack handle and does no unit conversion. Beamline holds
+the single shared T7 and converts each window's volts to amps once (see
+rbl/state/labjack_link.py); this tab renders the LogAmpState that comes out
+of it. A screen that re-derived the current from the raw payload — which this
+one used to do — is a second copy of the log-amp calibration curve that can
+drift away from the first.
 
 Plot navigation (from TDS-T8 live_plot mechanism):
   - Fixed 2-minute viewport window (WINDOW_SECONDS = 120).
@@ -20,10 +26,9 @@ from PySide6.QtWidgets import (
 )
 
 from rbl.hardware.labjack_driver import LJM_AVAILABLE
-from rbl.hardware.current_monitor import (
-    voltage_to_current, format_current, RollingBuffer,
-)
+from rbl.hardware.current_monitor import format_current, RollingBuffer
 from rbl.config import hardware_config as SC
+from rbl.state.snapshots import LogAmpState
 from rbl.gui.widgets.connection_bar import LabJackPanel
 from rbl.gui.widgets.beam_indicator import BeamPositionIndicator
 from rbl.gui.widgets.live_plot import LivePlotPanel
@@ -38,13 +43,13 @@ class CurrentTab(QWidget):
     BUFFER_CAPACITY = 36_000   # ~1 hour at 10 Hz
     WINDOW_SECONDS  = 120      # default 2-minute viewport
     # The log-amp tab never zooms below 1 s: log amps only carry a 10 Hz mean
-    # voltage (see _on_window), so a sub-second window has nothing to show.
+    # voltage (see on_logamp_state), so a sub-second window has nothing to show.
     MIN_WINDOW_SECONDS = 1.0
 
     def __init__(self, parent=None):
         super().__init__(parent)
         # This tab does not own a LabJack handle or stream worker. MainWindow
-        # owns the single shared instance and feeds readings via _on_window().
+        # owns the single shared instance; snapshots arrive via on_logamp_state().
         self._t0 = time.monotonic()   # reset on labjack_connected
         self.buffers = {name: RollingBuffer(self.BUFFER_CAPACITY)
                         for name in SC.LABJACK_CHANNEL_MAP.keys()}
@@ -220,7 +225,7 @@ class CurrentTab(QWidget):
     # ---- Visibility (QStackedWidget hides the non-current tab) ---------------
     #
     # The redraw timer is rendering, not data acquisition: it only needs to run
-    # while this tab is the one on screen. Buffers keep filling via _on_window
+    # while this tab is the one on screen. Buffers keep filling via on_logamp_state
     # regardless of visibility, so no data is lost while hidden — only
     # painting pauses.
 
@@ -243,12 +248,6 @@ class CurrentTab(QWidget):
 
     # ---- Slots ---------------------------------------------------------------
 
-    @staticmethod
-    def _by_slit(currents_by_ain: dict) -> dict:
-        """Re-key AIN -> current as slit label -> current for the indicator."""
-        return {slit: currents_by_ain.get(ain, float("nan"))
-                for ain, slit in SC.LABJACK_CHANNEL_MAP.items()}
-
     def set_slit_state(self, state: dict):
         """Slit geometry pushed over from the motor tab (see MotorTab.slit_state)."""
         self.beam_indicator.set_slit_state(state)
@@ -265,64 +264,43 @@ class CurrentTab(QWidget):
             "positions": {slit: axis.pos_mm for slit, axis in state.axes.items()},
         })
 
-    def _on_window(self, payload: dict):
-        """Consume one stream window from LabJackStreamWorker.
+    def on_logamp_state(self, state: LogAmpState):
+        """Render one LogAmpState — the log-amp half of one stream window.
 
-        Log-amp channels carry only a mean voltage (full waveform not stored).
-        When the WAVEFORM profile is active, log-amp payload entries are None;
-        display a "paused" state rather than stale numbers.
+        The volts-to-amps conversion is NOT done here. It happens once, in
+        Beamline (rbl/state/labjack_link.py), and every screen showing a beam
+        current renders the result of that one conversion. This tab used to
+        repeat the calculation on the raw payload while Beamline did it too
+        for the Overview; two copies of a calibration curve is one more than
+        can be kept correct.
+
+        A slit missing from `state.volts` was not sampled this window — the
+        WAVEFORM profile does not scan the log amps — and shows as paused
+        rather than as a stale number. That is a different condition from a
+        sampled channel whose current came back NaN (out of the log amp's
+        calibrated range), which still shows its voltage: one is the profile
+        doing what it was asked, the other is a reading worth investigating.
         """
-        channels = payload["channels"]
-        t        = payload["t"]
+        if not state.connected:
+            return
 
-        v1nA  = SC.LOG_AMP_V_AT_1NA
-        v1mA  = SC.LOG_AMP_V_AT_1MA
-
-        currents = {}
-        for ain in SC.LABJACK_CHANNEL_MAP.keys():
-            ch_data = channels.get(ain)
-
-            if ch_data is None:
-                # WAVEFORM profile: log amps not sampled this window.
+        for ain, slit in SC.LABJACK_CHANNEL_MAP.items():
+            if slit not in state.volts:
                 self.lbl_v[ain].setText("—  (Waveform mode)")
                 self.lbl_v[ain].setStyleSheet("color: #aaa; font-family: Consolas, 'Courier New', monospace;")
                 self.lbl_i[ain].setText("—  (Waveform mode)")
                 self.lbl_i[ain].setStyleSheet("color: #aaa; font-weight: bold;")
-                currents[ain] = float("nan")
                 continue
 
-            V = ch_data["mean"]
-            I = voltage_to_current(V, v1nA, v1mA)
-            currents[ain] = I
+            V = state.volts[slit]
+            I = state.currents.get(slit, float("nan"))
             self.lbl_v[ain].setText(f"{V:6.3f} V")
             self.lbl_v[ain].setStyleSheet("color: #555; font-family: Consolas, 'Courier New', monospace;")
             self.lbl_i[ain].setText(format_current(I))
             self.lbl_i[ain].setStyleSheet(theme.status_label(theme.OK))
-            self.buffers[ain].append(t, I)
+            self.buffers[ain].append(state.t, I)
 
-        self.beam_indicator.set_currents(self._by_slit(currents))
-
-        if self.plot.is_live:
-            self.plot.force_to_live()
-
-    def _on_reading(self, t: float, values: dict):
-        v1nA   = SC.LOG_AMP_V_AT_1NA
-        v1mA   = SC.LOG_AMP_V_AT_1MA
-
-        currents = {}
-        # The shared worker emits all 12 AINs. Take ONLY the log-amp channels;
-        # AIN6-AIN13 belong to the HV amplifier tab and must be ignored here.
-        for ain in SC.LABJACK_CHANNEL_MAP.keys():
-            V = values.get(ain)
-            if V is None:
-                continue
-            I = voltage_to_current(V, v1nA, v1mA)
-            currents[ain] = I
-            self.lbl_v[ain].setText(f"{V:6.3f} V")
-            self.lbl_i[ain].setText(format_current(I))
-            self.buffers[ain].append(t, I)
-
-        self.beam_indicator.set_currents(self._by_slit(currents))
+        self.beam_indicator.set_currents(dict(state.currents))
 
         # Auto-advance slider to live edge when in live mode
         if self.plot.is_live:

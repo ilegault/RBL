@@ -14,6 +14,7 @@ import pytest
 from unittest.mock import MagicMock
 
 from rbl.hardware.amp_monitor import pair_correlation
+from rbl.hardware.amp_trace import AmpTraceBuilder
 from rbl.state.beamline import Beamline
 
 
@@ -69,20 +70,20 @@ class TestWaveDecimation:
         trace must never invent."""
         a = _triangle(2.0, n=1000)
         b = _triangle(2.0, n=1000, invert=True)
-        da = Beamline._decimate_wave(a)
-        db = Beamline._decimate_wave(b)
+        da = AmpTraceBuilder.decimate(a)
+        db = AmpTraceBuilder.decimate(b)
         assert len(da) == len(db)
         assert pair_correlation(da, db) == pytest.approx(-1.0, abs=1e-6)
 
     def test_point_count_is_bounded(self):
-        assert len(Beamline._decimate_wave(list(range(100_000)))) <= Beamline._WAVE_POINTS
+        assert len(AmpTraceBuilder.decimate(list(range(100_000)))) <= AmpTraceBuilder.WAVE_POINTS
 
     def test_a_short_window_is_passed_through(self):
-        assert len(Beamline._decimate_wave([1.0, 2.0, 3.0])) == 3
+        assert len(AmpTraceBuilder.decimate([1.0, 2.0, 3.0])) == 3
 
     def test_no_waveform_is_empty_not_zeros(self):
-        assert Beamline._decimate_wave(None) == ()
-        assert Beamline._decimate_wave([]) == ()
+        assert AmpTraceBuilder.decimate(None) == ()
+        assert AmpTraceBuilder.decimate([]) == ()
 
 
 # ---- The timebase lock -------------------------------------------------------

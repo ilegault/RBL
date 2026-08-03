@@ -27,6 +27,7 @@ from rbl.hardware.waveform_period import (
     estimate_period_samples, cycle_span_samples, cycle_slice,
 )
 from rbl.hardware.waveform_ring import AlignedWaveHistory
+from rbl.hardware.amp_trace import AmpTraceBuilder
 from rbl.state.beamline import Beamline
 
 
@@ -232,7 +233,7 @@ class TestBeamlineCycleTraces:
         to 120 points, which draws a beat pattern of the decimation."""
         ch = _run(beamline, 1000.0).channels["X+"]
         assert ch.wave_span_s < 0.01
-        assert len(ch.wave_kv) <= Beamline._WAVE_POINTS
+        assert len(ch.wave_kv) <= AmpTraceBuilder.WAVE_POINTS
 
     def test_the_pair_shares_one_window(self, beamline):
         state = _run(beamline, 137.0)
@@ -311,6 +312,6 @@ class TestBeamlineCycleTraces:
         for k in range(20):
             beamline.ingest_labjack_window(_payload(k, 3.0))
         ains = [SC.AMP_CHANNEL_MAP[a]["voltage"] for a in ("X+", "X-")]
-        assert beamline._amp_waves.aligned_length(ains) > WINDOW
+        assert beamline.amp_traces.history.aligned_length(ains) > WINDOW
         beamline._mark_labjack_disconnected()
-        assert beamline._amp_waves.aligned_length(ains) == 0
+        assert beamline.amp_traces.history.aligned_length(ains) == 0

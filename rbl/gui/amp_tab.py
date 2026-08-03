@@ -6,9 +6,12 @@ Displays the VOLTAGE MONITOR and CURRENT MONITOR readings of four
 EEL5000.20.100 high-voltage amplifiers (X+, X-, Y+, Y-), wired to a LabJack T7
 via a CB37 terminal board on AIN6..AIN13.
 
-This tab does NOT own a LabJack connection. MainWindow owns the single shared
-LabJackT7 + stream worker and feeds every tab the same window payload. We take
-AIN6..AIN13 and ignore AIN0..AIN3 (the log amps).
+This tab does NOT own a LabJack connection and does NOT scale a monitor
+voltage itself. Beamline owns the single shared LabJackT7 + stream worker and
+converts each window once (rbl/state/labjack_link.py); this tab renders the
+AmpState that falls out — the AIN6..AIN13 half of it. The log amps (AIN0..3)
+in the same window reach the Beam Current tab as a LogAmpState and are not
+this tab's business.
 
 ONE plot, two viewing modes (driven by the time-window zoom)
 -----------------------------------------------------------
@@ -49,7 +52,6 @@ restarting the stream on every stray combo event.
 """
 import time
 
-import numpy as np
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
@@ -60,10 +62,10 @@ from PySide6.QtWidgets import (
 from rbl.hardware.labjack_driver import LJM_AVAILABLE
 from rbl.hardware.current_monitor import RollingBuffer
 from rbl.hardware.amp_monitor import (
-    monitor_to_kv, monitor_to_ma, format_kv, format_ma,
-    voltage_status, current_status,
+    format_kv, format_ma, voltage_status, current_status,
 )
 from rbl.hardware.waveform_ring import WaveformRing, decimate_minmax
+from rbl.state.snapshots import AmpState
 from rbl.config import hardware_config as SC
 from rbl.config.labjack_stream_config import (
     STREAM_PROFILES, GUI_REFRESH_HZ, window_samples, resolution_index,
@@ -131,7 +133,7 @@ class AmpTab(QWidget):
         self._connected = False
         self._visible   = False
 
-        # One trend buffer per AIN. Keys are AIN names so _on_window can index directly.
+        # One trend buffer per AIN. Keys are AIN names so on_amp_state can index directly.
         self.buffers = {ain: RollingBuffer(self.BUFFER_CAPACITY)
                         for ain in SC.AMP_AIN_NAMES}
 
@@ -568,7 +570,7 @@ class AmpTab(QWidget):
     # ---- Visibility (QStackedWidget hides the non-current tab) ---------------
     #
     # The redraw timer is rendering, not data acquisition: it only needs to run
-    # while this tab is the one on screen. Buffers keep filling via _on_window
+    # while this tab is the one on screen. Buffers keep filling via on_amp_state
     # regardless of visibility, so no data is lost while hidden — only
     # painting pauses.
 
@@ -782,120 +784,79 @@ class AmpTab(QWidget):
 
     # ---- Window ingestion ----------------------------------------------------
 
-    def _on_window(self, payload: dict):
-        """Consume one stream window from LabJackStreamWorker.
+    def on_amp_state(self, state: AmpState):
+        """Render one AmpState — the amplifier half of one stream window.
 
         Feeds three things per amplifier:
           * numeric readouts (peak/pk-pk/RMS scalars),
-          * the 10 Hz trend buffers (peak-kV / RMS-mA),
+          * the 10 Hz trend buffers (RMS-kV / RMS-mA),
           * the raw-waveform ring (full window, in kV / mA) for snapshot mode.
-        """
-        channels = payload["channels"]
-        t = payload["t"]
 
+        None of the monitor scaling happens here.  Beamline converts each
+        window's volts to kV and mA once (see rbl/state/labjack_link.py) and
+        this tab renders what comes out, including the full-resolution
+        `window_kv` / `window_ma` arrays the scope view needs.  Keeping the
+        EEL5000 monitor ratios in one file is the whole point: this tab used
+        to apply them itself, in parallel with Beamline applying them for the
+        Overview, so the same BNC had two independent paths to a number.
+
+        Voltage and current are handled independently: a single-channel
+        profile streams ONE of an amplifier's two monitors, so requiring both
+        would blank a display that has half its data.
+        """
+        if not state.connected:
+            return
+
+        t = state.t
         # Adopt the stream's true sample period when present so stitched
         # waveform chunks use the real per-sample step (not a nominal guess).
-        self.wave_ring.set_sample_period(payload.get("sample_period"))
+        self.wave_ring.set_sample_period(state.sample_period)
 
-        # Voltage and current are handled independently: in single-channel mode
-        # only ONE of the two AINs for one amplifier is present, so requiring
-        # both would blank the display.
         for amp in SC.AMP_LABELS:
+            ch = state.channels.get(amp)
+            if ch is None:
+                continue
             v_ain = SC.AMP_CHANNEL_MAP[amp]["voltage"]
             i_ain = SC.AMP_CHANNEL_MAP[amp]["current"]
-            v_ch  = channels.get(v_ain)
-            i_ch  = channels.get(i_ain)
 
-            if v_ch is not None:
-                kv_peak = monitor_to_kv(v_ch["peak"])
-                kv_pkpk = v_ch["pk_pk"] * SC.VOLTAGE_MONITOR_KV_PER_VOLT
-                kv_rms  = monitor_to_kv(v_ch["rms"])
+            if ch.v_live:
                 # The trend / history line plots RMS (not peak): above the 1 s
                 # snapshot boundary RMS is the honest, stable summary and reads
                 # as a clean envelope rather than a jagged peak trace.  Peak and
                 # pk-pk remain in the numeric readouts above.
-                self.buffers[v_ain].append(t, kv_rms)
+                self.buffers[v_ain].append(t, ch.rms_kv)
 
-                vstatus = voltage_status(kv_peak)
-                self.lbl_kv[amp].setText(format_kv(kv_peak))
+                self.lbl_kv[amp].setText(format_kv(ch.peak_kv))
                 self.lbl_kv[amp].setStyleSheet(
-                    f"color: {_STATUS_COLOR[vstatus]}; font-weight: bold;"
+                    f"color: {_STATUS_COLOR[voltage_status(ch.peak_kv)]}; font-weight: bold;"
                 )
-                self.lbl_pp[amp].setText(format_kv(kv_pkpk))
+                self.lbl_pp[amp].setText(format_kv(ch.pkpk_kv))
                 self.lbl_pp[amp].setStyleSheet("color: #444; font-weight: bold;")
-                self.lbl_rms[amp].setText(format_kv(kv_rms))
+                self.lbl_rms[amp].setText(format_kv(ch.rms_kv))
                 self.lbl_rms[amp].setStyleSheet("color: #444; font-weight: bold;")
 
                 # Raw analog input: the actual volts arriving from the EEL5000
-                # VOLTAGE monitor into the LabJack, with NO kV scaling.  The
-                # window average is the DC level the input sits at (what a meter
-                # on the BNC would read).
-                wave = v_ch.get("waveform")
-                raw_v = float(np.mean(wave)) if wave is not None else v_ch["rms"]
-                self.lbl_raw_v[amp].setText(f"{v_ain}:  {raw_v:+.4f} V")
+                # VOLTAGE monitor into the LabJack, with NO kV scaling — the
+                # window average, i.e. what a meter on the BNC would read.
+                self.lbl_raw_v[amp].setText(f"{v_ain}:  {ch.raw_v:+.4f} V")
 
-                if wave is not None:
-                    self.wave_ring.store(
-                        v_ain, t, np.asarray(wave) * SC.VOLTAGE_MONITOR_KV_PER_VOLT
-                    )
+                if ch.window_kv is not None:
+                    self.wave_ring.store(v_ain, t, ch.window_kv)
 
-            if i_ch is not None:
-                ma_rms = monitor_to_ma(i_ch["rms"])
-                self.buffers[i_ain].append(t, ma_rms)
+            if ch.i_live:
+                self.buffers[i_ain].append(t, ch.rms_ma)
 
-                istatus = current_status(ma_rms)
-                self.lbl_ma[amp].setText(format_ma(ma_rms))
+                self.lbl_ma[amp].setText(format_ma(ch.rms_ma))
                 self.lbl_ma[amp].setStyleSheet(
-                    f"color: {_STATUS_COLOR[istatus]}; font-weight: bold;"
+                    f"color: {_STATUS_COLOR[current_status(ch.rms_ma)]}; font-weight: bold;"
                 )
 
                 # Raw analog input: the actual volts from the EEL5000 CURRENT
                 # monitor into the LabJack, with NO mA scaling (window average).
-                wave = i_ch.get("waveform")
-                raw_i = float(np.mean(wave)) if wave is not None else i_ch["rms"]
-                self.lbl_raw_i[amp].setText(f"{i_ain}:  {raw_i:+.4f} V")
+                self.lbl_raw_i[amp].setText(f"{i_ain}:  {ch.raw_i:+.4f} V")
 
-                if wave is not None:
-                    self.wave_ring.store(
-                        i_ain, t, np.asarray(wave) * SC.CURRENT_MONITOR_MA_PER_VOLT
-                    )
-
-        if self.plot.is_live:
-            self.plot.force_to_live()
-
-    def _on_reading(self, t: float, values: dict):
-        """Legacy command-response path (AIN6..AIN13 only).
-
-        Kept for the standalone smoke test / non-stream callers.  It fills the
-        trend buffers only; snapshot mode requires the stream's waveform arrays.
-        """
-        for amp in SC.AMP_LABELS:
-            v_ain = SC.AMP_CHANNEL_MAP[amp]["voltage"]
-            i_ain = SC.AMP_CHANNEL_MAP[amp]["current"]
-
-            v_raw = values.get(v_ain)
-            i_raw = values.get(i_ain)
-            if v_raw is None or i_raw is None:
-                continue
-
-            kv = monitor_to_kv(v_raw)
-            ma = monitor_to_ma(i_raw)
-
-            self.buffers[v_ain].append(t, kv)
-            self.buffers[i_ain].append(t, ma)
-
-            self.lbl_kv[amp].setText(format_kv(kv))
-            self.lbl_kv[amp].setStyleSheet(
-                f"color: {_STATUS_COLOR[voltage_status(kv)]}; font-weight: bold;"
-            )
-            self.lbl_ma[amp].setText(format_ma(ma))
-            self.lbl_ma[amp].setStyleSheet(
-                f"color: {_STATUS_COLOR[current_status(ma)]}; font-weight: bold;"
-            )
-
-            # Raw analog inputs (legacy single-point path): the direct volts.
-            self.lbl_raw_v[amp].setText(f"{v_ain}:  {v_raw:+.4f} V")
-            self.lbl_raw_i[amp].setText(f"{i_ain}:  {i_raw:+.4f} V")
+                if ch.window_ma is not None:
+                    self.wave_ring.store(i_ain, t, ch.window_ma)
 
         if self.plot.is_live:
             self.plot.force_to_live()

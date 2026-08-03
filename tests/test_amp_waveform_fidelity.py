@@ -25,6 +25,7 @@ pytest.importorskip("PySide6.QtWidgets")
 from PySide6.QtWidgets import QApplication
 
 from rbl.config import hardware_config as SC
+from tests.payloads import LabJackFeed
 
 
 @pytest.fixture(scope="module")
@@ -36,6 +37,13 @@ def qapp():
 def tab(qapp):
     from rbl.gui.amp_tab import AmpTab
     return AmpTab()
+
+
+@pytest.fixture
+def feed(tab):
+    """The tab is fed through a real Beamline: the samples it rings are the
+    ones Beamline scaled to kV/mA, not ones the tab scaled itself."""
+    return LabJackFeed(tab)
 
 
 def _wave_payload(ain, wave, t_end, sample_period):
@@ -61,7 +69,7 @@ def _wave_payload(ain, wave, t_end, sample_period):
 
 
 class TestSeamlessStitching:
-    def test_consecutive_windows_join_without_seams(self, tab):
+    def test_consecutive_windows_join_without_seams(self, tab, feed):
         # Three back-to-back 0.1 s windows at 8 kS/s (FULL amp rate).
         target = SC.AMP_CHANNEL_MAP["X+"]["voltage"]   # AIN13
         n  = 800
@@ -71,7 +79,7 @@ class TestSeamlessStitching:
         for k in range(3):
             t_end = (k + 1) * window_dur               # sample-accurate clock
             wave  = np.arange(n) + k * n               # values are arbitrary here
-            tab._on_window(_wave_payload(target, wave, t_end, dt))
+            feed.send_payload(_wave_payload(target, wave, t_end, dt))
 
         # The tab adopts the stream's real sample period from the payload.
         assert tab.wave_ring._dt == pytest.approx(dt)
@@ -88,7 +96,7 @@ class TestSeamlessStitching:
         # sample period.  A seam (overlap/gap) would show up as a diff != dt.
         assert np.allclose(diffs, dt, rtol=0, atol=dt * 1e-6)
 
-    def test_falls_back_to_nominal_period_without_sample_period(self, tab):
+    def test_falls_back_to_nominal_period_without_sample_period(self, tab, feed):
         # Legacy payloads (no sample_period) must still reconstruct a sane,
         # monotonic timeline from the nominal window duration / sample count.
         target = SC.AMP_CHANNEL_MAP["Y+"]["voltage"]   # AIN9
@@ -97,7 +105,7 @@ class TestSeamlessStitching:
         for k in range(2):
             payload = _wave_payload(target, np.zeros(n), (k + 1) * window_dur, None)
             payload.pop("sample_period")
-            tab._on_window(payload)
+            feed.send_payload(payload)
 
         series = tab.wave_ring.series(target, 0.0, 2 * window_dur)
         assert series is not None
