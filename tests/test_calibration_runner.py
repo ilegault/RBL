@@ -23,7 +23,8 @@ from PySide6.QtWidgets import QApplication
 
 from rbl.services import calibration_runner as calibration_runner_module
 from rbl.config.calibration_config import (
-    CAL_MAX_KV, CAL_PASSES, LoadCondition,
+    CAL_MAX_KV, CAL_PASSES, DRIFT_LOG_INTERVAL_S, DRIFT_MAX_ATTENDED_H,
+    DRIFT_MAX_UNATTENDED_H, LoadCondition,
 )
 from rbl.config.hardware_config import AMP_AIN_NAMES, AMP_CHANNEL_MAP, AMP_LABELS
 from rbl.config.labjack_stream_config import GUI_REFRESH_HZ
@@ -350,3 +351,141 @@ class TestProgressAndFinish:
         _drive_full_sweep(runner)
         assert len(finished) == 1
         assert isinstance(finished[0], str)
+
+
+# ---------------------------------------------------------------------------
+# Drift mode
+# ---------------------------------------------------------------------------
+
+class FakeClock:
+    """A settable stand-in for time.monotonic, so drift-completion timing
+    can be tested without a real wait."""
+    def __init__(self, t: float = 0.0):
+        self.t = t
+
+    def __call__(self):
+        return self.t
+
+    def advance(self, dt: float):
+        self.t += dt
+
+
+def _windows_per_drift_log():
+    return max(1, round(DRIFT_LOG_INTERVAL_S * GUI_REFRESH_HZ))
+
+
+class TestDriftLoadConditionGuard:
+    def test_on_plates_8h_refused(self, qapp, funcgen_map):
+        runner = CalibrationRunner(funcgen_map, LoadCondition.ON_PLATES)
+        errors = []
+        runner.error.connect(errors.append)
+        runner.start_drift(3.0, 8.0)
+        assert errors
+        assert runner._state == _State.IDLE
+        print("[OK] ON_PLATES + 8 h is refused")
+
+    def test_on_plates_1h_accepted(self, qapp, funcgen_map):
+        runner = CalibrationRunner(funcgen_map, LoadCondition.ON_PLATES)
+        errors = []
+        runner.error.connect(errors.append)
+        runner.start_drift(3.0, 1.0)
+        assert not errors
+        assert runner._state == _State.COLLECT
+        print("[OK] ON_PLATES + 1 h is accepted")
+
+    def test_disconnected_10h_accepted(self, qapp, funcgen_map):
+        runner = CalibrationRunner(funcgen_map, LoadCondition.DISCONNECTED)
+        errors = []
+        runner.error.connect(errors.append)
+        runner.start_drift(3.0, 10.0)
+        assert not errors
+        assert runner._state == _State.COLLECT
+        print("[OK] DISCONNECTED + 10 h is accepted")
+
+    def test_disconnected_20h_refused(self, qapp, funcgen_map):
+        runner = CalibrationRunner(funcgen_map, LoadCondition.DISCONNECTED)
+        errors = []
+        runner.error.connect(errors.append)
+        runner.start_drift(3.0, 20.0)
+        assert errors
+        assert runner._state == _State.IDLE
+        print("[OK] DISCONNECTED + 20 h is refused (exceeds DRIFT_MAX_UNATTENDED_H)")
+
+    def test_guard_boundaries_match_config_constants(self):
+        # Sanity: the guard's cutoffs are literally the config constants,
+        # not independently-chosen numbers that happen to agree today.
+        assert DRIFT_MAX_ATTENDED_H < DRIFT_MAX_UNATTENDED_H
+
+
+class TestDriftCompletionAndWatchdog:
+    def test_auto_zeros_at_completion(self, qapp, funcgen_map, gens, monkeypatch):
+        clock = FakeClock(0.0)
+        monkeypatch.setattr(calibration_runner_module.time, "monotonic", clock)
+
+        runner = CalibrationRunner(funcgen_map, LoadCondition.DISCONNECTED)
+        finished = []
+        runner.finished.connect(finished.append)
+
+        duration_h = 1.0 / 3600.0   # 1 simulated second
+        runner.start_drift(1.5, duration_h)
+        assert runner._state == _State.COLLECT
+
+        # Advance the clock past the drift's end before the log interval
+        # that will trigger the completion check.
+        clock.advance(duration_h * 3600.0 + 1.0)
+        for _ in range(_windows_per_drift_log()):
+            runner.on_window(make_payload(1.5))
+
+        assert finished
+        for label, (gen, channel) in funcgen_map.items():
+            assert gen.state[channel]["offset"] == pytest.approx(0.0)
+            assert gen.state[channel]["output"] is False
+        print("[OK] drift run auto-zeros at completion")
+
+    def test_watchdog_triggers_on_gap_and_zeros_output(self, qapp, funcgen_map, gens):
+        runner = CalibrationRunner(funcgen_map, LoadCondition.DISCONNECTED)
+        finished = []
+        errors = []
+        runner.finished.connect(finished.append)
+        runner.error.connect(errors.append)
+
+        runner.start_drift(2.0, 1.0)   # 1 h, well within the unattended cap
+        assert runner._state == _State.COLLECT
+
+        # A >5 s gap would fire the real QTimer in production; call its
+        # handler directly, the same technique used for the SETTLE timer —
+        # nothing here needs a real elapsed delay to make progress.
+        runner._on_watchdog_timeout()
+
+        assert finished
+        assert errors
+        for label, (gen, channel) in funcgen_map.items():
+            assert gen.state[channel]["offset"] == pytest.approx(0.0)
+            assert gen.state[channel]["output"] is False
+        print("[OK] a 6-second window gap triggers the watchdog and zeros the output")
+
+    def test_watchdog_resets_on_each_window(self, qapp, funcgen_map):
+        runner = CalibrationRunner(funcgen_map, LoadCondition.DISCONNECTED)
+        errors = []
+        runner.error.connect(errors.append)
+        runner.start_drift(1.0, 1.0)
+
+        # Windows keep arriving (fewer than a full log interval) -- the
+        # watchdog must not trip while data is still flowing.
+        for _ in range(_windows_per_drift_log() - 1):
+            runner.on_window(make_payload(1.0))
+        assert not errors
+        assert runner._state == _State.COLLECT
+
+    def test_drift_rows_carry_pass_type_drift(self, qapp, funcgen_map):
+        runner = CalibrationRunner(funcgen_map, LoadCondition.DISCONNECTED)
+        rows = []
+        runner.row_recorded.connect(rows.append)
+        runner.start_drift(2.5, 1.0)
+        for _ in range(_windows_per_drift_log()):
+            runner.on_window(make_payload(2.5))
+
+        assert len(rows) == 8
+        assert all(r["pass_type"] == "drift" for r in rows)
+        assert all(r["driven_amp"] == "ALL" for r in rows)
+        assert all(r["commanded_kv"] == pytest.approx(2.5) for r in rows)

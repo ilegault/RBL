@@ -73,7 +73,6 @@ import logging
 import random
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from enum import Enum, auto
 
 import numpy as np
@@ -81,15 +80,24 @@ from PySide6.QtCore import QObject, QTimer, Signal
 
 from rbl.config.calibration_config import (
     CAL_COLLECT_S, CAL_MAX_KV, CAL_PASSES, CAL_PROFILE, CAL_SETTLE_S,
+    DRIFT_LOG_INTERVAL_S, DRIFT_MAX_ATTENDED_H, DRIFT_MAX_UNATTENDED_H,
     LoadCondition, sweep_points,
 )
 from rbl.config.hardware_config import AMP_AIN_NAMES, AMP_CHANNEL_MAP, AMP_LABELS
 from rbl.config.labjack_stream_config import GUI_REFRESH_HZ
 from rbl.hardware.amp_monitor import monitor_to_kv, monitor_to_ma
 from rbl.hardware.funcgen_safety import _AMP_GAIN
-from rbl.services.calibration_writer import config_snapshot, git_commit_hash, new_run_id
+from rbl.services.calibration_writer import (
+    config_snapshot, git_commit_hash, new_run_id, now_iso,
+)
 
 log = logging.getLogger(__name__)
+
+# No window for this long is treated as a fault (LabJack dropout, dead
+# stream) rather than silently recording hours of nothing. Only armed in
+# drift mode — a sweep's SETTLE gaps are expected and bounded by
+# CAL_SETTLE_S, so a sweep never needs this.
+WATCHDOG_S = 5.0
 
 
 class _State(Enum):
@@ -133,6 +141,7 @@ class CalibrationRunner(QObject):
         self.operator_note   = ""       # set by the GUI before start_sweep()
 
         self._state    = _State.IDLE
+        self._mode     = "sweep"        # "sweep" | "drift"
         self._sequence: list[_StepPoint] = []
         self._seq_idx  = 0
         self._seed     = None
@@ -142,12 +151,21 @@ class CalibrationRunner(QObject):
         self._collect_window_count = 0
         self._windows_per_collect = max(1, round(CAL_COLLECT_S * GUI_REFRESH_HZ))
 
+        # Drift-mode-only state.
+        self._drift_setpoint_kv = 0.0
+        self._drift_end_t       = None
+        self._drift_windows_per_log = max(1, round(DRIFT_LOG_INTERVAL_S * GUI_REFRESH_HZ))
+
         self._run_id  = None
         self._t_start = None
 
         self._settle_timer = QTimer(self)
         self._settle_timer.setSingleShot(True)
         self._settle_timer.timeout.connect(self._on_settle_elapsed)
+
+        self._watchdog_timer = QTimer(self)
+        self._watchdog_timer.setSingleShot(True)
+        self._watchdog_timer.timeout.connect(self._on_watchdog_timeout)
 
         atexit.register(self._atexit_shutdown)
 
@@ -160,6 +178,7 @@ class CalibrationRunner(QObject):
             self._print_err("start_sweep: a run is already in progress")
             return
 
+        self._mode    = "sweep"
         self._run_id  = self._run_id_override or new_run_id()
         self._t_start = time.monotonic()
         self._seed    = random.SystemRandom().randrange(2 ** 31)
@@ -192,6 +211,84 @@ class CalibrationRunner(QObject):
               f"load={self._load_condition.value}, seed={self._seed}")
         self._enter_settle()
 
+    def start_drift(self, setpoint_kv: float, duration_h: float):
+        """Hold one setpoint on all four channels and log every AIN every
+        DRIFT_LOG_INTERVAL_S, for duration_h.
+
+        The load-condition duration guard is enforced HERE, not only in the
+        GUI: unattended running (up to DRIFT_MAX_UNATTENDED_H) is permitted
+        only with the amplifier DISCONNECTED from the steerer; ON_PLATES is
+        capped at DRIFT_MAX_ATTENDED_H. A future headless entry point must
+        inherit this rule rather than re-derive it.
+        """
+        if self._state != _State.IDLE:
+            self._print_err("start_drift: a run is already in progress")
+            return
+
+        max_allowed = (DRIFT_MAX_ATTENDED_H
+                        if self._load_condition is LoadCondition.ON_PLATES
+                        else DRIFT_MAX_UNATTENDED_H)
+        if duration_h > max_allowed:
+            msg = (
+                f"Drift run refused: {duration_h:.2f} h exceeds the "
+                f"{max_allowed:.2f} h cap for load condition "
+                f"{self._load_condition.value}."
+            )
+            if self._load_condition is LoadCondition.ON_PLATES:
+                msg += (
+                    f" Runs longer than {DRIFT_MAX_ATTENDED_H:.1f} h are only "
+                    "permitted with the amplifier DISCONNECTED from the steerer."
+                )
+            self._print_err(msg)
+            self.error.emit(msg)
+            return
+
+        self._mode    = "drift"
+        self._run_id  = self._run_id_override or new_run_id()
+        self._t_start = time.monotonic()
+        self._drift_setpoint_kv = max(-CAL_MAX_KV, min(CAL_MAX_KV, setpoint_kv))
+        self._drift_end_t = self._t_start + duration_h * 3600.0
+
+        self._orig_state = {}
+        for label, (gen, channel) in self._funcgen_map.items():
+            try:
+                self._orig_state[label] = gen.get_state(channel)
+            except Exception as e:
+                self._print_err(f"get_state failed for {label}: {e}")
+                self._orig_state[label] = None
+
+        if self._writer is not None:
+            try:
+                self._writer.update_metadata(
+                    load_condition=self._load_condition.value,
+                    operator_note=self.operator_note,
+                    funcgen_states=dict(self._orig_state),
+                    config_snapshot=config_snapshot(),
+                    git_commit_hash=git_commit_hash(),
+                    drift_setpoint_kv=self._drift_setpoint_kv,
+                    drift_duration_h=duration_h,
+                )
+            except Exception as e:
+                self._print_err(f"writer.update_metadata: {e}")
+
+        print(f"[CAL] start_drift: run_id={self._run_id} "
+              f"setpoint={self._drift_setpoint_kv:+.3f} kV "
+              f"duration={duration_h:.2f} h load={self._load_condition.value}")
+
+        try:
+            for amp in AMP_LABELS:
+                self._command_channel(amp, self._drift_setpoint_kv)
+        except Exception as e:
+            self._print_err(f"start_drift: {e}")
+            self.error.emit(str(e))
+            self._finish(aborted=True)
+            return
+
+        self._state = _State.COLLECT
+        self._collect_windows = {ain: [] for ain in AMP_AIN_NAMES}
+        self._collect_window_count = 0
+        self._watchdog_timer.start(int(WATCHDOG_S * 1000))
+
     def abort(self):
         if self._state in (_State.IDLE, _State.DONE, _State.ABORTING):
             return
@@ -206,8 +303,13 @@ class CalibrationRunner(QObject):
         try:
             self._accumulate(payload)
             self._collect_window_count += 1
-            if self._collect_window_count >= self._windows_per_collect:
-                self._record_and_advance()
+            if self._mode == "drift":
+                self._watchdog_timer.start(int(WATCHDOG_S * 1000))   # reset
+                if self._collect_window_count >= self._drift_windows_per_log:
+                    self._record_drift_row()
+            else:
+                if self._collect_window_count >= self._windows_per_collect:
+                    self._record_and_advance()
         except Exception as e:
             self._print_err(f"on_window: {e}")
             self.error.emit(str(e))
@@ -318,52 +420,122 @@ class CalibrationRunner(QObject):
         self._seq_idx += 1
         self._enter_settle()
 
+    def _window_stats(self, ain: str) -> tuple:
+        """(mean_v, std_v, min_v, max_v, n_samples, n_windows) over every
+        raw sample accumulated for *ain* since the last reset."""
+        arrays = self._collect_windows.get(ain, [])
+        n_windows = len(arrays)
+        if not arrays:
+            return float("nan"), float("nan"), float("nan"), float("nan"), 0, 0
+        samples = np.concatenate(arrays)
+        return (float(np.mean(samples)), float(np.std(samples)),
+                float(np.min(samples)), float(np.max(samples)),
+                int(samples.size), n_windows)
+
+    def _make_row(self, pass_index: int, pass_type: str, driven_amp: str,
+                  commanded_kv: float, amp: str, kind: str,
+                  t_elapsed: float, ts_iso: str) -> dict:
+        ain = AMP_CHANNEL_MAP[amp][kind]
+        mean_v, std_v, min_v, max_v, n_samples, n_windows = self._window_stats(ain)
+        gen_v = commanded_kv * 1000.0 / _AMP_GAIN
+        if kind == "voltage":
+            converted_value, converted_unit = monitor_to_kv(mean_v), "kV"
+        else:
+            converted_value, converted_unit = monitor_to_ma(mean_v), "mA"
+        return {
+            "run_id": self._run_id, "timestamp_iso": ts_iso,
+            "t_elapsed_s": t_elapsed,
+            "pass_index": pass_index, "pass_type": pass_type,
+            "driven_amp": driven_amp,
+            "commanded_kv": commanded_kv, "commanded_gen_v": gen_v,
+            "ain": ain, "amp_label": amp, "kind": kind,
+            "mean_v": mean_v, "std_v": std_v,
+            "min_v": min_v, "max_v": max_v,
+            "n_samples": n_samples, "n_windows": n_windows,
+            "converted_value": converted_value,
+            "converted_unit": converted_unit,
+            "stream_profile": CAL_PROFILE,
+        }
+
+    def _emit_row(self, row: dict):
+        self.row_recorded.emit(row)
+        if self._writer is not None:
+            try:
+                self._writer.write_row(row)
+            except Exception as e:
+                self._print_err(f"writer.write_row: {e}")
+
     def _emit_rows(self, step: "_StepPoint"):
         t_elapsed = time.monotonic() - self._t_start
-        ts_iso    = datetime.now(timezone.utc).isoformat()
-        gen_v     = step.commanded_kv * 1000.0 / _AMP_GAIN
-
+        ts_iso    = now_iso()
         for amp in AMP_LABELS:
             for kind in ("voltage", "current"):
-                ain = AMP_CHANNEL_MAP[amp][kind]
-                arrays = self._collect_windows.get(ain, [])
-                n_windows = len(arrays)
-                if arrays:
-                    samples   = np.concatenate(arrays)
-                    mean_v    = float(np.mean(samples))
-                    std_v     = float(np.std(samples))
-                    min_v     = float(np.min(samples))
-                    max_v     = float(np.max(samples))
-                    n_samples = int(samples.size)
-                else:
-                    mean_v = std_v = min_v = max_v = float("nan")
-                    n_samples = 0
+                self._emit_row(self._make_row(
+                    step.pass_index, step.pass_type, step.driven_amp,
+                    step.commanded_kv, amp, kind, t_elapsed, ts_iso,
+                ))
 
-                if kind == "voltage":
-                    converted_value, converted_unit = monitor_to_kv(mean_v), "kV"
-                else:
-                    converted_value, converted_unit = monitor_to_ma(mean_v), "mA"
+    # ------------------------------------------------------------------
+    # Drift mode
+    # ------------------------------------------------------------------
 
-                row = {
-                    "run_id": self._run_id, "timestamp_iso": ts_iso,
-                    "t_elapsed_s": t_elapsed,
-                    "pass_index": step.pass_index, "pass_type": step.pass_type,
-                    "driven_amp": step.driven_amp,
-                    "commanded_kv": step.commanded_kv, "commanded_gen_v": gen_v,
-                    "ain": ain, "amp_label": amp, "kind": kind,
-                    "mean_v": mean_v, "std_v": std_v,
-                    "min_v": min_v, "max_v": max_v,
-                    "n_samples": n_samples, "n_windows": n_windows,
-                    "converted_value": converted_value,
-                    "converted_unit": converted_unit,
-                    "stream_profile": CAL_PROFILE,
-                }
-                self.row_recorded.emit(row)
-                if self._writer is not None:
-                    try:
-                        self._writer.write_row(row)
-                    except Exception as e:
-                        self._print_err(f"writer.write_row: {e}")
+    def _record_drift_row(self):
+        try:
+            self._state = _State.RECORD
+            t_elapsed = time.monotonic() - self._t_start
+            ts_iso    = now_iso()
+            for amp in AMP_LABELS:
+                for kind in ("voltage", "current"):
+                    self._emit_row(self._make_row(
+                        0, "drift", "ALL", self._drift_setpoint_kv,
+                        amp, kind, t_elapsed, ts_iso,
+                    ))
+        except Exception as e:
+            self._print_err(f"_record_drift_row: {e}")
+            self.error.emit(str(e))
+            self._finish(aborted=True)
+            return
+
+        self._collect_windows = {ain: [] for ain in AMP_AIN_NAMES}
+        self._collect_window_count = 0
+
+        if time.monotonic() >= self._drift_end_t:
+            self._finish_success()
+            return
+        self._state = _State.COLLECT
+
+    def _on_watchdog_timeout(self):
+        if self._mode != "drift" or self._state not in (_State.COLLECT, _State.RECORD):
+            return   # a stale timer fire after finish/abort; ignore
+        msg = f"watchdog: no window arrived for {WATCHDOG_S:.0f}s — treating as a fault"
+        self._print_err(msg)
+        self.error.emit(msg)
+        self._emit_fault_row(msg)
+        self._finish(aborted=True)
+
+    def _emit_fault_row(self, reason: str):
+        """One row noting a fault (currently only the drift watchdog).
+
+        The CSV schema has no dedicated "reason" column (see calibration_
+        writer.CSV_COLUMNS — fixed since Phase 4); this repurposes the
+        free-text `converted_unit` column to carry it on a row that is
+        otherwise clearly not real data (kind="fault", every numeric stat
+        NaN). Documented in docs/calibration.md.
+        """
+        t_elapsed = (time.monotonic() - self._t_start) if self._t_start else float("nan")
+        row = {
+            "run_id": self._run_id, "timestamp_iso": now_iso(),
+            "t_elapsed_s": t_elapsed,
+            "pass_index": -1, "pass_type": self._mode, "driven_amp": "WATCHDOG_FAULT",
+            "commanded_kv": self._drift_setpoint_kv, "commanded_gen_v": float("nan"),
+            "ain": "", "amp_label": "", "kind": "fault",
+            "mean_v": float("nan"), "std_v": float("nan"),
+            "min_v": float("nan"), "max_v": float("nan"),
+            "n_samples": 0, "n_windows": 0,
+            "converted_value": float("nan"), "converted_unit": reason,
+            "stream_profile": CAL_PROFILE,
+        }
+        self._emit_row(row)
 
     # ------------------------------------------------------------------
     # Finish / abort / shutdown
@@ -384,6 +556,7 @@ class CalibrationRunner(QObject):
         """Always zero + outputs OFF on every channel, then (optionally)
         restore the pre-run waveform settings with output left OFF."""
         self._settle_timer.stop()
+        self._watchdog_timer.stop()
 
         for amp, (gen, channel) in self._funcgen_map.items():
             try:
