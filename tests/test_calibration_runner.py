@@ -28,6 +28,7 @@ from rbl.config.calibration_config import (
 from rbl.config.hardware_config import AMP_AIN_NAMES, AMP_CHANNEL_MAP, AMP_LABELS
 from rbl.config.labjack_stream_config import GUI_REFRESH_HZ
 from rbl.services.calibration_runner import CalibrationRunner, _State
+from rbl.services.calibration_writer import CalibrationWriter
 
 
 @pytest.fixture(scope="module")
@@ -300,6 +301,34 @@ class TestReproducibility:
 
         assert seq1 == seq2
         print("[OK] a random pass with a fixed seed reproduces exactly")
+
+
+class TestWriterIntegration:
+    def test_rows_and_metadata_reach_a_real_writer(self, qapp, funcgen_map, tmp_path):
+        writer = CalibrationWriter(output_dir=tmp_path)
+        runner = CalibrationRunner(funcgen_map, LoadCondition.ON_PLATES, writer=writer)
+        runner.operator_note = "bench sanity check"
+        finished = []
+        runner.finished.connect(finished.append)
+
+        runner.start_sweep()
+        _drive_one_setpoint(runner)
+        runner.abort()
+
+        assert finished and finished[0] == str(writer.csv_path)
+        assert writer.csv_path.exists()
+        assert writer.meta_path.exists()
+
+        import csv, json
+        with open(writer.csv_path) as f:
+            rows = list(csv.DictReader(f))
+        assert len(rows) == 8   # one setpoint recorded before abort
+
+        with open(writer.meta_path) as f:
+            meta = json.load(f)
+        assert meta["load_condition"] == "ON_PLATES"
+        assert meta["operator_note"] == "bench sanity check"
+        assert "seed" in meta
 
 
 class TestProgressAndFinish:

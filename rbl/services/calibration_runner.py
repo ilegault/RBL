@@ -87,6 +87,7 @@ from rbl.config.hardware_config import AMP_AIN_NAMES, AMP_CHANNEL_MAP, AMP_LABEL
 from rbl.config.labjack_stream_config import GUI_REFRESH_HZ
 from rbl.hardware.amp_monitor import monitor_to_kv, monitor_to_ma
 from rbl.hardware.funcgen_safety import _AMP_GAIN
+from rbl.services.calibration_writer import config_snapshot, git_commit_hash, new_run_id
 
 log = logging.getLogger(__name__)
 
@@ -123,11 +124,12 @@ class CalibrationRunner(QObject):
     error = Signal(str)
 
     def __init__(self, funcgen_map: dict, load_condition: LoadCondition,
-                 parent=None, writer=None):
+                 parent=None, writer=None, run_id: str = None):
         super().__init__(parent)
         self._funcgen_map   = funcgen_map
         self._load_condition = load_condition
         self._writer         = writer   # optional CalibrationWriter-like collaborator
+        self._run_id_override = run_id  # lets a caller keep writer/runner run_id in sync
         self.operator_note   = ""       # set by the GUI before start_sweep()
 
         self._state    = _State.IDLE
@@ -158,7 +160,7 @@ class CalibrationRunner(QObject):
             self._print_err("start_sweep: a run is already in progress")
             return
 
-        self._run_id  = time.strftime("cal_%Y%m%dT%H%M%S")
+        self._run_id  = self._run_id_override or new_run_id()
         self._t_start = time.monotonic()
         self._seed    = random.SystemRandom().randrange(2 ** 31)
         self._sequence = self._build_sequence()
@@ -171,6 +173,19 @@ class CalibrationRunner(QObject):
             except Exception as e:
                 self._print_err(f"get_state failed for {label}: {e}")
                 self._orig_state[label] = None
+
+        if self._writer is not None:
+            try:
+                self._writer.update_metadata(
+                    load_condition=self._load_condition.value,
+                    seed=self._seed,
+                    operator_note=self.operator_note,
+                    funcgen_states=dict(self._orig_state),
+                    config_snapshot=config_snapshot(),
+                    git_commit_hash=git_commit_hash(),
+                )
+            except Exception as e:
+                self._print_err(f"writer.update_metadata: {e}")
 
         print(f"[CAL] start_sweep: run_id={self._run_id} "
               f"{len(self._sequence)} setpoints, "
