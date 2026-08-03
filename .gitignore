@@ -249,4 +249,8 @@ bash.exe.stackdump
 
 build.bat
 
+# Calibration run output (CSV + metadata sidecars) — not source, not committed.
+/data/calibration/*
+!/data/calibration/.gitkeep
+
 
