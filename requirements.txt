@@ -3,4 +3,5 @@ matplotlib>=3.10.9
 PySide6>=6.11.1
 PyVISA>=1.16.2
 labjack-ljm>=1.23.0
+opencv-python>=4.9.0
 pytest>=9.1.1

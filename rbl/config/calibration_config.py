@@ -23,6 +23,7 @@ legitimate disagreement between commanded and measured is roughly +/-30 V.
 Deviations inside CAL_UNCERTAINTY_V are noise, not findings.
 """
 import random
+import sys
 from enum import Enum
 from pathlib import Path
 
@@ -48,10 +49,13 @@ CAL_UNCERTAINTY_V = 30.0
 # feature has no use for).
 CAL_PROFILE = "WAVEFORM"
 
-# Repo-relative; there is no existing app-wide data/output directory to
-# reuse (the only on-disk precedent, rbl/config/persistence.py, is a small
-# JSON config store, not a run-output store).
-CAL_OUTPUT_DIR = Path(__file__).resolve().parents[2] / "data" / "calibration"
+# In a PyInstaller one-folder build, sit beside the executable so the data
+# folder is at a predictable, user-visible location (dist/RBL/data/calibration).
+# In development, use the repo root (two packages up from this file).
+if getattr(sys, "frozen", False):
+    CAL_OUTPUT_DIR = Path(sys.executable).resolve().parent / "data" / "calibration"
+else:
+    CAL_OUTPUT_DIR = Path(__file__).resolve().parents[2] / "data" / "calibration"
 
 # --- Drift -----------------------------------------------------------------
 

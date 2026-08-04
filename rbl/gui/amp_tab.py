@@ -147,6 +147,7 @@ class AmpTab(QWidget):
 
         # Plot state (LIVE/FROZEN + window_seconds live on self.plot, built below)
         self._plot_mode         = "trend"   # "trend" | "snapshot"
+        self._paused            = False     # user-toggled waveform freeze
 
         # Vertical scale state.  The plot never auto-centers the voltage axis;
         # it holds these limits and the user zooms/pans them.  Voltage defaults
@@ -435,6 +436,12 @@ class AmpTab(QWidget):
         nav_row.addWidget(btn_vzoom_in)
         nav_row.addWidget(btn_vzoom_out)
         nav_row.addWidget(btn_vreset)
+        self._btn_pause = QPushButton("Pause")
+        self._btn_pause.setToolTip("Pause / resume the waveform plot updates")
+        self._btn_pause.setStyleSheet("padding: 2px 8px;")
+        self._btn_pause.clicked.connect(self._toggle_pause)
+        nav_row.addWidget(self._btn_pause)
+
         nav_row.addStretch()
         self.btn_jump_live = QPushButton("Jump to Live")
         self.btn_jump_live.setVisible(False)
@@ -1015,8 +1022,21 @@ class AmpTab(QWidget):
 
     # ---- Plot redraw ---------------------------------------------------------
 
+    def _toggle_pause(self):
+        """Pause / resume the waveform plot updates."""
+        self._paused = not self._paused
+        if self._paused:
+            self._btn_pause.setText("Resume")
+            self._btn_pause.setStyleSheet(
+                "background: #004e8c; color: white; font-weight: bold; padding: 2px 8px;")
+        else:
+            self._btn_pause.setText("Pause")
+            self._btn_pause.setStyleSheet("padding: 2px 8px;")
+
     def _redraw_plot(self):
         """Dispatch to the trend or waveform-snapshot renderer for this window."""
+        if self._paused:
+            return
         if self._is_snapshot():
             self._set_plot_mode("snapshot")
             self._redraw_snapshot()

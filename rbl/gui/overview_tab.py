@@ -40,6 +40,7 @@ Setpoints are shared, not copied: the boxes here and the Function Generators
 tab's panels are two views on one FuncGenSetpoints object, so neither screen
 can show a stale value or silently overwrite what the other has typed.
 """
+import dataclasses
 import math
 
 from PySide6.QtCore import QTimer, Qt
@@ -57,6 +58,8 @@ from rbl.hardware.funcgen_safety import (
 from rbl.gui import theme
 from rbl.gui.widgets.axis_drive import AxisDriveControl
 from rbl.gui.widgets.beam_indicator import BeamPositionIndicator
+from rbl.gui.widgets.camera_widget import CameraWidget
+from rbl.gui.widgets.drag_panel import DragPanel, PanelArea
 from rbl.gui.widgets.mini import MiniBar, PairTrace
 from rbl.gui.widgets.slit_control import SlitControl
 from rbl.state.beamline import Beamline
@@ -135,28 +138,23 @@ class OverviewTab(QWidget):
 
         outer.addLayout(self._build_status_strip())
 
-        body = QHBoxLayout()
-        outer.addLayout(body, stretch=1)
-
-        # Every column is pinned to the top rather than sharing the leftover
-        # height. Three panels of different natural heights, each stretched to
-        # match the tallest, is three frames with dead space inside them; this
-        # way the slack collects once, at the bottom, which is also where the
-        # next subsystem will go.
-        top = Qt.AlignmentFlag.AlignTop
-
-        # BeamPositionIndicator brings its own titled group box, so it goes in
-        # unwrapped — a second frame around it would just nest two identical
-        # titles.
+        # BeamPositionIndicator brings its own titled group box.
         self.beam = BeamPositionIndicator(compact=True)
-        body.addWidget(self.beam, alignment=top)
-        body.addWidget(self._build_slit_box(), stretch=1, alignment=top)
 
-        right = QVBoxLayout()
-        right.addWidget(self._build_funcgen_box(), alignment=top)
-        right.addWidget(self._build_hv_box(), alignment=top)
-        right.addStretch(1)
-        body.addLayout(right, stretch=1)
+        # Camera widget — live USB feed with photo/video capture.
+        self.camera = CameraWidget()
+        self.camera.set_metadata_provider(self._camera_metadata)
+
+        # Five independent draggable panels; FuncGen and HV are separate so
+        # they can be stacked in the same column or spread across columns.
+        # Initial layout: one panel per column (cols 0-4).
+        self._panel_area = PanelArea()
+        self._panel_area.add(DragPanel(self.beam,                  stretch=0), col=0)
+        self._panel_area.add(DragPanel(self._build_slit_box(),     stretch=1), col=1)
+        self._panel_area.add(DragPanel(self.camera,                stretch=1), col=2)
+        self._panel_area.add(DragPanel(self._build_funcgen_box(),  stretch=1), col=3)
+        self._panel_area.add(DragPanel(self._build_hv_box(),       stretch=1), col=4)
+        outer.addWidget(self._panel_area, stretch=1)
 
         # A move commanded on the Stepper Motors tab publishes its target
         # through Beamline; render it here so the caret and the target box on
@@ -484,6 +482,25 @@ class OverviewTab(QWidget):
         self.lbl_failure.setStyleSheet(
             theme.status_label(theme.FAULT, bold=False)
             + f"font-size: {theme.FS_LABEL}px;")
+
+    # ---- Camera metadata provider ------------------------------------------
+
+    def _camera_metadata(self) -> dict:
+        """Snapshot of every live readout at the moment of photo/video capture.
+
+        Passed to CameraWidget so each sidecar JSON contains the full beamline
+        state — slit positions, beam currents, HV readings, and function-
+        generator setpoints — paired with the image by matching filename stem.
+        """
+        def _dc(obj):
+            return dataclasses.asdict(obj) if dataclasses.is_dataclass(obj) else {}
+
+        return {
+            "motors":   _dc(self._motors),
+            "logamps":  _dc(self._logamps),
+            "amps":     _dc(self._amps),
+            "funcgens": _dc(self._funcgens),
+        }
 
     # ---- Commands out ----------------------------------------------------------
     #
