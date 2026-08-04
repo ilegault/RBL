@@ -199,6 +199,7 @@ class LabJackLinkMixin:
         self._lj_worker = worker
 
     def _on_stream_window(self, payload: dict):
+        self.raw_window_ready.emit(payload)
         self.ingest_labjack_window(payload, active_profile=self.active_profile)
 
     def _on_stream_error(self, msg: str):

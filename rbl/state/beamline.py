@@ -61,6 +61,14 @@ class Beamline(LabJackLinkMixin, FuncGenControlMixin, MotorControlMixin, QObject
     stream_error         = Signal(str)
     profile_changed      = Signal(str)
 
+    # The raw, unconverted LabJackStreamWorker.window_ready payload for every
+    # window, re-emitted as-is. logamps_changed/amps_changed carry the
+    # converted kV/mA state every tab renders; this exists for a consumer
+    # that needs the original volts (e.g. CalibrationRunner's mean/std/min/max
+    # over the raw waveform), so it isn't reconstructing volts from an
+    # already-converted snapshot.
+    raw_window_ready     = Signal(dict)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._init_labjack()

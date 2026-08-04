@@ -20,6 +20,7 @@ from rbl.gui.logamp_tab import CurrentTab
 from rbl.gui.amp_tab import AmpTab
 from rbl.gui.funcgen_tab import FuncGenTab
 from rbl.gui.overview_tab import OverviewTab
+from rbl.gui.calibration_tab import CalibrationTab
 from rbl.state.beamline import Beamline
 
 
@@ -49,6 +50,7 @@ class MainWindow(QMainWindow):
         self._outer_tabbar.addTab("HV Amplifiers")
         self._outer_tabbar.addTab("Function Generators")
         self._outer_tabbar.addTab("Overview")
+        self._outer_tabbar.addTab("HV Calibration")
         self._outer_tabbar.setExpanding(False)
         self._outer_tabbar.setDocumentMode(True)
         outer_layout.addWidget(self._outer_tabbar)
@@ -67,6 +69,7 @@ class MainWindow(QMainWindow):
         self.amp_tab     = AmpTab(self)
         self.funcgen_tab = FuncGenTab(self.beamline, self)
         self.overview_tab = OverviewTab(self.beamline, self)
+        self.calibration_tab = CalibrationTab(self.beamline, self)
         # Each page goes inside a scroll area: when the window is narrowed past
         # what a tab's content can reflow to, a scrollbar appears rather than
         # forcing the window to stay wide. This is what makes the app
@@ -76,6 +79,7 @@ class MainWindow(QMainWindow):
         self._outer_stack.addWidget(self._wrap_scroll(self.amp_tab))
         self._outer_stack.addWidget(self._wrap_scroll(self.funcgen_tab))
         self._outer_stack.addWidget(self._wrap_scroll(self.overview_tab))
+        self._outer_stack.addWidget(self._wrap_scroll(self.calibration_tab))
 
         # ── Shared LabJack T7 ─────────────────────────────────────────────────
         #
@@ -84,7 +88,7 @@ class MainWindow(QMainWindow):
         # (AIN0-3, the log amps) and an AmpState (AIN6-13, the EEL5000
         # monitors); each tab subscribes to the one it renders. No tab sees
         # the raw payload, so no tab can convert volts a second way.
-        self._lj_tabs = (self.current_tab, self.amp_tab)
+        self._lj_tabs = (self.current_tab, self.amp_tab, self.calibration_tab)
 
         for tab in self._lj_tabs:
             tab.lj_panel.connect_requested.connect(self._labjack_connect)
@@ -100,6 +104,20 @@ class MainWindow(QMainWindow):
         # target selector drives which channel a single-channel profile streams.
         self.amp_tab.profile_change_requested.connect(self.beamline.set_stream_profile)
         self.amp_tab.single_channel_change_requested.connect(self.beamline.set_stream_channel)
+
+        # Calibration tab forces CAL_PROFILE at run start and restores the
+        # prior profile afterward, via the same profile_change_requested ->
+        # beamline.set_stream_profile path AmpTab uses. It needs the RAW
+        # (unconverted) window payload — amps_changed only carries the
+        # already-converted kV/mA state — so it is wired to
+        # Beamline.raw_window_ready instead of amps_changed.
+        self.calibration_tab.profile_change_requested.connect(self.beamline.set_stream_profile)
+        self.beamline.raw_window_ready.connect(self.calibration_tab.on_window)
+        # A calibration run switching the stream profile out from under
+        # AmpTab would corrupt the run if AmpTab's own Apply fired mid-run.
+        self.calibration_tab.run_state_changed.connect(
+            lambda running: self.amp_tab.set_profile_controls_enabled(not running)
+        )
 
         # Motor poll data feeds Beamline, which derives MotorState (typed,
         # richer than slit_state) and republishes it. The beam-position
@@ -181,6 +199,10 @@ class MainWindow(QMainWindow):
             pass
         try:
             self.funcgen_tab.close_session()
+        except Exception:
+            pass
+        try:
+            self.calibration_tab.shutdown()
         except Exception:
             pass
         try:
