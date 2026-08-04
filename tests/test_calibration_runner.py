@@ -158,10 +158,12 @@ class TestFullSweep:
         assert finished, "sweep never finished"
         print("[OK] runner completes a full sweep with zero calls to time.sleep")
 
-    def test_total_setpoints_matches_4ch_3pass_43pt(self, qapp, funcgen_map):
+    def test_total_setpoints_matches_config(self, qapp, funcgen_map):
         runner = CalibrationRunner(funcgen_map, LoadCondition.DISCONNECTED)
         runner.start_sweep()
-        assert len(runner._sequence) == len(AMP_LABELS) * len(CAL_PASSES) * 43
+        from rbl.config.calibration_config import sweep_points as _sp
+        pts_per_pass = len(_sp("up"))
+        assert len(runner._sequence) == len(AMP_LABELS) * len(CAL_PASSES) * pts_per_pass
 
     def test_eight_rows_per_setpoint(self, qapp, funcgen_map):
         runner = CalibrationRunner(funcgen_map, LoadCondition.DISCONNECTED)

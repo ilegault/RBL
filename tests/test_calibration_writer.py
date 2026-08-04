@@ -12,7 +12,7 @@ import pytest
 from rbl.services.calibration_writer import (
     CSV_COLUMNS, CalibrationWriter, config_snapshot, git_commit_hash,
 )
-from rbl.config.calibration_config import LoadCondition
+from rbl.config.calibration_config import CAL_MAX_KV, LoadCondition
 
 
 def _sample_row(i=0):
@@ -93,7 +93,7 @@ class TestConfigSnapshotAndGit:
         snap = config_snapshot()
         assert "CAL_MAX_KV" in snap
         assert "CAL_UNCERTAINTY_V" in snap
-        assert snap["CAL_MAX_KV"] == pytest.approx(4.0)
+        assert snap["CAL_MAX_KV"] == pytest.approx(CAL_MAX_KV)
         # CAL_OUTPUT_DIR is a Path -- must be JSON-serializable as str.
         assert isinstance(snap["CAL_OUTPUT_DIR"], str)
 

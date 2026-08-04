@@ -6,8 +6,8 @@ No hardware required — pure data / math.
 import pytest
 
 from rbl.config.calibration_config import (
-    CAL_MAX_KV, CAL_PASSES, CAL_PROFILE, CAL_UNCERTAINTY_V, LoadCondition,
-    sweep_points,
+    CAL_MAX_KV, CAL_PASSES, CAL_PROFILE, CAL_STEP_KV, CAL_UNCERTAINTY_V,
+    LoadCondition, sweep_points,
 )
 from rbl.hardware.funcgen_driver import MAX_GEN_VOLTS
 from rbl.config.labjack_stream_config import STREAM_PROFILES
@@ -16,12 +16,13 @@ from rbl.config.labjack_stream_config import STREAM_PROFILES
 class TestSweepPoints:
     def test_up_is_ascending_and_bracketed(self):
         pts = sweep_points("up")
-        assert len(pts) == 43   # 41 + leading/trailing zero
+        n_ladder = round(2 * CAL_MAX_KV / CAL_STEP_KV) + 1
+        assert len(pts) == n_ladder + 2   # ladder + leading/trailing zero
         assert pts[0] == 0.0
         assert pts[-1] == 0.0
         inner = pts[1:-1]
         assert inner == sorted(inner)
-        print("[OK] sweep_points('up') is ascending, length 43 (41 + leading/trailing zero)")
+        print(f"[OK] sweep_points('up') is ascending, length {len(pts)} ({n_ladder} + leading/trailing zero)")
 
     def test_down_is_reverse_of_up_modulo_zeros(self):
         up = sweep_points("up")
@@ -34,7 +35,7 @@ class TestSweepPoints:
         r1 = sweep_points("random", seed=42)
         r2 = sweep_points("random", seed=42)
         assert r1 == r2
-        assert len(r1) == 43
+        assert len(r1) == len(sweep_points("up"))
         print("[OK] sweep_points('random', seed=42) is deterministic across two calls")
 
     def test_random_different_seed_differs(self):

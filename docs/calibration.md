@@ -3,7 +3,8 @@
 The `HV Calibration` tab checks, systematically, whether what the app
 commands on a deflection channel agrees with what the EEL5000 amplifier's
 own front-panel monitors report back — something nobody had ever measured
-before this feature existed.
+before this feature existed. The sweep covers the amplifier's full ±5.0 kV
+rated range.
 
 **Read the "What this cannot tell you" section before trusting a number out
 of this tool.** It changes what a bad-looking result means.
@@ -25,6 +26,10 @@ amplifier is under-producing by 1.8% or the monitor is under-reading by
 1.8% — both produce a byte-identical CSV. Telling them apart needs an
 independent reference at the HV output itself (a calibrated HV probe), which
 this feature does not have and does not assume.
+
+The sweep now covers the amplifier's full ±5.0 kV rated range (matching
+`MAX_GEN_VOLTS`), so the calibration data extends to the rail with no
+margin held back.
 
 **Consequently: this feature only ever logs and displays. It never applies
 a correction factor**, and no "Apply correction" control exists anywhere in
@@ -66,16 +71,16 @@ but isn't part of this voltage-only budget.
 
 A Sweep drives each of the four deflection channels, one at a time, through
 a bipolar DC ladder from `-CAL_MAX_KV` to `+CAL_MAX_KV` in `CAL_STEP_KV`
-steps (default: ±4.0 kV in 0.2 kV steps, 41 points), bracketed by a leading
+steps (default: ±5.0 kV in 0.2 kV steps, 51 points), bracketed by a leading
 and trailing 0 kV point on every pass — the zero-drift tracker. Three
 passes run per channel: **up** (ascending), **down** (descending, to catch
 hysteresis), and **random** (a seeded, reproducible shuffle of the same
 points, to catch anything that depends on step history). A full run is
-4 channels × 3 passes × 43 points ≈ 13 minutes.
+4 channels × 3 passes × 53 points ≈ 16 minutes.
 
 **All 8 amplifier monitors (voltage + current, all four channels) are
 recorded at every setpoint**, even though only one channel is being driven.
-This is free crosstalk data: if driving X+ to +4 kV makes Y− read anything
+This is free crosstalk data: if driving X+ to +5 kV makes Y− read anything
 other than zero, that's real coupling between channels, not an artifact.
 
 To run one:
@@ -105,7 +110,7 @@ To run one:
 A Drift run holds **all four channels** at one setpoint simultaneously and
 logs every AIN once every `DRIFT_LOG_INTERVAL_S` (default 1 s), for a
 chosen duration — the tool for catching slow thermal drift or intermittent
-faults that a 13-minute sweep can't see.
+faults that a ~16-minute sweep can't see.
 
 **Duration is gated by load condition, and this is enforced in the runner
 itself, not just the GUI:**

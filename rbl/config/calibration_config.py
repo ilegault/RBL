@@ -30,8 +30,8 @@ from rbl.hardware.funcgen_driver import MAX_GEN_VOLTS
 
 # --- Sweep ---------------------------------------------------------------
 
-CAL_MAX_KV  = 4.0    # must equal-or-undercut MAX_GEN_VOLTS; asserted below
-CAL_STEP_KV = 0.2     # -> 41 points across -4.0 .. +4.0 inclusive
+CAL_MAX_KV  = 5.0    # must equal-or-undercut MAX_GEN_VOLTS; asserted below
+CAL_STEP_KV = 0.2     # -> 51 points across -5.0 .. +5.0 inclusive
 
 CAL_SETTLE_S  = 0.5   # discarded after each setpoint change
 CAL_COLLECT_S = 1.0   # averaged
@@ -76,7 +76,7 @@ class LoadCondition(Enum):
 # --- Sweep point generation -------------------------------------------------
 
 def _base_ladder() -> list:
-    """The 41-point bipolar ladder from -CAL_MAX_KV to +CAL_MAX_KV, ascending."""
+    """The bipolar ladder from -CAL_MAX_KV to +CAL_MAX_KV, ascending."""
     n = round(2 * CAL_MAX_KV / CAL_STEP_KV) + 1
     return [round(-CAL_MAX_KV + i * CAL_STEP_KV, 10) for i in range(n)]
 
@@ -121,14 +121,16 @@ assert CAL_MAX_KV <= MAX_GEN_VOLTS, (
 if __name__ == "__main__":
     up = sweep_points("up")
     down = sweep_points("down")
+    n_ladder = round(2 * CAL_MAX_KV / CAL_STEP_KV) + 1
+    n_bracketed = n_ladder + 2
 
-    assert len(up) == 43, f"expected 43 points (41 + bracketing zeros), got {len(up)}"
+    assert len(up) == n_bracketed, f"expected {n_bracketed} points ({n_ladder} + bracketing zeros), got {len(up)}"
     assert up[0] == 0.0 and up[-1] == 0.0
     inner_up = up[1:-1]
     assert inner_up == sorted(inner_up), "up pass is not ascending"
-    print(f"[OK] sweep_points('up') is ascending, length {len(up)} (41 + leading/trailing zero)")
+    print(f"[OK] sweep_points('up') is ascending, length {len(up)} ({n_ladder} + leading/trailing zero)")
 
-    assert len(down) == 43
+    assert len(down) == n_bracketed
     assert down[0] == 0.0 and down[-1] == 0.0
     inner_down = down[1:-1]
     assert inner_down == list(reversed(inner_up)), \
@@ -138,7 +140,7 @@ if __name__ == "__main__":
     r1 = sweep_points("random", seed=42)
     r2 = sweep_points("random", seed=42)
     assert r1 == r2, "same seed must reproduce the same order"
-    assert len(r1) == 43
+    assert len(r1) == n_bracketed
     print("[OK] sweep_points('random', seed=42) is deterministic across two calls")
 
     for pass_type in CAL_PASSES:
