@@ -38,8 +38,9 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from rbl.config import hardware_config as SC
 from rbl.config.calibration_config import (
     CAL_MAX_KV, CAL_STEP_KV, CAL_PASSES, CAL_PROFILE, CAL_UNCERTAINTY_V,
+    CAL_AC_FREQ_HZ,
     DRIFT_DEFAULT_KV, DRIFT_MAX_ATTENDED_H, DRIFT_MAX_UNATTENDED_H,
-    LoadCondition, sweep_points,
+    LoadCondition, sweep_points, ac_sweep_points,
 )
 from rbl.hardware.funcgen_safety import CHANNEL_ROLE
 from rbl.gui import theme
@@ -178,14 +179,18 @@ class CalibrationTab(QWidget):
         cfg_form = QFormLayout(cfg_box)
 
         mode_row = QHBoxLayout()
-        self.rb_sweep = QRadioButton("Sweep")
+        self.rb_sweep = QRadioButton("DC Sweep")
+        self.rb_ac = QRadioButton("AC Sweep")
         self.rb_drift = QRadioButton("Drift")
         self.rb_sweep.setChecked(True)
         self._mode_group = QButtonGroup(self)
         self._mode_group.addButton(self.rb_sweep)
+        self._mode_group.addButton(self.rb_ac)
         self._mode_group.addButton(self.rb_drift)
         self.rb_sweep.toggled.connect(self._on_mode_toggled)
+        self.rb_ac.toggled.connect(self._on_mode_toggled)
         mode_row.addWidget(self.rb_sweep)
+        mode_row.addWidget(self.rb_ac)
         mode_row.addWidget(self.rb_drift)
         mode_row.addStretch()
         cfg_form.addRow("Mode:", mode_row)
@@ -206,12 +211,23 @@ class CalibrationTab(QWidget):
         n_total = n_pts * len(CAL_PASSES) * len(SC.AMP_LABELS)
         self.lbl_sweep_info = QLabel(
             f"{n_pts} points/pass (±{CAL_MAX_KV:.1f} kV, {CAL_STEP_KV:.2f} kV step, "
-            f"bracketed by 0 kV) × {len(CAL_PASSES)} passes × {len(SC.AMP_LABELS)} "
+            f"ramps from 0) × {len(CAL_PASSES)} passes × {len(SC.AMP_LABELS)} "
             f"channels = {n_total} setpoints"
         )
         self.lbl_sweep_info.setWordWrap(True)
         self.lbl_sweep_info.setStyleSheet(f"color: {theme.NEUTRAL}; font-size: 10px;")
-        cfg_form.addRow("Sweep:", self.lbl_sweep_info)
+        cfg_form.addRow("DC Sweep:", self.lbl_sweep_info)
+
+        n_ac_pts = len(ac_sweep_points())
+        n_ac_total = n_ac_pts * len(SC.AMP_LABELS)
+        self.lbl_ac_info = QLabel(
+            f"{n_ac_pts} points (0 → {CAL_MAX_KV:.1f} kV peak → 0, "
+            f"{CAL_STEP_KV:.2f} kV step) × {len(SC.AMP_LABELS)} channels "
+            f"= {n_ac_total} setpoints at {CAL_AC_FREQ_HZ:.0f} Hz"
+        )
+        self.lbl_ac_info.setWordWrap(True)
+        self.lbl_ac_info.setStyleSheet(f"color: {theme.NEUTRAL}; font-size: 10px;")
+        cfg_form.addRow("AC Sweep:", self.lbl_ac_info)
 
         # Drift controls.
         self.spn_drift_kv = QuietDoubleSpinBox()
@@ -347,9 +363,9 @@ class CalibrationTab(QWidget):
     # ------------------------------------------------------------------
 
     def _on_mode_toggled(self, *_):
-        is_sweep = self.rb_sweep.isChecked()
-        self.spn_drift_kv.setEnabled(not is_sweep)
-        self.spn_drift_h.setEnabled(not is_sweep)
+        is_drift = self.rb_drift.isChecked()
+        self.spn_drift_kv.setEnabled(is_drift)
+        self.spn_drift_h.setEnabled(is_drift)
 
     def _refresh_run_enabled(self, *_):
         has_load = self.cbo_load.currentData() is not None
@@ -365,7 +381,7 @@ class CalibrationTab(QWidget):
             QMessageBox.warning(self, "Load condition required",
                                  "Select a load condition before running.")
             return
-        if not self.rb_sweep.isChecked() and load_condition is LoadCondition.ON_PLATES \
+        if self.rb_drift.isChecked() and load_condition is LoadCondition.ON_PLATES \
                 and self.spn_drift_h.value() > DRIFT_MAX_ATTENDED_H:
             QMessageBox.warning(
                 self, "Drift duration refused",
@@ -404,10 +420,18 @@ class CalibrationTab(QWidget):
         self.run_state_changed.emit(True)
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
-        self.lbl_state.setText(f"Running ({'sweep' if self.rb_sweep.isChecked() else 'drift'})…")
+        if self.rb_sweep.isChecked():
+            mode_label = "DC sweep"
+        elif self.rb_ac.isChecked():
+            mode_label = "AC sweep"
+        else:
+            mode_label = "drift"
+        self.lbl_state.setText(f"Running ({mode_label})…")
 
         if self.rb_sweep.isChecked():
             self._runner.start_sweep()
+        elif self.rb_ac.isChecked():
+            self._runner.start_ac_sweep()
         else:
             self._runner.start_drift(self.spn_drift_kv.value(), self.spn_drift_h.value())
 
@@ -435,6 +459,9 @@ class CalibrationTab(QWidget):
         self.btn_run.setEnabled(True)
         self.btn_abort.setEnabled(False)
         self.run_state_changed.emit(False)
+        # Set progress to 100% on completion.
+        maximum = max(self.progress.maximum(), 1)
+        self.progress.setValue(maximum)
         self.lbl_state.setText(
             f"Finished — {csv_path}" if csv_path else "Stopped"
         )

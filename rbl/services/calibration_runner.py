@@ -80,8 +80,9 @@ from PySide6.QtCore import QObject, QTimer, Signal
 
 from rbl.config.calibration_config import (
     CAL_COLLECT_S, CAL_MAX_KV, CAL_PASSES, CAL_PROFILE, CAL_SETTLE_S,
+    CAL_AC_FREQ_HZ, CAL_AC_SETTLE_S, CAL_AC_COLLECT_S, CAL_STEP_KV,
     DRIFT_LOG_INTERVAL_S, DRIFT_MAX_ATTENDED_H, DRIFT_MAX_UNATTENDED_H,
-    LoadCondition, sweep_points,
+    LoadCondition, sweep_points, ac_sweep_points,
 )
 from rbl.config.hardware_config import AMP_AIN_NAMES, AMP_CHANNEL_MAP, AMP_LABELS
 from rbl.config.labjack_stream_config import GUI_REFRESH_HZ
@@ -146,6 +147,7 @@ class CalibrationRunner(QObject):
         self._seq_idx  = 0
         self._seed     = None
         self._orig_state: dict = {}     # amp_label -> get_state() snapshot
+        self._current_driven: str = None  # tracks which amp is being driven
 
         self._collect_windows: dict = {}   # ain -> [np.ndarray, ...]
         self._collect_window_count = 0
@@ -209,6 +211,53 @@ class CalibrationRunner(QObject):
         print(f"[CAL] start_sweep: run_id={self._run_id} "
               f"{len(self._sequence)} setpoints, "
               f"load={self._load_condition.value}, seed={self._seed}")
+        self._enter_settle()
+
+    def start_ac_sweep(self):
+        """AC sweep: sine wave at CAL_AC_FREQ_HZ, amplitude ramped 0 → max → 0.
+
+        Uses the same state machine as the DC sweep but commands a sine
+        waveform instead of DC, and uses longer settle/collect windows.
+        """
+        if self._state != _State.IDLE:
+            self._print_err("start_ac_sweep: a run is already in progress")
+            return
+
+        self._mode    = "ac_sweep"
+        self._run_id  = self._run_id_override or new_run_id()
+        self._t_start = time.monotonic()
+        self._seed    = None
+        self._sequence = self._build_ac_sequence()
+        self._seq_idx  = 0
+
+        # Use AC-specific timing.
+        self._windows_per_collect = max(1, round(CAL_AC_COLLECT_S * GUI_REFRESH_HZ))
+
+        self._orig_state = {}
+        for label, (gen, channel) in self._funcgen_map.items():
+            try:
+                self._orig_state[label] = gen.get_state(channel)
+            except Exception as e:
+                self._print_err(f"get_state failed for {label}: {e}")
+                self._orig_state[label] = None
+
+        if self._writer is not None:
+            try:
+                self._writer.update_metadata(
+                    load_condition=self._load_condition.value,
+                    operator_note=self.operator_note,
+                    funcgen_states=dict(self._orig_state),
+                    config_snapshot=config_snapshot(),
+                    git_commit_hash=git_commit_hash(),
+                    ac_freq_hz=CAL_AC_FREQ_HZ,
+                )
+            except Exception as e:
+                self._print_err(f"writer.update_metadata: {e}")
+
+        print(f"[CAL] start_ac_sweep: run_id={self._run_id} "
+              f"{len(self._sequence)} setpoints, "
+              f"freq={CAL_AC_FREQ_HZ} Hz, "
+              f"load={self._load_condition.value}")
         self._enter_settle()
 
     def start_drift(self, setpoint_kv: float, duration_h: float):
@@ -335,6 +384,19 @@ class CalibrationRunner(QObject):
                 pass_counter += 1
         return seq
 
+    def _build_ac_sequence(self) -> list:
+        """AC sweep: amplitude ramp for each channel (up then down)."""
+        seq = []
+        pts = ac_sweep_points()
+        for pass_idx, amp in enumerate(AMP_LABELS):
+            for point_idx, peak_kv in enumerate(pts):
+                seq.append(_StepPoint(
+                    driven_amp=amp, pass_type="ac",
+                    pass_index=pass_idx, point_index=point_idx,
+                    commanded_kv=peak_kv,
+                ))
+        return seq
+
     # ------------------------------------------------------------------
     # SETTLE
     # ------------------------------------------------------------------
@@ -346,6 +408,22 @@ class CalibrationRunner(QObject):
 
         step = self._sequence[self._seq_idx]
         self._state = _State.SETTLE
+
+        # When the driven channel changes (new pass or new amp), zero the
+        # previous driven channel and set the new non-driven channels to 0.
+        # This happens once per pass, not at every setpoint.
+        if step.driven_amp != self._current_driven:
+            try:
+                for amp in AMP_LABELS:
+                    if amp != step.driven_amp:
+                        self._command_channel(amp, 0.0)
+            except Exception as e:
+                self._print_err(f"_enter_settle zero others: {e}")
+                self.error.emit(str(e))
+                self._finish(aborted=True)
+                return
+            self._current_driven = step.driven_amp
+
         try:
             self._command_setpoint(step.driven_amp, step.commanded_kv)
         except Exception as e:
@@ -360,19 +438,24 @@ class CalibrationRunner(QObject):
         )
         self._collect_windows = {ain: [] for ain in AMP_AIN_NAMES}
         self._collect_window_count = 0
-        self._settle_timer.start(int(CAL_SETTLE_S * 1000))
+        settle_s = CAL_AC_SETTLE_S if self._mode == "ac_sweep" else CAL_SETTLE_S
+        self._settle_timer.start(int(settle_s * 1000))
 
     def _command_setpoint(self, driven_amp: str, commanded_kv: float):
-        """Driven channel to its clamped setpoint; the other three to 0.0.
+        """Driven channel to its clamped setpoint; others zeroed once per pass.
 
-        Every channel is (re)commanded on every setpoint, driven or not —
-        an undriven channel that silently kept whatever it held before is
-        not the guarantee this sweep is supposed to give.
+        Non-driven channels are zeroed at the start of each pass (see
+        _enter_settle) rather than re-commanded at every setpoint — sending
+        SCPI writes to all four generators at every step slows the sweep and
+        is unnecessary: a channel sitting at DC 0 V stays there.
+
+        In AC mode, commanded_kv is the peak amplitude (non-negative).
         """
-        clamped = max(-CAL_MAX_KV, min(CAL_MAX_KV, commanded_kv))
-        for amp in AMP_LABELS:
-            value = clamped if amp == driven_amp else 0.0
-            self._command_channel(amp, value)
+        if self._mode == "ac_sweep":
+            self._command_channel_ac(driven_amp, commanded_kv)
+        else:
+            clamped = max(-CAL_MAX_KV, min(CAL_MAX_KV, commanded_kv))
+            self._command_channel(driven_amp, clamped)
 
     def _command_channel(self, amp_label: str, value_kv: float):
         gen, channel = self._funcgen_map[amp_label]
@@ -381,6 +464,30 @@ class CalibrationRunner(QObject):
               f"({value_kv:+.4f} kV)")
         try:
             warn = gen.set_waveform(channel, "DC", 0.0, 0.0, gen_v, 0.0)
+            if warn:
+                print(f"[CAL] WARN {amp_label} ch{channel}: {warn}")
+                log.warning("%s ch%s: %s", amp_label, channel, warn)
+            gen.output_on(channel)
+        except Exception as e:
+            self._print_err(f"{amp_label} ch{channel}: {e}")
+            raise
+
+    def _command_channel_ac(self, amp_label: str, peak_kv: float):
+        """Command a sine wave with the given peak amplitude (in kV).
+
+        peak_kv is the peak output voltage. The generator needs Vpp, and the
+        amplifier has gain _AMP_GAIN, so:
+            gen_vpp = (peak_kv * 2) * 1000 / _AMP_GAIN
+        Offset is 0 (symmetric sine around zero).
+        """
+        gen, channel = self._funcgen_map[amp_label]
+        clamped = max(0.0, min(CAL_MAX_KV, peak_kv))
+        gen_vpp = clamped * 2.0 * 1000.0 / _AMP_GAIN
+        print(f"[CAL] {amp_label} ch{channel}: SIN {CAL_AC_FREQ_HZ} Hz "
+              f"{gen_vpp:.4f} Vpp ({clamped:.4f} kV peak)")
+        try:
+            warn = gen.set_waveform(channel, "SIN", CAL_AC_FREQ_HZ,
+                                    gen_vpp, 0.0, 0.0)
             if warn:
                 print(f"[CAL] WARN {amp_label} ch{channel}: {warn}")
                 log.warning("%s ch%s: %s", amp_label, channel, warn)

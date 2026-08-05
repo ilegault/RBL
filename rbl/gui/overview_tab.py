@@ -413,7 +413,7 @@ class OverviewTab(QWidget):
             bars = QHBoxLayout()
             bars.setSpacing(6)
             for amp in (plus, minus):
-                bar = MiniBar(f"{amp} peak", 0.0, SC.AMP_MAX_KV, unit="kV",
+                bar = MiniBar(f"{amp} peak", -SC.AMP_MAX_KV, SC.AMP_MAX_KV, unit="kV",
                               color=theme.SLIT_COLORS[amp])
                 self.hv_bars[amp] = bar
                 bars.addWidget(bar, stretch=1)

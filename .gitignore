@@ -254,3 +254,4 @@ build.bat
 !/data/calibration/.gitkeep
 
 
+/processing/

@@ -62,7 +62,7 @@ from PySide6.QtWidgets import (
 from rbl.hardware.labjack_driver import LJM_AVAILABLE
 from rbl.hardware.current_monitor import RollingBuffer
 from rbl.hardware.amp_monitor import (
-    format_kv, format_ma, voltage_status, current_status,
+    format_kv, format_ma, monitor_to_kv, voltage_status, current_status,
 )
 from rbl.hardware.waveform_ring import WaveformRing, decimate_minmax
 from rbl.state.snapshots import AmpState
@@ -848,11 +848,12 @@ class AmpTab(QWidget):
             i_ain = SC.AMP_CHANNEL_MAP[amp]["current"]
 
             if ch.v_live:
-                # The trend / history line plots RMS (not peak): above the 1 s
-                # snapshot boundary RMS is the honest, stable summary and reads
-                # as a clean envelope rather than a jagged peak trace.  Peak and
-                # pk-pk remain in the numeric readouts above.
-                self.buffers[v_ain].append(t, ch.rms_kv)
+                # The trend / history line plots the SIGNED MEAN (not RMS):
+                # above the 1 s snapshot boundary this gives the true DC level
+                # including polarity, so -4 kV reads as -4 kV, not +4 kV.
+                # raw_v is the mean of the window's waveform in monitor volts,
+                # which equals kV (1000:1 monitor ratio).
+                self.buffers[v_ain].append(t, monitor_to_kv(ch.raw_v))
 
                 self.lbl_kv[amp].setText(format_kv(ch.peak_kv))
                 self.lbl_kv[amp].setStyleSheet(

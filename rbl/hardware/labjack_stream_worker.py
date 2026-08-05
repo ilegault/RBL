@@ -34,7 +34,7 @@ Emitted once per GUI refresh window (GUI_REFRESH_HZ = 10 Hz).
       "sample_period":  float — seconds per sample (1 / actual scan rate)
       "channels": {
           "AIN6":  {"waveform": np.ndarray,   # raw volts
-                    "peak":     float,         # max(|waveform|) in volts
+                    "peak":     float,         # signed sample with max |amplitude|
                     "pk_pk":    float,         # max - min in volts
                     "rms":      float,         # RMS in volts
                     "mean":     float,         # arithmetic mean in volts (DC estimator)
@@ -284,7 +284,7 @@ class LabJackStreamWorker(QThread):
             if ain in AMP_CHANNELS:
                 channels[ain] = {
                     "waveform": col.copy(),
-                    "peak":   float(np.max(np.abs(col))),
+                    "peak":   float(col[np.argmax(np.abs(col))]),
                     "pk_pk":  float(col.max() - col.min()),
                     "rms":    float(np.sqrt(np.mean(col ** 2))),
                     "mean":   float(np.mean(col)),

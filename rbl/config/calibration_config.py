@@ -34,10 +34,18 @@ from rbl.hardware.funcgen_driver import MAX_GEN_VOLTS
 CAL_MAX_KV  = 5.0    # must equal-or-undercut MAX_GEN_VOLTS; asserted below
 CAL_STEP_KV = 0.2     # -> 51 points across -5.0 .. +5.0 inclusive
 
-CAL_SETTLE_S  = 0.5   # discarded after each setpoint change
+CAL_SETTLE_S  = 1.5   # discarded after each setpoint change (amplifier + monitor settle)
 CAL_COLLECT_S = 1.0   # averaged
 
 CAL_PASSES = ("up", "down", "random")
+
+# --- AC sweep -------------------------------------------------------------
+# AC mode commands a sine wave at CAL_AC_FREQ_HZ and sweeps the amplitude
+# from 0 to CAL_MAX_KV in CAL_STEP_KV increments.  The setpoints are
+# peak output kV (= Vpp/2 * AMP_GAIN / 1000).
+CAL_AC_FREQ_HZ   = 1000.0   # 1 kHz — well within the EEL5000 bandwidth
+CAL_AC_SETTLE_S  = 2.0      # AC needs more settle time (waveform stabilization)
+CAL_AC_COLLECT_S = 2.0      # average over more cycles for a stable RMS reading
 
 # Combined amp + monitor + DAQ budget, in volts at the output. See module
 # docstring. Deviations inside this band must not be reported as findings.
@@ -85,30 +93,56 @@ def _base_ladder() -> list:
     return [round(-CAL_MAX_KV + i * CAL_STEP_KV, 10) for i in range(n)]
 
 
-def sweep_points(pass_type: str, seed: int = None) -> list:
-    """The commanded setpoints (kV) for one sweep pass, bracketed by zero.
+def _positive_half() -> list:
+    """0.0, step, 2*step, ..., CAL_MAX_KV (ascending, excluding 0)."""
+    n = round(CAL_MAX_KV / CAL_STEP_KV)
+    return [round((i + 1) * CAL_STEP_KV, 10) for i in range(n)]
 
-    "up"     -> the ladder ascending, -CAL_MAX_KV .. +CAL_MAX_KV
-    "down"   -> the ladder descending, +CAL_MAX_KV .. -CAL_MAX_KV
-    "random" -> the same ladder, shuffled with a seeded RNG (reproducible;
+
+def sweep_points(pass_type: str, seed: int = None) -> list:
+    """The commanded setpoints (kV) for one sweep pass, starting from zero.
+
+    All passes start at 0 and ramp outward so the amplifier never sees a
+    large voltage step from rest.  The largest step between consecutive
+    points is CAL_STEP_KV (except "random", which shuffles freely but still
+    starts and ends at 0).
+
+    "up"     -> 0 .. +CAL_MAX_KV, back through 0, then 0 .. -CAL_MAX_KV, 0
+                (positive ascending, then negative descending)
+    "down"   -> 0 .. -CAL_MAX_KV, back through 0, then 0 .. +CAL_MAX_KV, 0
+                (negative descending first, then positive ascending)
+    "random" -> the full ladder shuffled with a seeded RNG (reproducible;
                 the seed is recorded in the metadata sidecar)
 
-    Every pass is prefixed and suffixed with an explicit 0.0 point regardless
-    of pass_type — the zero-drift tracker — even though the ladder itself
-    already passes through zero in its interior.
+    Every pass is prefixed and suffixed with an explicit 0.0 point —
+    the zero-drift tracker.
     """
-    ladder = _base_ladder()
     if pass_type == "up":
-        seq = ladder
+        pos = _positive_half()          # 0.2, 0.4, ..., 5.0
+        neg = [-v for v in pos]         # -0.2, -0.4, ..., -5.0
+        seq = pos + list(reversed(pos)) + [0.0] + neg + list(reversed(neg))
     elif pass_type == "down":
-        seq = list(reversed(ladder))
+        pos = _positive_half()
+        neg = [-v for v in pos]
+        seq = neg + list(reversed(neg)) + [0.0] + pos + list(reversed(pos))
     elif pass_type == "random":
         rng = random.Random(seed)
-        seq = list(ladder)
+        seq = list(_base_ladder())
         rng.shuffle(seq)
     else:
         raise ValueError(f"Unknown pass_type: {pass_type!r}")
     return [0.0] + seq + [0.0]
+
+
+def ac_sweep_points() -> list:
+    """Amplitude setpoints (peak kV) for the AC sweep: 0 → CAL_MAX_KV → 0.
+
+    The sweep ramps amplitude up from 0 to CAL_MAX_KV in CAL_STEP_KV steps,
+    then back down to 0 — one complete up-down cycle.  Every value is a
+    non-negative peak output kV (the sine swings ±this around zero offset).
+    """
+    pos = _positive_half()   # 0.2, 0.4, ..., 5.0
+    return [0.0] + pos + list(reversed(pos)) + [0.0]
 
 
 # --- Self-check at import: fail loudly, not silently over the safety cap ---
@@ -125,26 +159,38 @@ assert CAL_MAX_KV <= MAX_GEN_VOLTS, (
 if __name__ == "__main__":
     up = sweep_points("up")
     down = sweep_points("down")
-    n_ladder = round(2 * CAL_MAX_KV / CAL_STEP_KV) + 1
-    n_bracketed = n_ladder + 2
 
-    assert len(up) == n_bracketed, f"expected {n_bracketed} points ({n_ladder} + bracketing zeros), got {len(up)}"
     assert up[0] == 0.0 and up[-1] == 0.0
-    inner_up = up[1:-1]
-    assert inner_up == sorted(inner_up), "up pass is not ascending"
-    print(f"[OK] sweep_points('up') is ascending, length {len(up)} ({n_ladder} + leading/trailing zero)")
-
-    assert len(down) == n_bracketed
     assert down[0] == 0.0 and down[-1] == 0.0
-    inner_down = down[1:-1]
-    assert inner_down == list(reversed(inner_up)), \
-        "down pass's ladder is not the reverse of up's"
-    print("[OK] sweep_points('down') == reversed(up) modulo the bracketing zeros")
+    print(f"[OK] sweep_points('up') length {len(up)}, starts and ends at 0.0")
+    print(f"[OK] sweep_points('down') length {len(down)}, starts and ends at 0.0")
+
+    # Up pass: first non-zero value should be positive (ramps positive first)
+    first_nonzero = next(v for v in up if v != 0.0)
+    assert first_nonzero > 0, f"up pass should start positive, got {first_nonzero}"
+    print(f"[OK] up pass starts positive ({first_nonzero})")
+
+    # Down pass: first non-zero value should be negative (ramps negative first)
+    first_nonzero = next(v for v in down if v != 0.0)
+    assert first_nonzero < 0, f"down pass should start negative, got {first_nonzero}"
+    print(f"[OK] down pass starts negative ({first_nonzero})")
+
+    # Max step between consecutive points in up/down (excluding random)
+    for name, pts in [("up", up), ("down", down)]:
+        max_step = max(abs(pts[i+1] - pts[i]) for i in range(len(pts)-1))
+        assert max_step <= CAL_STEP_KV + 1e-9, \
+            f"{name}: max step {max_step} exceeds {CAL_STEP_KV}"
+        print(f"[OK] {name} max consecutive step: {max_step:.3f} kV")
+
+    # Both passes cover the full range
+    for name, pts in [("up", up), ("down", down)]:
+        assert max(pts) >= CAL_MAX_KV - 1e-9, f"{name} doesn't reach +{CAL_MAX_KV}"
+        assert min(pts) <= -CAL_MAX_KV + 1e-9, f"{name} doesn't reach -{CAL_MAX_KV}"
+    print("[OK] both passes cover full +/- range")
 
     r1 = sweep_points("random", seed=42)
     r2 = sweep_points("random", seed=42)
     assert r1 == r2, "same seed must reproduce the same order"
-    assert len(r1) == n_bracketed
     print("[OK] sweep_points('random', seed=42) is deterministic across two calls")
 
     for pass_type in CAL_PASSES:
