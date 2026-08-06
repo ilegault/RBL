@@ -88,6 +88,7 @@ from rbl.config.hardware_config import AMP_AIN_NAMES, AMP_CHANNEL_MAP, AMP_LABEL
 from rbl.config.labjack_stream_config import GUI_REFRESH_HZ
 from rbl.hardware.amp_monitor import monitor_to_kv, monitor_to_ma
 from rbl.hardware.funcgen_safety import _AMP_GAIN
+from rbl.services.amp_drive import AmpDrive
 from rbl.services.calibration_writer import (
     config_snapshot, git_commit_hash, new_run_id, now_iso,
 )
@@ -169,6 +170,7 @@ class CalibrationRunner(QObject):
         self._watchdog_timer.setSingleShot(True)
         self._watchdog_timer.timeout.connect(self._on_watchdog_timeout)
 
+        self._drive = AmpDrive(funcgen_map, max_kv=CAL_MAX_KV, log_prefix="[CAL]")
         atexit.register(self._atexit_shutdown)
 
     # ------------------------------------------------------------------
@@ -187,13 +189,7 @@ class CalibrationRunner(QObject):
         self._sequence = self._build_sequence()
         self._seq_idx  = 0
 
-        self._orig_state = {}
-        for label, (gen, channel) in self._funcgen_map.items():
-            try:
-                self._orig_state[label] = gen.get_state(channel)
-            except Exception as e:
-                self._print_err(f"get_state failed for {label}: {e}")
-                self._orig_state[label] = None
+        self._orig_state = self._drive.snapshot_all()
 
         if self._writer is not None:
             try:
@@ -233,13 +229,7 @@ class CalibrationRunner(QObject):
         # Use AC-specific timing.
         self._windows_per_collect = max(1, round(CAL_AC_COLLECT_S * GUI_REFRESH_HZ))
 
-        self._orig_state = {}
-        for label, (gen, channel) in self._funcgen_map.items():
-            try:
-                self._orig_state[label] = gen.get_state(channel)
-            except Exception as e:
-                self._print_err(f"get_state failed for {label}: {e}")
-                self._orig_state[label] = None
+        self._orig_state = self._drive.snapshot_all()
 
         if self._writer is not None:
             try:
@@ -298,13 +288,7 @@ class CalibrationRunner(QObject):
         self._drift_setpoint_kv = max(-CAL_MAX_KV, min(CAL_MAX_KV, setpoint_kv))
         self._drift_end_t = self._t_start + duration_h * 3600.0
 
-        self._orig_state = {}
-        for label, (gen, channel) in self._funcgen_map.items():
-            try:
-                self._orig_state[label] = gen.get_state(channel)
-            except Exception as e:
-                self._print_err(f"get_state failed for {label}: {e}")
-                self._orig_state[label] = None
+        self._orig_state = self._drive.snapshot_all()
 
         if self._writer is not None:
             try:
@@ -458,42 +442,18 @@ class CalibrationRunner(QObject):
             self._command_channel(driven_amp, clamped)
 
     def _command_channel(self, amp_label: str, value_kv: float):
-        gen, channel = self._funcgen_map[amp_label]
-        gen_v = value_kv * 1000.0 / _AMP_GAIN
-        print(f"[CAL] {amp_label} ch{channel}: DC {gen_v:+.4f} V "
-              f"({value_kv:+.4f} kV)")
         try:
-            warn = gen.set_waveform(channel, "DC", 0.0, 0.0, gen_v, 0.0)
-            if warn:
-                print(f"[CAL] WARN {amp_label} ch{channel}: {warn}")
-                log.warning("%s ch%s: %s", amp_label, channel, warn)
-            gen.output_on(channel)
+            self._drive.command_dc(amp_label, value_kv)
         except Exception as e:
-            self._print_err(f"{amp_label} ch{channel}: {e}")
+            self._print_err(f"{amp_label}: {e}")
             raise
 
     def _command_channel_ac(self, amp_label: str, peak_kv: float):
-        """Command a sine wave with the given peak amplitude (in kV).
-
-        peak_kv is the peak output voltage. The generator needs Vpp, and the
-        amplifier has gain _AMP_GAIN, so:
-            gen_vpp = (peak_kv * 2) * 1000 / _AMP_GAIN
-        Offset is 0 (symmetric sine around zero).
-        """
-        gen, channel = self._funcgen_map[amp_label]
-        clamped = max(0.0, min(CAL_MAX_KV, peak_kv))
-        gen_vpp = clamped * 2.0 * 1000.0 / _AMP_GAIN
-        print(f"[CAL] {amp_label} ch{channel}: SIN {CAL_AC_FREQ_HZ} Hz "
-              f"{gen_vpp:.4f} Vpp ({clamped:.4f} kV peak)")
+        """Command a sine wave with the given peak amplitude (in kV)."""
         try:
-            warn = gen.set_waveform(channel, "SIN", CAL_AC_FREQ_HZ,
-                                    gen_vpp, 0.0, 0.0)
-            if warn:
-                print(f"[CAL] WARN {amp_label} ch{channel}: {warn}")
-                log.warning("%s ch%s: %s", amp_label, channel, warn)
-            gen.output_on(channel)
+            self._drive.command_sine(amp_label, peak_kv, CAL_AC_FREQ_HZ)
         except Exception as e:
-            self._print_err(f"{amp_label} ch{channel}: {e}")
+            self._print_err(f"{amp_label}: {e}")
             raise
 
     def _on_settle_elapsed(self):
@@ -665,27 +625,10 @@ class CalibrationRunner(QObject):
         self._settle_timer.stop()
         self._watchdog_timer.stop()
 
-        for amp, (gen, channel) in self._funcgen_map.items():
-            try:
-                gen.set_waveform(channel, "DC", 0.0, 0.0, 0.0, 0.0)
-            except Exception as e:
-                self._print_err(f"zero {amp}: {e}")
-            try:
-                gen.output_off(channel)
-            except Exception as e:
-                self._print_err(f"output_off {amp}: {e}")
+        self._drive.zero_and_off_all()
 
         if restore:
-            for amp, (gen, channel) in self._funcgen_map.items():
-                snap = self._orig_state.get(amp)
-                if not snap or "error" in snap:
-                    continue
-                try:
-                    gen.set_waveform(channel, snap["shape"], snap["freq"],
-                                      snap["amp"], snap["offset"], snap["phase"])
-                    gen.set_output_load(channel, snap.get("load", "INFinity"))
-                except Exception as e:
-                    self._print_err(f"restore {amp}: {e}")
+            self._drive.restore_all(self._orig_state)
 
         csv_path = None
         if self._writer is not None:
@@ -698,15 +641,10 @@ class CalibrationRunner(QObject):
     def _atexit_shutdown(self):
         """Best-effort, never raises — same pattern as
         Beamline._emergency_labjack_shutdown. Zero + off only; no restore."""
-        for amp, (gen, channel) in self._funcgen_map.items():
-            try:
-                gen.set_waveform(channel, "DC", 0.0, 0.0, 0.0, 0.0)
-            except Exception:
-                pass
-            try:
-                gen.output_off(channel)
-            except Exception:
-                pass
+        try:
+            self._drive.zero_and_off_all()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
 
