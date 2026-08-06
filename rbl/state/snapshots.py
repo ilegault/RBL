@@ -173,6 +173,35 @@ class VacuumState:
 
 
 @dataclass(frozen=True)
+class ScopeState:
+    """Beam profile snapshot from the TDS 2012 oscilloscope.
+
+    `fwhm_samples` and `fwhm_seconds` are NaN when the FWHM extraction
+    failed (e.g. no beam, clipped waveform).  The caller must check
+    math.isnan before displaying.
+
+    `volts_downsampled` is a list of floats suitable for plotting — at most
+    SCOPE_WAVEFORM_DOWNSAMPLE points (see scope_config.py).  Empty when no
+    waveform was acquired this tick.
+
+    `error` is a non-empty string when the worker encountered a protocol or
+    timeout error that prevented acquisition; the worker emits a separate
+    scope_error signal in that case, but the string is also recorded here so
+    a log file has it in-band.
+    """
+    timestamp:          float
+    connected:          bool  = False
+    channel:            str   = "CH1"
+    fwhm_samples:       float = float("nan")
+    fwhm_seconds:       float = float("nan")
+    xincr:              float = float("nan")
+    xzero:              float = float("nan")
+    volts_downsampled:  list  = field(default_factory=list)
+    preamble:           dict  = field(default_factory=dict)
+    error:              str   = ""
+
+
+@dataclass(frozen=True)
 class AmpState:
     """Every amplifier's monitors for one stream window.
 

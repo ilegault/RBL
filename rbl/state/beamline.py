@@ -39,9 +39,10 @@ from rbl.state.funcgen_control import FuncGenControlMixin
 from rbl.state.labjack_link import LabJackLinkMixin
 from rbl.state.motor_control import MotorControlMixin
 from rbl.state.vacuum_link import VacuumLinkMixin
+from rbl.state.scope_link import ScopeLinkMixin
 
 
-class Beamline(LabJackLinkMixin, FuncGenControlMixin, MotorControlMixin, VacuumLinkMixin, QObject):
+class Beamline(LabJackLinkMixin, FuncGenControlMixin, MotorControlMixin, VacuumLinkMixin, ScopeLinkMixin, QObject):
     motors_changed   = Signal(object)   # MotorState
     logamps_changed  = Signal(object)   # LogAmpState
     amps_changed     = Signal(object)   # AmpState
@@ -50,6 +51,8 @@ class Beamline(LabJackLinkMixin, FuncGenControlMixin, MotorControlMixin, VacuumL
     command_failed   = Signal(str, str)  # subsystem, message
     vacuum_changed   = Signal(object)   # VacuumState
     vacuum_error     = Signal(str)
+    scope_changed    = Signal(object)   # ScopeState
+    scope_error      = Signal(str)
 
     # Motion commanded from ANY screen, published so every screen sees it.
     # See motor_control.py's module docstring for why a move is published and
@@ -78,6 +81,7 @@ class Beamline(LabJackLinkMixin, FuncGenControlMixin, MotorControlMixin, VacuumL
         self._init_funcgens()
         self._init_motors()
         self._init_vacuum()
+        self._init_scope()
 
         # Last-resort safety net: if the process is torn down without a clean
         # closeEvent (e.g. an unhandled exit), still stop the LabJack stream
@@ -133,6 +137,10 @@ class Beamline(LabJackLinkMixin, FuncGenControlMixin, MotorControlMixin, VacuumL
             pass
         try:
             self._shutdown_vacuum()
+        except Exception:
+            pass
+        try:
+            self._shutdown_scope()
         except Exception:
             pass
         for gen in (self.dg_a, self.dg_b):
