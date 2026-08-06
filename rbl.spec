@@ -1,0 +1,215 @@
+# rbl.spec — PyInstaller spec for the RBL PySide6 desktop application
+#
+# Build:
+#   cd C:\Users\IGLeg\PycharmProjects\RBL
+#   .venv\Scripts\activate
+#   pyinstaller rbl.spec --clean
+#
+# Output: dist\RBL\RBL.exe  (one-folder distribution)
+# Distribute the entire dist\RBL\ folder to the target machine.
+
+import os
+from PyInstaller.utils.hooks import collect_data_files
+
+block_cipher = None
+
+# ---------------------------------------------------------------------------
+# Key paths
+# ---------------------------------------------------------------------------
+ROOT     = os.path.abspath(SPECPATH)          # C:\...\RBL
+RBL_PKG  = os.path.join(ROOT, "rbl")          # C:\...\RBL\rbl
+RBL_GUI  = os.path.join(RBL_PKG, "gui")       # C:\...\RBL\rbl\gui
+
+# ---------------------------------------------------------------------------
+# Data files only — PyInstaller's built-in hooks handle binaries/submodules
+# for PySide6, scipy, matplotlib automatically via the dependency graph.
+# We just need to ensure data files (fonts, styles, .pyi stubs) are copied.
+# ---------------------------------------------------------------------------
+all_datas = (
+    collect_data_files("matplotlib")   # fonts, style sheets, matplotlibrc
+    + collect_data_files("scipy")      # .pyi stubs, cython data
+)
+
+# ---------------------------------------------------------------------------
+# Hidden imports — ONLY what's actually used in this codebase:
+#   main.py        → numpy, yaml, json, csv, matplotlib.use("Agg")
+#   current_tab.py → matplotlib.use("QtAgg"), FigureCanvasQTAgg
+#   optimizer.py   → scipy.optimize.differential_evolution
+#   app.py, tabs   → PySide6.QtWidgets/Core/Gui
+#
+# Do NOT use collect_submodules() here — it pulls in hundreds of test files
+# and unused backends (gtk, wx, tkinter, macosx, sphinx...) that bloat the
+# bundle massively.
+#
+# Do NOT use collect_all("PySide6") — it triggers hook-PySide6.QtQml which
+# crashes on Python 3.14 + PyInstaller 6.x.
+# ---------------------------------------------------------------------------
+all_hiddenimports = [
+    # PySide6 — only modules actually imported in source
+    "PySide6.QtWidgets",
+    "PySide6.QtCore",
+    "PySide6.QtGui",
+    "PySide6.QtPrintSupport",      # required by matplotlib toolbar
+    "PySide6.QtSvg",               # SVG icon support
+    "PySide6.QtOpenGL",            # needed by QtOpenGLWidgets
+    "PySide6.QtOpenGLWidgets",     # needed by matplotlib qtagg canvas
+
+    # Matplotlib — only the backends this app calls matplotlib.use() with
+    "matplotlib.backends.backend_qtagg",   # current_tab: matplotlib.use("QtAgg")
+    "matplotlib.backends.backend_agg",     # main.py:     matplotlib.use("Agg")
+    "matplotlib.backends.backend_qt",      # shared Qt backend base
+    "mpl_toolkits.mplot3d",                # needed for 3D axes (viz.py)
+
+    # scipy — only what optimizer.py actually imports
+    "scipy.optimize",
+    "scipy.optimize._differentialevolution",
+    "scipy.linalg.cython_blas",    # often needed at runtime by scipy internals
+    "scipy.linalg.cython_lapack",
+
+    # Hardware drivers (gracefully absent at runtime if not installed)
+    "labjack",
+    "labjack.ljm",
+
+    # yaml — main.py uses yaml.safe_load for --config mode
+    "yaml",
+
+    # opencv-python — USB camera capture in camera_widget.py
+    # The import is guarded (try/except ImportError) so the app still runs
+    # without a camera if cv2 is absent, but include it in the bundle when
+    # it is installed.
+    "cv2",
+
+    # pyserial — RS-232 transport for XGS-600, VGC083, TDS 2012
+    "serial",
+    "serial.tools",
+    "serial.tools.list_ports",
+
+    # scipy curve_fit — used by profile_fwhm.gaussian_fwhm_fit (optional path)
+    "scipy.optimize._minpack_py",   # curve_fit implementation
+]
+
+# ---------------------------------------------------------------------------
+# Analysis
+# ---------------------------------------------------------------------------
+a = Analysis(
+    # Entry point
+    [os.path.join(RBL_PKG, "main.py")],
+
+    # pathex tells PyInstaller where to look for imports:
+    #   ROOT      → finds the "rbl" package  (from rbl.gui.app import ...)
+    #   RBL_PKG   → finds top-level modules inside rbl/ (when main.py path-inserts itself)
+    #   RBL_GUI   → finds viz, motor_tab, current_tab  (app.py path-inserts rbl/gui/)
+    pathex=[ROOT, RBL_PKG, RBL_GUI],
+
+    binaries=[],
+    datas=all_datas,
+    hiddenimports=all_hiddenimports,
+
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+
+    excludes=[
+        # UI toolkits not used
+        "tkinter", "_tkinter",
+        "PyQt5", "PyQt6", "PySide2",
+        "wx",
+
+        # Unused PySide6 submodules whose hooks crash or bloat the bundle
+        "PySide6.QtQml",
+        "PySide6.QtQuick",
+        "PySide6.QtQuickWidgets",
+        "PySide6.QtWebEngineCore",
+        "PySide6.QtWebEngineWidgets",
+        "PySide6.QtWebEngineQuick",
+        "PySide6.Qt3DCore",
+        "PySide6.Qt3DRender",
+        "PySide6.Qt3DInput",
+        "PySide6.Qt3DLogic",
+        "PySide6.Qt3DAnimation",
+        "PySide6.Qt3DExtras",
+        "PySide6.QtLocation",
+        "PySide6.QtGraphs",
+        "PySide6.QtBluetooth",
+        "PySide6.QtNfc",
+        "PySide6.scripts.deploy_lib",
+        "PySide6.QtMultimedia",
+        "PySide6.QtMultimediaWidgets",
+        "PySide6.QtSql",
+
+        # Matplotlib backends not used by this app
+        "matplotlib.backends.backend_gtk3agg",
+        "matplotlib.backends.backend_gtk3cairo",
+        "matplotlib.backends.backend_gtk4agg",
+        "matplotlib.backends.backend_gtk4cairo",
+        "matplotlib.backends.backend_tkagg",
+        "matplotlib.backends.backend_tkcairo",
+        "matplotlib.backends.backend_wxagg",
+        "matplotlib.backends.backend_wxcairo",
+        "matplotlib.backends.backend_macosx",
+        "matplotlib.backends.backend_nbagg",
+        "matplotlib.backends.backend_webagg",
+        "matplotlib.sphinxext",
+        "matplotlib.testing",
+
+        # Large packages not used by this app
+        "pandas",
+        "pyarrow",
+        "IPython",
+        "jupyter",
+        "notebook",
+        "streamlit",
+        "tornado",
+        "pytest",
+        "sphinx",
+        "docutils",
+
+    ],
+
+    win_no_prefer_redirects=False,
+    win_private_assemblies=False,
+    cipher=block_cipher,
+    noarchive=False,
+)
+
+# ---------------------------------------------------------------------------
+# PYZ
+# ---------------------------------------------------------------------------
+pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+
+# ---------------------------------------------------------------------------
+# EXE
+# console=False → no terminal window behind the GUI
+# console=True  → shows log output (helpful during first-deploy testing)
+# ---------------------------------------------------------------------------
+exe = EXE(
+    pyz,
+    a.scripts,
+    [],
+    exclude_binaries=True,
+    name="RBL",
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=False,
+    console=True,     # flip to True if you want a console log window
+    disable_windowed_traceback=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+)
+
+# ---------------------------------------------------------------------------
+# COLLECT — one-folder distribution
+# dist\RBL\RBL.exe is the single entry point; the folder must stay together
+# ---------------------------------------------------------------------------
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=False,
+    upx_exclude=[],
+    name="RBL",
+)
