@@ -35,9 +35,10 @@ AMT_SUMMARY_CSV     = "summary.csv"
 AMT_METADATA_JSON   = "metadata.json"
 
 # Shared across all runs — lives at the top of AMT_OUTPUT_DIR, NOT inside
-# a run folder. A run folder records which state was active; this file holds
-# the authoritative current reading.
-AMT_FRONT_PANEL_JSON = "front_panel_state.json"
+# a run folder. Written automatically by G1.1 (trip_ma per amp) and G2.1
+# (load_cap_pf per amp) as those tests complete. Consumed at run time by the
+# trip interlock and the envelope guard.
+AMT_MEASURED_LIMITS_JSON = "measured_limits.json"
 
 # ---------------------------------------------------------------------------
 # Raw-capture size guards
@@ -173,18 +174,6 @@ ENDURANCE_PROBE_INTERVAL_S = 1200.0   # 20 min, per matrix row 35
 
 # How often the running statistics are logged during a G9.1 hold.
 ENDURANCE_LOG_INTERVAL_S = 1.0
-
-# ---------------------------------------------------------------------------
-# Ramp constants (G2.4)
-# ---------------------------------------------------------------------------
-# SCPI ramping cannot reach the microsecond figure in the Findings sheet
-# (a USB/VISA round-trip is on the order of milliseconds), so "ramped"
-# means sub-stepping: N smaller command_dc calls spaced by a QTimer.
-# Each sub-step still rises at the amplifier's full slew rate; the benefit
-# is a lower per-step amplitude and therefore lower peak inrush current.
-# See docs/amp_test_matrix.md — "Limitations" section.
-RAMP_SUBSTEPS    = 10
-RAMP_SUBSTEP_MS  = 20
 
 # ---------------------------------------------------------------------------
 # Import-time assertions — fail loudly, do not silently ship a bad config
