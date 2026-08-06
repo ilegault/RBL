@@ -22,6 +22,7 @@ LAYOUT
 import logging
 import math
 import time
+from datetime import datetime, timezone
 
 import matplotlib
 matplotlib.use("QtAgg")
@@ -149,6 +150,25 @@ class ProfilerTab(QWidget):
         hist_lay.addWidget(self._canvas_hist)
         layout.addWidget(hist_box, stretch=1)
 
+        # ── Calibration hook ──────────────────────────────────────────────────
+        cal_box = QGroupBox("FWHM Reference (Calibration)")
+        cal_lay = QHBoxLayout(cal_box)
+
+        self._btn_save_ref = QPushButton("Save FWHM Reference")
+        self._btn_save_ref.setEnabled(False)
+        self._btn_save_ref.setToolTip(
+            "Save the current FWHM reading as the reference value for this session."
+        )
+        self._btn_save_ref.clicked.connect(self._on_save_fwhm_ref)
+        cal_lay.addWidget(self._btn_save_ref)
+
+        self._lbl_ref = QLabel(self._load_fwhm_ref_label())
+        self._lbl_ref.setStyleSheet(
+            f"color: {theme.NEUTRAL}; font-size: 10px; font-style: italic;"
+        )
+        cal_lay.addWidget(self._lbl_ref, stretch=1)
+        layout.addWidget(cal_box)
+
         # ── Subscribe to Beamline signals ─────────────────────────────────────
         self.beamline.scope_changed.connect(self._on_scope_state)
         self.beamline.scope_error.connect(self._on_scope_error)
@@ -193,6 +213,9 @@ class ProfilerTab(QWidget):
         """Receive ScopeState; cache for next redraw tick."""
         self._last_state = state
         self._last_time  = time.time()
+
+        if state.connected and not math.isnan(state.fwhm_seconds):
+            self._btn_save_ref.setEnabled(True)
 
         now = time.time()
         fwhm = state.fwhm_seconds
@@ -316,6 +339,52 @@ class ProfilerTab(QWidget):
         self._ax_hist.plot(xs, ys, color=theme.OK, linewidth=0.8)
         self._ax_hist.invert_xaxis()
         self._canvas_hist.draw_idle()
+
+    # -----------------------------------------------------------------------
+    # Calibration hook
+    # -----------------------------------------------------------------------
+
+    def _on_save_fwhm_ref(self):
+        state = self._last_state
+        if state is None or math.isnan(state.fwhm_seconds):
+            return
+        iso = datetime.now(timezone.utc).isoformat()
+        entry = {
+            "fwhm_seconds":  state.fwhm_seconds,
+            "fwhm_samples":  state.fwhm_samples,
+            "channel":       state.channel,
+            "xincr":         state.xincr,
+            "saved_iso":     iso,
+        }
+        try:
+            from rbl.config.persistence import load_config, save_config
+            cfg = load_config()
+            cfg["fwhm_calibration"] = entry
+            save_config(cfg)
+            log.info("profiler_tab: saved FWHM reference: %s", entry)
+        except Exception as exc:
+            log.exception("profiler_tab: failed to save FWHM reference: %s", exc)
+        self._lbl_ref.setText(self._fmt_ref(entry))
+
+    @staticmethod
+    def _fmt_ref(entry: dict) -> str:
+        fwhm_s = entry.get("fwhm_seconds", math.nan)
+        iso    = entry.get("saved_iso", "")
+        if math.isnan(fwhm_s):
+            return "(no reference saved)"
+        return f"Reference: {fwhm_s:.4g} s  (saved {iso[:19].replace('T', ' ')} UTC)"
+
+    @staticmethod
+    def _load_fwhm_ref_label() -> str:
+        try:
+            from rbl.config.persistence import load_config
+            cfg   = load_config()
+            entry = cfg.get("fwhm_calibration")
+            if entry:
+                return ProfilerTab._fmt_ref(entry)
+        except Exception:
+            pass
+        return "(no reference saved)"
 
     # -----------------------------------------------------------------------
     # Shutdown
