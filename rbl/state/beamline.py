@@ -38,15 +38,18 @@ from rbl.hardware import beam_reconstruction as BR
 from rbl.state.funcgen_control import FuncGenControlMixin
 from rbl.state.labjack_link import LabJackLinkMixin
 from rbl.state.motor_control import MotorControlMixin
+from rbl.state.vacuum_link import VacuumLinkMixin
 
 
-class Beamline(LabJackLinkMixin, FuncGenControlMixin, MotorControlMixin, QObject):
+class Beamline(LabJackLinkMixin, FuncGenControlMixin, MotorControlMixin, VacuumLinkMixin, QObject):
     motors_changed   = Signal(object)   # MotorState
     logamps_changed  = Signal(object)   # LogAmpState
     amps_changed     = Signal(object)   # AmpState
     funcgens_changed = Signal(object)   # FuncGenState
     timebase_changed = Signal(dict)     # {"A": "INT"/"EXT"/"?"/"—", "B": ...}
     command_failed   = Signal(str, str)  # subsystem, message
+    vacuum_changed   = Signal(object)   # VacuumState
+    vacuum_error     = Signal(str)
 
     # Motion commanded from ANY screen, published so every screen sees it.
     # See motor_control.py's module docstring for why a move is published and
@@ -74,6 +77,7 @@ class Beamline(LabJackLinkMixin, FuncGenControlMixin, MotorControlMixin, QObject
         self._init_labjack()
         self._init_funcgens()
         self._init_motors()
+        self._init_vacuum()
 
         # Last-resort safety net: if the process is torn down without a clean
         # closeEvent (e.g. an unhandled exit), still stop the LabJack stream
@@ -125,6 +129,10 @@ class Beamline(LabJackLinkMixin, FuncGenControlMixin, MotorControlMixin, QObject
             pass
         try:
             self.galil.disconnect()
+        except Exception:
+            pass
+        try:
+            self._shutdown_vacuum()
         except Exception:
             pass
         for gen in (self.dg_a, self.dg_b):

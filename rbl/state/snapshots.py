@@ -149,6 +149,30 @@ class AmpChannelSnapshot:
 
 
 @dataclass(frozen=True)
+class VacuumState:
+    """Pressure snapshot from both gauge controllers, one poll tick.
+
+    `xgs_readings` and `vgc_readings` hold XgsReading / VgcReading objects
+    respectively.  Either list may be empty when the corresponding instrument
+    is absent — missing hardware is a normal operating state, not an error.
+
+    `xgs_connected` / `vgc_connected` distinguish "not present" from "present
+    but reading an error value".
+
+    `units_xgs` / `units_vgc` carry the unit strings read from each
+    instrument at connect time.  They may differ; the log writes both.
+    Never convert between units silently.
+    """
+    timestamp:     float          # time.time() at poll completion
+    xgs_readings:  list  = field(default_factory=list)  # list[XgsReading]
+    vgc_readings:  list  = field(default_factory=list)  # list[VgcReading]
+    xgs_connected: bool  = False
+    vgc_connected: bool  = False
+    units_xgs:     str   = ""
+    units_vgc:     str   = "Torr"   # VGC083 always reports Torr on its display
+
+
+@dataclass(frozen=True)
 class AmpState:
     """Every amplifier's monitors for one stream window.
 
