@@ -120,6 +120,7 @@ class MainWindow(QMainWindow):
         # already-converted kV/mA state — so it is wired to
         # Beamline.raw_window_ready instead of amps_changed.
         self.calibration_tab.profile_change_requested.connect(self.beamline.set_stream_profile)
+        self.calibration_tab.channel_change_requested.connect(self.beamline.set_stream_channel)
         self.beamline.raw_window_ready.connect(self.calibration_tab.on_window)
         # A calibration run switching the stream profile out from under
         # AmpTab would corrupt the run if AmpTab's own Apply fired mid-run.

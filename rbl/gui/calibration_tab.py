@@ -42,12 +42,16 @@ from rbl.config.calibration_config import (
     DRIFT_DEFAULT_KV, DRIFT_MAX_ATTENDED_H, DRIFT_MAX_UNATTENDED_H,
     LoadCondition, sweep_points, ac_sweep_points,
 )
+from rbl.config.amp_test_matrix import groups as amt_groups, tests_in_group
 from rbl.hardware.funcgen_safety import CHANNEL_ROLE
 from rbl.gui import theme
 from rbl.gui.widgets.connection_bar import LabJackPanel
 from rbl.gui.widgets.inputs import NoScrollComboBox, QuietDoubleSpinBox, unit_row
 from rbl.services.calibration_runner import CalibrationRunner
 from rbl.services.calibration_writer import CalibrationWriter
+from rbl.services.amp_test_runner import AmpTestRunner
+from rbl.services.amp_test_writer import AmpTestWriter
+from rbl.services.measured_limits import hash_state as limits_hash_state
 
 log = logging.getLogger(__name__)
 
@@ -133,18 +137,71 @@ class _PreRunChecklistDialog(QDialog):
         self._buttons.button(QDialogButtonBox.StandardButton.Ok).setEnabled(ok)
 
 
+# ─── Amp-test checklist dialog ────────────────────────────────────────────────
+
+class _AmpTestChecklistDialog(QDialog):
+    """Pre-run checklist for an amp test spec."""
+
+    def __init__(self, spec, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"{spec.test_id} — pre-run checklist")
+        self.setModal(True)
+        layout = QVBoxLayout(self)
+
+        intro = QLabel(
+            f"<b>{spec.test_id}: {spec.title}</b><br>"
+            f"Load condition: <b>{spec.load_condition}</b>"
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        self._checks = []
+        items = [
+            "HIGH VOLTAGE ENABLE shorting cap is installed on all four amplifiers.",
+            f"Load condition is correct: {spec.load_condition}.",
+        ]
+        if "ON_PLATES" in spec.load_condition:
+            items.append("Nobody is at the beamline and the area is clear.")
+        if spec.expect_trip:
+            items.append(
+                "Current pot is set correctly — a trip is expected and will be recorded."
+            )
+        if spec.operator_paced:
+            items.append(
+                "Ready for operator-paced prompts — do not leave the workstation."
+            )
+
+        for text in items:
+            cb = QCheckBox(text)
+            cb.setWordWrap(True) if hasattr(cb, "setWordWrap") else None
+            cb.toggled.connect(self._refresh_ok)
+            self._checks.append(cb)
+            layout.addWidget(cb)
+
+        self._buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        self._buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Start Amp Test")
+        self._buttons.accepted.connect(self.accept)
+        self._buttons.rejected.connect(self.reject)
+        layout.addWidget(self._buttons)
+        self._refresh_ok()
+
+    def _refresh_ok(self, *_):
+        ok = all(cb.isChecked() for cb in self._checks)
+        self._buttons.button(QDialogButtonBox.StandardButton.Ok).setEnabled(ok)
+
+
 # ─── Top-level tab widget ─────────────────────────────────────────────────────
 
 class CalibrationTab(QWidget):
     """The 'HV Calibration' outer tab."""
 
-    # Mirrors AmpTab.profile_change_requested exactly — MainWindow connects
-    # this straight to beamline.set_stream_profile (see Phase 0 recon: there
-    # is no MainWindow._set_stream_profile wrapper; amp_tab wires directly).
+    # Mirrors AmpTab signals — MainWindow connects these to beamline.
     profile_change_requested = Signal(str)
+    channel_change_requested = Signal(str)   # single-channel target for amp tests
 
-    # True while a run (sweep or drift) is active. MainWindow uses this to
-    # grey out AmpTab's stream-profile selector for the duration.
+    # True while any run (sweep, drift, or amp test) is active.
     run_state_changed = Signal(bool)
 
     def __init__(self, beamline, parent=None):
@@ -152,6 +209,7 @@ class CalibrationTab(QWidget):
         self.beamline = beamline
         self._runner: CalibrationRunner = None
         self._writer: CalibrationWriter = None
+        self._amt_runner: AmpTestRunner = None
         self._current_profile = None      # tracked via on_profile_changed
         self._prior_profile = None        # stashed at run start, restored after
         self._connected = False
@@ -294,6 +352,63 @@ class CalibrationTab(QWidget):
         self.lbl_state.setStyleSheet(f"color: {theme.NEUTRAL}; font-size: 10px;")
         left_col.addWidget(self.lbl_state)
 
+        # ── Amp Test Matrix ────────────────────────────────────────────────
+        amt_box = QGroupBox("Amp Test Matrix")
+        amt_vlay = QVBoxLayout(amt_box)
+
+        # Cascading group / test selectors
+        sel_row = QHBoxLayout()
+        sel_row.addWidget(QLabel("Group:"))
+        self.cbo_amt_group = NoScrollComboBox()
+        for gnum, gname in amt_groups():
+            self.cbo_amt_group.addItem(f"G{gnum}: {gname}", userData=gnum)
+        self.cbo_amt_group.currentIndexChanged.connect(self._on_amt_group_changed)
+        sel_row.addWidget(self.cbo_amt_group, 1)
+        sel_row.addWidget(QLabel("Test:"))
+        self.cbo_amt_test = NoScrollComboBox()
+        self.cbo_amt_test.currentIndexChanged.connect(self._on_amt_test_changed)
+        sel_row.addWidget(self.cbo_amt_test, 1)
+        amt_vlay.addLayout(sel_row)
+
+        # Spec detail
+        self.lbl_amt_detail = QLabel("Select a test to see details.")
+        self.lbl_amt_detail.setWordWrap(True)
+        self.lbl_amt_detail.setStyleSheet("font-size: 9pt; color: #333;")
+        self.lbl_amt_detail.setMaximumHeight(80)
+        amt_vlay.addWidget(self.lbl_amt_detail)
+
+        # Run / Abort
+        amt_run_row = QHBoxLayout()
+        self.btn_amt_run = QPushButton("Run Amp Test")
+        self.btn_amt_run.setMinimumHeight(28)
+        self.btn_amt_run.setStyleSheet(
+            "QPushButton { background:#004d99; color:white; font-weight:bold; }"
+            "QPushButton:hover { background:#0060bb; }"
+            "QPushButton:disabled { background:#c0c0c0; color:#888; }"
+        )
+        self.btn_amt_run.clicked.connect(self._on_amt_run_clicked)
+        self.btn_amt_abort = QPushButton("Abort")
+        self.btn_amt_abort.setMinimumHeight(28)
+        self.btn_amt_abort.setEnabled(False)
+        self.btn_amt_abort.setStyleSheet(
+            "QPushButton { background:#8c0000; color:white; font-weight:bold; }"
+            "QPushButton:hover { background:#a00000; }"
+            "QPushButton:disabled { background:#c0c0c0; color:#888; }"
+        )
+        self.btn_amt_abort.clicked.connect(self._on_amt_abort_clicked)
+        amt_run_row.addWidget(self.btn_amt_run)
+        amt_run_row.addWidget(self.btn_amt_abort)
+        amt_vlay.addLayout(amt_run_row)
+
+        self.progress_amt = QProgressBar()
+        self.progress_amt.setRange(0, 1)
+        amt_vlay.addWidget(self.progress_amt)
+        self.lbl_amt_state = QLabel("Idle")
+        self.lbl_amt_state.setStyleSheet(f"color: {theme.NEUTRAL}; font-size: 10px;")
+        amt_vlay.addWidget(self.lbl_amt_state)
+
+        left_col.addWidget(amt_box)
+
         left_col.addStretch()
         top_row.addLayout(left_col, stretch=1)
 
@@ -342,7 +457,155 @@ class CalibrationTab(QWidget):
 
         self._on_mode_toggled()
         self._refresh_run_enabled()
+        self._on_amt_group_changed()   # populate test combo for first group
         self.lj_panel.set_enabled(True)
+
+    # ------------------------------------------------------------------
+    # Amp Test Matrix methods
+    # ------------------------------------------------------------------
+
+    def _on_amt_group_changed(self, *_):
+        gnum = self.cbo_amt_group.currentData()
+        self.cbo_amt_test.blockSignals(True)
+        self.cbo_amt_test.clear()
+        if gnum is not None:
+            for spec in tests_in_group(gnum):
+                self.cbo_amt_test.addItem(f"{spec.test_id}: {spec.title}", userData=spec)
+        self.cbo_amt_test.blockSignals(False)
+        self._on_amt_test_changed()
+
+    def _on_amt_test_changed(self, *_):
+        spec = self.cbo_amt_test.currentData()
+        if spec is None:
+            self.lbl_amt_detail.setText("Select a test to see details.")
+            self._amt_refresh_run_enabled()
+            return
+
+        if spec.notes.startswith("delegate:"):
+            tag = " <i>[DELEGATE — use calibration section above]</i>"
+        elif spec.profile == "":
+            tag = " <i>[MANUAL ENTRY — not yet supported]</i>"
+        else:
+            tag = ""
+
+        trip_str = "YES — trip expected" if spec.expect_trip else "no"
+        proves_snip = spec.proves[:220] + ("…" if len(spec.proves) > 220 else "")
+        self.lbl_amt_detail.setText(
+            f"<b>{spec.test_id}: {spec.title}</b>{tag}<br>"
+            f"<i>Load:</i> {spec.load_condition} | "
+            f"<i>Trip:</i> {trip_str}<br>"
+            f"{proves_snip}"
+        )
+        self._amt_refresh_run_enabled()
+
+    def _amt_refresh_run_enabled(self):
+        spec = self.cbo_amt_test.currentData()
+        any_running = (self._runner is not None or self._amt_runner is not None)
+        runnable = (
+            spec is not None
+            and self._connected
+            and not any_running
+            and not getattr(spec, "notes", "").startswith("delegate:")
+            and getattr(spec, "profile", "") != ""
+        )
+        self.btn_amt_run.setEnabled(runnable)
+
+    def _on_amt_run_clicked(self):
+        spec = self.cbo_amt_test.currentData()
+        if spec is None:
+            return
+
+        if spec.notes.startswith("delegate:"):
+            target = spec.notes[len("delegate:"):]
+            mode = "AC Sweep" if "ac_sweep" in target else "DC Sweep"
+            QMessageBox.information(
+                self, f"{spec.test_id} — Delegate test",
+                f"This test delegates to the calibration runner.\n\n"
+                f"Select \"{mode}\" in the Run Configuration above and click Run.",
+            )
+            return
+
+        if spec.profile == "":
+            QMessageBox.information(
+                self, f"{spec.test_id} — Manual entry",
+                "This test requires manual data entry (e.g. DMM readings).\n"
+                "This mode is not yet supported in the GUI.",
+            )
+            return
+
+        dialog = _AmpTestChecklistDialog(spec, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        funcgen_map = _build_funcgen_map(self.beamline)
+        limits_hash = limits_hash_state()
+        writer = AmpTestWriter(spec, limits_hash=limits_hash)
+
+        self._amt_runner = AmpTestRunner(funcgen_map, parent=self)
+        self._amt_runner.progress.connect(self._on_amt_progress)
+        self._amt_runner.row_recorded.connect(self._on_amt_row_recorded)
+        self._amt_runner.finished.connect(self._on_amt_finished)
+        self._amt_runner.error.connect(self._on_amt_error)
+        self._amt_runner.operator_prompt.connect(self._on_amt_operator_prompt)
+        self._amt_runner.profile_change_requested.connect(self.profile_change_requested)
+        self._amt_runner.channel_change_requested.connect(self.channel_change_requested)
+
+        self._prior_profile = self._current_profile
+        self.btn_amt_run.setEnabled(False)
+        self.btn_run.setEnabled(False)
+        self.btn_amt_abort.setEnabled(True)
+        self.run_state_changed.emit(True)
+        self.progress_amt.setRange(0, len(self._amt_runner._sequence) or 1)
+        self.progress_amt.setValue(0)
+        self.lbl_amt_state.setText(f"Starting {spec.test_id}…")
+
+        self._amt_runner.start(spec, writer=writer)
+        # Update progress range now that sequence is built
+        total = len(self._amt_runner._sequence)
+        if total > 0:
+            self.progress_amt.setRange(0, total)
+
+    def _on_amt_abort_clicked(self):
+        if self._amt_runner is not None:
+            self._amt_runner.abort()
+
+    def _on_amt_progress(self, done: int, total: int, label: str):
+        self.progress_amt.setRange(0, max(total, 1))
+        self.progress_amt.setValue(done)
+        self.lbl_amt_state.setText(label)
+
+    def _on_amt_row_recorded(self, row: dict):
+        log.debug("amt row: %s %s", row.get("test_id"), row.get("level_label"))
+
+    def _on_amt_finished(self, run_dir: str):
+        self.btn_amt_abort.setEnabled(False)
+        self.run_state_changed.emit(False)
+        maximum = max(self.progress_amt.maximum(), 1)
+        self.progress_amt.setValue(maximum)
+        self.lbl_amt_state.setText(
+            f"Done — {run_dir}" if run_dir else "Stopped"
+        )
+        self._amt_runner = None
+        self._amt_refresh_run_enabled()
+        self._refresh_run_enabled()
+        if self._prior_profile:
+            self.profile_change_requested.emit(self._prior_profile)
+        self._prior_profile = None
+
+    def _on_amt_error(self, msg: str):
+        log.error("amp test error: %s", msg)
+        self.lbl_amt_state.setText(f"Error: {msg[:80]}")
+
+    def _on_amt_operator_prompt(self, title: str, instruction: str):
+        reply = QMessageBox.question(
+            self, title, instruction,
+            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+        )
+        if self._amt_runner is not None:
+            if reply == QMessageBox.StandardButton.Ok:
+                self._amt_runner.operator_acknowledged()
+            else:
+                self._amt_runner.abort()
 
     # ------------------------------------------------------------------
     # Static plot chrome: ideal y=x line + shaded uncertainty band.
@@ -522,13 +785,17 @@ class CalibrationTab(QWidget):
         self._connected = True
         self.lj_panel.set_connected(True, serial)
         self._refresh_run_enabled()
+        self._amt_refresh_run_enabled()
 
     def on_labjack_disconnected(self):
         self._connected = False
         self.lj_panel.set_connected(False)
         self._refresh_run_enabled()
+        self._amt_refresh_run_enabled()
         if self._runner is not None:
             self._runner.abort()
+        if self._amt_runner is not None:
+            self._amt_runner.abort()
 
     def _on_error(self, msg: str):
         QMessageBox.warning(self, "LabJack poll error", msg)
@@ -540,9 +807,13 @@ class CalibrationTab(QWidget):
         """Connected to Beamline.raw_window_ready (see rbl/gui/app.py)."""
         if self._runner is not None:
             self._runner.on_window(payload)
+        if self._amt_runner is not None:
+            self._amt_runner.on_window(payload)
 
     # ------------------------------------------------------------------
 
     def shutdown(self):
         if self._runner is not None:
             self._runner.abort()
+        if self._amt_runner is not None:
+            self._amt_runner.abort()

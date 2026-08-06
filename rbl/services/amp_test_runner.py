@@ -268,6 +268,13 @@ class AmpTestRunner(QObject):
             )
             return
 
+        if spec.profile == "":
+            self._err(
+                f"{spec.test_id}: this test has no stream profile "
+                f"(manual/offline data entry only — not supported by AmpTestRunner)"
+            )
+            return
+
         self._spec        = spec
         self._writer      = writer
         self._limits_path = limits_path
@@ -436,11 +443,15 @@ class AmpTestRunner(QObject):
                     target_ain = ""
 
             for i, (level, label) in enumerate(zip(spec.levels, spec.level_labels)):
-                commanded_kv = _infer_commanded_kv(spec, level)
-                freq_hz      = _infer_freq_hz(spec, level)
+                try:
+                    level_f = float(level)
+                except (TypeError, ValueError):
+                    level_f = 0.0
+                commanded_kv = _infer_commanded_kv(spec, level_f)
+                freq_hz      = _infer_freq_hz(spec, level_f)
                 steps.append(_Step(
                     amp_label=amp, target_ain=target_ain,
-                    level_index=i, level_label=label, level_value=float(level),
+                    level_index=i, level_label=label, level_value=level_f,
                     commanded_kv=commanded_kv, shape=shape, freq_hz=freq_hz,
                     seq=seq, is_step_test=is_step,
                 ))
