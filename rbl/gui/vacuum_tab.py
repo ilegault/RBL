@@ -16,6 +16,8 @@ or opens a serial port.
 import logging
 import time
 
+from rbl.services.vacuum_logger import VacuumLogger
+
 import matplotlib
 matplotlib.use("QtAgg")
 from matplotlib.figure import Figure
@@ -159,12 +161,12 @@ class VacuumTab(QWidget):
         # ── Logging bar ───────────────────────────────────────────────────────
         log_bar = QHBoxLayout()
         self._btn_log = QPushButton("Start Logging")
-        self._btn_log.setEnabled(False)   # enabled in Phase 6
-        self._btn_log.setToolTip("Pressure logging is implemented in Phase 6")
+        self._btn_log.setEnabled(False)   # enabled once a state arrives
         self._lbl_log_path = QLabel("(not logging)")
         self._lbl_log_path.setStyleSheet(
             f"color: {theme.NEUTRAL}; font-size: 10px; font-style: italic;"
         )
+        self._btn_log.clicked.connect(self._on_log_toggle)
         log_bar.addWidget(self._btn_log)
         log_bar.addWidget(self._lbl_log_path, stretch=1)
         layout.addLayout(log_bar)
@@ -213,6 +215,10 @@ class VacuumTab(QWidget):
         self._last_state = state
         self._last_time  = time.time()
 
+        # Enable logging button once we have at least one reading
+        if not self._btn_log.isEnabled():
+            self._btn_log.setEnabled(True)
+
         # Update connection bars
         self._xgs_bar.set_connected(state.xgs_connected)
         self._vgc_bar.set_connected(state.vgc_connected)
@@ -230,6 +236,73 @@ class VacuumTab(QWidget):
             self._history.setdefault(key, []).append((now, r.pressure))
             if len(self._history[key]) > _MAX_HISTORY:
                 self._history[key] = self._history[key][-_MAX_HISTORY:]
+
+        # Forward to active logger; reopen if gauge set changed
+        if self._logger is not None:
+            ok = self._logger.write_row(state)
+            if not ok:
+                log.warning("vacuum_tab: gauge set changed mid-session — reopening logger")
+                self._logger.close()
+                self._logger = VacuumLogger(
+                    self._build_gauge_labels(state),
+                    output_dir=None,
+                )
+                self._logger.write_header_comment(self._build_comment_lines(state))
+                self._logger.write_row(state)
+
+    # -----------------------------------------------------------------------
+    # Logging toggle
+    # -----------------------------------------------------------------------
+
+    def _on_log_toggle(self):
+        if self._logger is None:
+            self._start_logging()
+        else:
+            self._stop_logging()
+
+    def _start_logging(self):
+        state = self._last_state
+        if state is None:
+            return
+        labels = self._build_gauge_labels(state)
+        self._logger = VacuumLogger(labels)
+        self._logger.write_header_comment(self._build_comment_lines(state))
+        self._btn_log.setText("Stop Logging")
+        self._lbl_log_path.setText(self._logger.csv_path)
+        self._lbl_log_path.setStyleSheet(
+            f"color: {theme.OK}; font-size: 10px; font-style: italic;"
+        )
+        log.info("vacuum_tab: logging started -> %s", self._logger.csv_path)
+
+    def _stop_logging(self):
+        if self._logger is None:
+            return
+        path = self._logger.close()
+        self._logger = None
+        self._btn_log.setText("Start Logging")
+        self._lbl_log_path.setText(f"Saved: {path}")
+        self._lbl_log_path.setStyleSheet(
+            f"color: {theme.NEUTRAL}; font-size: 10px; font-style: italic;"
+        )
+        log.info("vacuum_tab: logging stopped — file closed: %s", path)
+
+    @staticmethod
+    def _build_gauge_labels(state) -> list[str]:
+        labels = []
+        for r in state.xgs_readings:
+            labels.append(f"xgs600:{r.channel.label}")
+        for r in state.vgc_readings:
+            labels.append(f"vgc083:{r.channel}")
+        return labels
+
+    @staticmethod
+    def _build_comment_lines(state) -> list[str]:
+        lines = [f"vacuum_logger RBL {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}"]
+        if state.xgs_connected:
+            lines.append(f"xgs600: units={state.units_xgs}")
+        if state.vgc_connected:
+            lines.append(f"vgc083: units={state.units_vgc}")
+        return lines
 
     def _on_vacuum_error(self, msg: str):
         log.warning("vacuum_tab: error signal: %s", msg)
@@ -346,6 +419,12 @@ class VacuumTab(QWidget):
     def shutdown(self):
         self._redraw_timer.stop()
         self._plot_timer.stop()
+        if self._logger is not None:
+            try:
+                self._logger.close()
+            except Exception:
+                log.exception("vacuum_tab: error closing logger on shutdown")
+            self._logger = None
 
 
 # ---------------------------------------------------------------------------
