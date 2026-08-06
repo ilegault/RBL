@@ -33,6 +33,7 @@ metadata.
 """
 import atexit
 import logging
+import re
 import shutil
 import time
 from dataclasses import dataclass
@@ -97,8 +98,10 @@ def _infer_freq_hz(spec: TestSpec, level_value: float) -> float:
         return STEP_RESPONSE_FREQ_HZ
     if spec.factor == "frequency":
         return float(level_value)
-    # G7.1-G7.3 have amplitude ladder at a fixed frequency given in notes;
-    # fall back to 1000 Hz as a safe default (Phase 8 parses notes properly).
+    # Fixed-frequency AC tests (G7.1–G7.3): notes carry "Fixed frequency: NNN Hz."
+    m = re.search(r'Fixed frequency:\s*([\d.]+)\s*Hz', spec.notes)
+    if m:
+        return float(m.group(1))
     return 1000.0
 
 
@@ -110,7 +113,10 @@ def _infer_commanded_kv(spec: TestSpec, level_value: float) -> float:
     if spec.factor in ("commanded kV", "step size", "peak kV"):
         return float(level_value)
     if spec.factor == "frequency":
-        # AC frequency sweep at fixed amplitude (G2.1 or G7.4/G7.5)
+        # Fixed amplitude specified in notes (G2.1, G7.4, G7.5)
+        m = re.search(r'Fixed peak amplitude:\s*([\d.]+)\s*kV', spec.notes)
+        if m:
+            return float(m.group(1))
         if "G2" in spec.test_id:
             return G2_1_PEAK_KV
         return G7_FREQ_TESTS_PEAK_KV
@@ -219,6 +225,9 @@ class AmpTestRunner(QObject):
         # Trip interlock state
         self._collapse_count: dict = {}   # ain -> int
 
+        # G2.1 capacitance accumulator: amp -> [(freq_hz, i_pk_ma, v_pk_kv), ...]
+        self._g2_cap_samples: dict = {}
+
         # Profile-handshake state
         self._expected_profile:  str = ""
         self._expected_win_samp: int = 0
@@ -264,6 +273,7 @@ class AmpTestRunner(QObject):
         self._limits_path = limits_path
         self._t_start     = time.monotonic()
         self._run_id      = f"amt_{time.strftime('%Y%m%dT%H%M%S')}"
+        self._g2_cap_samples = {}
         self._state       = _State.PREFLIGHT
 
         print(f"[AMT] {spec.test_id} '{spec.title}' — PREFLIGHT")
@@ -367,6 +377,8 @@ class AmpTestRunner(QObject):
                     f"({LOAD_CAP_PF_DEFAULT} pF) — run G2 first for a measured value"
                 )
             load_pf = LOAD_CAP_PF_DEFAULT
+            # Use the measured trip threshold (or AMP_MAX_MA_DC if not yet measured)
+            trip_threshold, _ = limits_trip_ma("X+", path=self._limits_path)
 
             for level, label in zip(spec.levels, spec.level_labels):
                 kv   = _infer_commanded_kv(spec, level)
@@ -374,7 +386,7 @@ class AmpTestRunner(QObject):
                 if freq <= 0 or kv <= 0:
                     continue
                 i_ma = peak_current_ma(freq, kv, load_pf)
-                ceil_kv, reason = envelope_ceiling_kv(freq, None, load_pf)
+                ceil_kv, reason = envelope_ceiling_kv(freq, trip_threshold, load_pf)
                 if kv > ceil_kv and not spec.expect_trip:
                     self._err(
                         f"PREFLIGHT: {spec.test_id} level {label!r} "
@@ -510,25 +522,29 @@ class AmpTestRunner(QObject):
         step = self._sequence[self._seq_idx]
         self._state = _State.SETTLE
 
-        settle_ms = int(self._spec.settle_s * 1000)
+        # For AC waveforms at low frequencies, settle must cover at least 3 cycles
+        settle_s = self._spec.settle_s
+        if step.shape in ("Sine", "Square") and step.freq_hz > 0:
+            settle_s = max(settle_s, 3.0 / step.freq_hz)
+        settle_ms = int(settle_s * 1000)
 
         if step.amp_label == "NONE":
             # No drive command
-            print(f"[AMT] SETTLE: NONE drive, holding {self._spec.settle_s:.1f}s")
+            print(f"[AMT] SETTLE: NONE drive, holding {settle_s:.1f}s")
         elif step.is_step_test:
             # Step tests: command 0 kV first, capture opens when settle fires
             self._command_step(step.amp_label, 0.0, step.shape, step.freq_hz)
             print(
-                f"[AMT] SETTLE (step): {step.amp_label} → 0 V, "
-                f"will step to {step.commanded_kv:+.3f} kV after {self._spec.settle_s:.1f}s"
+                f"[AMT] SETTLE (step): {step.amp_label} -> 0 V, "
+                f"will step to {step.commanded_kv:+.3f} kV after {settle_s:.1f}s"
             )
         else:
             # Normal: command target level during settle
             self._command_step(step.amp_label, step.commanded_kv,
                                step.shape, step.freq_hz)
             print(
-                f"[AMT] SETTLE: {step.amp_label} → {step.commanded_kv:+.3f} kV, "
-                f"holding {self._spec.settle_s:.1f}s"
+                f"[AMT] SETTLE: {step.amp_label} -> {step.commanded_kv:+.3f} kV, "
+                f"holding {settle_s:.1f}s"
             )
 
         self._collect_windows = {}
@@ -760,6 +776,10 @@ class AmpTestRunner(QObject):
                 except Exception as exc:
                     log.warning("writer.write_row: %s", exc)
 
+        # G2.1: accumulate per-level capacitance sample; write when amp completes
+        if self._spec is not None and self._spec.test_id == "G2.1":
+            self._accumulate_g2_cap(step)
+
         done  = self._seq_idx + 1
         total = len(self._sequence)
         self.progress.emit(done, total, step.level_label)
@@ -795,6 +815,66 @@ class AmpTestRunner(QObject):
             self._enter_await_profile_at(next_step)
         else:
             self._enter_settle()
+
+    def _accumulate_g2_cap(self, step: _Step) -> None:
+        """Accumulate one (freq, I_pk_ma, V_pk_kV) sample for G2.1.
+
+        When the last level for an amp completes, compute the mean capacitance
+        across all collected frequencies and write it to measured_limits.
+        """
+        amp = step.amp_label
+        if amp in ("ALL", "NONE", ""):
+            return
+        current_ain = AMP_CHANNEL_MAP.get(amp, {}).get("current", "")
+        voltage_ain = AMP_CHANNEL_MAP.get(amp, {}).get("voltage", "")
+        if not current_ain or not voltage_ain:
+            return
+
+        cur_wins  = self._collect_windows.get(current_ain, [])
+        volt_wins = self._collect_windows.get(voltage_ain, [])
+        if not cur_wins or not volt_wins:
+            log.warning("G2.1: no data for %s at %s Hz", amp, step.freq_hz)
+            return
+
+        i_pk_ma = monitor_to_ma(
+            float(np.max(np.abs(np.concatenate(cur_wins))))
+        )
+        v_pk_kv = monitor_to_kv(
+            float(np.max(np.abs(np.concatenate(volt_wins))))
+        )
+        if step.freq_hz <= 0 or v_pk_kv <= 0 or i_pk_ma <= 0:
+            log.warning(
+                "G2.1: skipping degenerate sample for %s f=%.1f i=%.3f v=%.4f",
+                amp, step.freq_hz, i_pk_ma, v_pk_kv,
+            )
+            return
+
+        self._g2_cap_samples.setdefault(amp, []).append(
+            (step.freq_hz, i_pk_ma, v_pk_kv)
+        )
+        print(
+            f"[AMT] G2.1 {amp} @ {step.freq_hz:.0f} Hz: "
+            f"I_pk={i_pk_ma:.3f} mA, V_pk={v_pk_kv:.4f} kV"
+        )
+
+        # Write once when the last level for this amp finishes
+        if step.level_index == len(self._spec.levels) - 1:
+            samples = self._g2_cap_samples.get(amp, [])
+            if not samples:
+                log.warning("G2.1: no valid samples for %s — skipping write", amp)
+                return
+            # C_pF = I_pk_mA * 1e6 / (2π * f_Hz * V_pk_kV)
+            cap_values = [
+                i_ma * 1e6 / (2.0 * np.pi * f * v_kv)
+                for f, i_ma, v_kv in samples
+            ]
+            mean_pf = float(np.mean(cap_values))
+            print(
+                f"[AMT] G2.1 {amp}: computed load_cap = {mean_pf:.1f} pF "
+                f"(mean of {len(cap_values)} measurements)"
+            )
+            record_load_cap_pf(amp, mean_pf, path=self._limits_path)
+            log.info("G2.1: recorded load_cap_pf(%s) = %.1f pF", amp, mean_pf)
 
     def _profile_changed(self, next_step: _Step) -> bool:
         """True if the next step requires a different single-channel target."""

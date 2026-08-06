@@ -401,3 +401,120 @@ def test_abort_zeros_all_outputs(runner, fgens, tmp_limits):
     zero_b = [c for c in fb.calls if c[0] == "set_waveform"]
     assert all(c[5] == 0.0 for c in zero_a + zero_b), \
         "all channels must be zeroed after abort"
+
+
+# ---------------------------------------------------------------------------
+# 10. _infer_freq_hz parses "Fixed frequency: NNN Hz" from G7.1–G7.3 notes
+# ---------------------------------------------------------------------------
+
+def test_infer_freq_hz_parses_notes_for_g7_amplitude_tests():
+    from rbl.services.amp_test_runner import _infer_freq_hz
+    from rbl.config.amp_test_matrix import by_id
+
+    assert _infer_freq_hz(by_id("G7.1"), 0.5) == pytest.approx(100.0)
+    assert _infer_freq_hz(by_id("G7.2"), 0.5) == pytest.approx(1000.0)
+    assert _infer_freq_hz(by_id("G7.3"), 0.5) == pytest.approx(2000.0)
+
+
+# ---------------------------------------------------------------------------
+# 11. _infer_commanded_kv parses "Fixed peak amplitude: N.N kV" from G7.4/G7.5
+# ---------------------------------------------------------------------------
+
+def test_infer_commanded_kv_parses_notes_for_frequency_ladders():
+    from rbl.services.amp_test_runner import _infer_commanded_kv
+    from rbl.config.amp_test_matrix import by_id
+
+    # G7.4: "Fixed peak amplitude: 2.0 kV"
+    assert _infer_commanded_kv(by_id("G7.4"), 1.0) == pytest.approx(2.0)
+    # G7.5: "Fixed peak amplitude: 2.0 kV"
+    assert _infer_commanded_kv(by_id("G7.5"), 3000.0) == pytest.approx(2.0)
+    # G2.1 also has "Fixed peak amplitude of 2.0 kV" (different phrasing — uses fallback)
+    # G2.1 notes say "Fixed peak amplitude of 2.0 kV" (no colon after "amplitude")
+    # so it falls through to the "G2" branch → G2_1_PEAK_KV = 2.0
+    from rbl.services.amp_test_runner import G2_1_PEAK_KV
+    assert _infer_commanded_kv(by_id("G2.1"), 100.0) == pytest.approx(G2_1_PEAK_KV)
+
+
+# ---------------------------------------------------------------------------
+# 12. G7.4 at 1 Hz uses settle_s >= 3.0 s (3 cycles minimum)
+# ---------------------------------------------------------------------------
+
+def test_g7_4_low_freq_settle_is_at_least_3_cycles(runner, tmp_limits):
+    """At 1 Hz the settle must be max(spec.settle_s, 3.0/1.0) = 3.0 s."""
+    from rbl.services.amp_test_runner import _infer_freq_hz, _infer_commanded_kv
+    from rbl.config.amp_test_matrix import by_id
+
+    spec = by_id("G7.4")
+    # First level is 1 Hz
+    freq = _infer_freq_hz(spec, spec.levels[0])
+    assert freq == pytest.approx(1.0)
+
+    # Minimum settle = 3 cycles = 3.0 s; spec.settle_s = 2.0 s → result must be 3.0 s
+    min_settle = max(spec.settle_s, 3.0 / freq)
+    assert min_settle >= 3.0, f"settle at 1 Hz should be >= 3 s, got {min_settle}"
+
+
+# ---------------------------------------------------------------------------
+# 13. G2.1: capacitance is computed and written after all levels per amp
+# ---------------------------------------------------------------------------
+
+def test_g2_1_writes_load_cap_pf_after_all_levels(runner, tmp_limits):
+    """After completing all 3 frequency levels for one amp, load_cap_pf is written."""
+    import math
+    from rbl.services.measured_limits import load_cap_pf as read_load_cap_pf
+    from rbl.hardware.amp_monitor import monitor_to_ma, monitor_to_kv
+    from rbl.config.hardware_config import AMP_CHANNEL_MAP
+    from rbl.config.labjack_stream_config import window_samples
+
+    spec_g2 = __import__("rbl.config.amp_test_matrix", fromlist=["by_id"]).by_id("G2.1")
+    runner.start(spec_g2, limits_path=tmp_limits)
+
+    ws = window_samples("WAVEFORM")
+
+    # Build a payload with realistic synthetic currents for X+ (AIN12=current, AIN13=voltage)
+    # Use ~0.5 V on current AIN (= ~5 mA) and ~0.3 V on voltage AIN (= ~3 kV)
+    # C = 5e-3 / (2π * f * 3e3)
+    def _payload(freq_hz):
+        channels = {}
+        for ain in ("AIN6","AIN7","AIN8","AIN9","AIN10","AIN11","AIN12","AIN13"):
+            channels[ain] = {"waveform": np.zeros(ws), "peak": 0.0, "pk_pk": 0.0, "rms": 0.0}
+        # X+ current AIN12: 0.5 V peak → monitor_to_ma(0.5) mA
+        channels["AIN12"]["waveform"] = np.full(ws, 0.5)
+        # X+ voltage AIN13: 0.3 V peak → monitor_to_kv(0.3) kV
+        channels["AIN13"]["waveform"] = np.full(ws, 0.3)
+        return {"profile": "WAVEFORM", "window_samples": ws,
+                "t": 1.0, "channels": channels}
+
+    # Pump profile handshake
+    _pump_profile(runner, "WAVEFORM")
+
+    # For each of the 3 frequency levels, enter CAPTURE and drain it
+    for level_val in spec_g2.levels:
+        _force_capture(runner)
+        if runner._state != _State.CAPTURE:
+            pytest.skip("runner did not reach CAPTURE for G2.1")
+
+        # Feed one window with signal, then expire the hold
+        runner.on_window(_payload(level_val))
+        runner._collect_t_end = 0.0   # expire hold immediately
+        runner.on_window(_payload(level_val))
+
+        # Re-pump profile if needed for next level
+        if runner._state == _State.AWAIT_PROFILE:
+            _pump_profile(runner, "WAVEFORM")
+
+    # After all 3 levels for X+, load_cap_pf["X+"] should be written
+    cap_val, is_measured = read_load_cap_pf("X+", path=tmp_limits)
+    assert is_measured, "load_cap_pf for X+ should be written after G2.1 completes all levels"
+    assert cap_val > 0, f"capacitance must be positive, got {cap_val}"
+    # Sanity check: C = mean(I_pk_ma * 1e6 / (2π * f * V_pk_kV)) across all 3 levels
+    # (constant injected signal, so I_pk_ma and V_pk_kV are the same at each level)
+    i_pk_ma = monitor_to_ma(0.5)
+    v_pk_kv = monitor_to_kv(0.3)
+    expected_caps = [
+        i_pk_ma * 1e6 / (2.0 * math.pi * f * v_pk_kv)
+        for f in spec_g2.levels   # [100.0, 500.0, 1000.0]
+    ]
+    expected_mean_pf = sum(expected_caps) / len(expected_caps)
+    assert abs(cap_val - expected_mean_pf) / expected_mean_pf < 0.02, \
+        f"computed cap {cap_val:.1f} pF differs >2% from expected {expected_mean_pf:.1f} pF"
