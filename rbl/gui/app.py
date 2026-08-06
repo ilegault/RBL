@@ -22,6 +22,7 @@ from rbl.gui.funcgen_tab import FuncGenTab
 from rbl.gui.overview_tab import OverviewTab
 from rbl.gui.calibration_tab import CalibrationTab
 from rbl.gui.vacuum_tab import VacuumTab
+from rbl.gui.profiler_tab import ProfilerTab
 from rbl.state.beamline import Beamline
 
 
@@ -53,6 +54,7 @@ class MainWindow(QMainWindow):
         self._outer_tabbar.addTab("Overview")
         self._outer_tabbar.addTab("HV Calibration")
         self._outer_tabbar.addTab("Vacuum")
+        self._outer_tabbar.addTab("Beam Profiler")
         self._outer_tabbar.setExpanding(False)
         self._outer_tabbar.setDocumentMode(True)
         outer_layout.addWidget(self._outer_tabbar)
@@ -73,6 +75,7 @@ class MainWindow(QMainWindow):
         self.overview_tab = OverviewTab(self.beamline, self)
         self.calibration_tab = CalibrationTab(self.beamline, self)
         self.vacuum_tab      = VacuumTab(self.beamline, self)
+        self.profiler_tab    = ProfilerTab(self.beamline, self)
         # Each page goes inside a scroll area: when the window is narrowed past
         # what a tab's content can reflow to, a scrollbar appears rather than
         # forcing the window to stay wide. This is what makes the app
@@ -84,6 +87,7 @@ class MainWindow(QMainWindow):
         self._outer_stack.addWidget(self._wrap_scroll(self.overview_tab))
         self._outer_stack.addWidget(self._wrap_scroll(self.calibration_tab))
         self._outer_stack.addWidget(self._wrap_scroll(self.vacuum_tab))
+        self._outer_stack.addWidget(self._wrap_scroll(self.profiler_tab))
 
         # ── Shared LabJack T7 ─────────────────────────────────────────────────
         #
@@ -211,6 +215,10 @@ class MainWindow(QMainWindow):
             pass
         try:
             self.vacuum_tab.shutdown()
+        except Exception:
+            pass
+        try:
+            self.profiler_tab.shutdown()
         except Exception:
             pass
         try:
