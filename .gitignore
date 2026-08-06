@@ -255,3 +255,4 @@ build.bat
 
 
 /processing/
+/processing/analyze_calibration.py

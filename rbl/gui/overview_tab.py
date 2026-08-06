@@ -64,7 +64,7 @@ from rbl.gui.widgets.mini import MiniBar, PairTrace
 from rbl.gui.widgets.slit_control import SlitControl
 from rbl.state.beamline import Beamline
 from rbl.state.setpoints import AXIS_CHANNELS, AXIS_GENERATOR
-from rbl.state.snapshots import MotorState, LogAmpState, AmpState, FuncGenState
+from rbl.state.snapshots import MotorState, LogAmpState, AmpState, FuncGenState, ScopeState
 
 
 def _format_span(seconds: float) -> str:
@@ -118,6 +118,7 @@ class OverviewTab(QWidget):
         self._logamps: LogAmpState = LogAmpState(connected=False)
         self._amps: AmpState = AmpState(connected=False)
         self._funcgens: FuncGenState = FuncGenState()
+        self._scope: ScopeState = ScopeState(timestamp=0.0)
 
         # Was the Galil connected on the previous redraw? Used to preload each
         # target box with the live position exactly once, when the link comes
@@ -166,6 +167,7 @@ class OverviewTab(QWidget):
         beamline.logamps_changed.connect(self._on_logamps)
         beamline.amps_changed.connect(self._on_amps)
         beamline.funcgens_changed.connect(self._on_funcgens)
+        beamline.scope_changed.connect(self._on_scope)
         beamline.command_failed.connect(self._on_failure)
         beamline.timebase_changed.connect(self._on_timebase_changed)
 
@@ -471,6 +473,9 @@ class OverviewTab(QWidget):
     def _on_funcgens(self, state: FuncGenState):
         self._funcgens = state
 
+    def _on_scope(self, state: ScopeState):
+        self._scope = state
+
     def _on_slit_target_changed(self, slit: str, mm: float):
         """Some screen commanded *slit* to *mm* — show it on that slit's bar."""
         ctrl = self.slits.get(slit)
@@ -500,6 +505,7 @@ class OverviewTab(QWidget):
             "logamps":  _dc(self._logamps),
             "amps":     _dc(self._amps),
             "funcgens": _dc(self._funcgens),
+            "scope":    _dc(self._scope),
         }
 
     # ---- Commands out ----------------------------------------------------------
@@ -695,8 +701,14 @@ class OverviewTab(QWidget):
 
         self._redraw_slits()
         self._redraw_beam()
+        self._redraw_scope()
         self._redraw_funcgens()
         self._redraw_amps()
+
+    def _redraw_scope(self):
+        scope = self._scope
+        fwhm = scope.fwhm_seconds if scope.connected else float("nan")
+        self.beam.set_fwhm(fwhm)
 
     def _redraw_slits(self):
         motors = self._motors

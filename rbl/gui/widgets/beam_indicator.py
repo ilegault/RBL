@@ -24,6 +24,15 @@ from rbl.gui.widgets.inputs import NoScrollComboBox, QuietDoubleSpinBox
 _SLIT_COLORS = theme.SLIT_COLORS
 
 
+def _fmt_fwhm(seconds: float) -> str:
+    """Format a FWHM duration in the most readable unit."""
+    if seconds >= 1.0:
+        return f"{seconds:.3f} s"
+    if seconds >= 1e-3:
+        return f"{seconds * 1e3:.3g} ms"
+    return f"{seconds * 1e6:.3g} µs"
+
+
 class _ApertureView(QWidget):
     """The slit aperture and the beam inside it, drawn to scale in millimetres.
 
@@ -477,9 +486,32 @@ class BeamPositionIndicator(QWidget):
         self.lbl_overscan.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(self.lbl_overscan)
 
+        self.lbl_fwhm = QLabel("FWHM  —")
+        self.lbl_fwhm.setFont(QFont("Consolas", 10 if compact else 11,
+                                    QFont.Weight.Bold))
+        self.lbl_fwhm.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(self.lbl_fwhm)
+
+        self.lbl_fwhm_note = QLabel("")
+        self.lbl_fwhm_note.setWordWrap(True)
+        self.lbl_fwhm_note.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_fwhm_note.setStyleSheet(f"font-size: {self._small}px; color: #888;")
+        lay.addWidget(self.lbl_fwhm_note)
+
+        self._fwhm_s: float = float("nan")
+
         self._on_mode_changed()
 
     # ---- Inputs -------------------------------------------------------------
+
+    def set_fwhm(self, fwhm_seconds: float):
+        """Live FWHM from the beam profiler scope, in seconds.
+
+        Pass ``float('nan')`` when the scope is disconnected or the extraction
+        failed.  Only shown in static-beam mode; ignored in raster mode.
+        """
+        self._fwhm_s = fwhm_seconds
+        self._update_fwhm_label()
 
     def set_currents(self, currents_by_slit: dict):
         """Latest log-amp current per slit label, in Amps."""
@@ -509,11 +541,31 @@ class BeamPositionIndicator(QWidget):
 
     # ---- Internals ----------------------------------------------------------
 
+    def _update_fwhm_label(self):
+        fwhm = self._fwhm_s
+        if math.isnan(fwhm):
+            self.lbl_fwhm.setText("FWHM  —")
+            self.lbl_fwhm.setStyleSheet(f"color: #888;")
+            self.lbl_fwhm_note.setText(
+                "Scope not connected — connect the TDS 2012 oscilloscope "
+                "on the Beam Profiler tab for automatic FWHM measurement.")
+            self.lbl_fwhm_note.setStyleSheet(
+                f"font-size: {self._small}px; color: #b06000;")
+        else:
+            self.lbl_fwhm.setText(f"FWHM  {_fmt_fwhm(fwhm)}")
+            self.lbl_fwhm.setStyleSheet(f"color: {theme.OK};")
+            self.lbl_fwhm_note.setText("")
+
     def _on_mode_changed(self, *_):
         raster = self.cmb_mode.currentIndex() == 1
-        for wdg in (self.lbl_span_x, self.spn_span_x,
+        # Spot FWHM spinbox: raster mode only — in static mode the scope
+        # measures it directly, so manual entry is redundant.
+        for wdg in (self.lbl_spot, self.spn_spot,
+                    self.lbl_span_x, self.spn_span_x,
                     self.lbl_span_y, self.spn_span_y):
             wdg.setVisible(raster)
+        self.lbl_fwhm.setVisible(not raster)
+        self.lbl_fwhm_note.setVisible(not raster)
         self._recompute()
 
     def _recompute(self):
