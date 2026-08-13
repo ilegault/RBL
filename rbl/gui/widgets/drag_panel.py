@@ -25,12 +25,19 @@ Usage
     area.add(DragPanel(slits,   stretch=1), col=1)
     area.add(DragPanel(funcgen, stretch=1), col=2)
     area.add(DragPanel(hv,      stretch=1), col=2)   # stacked under funcgen
+
+  Resize outer panels  →  drag the handle on the OUTER edge of the first/last
+                          panel.  Those handles are backed by a zero-size
+                          spacer, so growing one purely takes space from the
+                          panel beside it.
+  Squeeze past content →  a panel below its content's natural size scrolls its
+                          own content rather than refusing to shrink.
 """
 
 from PySide6.QtCore import Qt, QPoint, QRect
 from PySide6.QtGui import QPainter, QColor
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QLabel, QSplitter,
+    QWidget, QVBoxLayout, QLabel, QSplitter, QSizePolicy, QScrollArea,
 )
 
 from rbl.gui import theme
@@ -59,6 +66,35 @@ class _DropIndicator(QWidget):
 
 
 # ---------------------------------------------------------------------------
+# Edge spacer
+# ---------------------------------------------------------------------------
+
+class _EdgeSpacer(QWidget):
+    """A zero-width filler at each end of a QSplitter.
+
+    A QSplitter with N children has N-1 handles and they all sit BETWEEN
+    children, so the first and last panel have no handle on their outer edge
+    and cannot be squeezed from that side.  Parking a collapsible zero-size
+    widget at each end turns those outer edges into real handles: dragging the
+    leftmost handle rightward grows this spacer and shrinks column 0, which is
+    the gesture the operator was reaching for and could not find.
+
+    It draws nothing and holds no content, so growing it costs only the space
+    it takes from its neighbour.
+    """
+
+    def __init__(self, orientation: Qt.Orientation, parent=None):
+        super().__init__(parent)
+        self.setMinimumSize(0, 0)
+        if orientation is Qt.Orientation.Horizontal:
+            self.setSizePolicy(QSizePolicy.Policy.Ignored,
+                               QSizePolicy.Policy.Expanding)
+        else:
+            self.setSizePolicy(QSizePolicy.Policy.Expanding,
+                               QSizePolicy.Policy.Ignored)
+
+
+# ---------------------------------------------------------------------------
 # Grip handle
 # ---------------------------------------------------------------------------
 
@@ -80,7 +116,10 @@ class _GripHandle(QLabel):
             "Drag left/right  →  move to a different column\n"
             "Drag up/down     →  reorder within this column\n"
             "Drag right past all columns  →  new column\n\n"
-            "Drag the thin handle between columns to resize them."
+            "Resize: drag any thin handle — including the ones at the far left, far\n"
+            "right, top and bottom edges, which squeeze the outermost panels.\n"
+            "A panel squeezed smaller than its content scrolls; it does not stretch\n"
+            "the tab."
         )
         self._pressing = False
 
@@ -120,15 +159,41 @@ class DragPanel(QWidget):
         stretch=1  →  column grows proportionally.
     """
 
+    # Smallest a panel may be dragged.  Wide enough that the ⠿ grip (22 px
+    # + 4 px margin) stays clickable, so a squeezed panel can always be
+    # dragged back out.
+    _MIN_PX = 34
+
     def __init__(self, content: QWidget, stretch: int = 0, parent=None):
         super().__init__(parent)
         self.stretch = stretch
         self._area: "PanelArea | None" = None
 
+        # The content keeps its own generous minimum size (MiniBar is 100 px
+        # wide, TraceArea 70, spin boxes more), and a QSplitter with
+        # childrenCollapsible off refuses to shrink a child below that.
+        # Putting the content inside a scroll area and giving the panel itself
+        # a near-zero minimum moves the decision to the operator: drag a panel
+        # as small as you like and its content clips and scrolls rather than
+        # jamming the handle.
+        self._scroll = QScrollArea(self)
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        self._scroll.setMinimumSize(0, 0)
+        self._scroll.setWidget(content)
+        self._scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
-        lay.addWidget(content)
+        lay.addWidget(self._scroll)
+
+        # Small but non-zero: childrenCollapsible stays off so a panel can
+        # never be dragged out of existence, but it can be squeezed to a sliver.
+        self.setMinimumSize(self._MIN_PX, self._MIN_PX)
 
         self._grip = _GripHandle(self)
         self._grip.show()
@@ -183,8 +248,18 @@ class PanelArea(QWidget):
         self._splitter.setStyleSheet(self._SPLITTER_STYLE)
         outer.addWidget(self._splitter)
 
-        # One QWidget+QVBoxLayout per column, rebuilt on every drop
+        # One QSplitter per column, rebuilt on every drop
         self._col_widgets: list[QWidget] = []
+
+        # A QSplitter with N children has N-1 handles, all BETWEEN children.
+        # Without edge spacers the outermost panels have no outer handle and
+        # cannot be shrunk from that side.  These zero-size spacers live at
+        # index 0 and the last index of the horizontal splitter; _rebuild
+        # re-parks them on every drop so they always stay at the ends.
+        self._head_spacer = _EdgeSpacer(Qt.Orientation.Horizontal, self)
+        self._tail_spacer = _EdgeSpacer(Qt.Orientation.Horizontal, self)
+        self._splitter.addWidget(self._head_spacer)
+        self._splitter.addWidget(self._tail_spacer)
 
         # Drop indicator is always a direct child of PanelArea so it can be
         # placed in PanelArea-local coordinates regardless of splitter layout
@@ -347,7 +422,9 @@ class PanelArea(QWidget):
 
         # Step 3: build a vertical QSplitter for each non-empty column and
         #         add it to the horizontal splitter.  Each panel inside the
-        #         column splitter is individually height-resizable.
+        #         column splitter is individually height-resizable, and each
+        #         column gets its own top/bottom spacers for the same reason
+        #         the horizontal splitter has left/right ones.
         for i, col in enumerate(self._cols):
             if not col:
                 continue
@@ -357,19 +434,49 @@ class PanelArea(QWidget):
             cw.setHandleWidth(8)
             cw.setStyleSheet(self._SPLITTER_STYLE)
 
-            for r, panel in enumerate(col):
+            top = _EdgeSpacer(Qt.Orientation.Vertical)
+            cw.addWidget(top)
+            for panel in col:
                 panel.setParent(cw)
                 cw.addWidget(panel)
-                cw.setStretchFactor(r, 1)   # equal share by default
                 panel.show()
+            bot = _EdgeSpacer(Qt.Orientation.Vertical)
+            cw.addWidget(bot)
+
+            # Index 0 and the last index are the spacers: stretch 0 so they
+            # stay collapsed until the operator deliberately drags them open.
+            n = cw.count()
+            cw.setStretchFactor(0, 0)
+            cw.setStretchFactor(n - 1, 0)
+            for r in range(1, n - 1):
+                cw.setStretchFactor(r, 1)
+            cw.setSizes([0] + [1] * (n - 2) + [0])
 
             self._splitter.addWidget(cw)
             self._col_widgets.append(cw)
 
-        # Step 4: apply horizontal stretch factors (column width behaviour).
-        for i, col in enumerate(self._cols):
-            self._splitter.setStretchFactor(i, max(p.stretch for p in col))
+        # Step 4: re-park the edge spacers.  addWidget/insertWidget on a widget
+        #         already owned by the splitter MOVES it, which is what keeps
+        #         them at the two ends across rebuilds — the loop above always
+        #         appends, so without this the tail spacer would end up buried
+        #         in the middle after the first drag-and-drop.
+        self._splitter.insertWidget(0, self._head_spacer)
+        self._splitter.addWidget(self._tail_spacer)
 
-        # Step 5: keep the indicator as a direct child of PanelArea, on top.
+        # Step 5: horizontal stretch factors.  Splitter index 0 is the head
+        #         spacer, so column c lives at splitter index c + 1.
+        self._splitter.setStretchFactor(0, 0)
+        for i, col in enumerate(self._cols):
+            if not col:
+                continue
+            self._splitter.setStretchFactor(i + 1, max(p.stretch for p in col))
+        self._splitter.setStretchFactor(self._splitter.count() - 1, 0)
+
+        # Step 6: start both spacers collapsed so the layout looks unchanged
+        #         until someone drags an outer handle.
+        col_sizes = [max(cw.width(), 1) for cw in self._col_widgets]
+        self._splitter.setSizes([0] + col_sizes + [0])
+
+        # Step 7: keep the indicator as a direct child of PanelArea, on top.
         self._indicator.setParent(self)
         self._indicator.raise_()

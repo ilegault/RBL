@@ -35,7 +35,6 @@ HEADER FORMAT
 import csv
 import json
 import logging
-import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -48,9 +47,7 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def _output_dir() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent / "data" / "vacuum"
-    return Path(__file__).resolve().parents[2] / "data" / "vacuum"
+    return Path.home() / "Desktop" / "RBL_log" / "data" / "vacuum"
 
 
 def _new_run_id() -> str:

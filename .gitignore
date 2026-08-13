@@ -249,10 +249,12 @@ bash.exe.stackdump
 
 build.bat
 
-# Calibration run output (CSV + metadata sidecars) — not source, not committed.
-/data/calibration/*
-!/data/calibration/.gitkeep
-
-
+/data/
+/docs/
 /processing/
-/processing/analyze_calibration.py
+
+/logs/
+/captures/
+/tools/ffmpeg.exe
+# ffmpeg lives in converter/ now — offline-only tool, never bundled into the app.
+/converter/ffmpeg.exe

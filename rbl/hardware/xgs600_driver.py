@@ -16,20 +16,32 @@ Silence : wrong address or missing terminator -> no response at all.
 Timing : latency ~10 ms; DO NOT query faster than 10 per second.
          This driver enforces that limit at the Xgs600 level.
 
-SLOT CODES (from #0001 response, two hex chars each)
------------------------------------------------------
-10 = hot filament ion gauge (HFIG)
-3A = inverted magnetron (IMG)
-40 = convection gauge board (CNV) — carries TWO sensors
-4C = analog input board (AUX)
+SLOT CODES (from #0001 response, two hex chars each — manual Table B-1)
+------------------------------------------------------------------------
+10 = hot filament ion gauge (HFIG)   — ONE sensor
+3A = inverted magnetron (IMG)        — ONE sensor
+40 = convection gauge board (CNV)    — TWO sensors
+4C = analog input board (AUX)        — TWO sensors
 FE = empty slot
 
-CHANNEL INDEXING
-----------------
-#000F returns all channels in board-installation (left-to-right) order.
-One convection board contributes two entries; all others contribute one.
-The mapping from list position to physical gauge is derived from #0001
-and #0015 once at connect time, then cached in self._channels.
+CHANNEL INDEXING — GET THIS WRONG AND read_all() RAISES
+--------------------------------------------------------
+#000F returns all channels in board-installation (left-to-right) order, and
+read_all() zips those fields against self._channels positionally.  If the
+per-board sensor count is wrong the two lists desynchronise and every
+reading is attributed to the wrong gauge — or the count check fires.
+
+The ANALOG board carries TWO sensors, exactly like the convection board.
+Manual page 2-2 labels its two connectors (AUX1,3,5,7,9,B) and
+(AUX2,4,6,8,A,C).  Treating it as a single channel is a bug: on a unit with
+two analog boards, #0001 reports "FEFE4CFE4CFE" (2 boards) while #000F
+returns 4 fields.
+
+SENSOR CODES are derived from SLOT POSITION, not a running counter.  A board
+in 1-based slot k owns sensor numbers 2k-1 and 2k, rendered as a single hex
+digit: slot 1 -> 1,2   slot 2 -> 3,4   slot 3 -> 5,6   slot 4 -> 7,8
+       slot 5 -> 9,A   slot 6 -> B,C
+Hence CNV1..CNVC and AUX1..AUXC in the manual's connector labels.
 """
 import logging
 import re
@@ -53,13 +65,34 @@ _SLOT_CODES = {
     "FE": "EMPTY",
 }
 
-# Text states the XGS-600 returns instead of a numeric pressure
+# Text states the XGS-600 returns instead of a numeric pressure.
+# NOCBL is what the instrument actually sends for a disconnected gauge --
+# confirmed on hardware: #000F -> ">NOCBL    ,NOCBL    ,NOCBL    ,3.668E-05".
+# Fields are space-padded, so every key is matched after stripping.
 _STATE_MAP = {
-    "OFF":     "OFF",
-    "UNDER":   "UNDER",
-    "NO CABLE":"NO_CABLE",
-    "NO_CABLE":"NO_CABLE",  # some firmware variants
-    "OVER":    "OVER",
+    "OFF":      "OFF",
+    "UNDER":    "UNDER",
+    "OVER":     "OVER",
+    "NOCBL":    "NO_CABLE",   # <- the real one
+    "NO CABLE": "NO_CABLE",
+    "NO_CABLE": "NO_CABLE",   # defensive: other firmware variants
+}
+
+# Sensors carried by each board type.  See "CHANNEL INDEXING" above --
+# an error here silently mis-attributes every pressure reading.
+_SENSORS_PER_BOARD = {
+    "HFIG":  1,
+    "IMG":   1,
+    "CNV":   2,
+    "AUX":   2,
+}
+
+# Sensor-code prefix per board type, used in #0002{code} and #0015{code}.
+_SENSOR_PREFIX = {
+    "HFIG": "IG",
+    "IMG":  "IG",
+    "CNV":  "CNV",
+    "AUX":  "AUX",
 }
 
 
@@ -197,43 +230,24 @@ class Xgs600:
         log.debug("xgs600: slot codes = %s", slots)
 
         channels: list[XgsChannel] = []
-        ion_index  = 0   # for sensor codes I1, I2, ...
-        conv_index = 0   # for sensor codes T1, T2, ...
 
         for slot_num, code in enumerate(slots):
             board = _SLOT_CODES.get(code, "UNKNOWN")
-            if board == "EMPTY":
+            if board in ("EMPTY", "UNKNOWN"):
+                if board == "UNKNOWN":
+                    log.warning("xgs600: slot %d has unrecognised board code "
+                                "%r — skipping.  #000F field alignment may be "
+                                "wrong.", slot_num, code)
                 continue
 
-            if board in ("HFIG", "IMG"):
-                ion_index += 1
-                sensor_code = f"I{ion_index}"
-                label = self._get_label(sensor_code)
-                channels.append(XgsChannel(
-                    index       = len(channels),
-                    slot        = slot_num,
-                    board       = board,
-                    label       = label or sensor_code,
-                    sensor_code = sensor_code,
-                ))
+            n_sensors = _SENSORS_PER_BOARD[board]
+            prefix    = _SENSOR_PREFIX[board]
 
-            elif board == "CNV":
-                # Convection board carries two sensors.
-                for sub in range(2):
-                    conv_index += 1
-                    sensor_code = f"T{conv_index}"
-                    label = self._get_label(sensor_code)
-                    channels.append(XgsChannel(
-                        index       = len(channels),
-                        slot        = slot_num,
-                        board       = board,
-                        label       = label or sensor_code,
-                        sensor_code = sensor_code,
-                    ))
-
-            elif board == "AUX":
-                conv_index += 1
-                sensor_code = f"T{conv_index}"
+            for sub in range(n_sensors):
+                # Sensor number is derived from SLOT POSITION, not a running
+                # counter: 1-based slot k owns 2k-1 and 2k, as a hex digit.
+                sensor_num  = (slot_num * 2) + sub + 1
+                sensor_code = f"{prefix}{sensor_num:X}"
                 label = self._get_label(sensor_code)
                 channels.append(XgsChannel(
                     index       = len(channels),

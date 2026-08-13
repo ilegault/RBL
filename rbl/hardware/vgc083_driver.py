@@ -4,10 +4,42 @@ INFICON VGC083 vacuum gauge controller — RS-232 serial protocol driver.
 
 No Qt imports.  No file I/O.  Pure protocol translation.
 
-PROTOCOL REFERENCE (from the VGC083 manual, INFICON mode)
-----------------------------------------------------------
+PROTOCOL REFERENCE (VGC083A/B Operating Manual, tinb29e1-e 2026-01, §9)
+------------------------------------------------------------------------
 Frame    : 19200 baud, 8 data bits, no parity, 1 stop bit.
-           NO hardware handshake (no RTS/CTS/DTR) — open with rtscts=False.
+           (Manual 9.2 note 1 and 6.5.1 factory defaults.)
+           The front panel can set baud to any of 300 / 600 / 1200 / 2400 /
+           4800 / 9600 / 19200 / 38400, data bits to 7 or 8, parity to
+           None / Even / Odd, and stop bits to 1 or 2 — independently.  Any
+           one of those being off 8-N-1 breaks comms, so tools/vgc083_sweep.py
+           sweeps all of them.
+           NO hardware handshake — open with rtscts=False.  Manual 9.3
+           note 3, verbatim: "Hardware handshake controls do not exist on
+           VGC083 (e.g., RTS, CTS, DTR)."  The RS232 socket leaves pins 4,
+           6, 7 and 8 unconnected.
+Identity : #xxVER<CR> -> *xx_mmmmm-vv<CR>, e.g. *01_01306-11<CR>
+           (Manual 9.3, READ SW VERSION.)  identify() below relies on this.
+Max rate : 38400->38 ms, 19200->46 ms, 9600->61 ms, 4800->93 ms,
+           2400->156 ms, 1200->280 ms (manual 9.1 repetition-rate table).
+           _MIN_GAP_S below is the 19200 figure plus margin.
+
+WIRING — THE TWO MISTAKES THAT PRODUCE PERFECT SILENCE
+-------------------------------------------------------
+1. COMM TYPE.  Manual 6.5.1: "COMM TYPE [Factory default = RS485]".
+   An unconfigured unit does not talk RS232 at all.  Set it on the front
+   panel: MENU -> SETUP UNIT -> SERIAL COMM -> COMM TYPE -> RS232.
+2. CONNECTOR.  There are two independent DE9 connectors (manual 4.2.10):
+       RS232 -> DE9S (female socket on the instrument)
+       RS485 -> DE9P (male pins on the instrument)
+   Never connect both at once; the unit serves one or the other.
+
+CABLE: straight-through, pin-to-pin — NOT null-modem.  The RS232 socket is
+DCE-wired (manual 4.2.10 table):
+       pin 2 = Transmitted Data (OUT, from the VGC083)
+       pin 3 = Received Data (IN, to the VGC083)
+       pin 5 = Signal Ground
+       pins 1, 4, 6, 7, 8, 9 = no connection
+Only those three conductors carry anything.
 Command  : #{xx}{CMD}<CR>
            In RS232 mode the two address characters are two spaces: "#  CMD<CR>"
 Response : *{xx}_{data}<CR>

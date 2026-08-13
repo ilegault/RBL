@@ -31,6 +31,34 @@ all_datas = (
 )
 
 # ---------------------------------------------------------------------------
+# ffmpeg — DELIBERATELY NOT BUNDLED.
+#
+# A 100 MB unsigned static ffmpeg.exe, bundled inside an unsigned PyInstaller
+# app and spawned as a hidden subprocess (CREATE_NO_WINDOW), trips antivirus
+# heuristics.  Lab IT quarantined the app because of it.  So the lab build
+# ships no ffmpeg and keeps .avi only — video_transcoder.find_ffmpeg() returns
+# None, the transcode queue is never started, and the UI says
+# "ffmpeg not found — keeping .avi only".  This path is supported by design.
+#
+# MP4s for sharing are produced offline instead:  converter\avi2mp4.py on a
+# personal machine.  ffmpeg.exe lives in converter\ and is never seen here.
+#
+# If IT ever installs ffmpeg system-wide, find_ffmpeg() already falls back to
+# shutil.which("ffmpeg") and transcoding turns itself back on — no rebuild.
+#
+# To deliberately re-bundle it (NOT for lab deployment), put ffmpeg.exe back in
+# tools\ and build with  set RBL_BUNDLE_FFMPEG=1
+# ---------------------------------------------------------------------------
+_ffmpeg = os.path.join(ROOT, "tools", "ffmpeg.exe")
+_bundle_ffmpeg = os.environ.get("RBL_BUNDLE_FFMPEG") == "1"
+all_binaries = (
+    [(_ffmpeg, ".")] if (_bundle_ffmpeg and os.path.isfile(_ffmpeg)) else []
+)
+if all_binaries:
+    print("*** WARNING: bundling ffmpeg.exe — antivirus will likely flag this "
+          "build.  Do not deploy to the lab machine. ***")
+
+# ---------------------------------------------------------------------------
 # Hidden imports — ONLY what's actually used in this codebase:
 #   main.py        → numpy, yaml, json, csv, matplotlib.use("Agg")
 #   current_tab.py → matplotlib.use("QtAgg"), FigureCanvasQTAgg
@@ -73,7 +101,7 @@ all_hiddenimports = [
     # yaml — main.py uses yaml.safe_load for --config mode
     "yaml",
 
-    # opencv-python — USB camera capture in camera_widget.py
+    # opencv-python — USB camera capture in camera_source.py
     # The import is guarded (try/except ImportError) so the app still runs
     # without a camera if cv2 is absent, but include it in the bundle when
     # it is installed.
@@ -101,7 +129,7 @@ a = Analysis(
     #   RBL_GUI   → finds viz, motor_tab, current_tab  (app.py path-inserts rbl/gui/)
     pathex=[ROOT, RBL_PKG, RBL_GUI],
 
-    binaries=[],
+    binaries=all_binaries,
     datas=all_datas,
     hiddenimports=all_hiddenimports,
 

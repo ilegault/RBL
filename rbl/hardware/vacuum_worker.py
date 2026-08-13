@@ -34,10 +34,13 @@ from PySide6.QtCore import QThread, Signal
 
 from rbl.config.vacuum_config import (
     POLL_INTERVAL_S, VGC_ACTIVE_CHANNELS, RECONNECT_BACKOFF_S,
-    XGS_BAUD_DEFAULT, VGC_BAUD_DEFAULT,
+    XGS_BAUD_DEFAULT, VGC_BAUD_DEFAULT, VGC_BAUD_CANDIDATES,
+    XGS_BAUD_CANDIDATES,
 )
 from rbl.hardware.serial_transport import SerialTransport
-from rbl.hardware.xgs600_driver import Xgs600, XgsTimeoutError, XgsProtocolError
+from rbl.hardware.xgs600_driver import (
+    Xgs600, XgsTimeoutError, XgsProtocolError, XgsFieldError,
+)
 from rbl.hardware.vgc083_driver import Vgc083, VgcTimeoutError, VgcProtocolError
 from rbl.state.snapshots import VacuumState
 
@@ -142,7 +145,12 @@ class VacuumWorker(QThread):
                     xgs_readings = xgs.read_all()
                     xgs_ok = True
                     xgs_backoff_idx = 0
-                except (XgsTimeoutError, XgsProtocolError, OSError) as exc:
+                # XgsFieldError subclasses ValueError, NOT OSError — without
+                # it listed explicitly a board-count mismatch escapes run()
+                # and kills the whole worker thread instead of triggering the
+                # reconnect ladder.
+                except (XgsTimeoutError, XgsProtocolError, XgsFieldError,
+                        OSError) as exc:
                     msg = f"XGS-600 poll error: {exc}"
                     log.warning("vacuum_worker: %s", msg)
                     self.error.emit(msg)
@@ -204,37 +212,85 @@ class VacuumWorker(QThread):
     # -----------------------------------------------------------------------
 
     def _connect_xgs(self):
-        """Try to open the XGS-600 port. Returns (transport, driver) or (None, None)."""
+        """Try to open the XGS-600 port. Returns (transport, driver) or (None, None).
+
+        CRITICAL: if open() succeeds but the identity handshake fails, the
+        transport MUST be closed before returning.  Otherwise the port stays
+        registered in serial_transport._OPEN_PORTS and every subsequent
+        reconnect attempt fails with "already open by another SerialTransport
+        instance" — a self-inflicted permanent failure.
+        """
         port = self._ports.get("xgs600")
         if not port:
             return None, None
-        try:
-            t = SerialTransport(port, self._xgs_baud, timeout=2.0)
-            t.open()
-            drv = Xgs600(t)
-            drv.discover_channels()
-            log.info("vacuum_worker: XGS-600 connected on %s, %d channel(s)",
-                     port, len(drv._channels))
-            return t, drv
-        except Exception as exc:
-            log.warning("vacuum_worker: XGS-600 open failed on %s: %s", port, exc)
-            return None, None
+
+        bauds = [self._xgs_baud] + [b for b in XGS_BAUD_CANDIDATES
+                                    if b != self._xgs_baud]
+
+        for baud in bauds:
+            t = None
+            try:
+                t = SerialTransport(port, baud, timeout=2.0)
+                t.open()
+                t.reset_buffers()
+                drv = Xgs600(t)
+                drv.discover_channels()
+                log.info("vacuum_worker: XGS-600 connected on %s @ %d baud, "
+                         "%d channel(s)", port, baud, len(drv._channels))
+                if baud != self._xgs_baud:
+                    log.warning(
+                        "vacuum_worker: XGS-600 answered at %d baud, not the "
+                        "configured %d.  Update XGS_BAUD_DEFAULT.",
+                        baud, self._xgs_baud)
+                    self._xgs_baud = baud
+                return t, drv
+            except Exception as exc:
+                log.warning("vacuum_worker: XGS-600 open failed on %s @ %d "
+                            "baud: %s", port, baud, exc)
+                _close_transport(t)      # <- releases the port registry entry
+
+        return None, None
 
     def _connect_vgc(self):
-        """Try to open the VGC083 port. Returns (transport, driver) or (None, None)."""
+        """Try to open the VGC083 port. Returns (transport, driver) or (None, None).
+
+        Tries the configured baud first, then the alternate rate.  A VGC083
+        set to 9600 on its front panel answers nothing at 19200, which is
+        indistinguishable from "not plugged in" without this sweep.
+
+        Same close-on-failure contract as _connect_xgs — see its docstring.
+        """
         port = self._ports.get("vgc083")
         if not port:
             return None, None
-        try:
-            t = SerialTransport(port, self._vgc_baud, rtscts=False, timeout=2.0)
-            t.open()
-            drv = Vgc083(t)
-            ident = drv.identify()
-            log.info("vacuum_worker: VGC083 connected on %s, fw=%s", port, ident)
-            return t, drv
-        except Exception as exc:
-            log.warning("vacuum_worker: VGC083 open failed on %s: %s", port, exc)
-            return None, None
+
+        # Configured baud first, then the other supported rate.
+        bauds = [self._vgc_baud] + [b for b in VGC_BAUD_CANDIDATES
+                                    if b != self._vgc_baud]
+
+        for baud in bauds:
+            t = None
+            try:
+                t = SerialTransport(port, baud, rtscts=False, timeout=2.0)
+                t.open()
+                t.reset_buffers()
+                drv = Vgc083(t)
+                ident = drv.identify()
+                log.info("vacuum_worker: VGC083 connected on %s @ %d baud, fw=%s",
+                         port, baud, ident)
+                if baud != self._vgc_baud:
+                    log.warning(
+                        "vacuum_worker: VGC083 answered at %d baud, not the "
+                        "configured %d.  Update VGC_BAUD_DEFAULT or the "
+                        "instrument's front-panel setting.", baud, self._vgc_baud)
+                    self._vgc_baud = baud
+                return t, drv
+            except Exception as exc:
+                log.warning("vacuum_worker: VGC083 open failed on %s @ %d baud: %s",
+                            port, baud, exc)
+                _close_transport(t)      # <- releases the port registry entry
+
+        return None, None
 
 
 # ---------------------------------------------------------------------------

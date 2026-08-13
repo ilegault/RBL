@@ -27,29 +27,30 @@ Scope of the controls here:
     not editable here. Amplitude is in PEAK volts, which is what reads across
     to the amplifier bars below (see axis_drive.py). Per-channel editing,
     offset, shape and load stay on the Function Generators tab.
-The HV amplifiers stay read-only — nothing on this screen commands them. Their
-panels are grouped by axis with each pair's waveforms drawn over each other,
-because the failure worth catching there is a RELATIONSHIP (a pair that has
-stopped being mirror images), which no single channel's readout can show. Each
-pair's trace window is sized to the drive that pair is MEASURED to be running
-(see rbl/hardware/amp_trace.py), not to the 0.1 s stream window, so the picture
-holds a couple of readable cycles at any raster rate; the caption under it
-reads that window back.
+The HV amplifiers stay read-only — nothing on this screen commands them.  Each
+axis shows its pair's peak output side by side on one scale, with two captions
+underneath: the measured drive window, and the push-pull correlation for the
+pair.  The correlation is the check that matters (a pair that has stopped being
+mirror images is the failure no single channel's readout can show); it used to
+be backed by an overlaid waveform drawing, which was removed because a moving
+trace on an always-on overview screen is a distraction, not information.  The
+window caption is what keeps the correlation honest: it is worth nothing until
+you know it was computed over a whole cycle.
 
 Setpoints are shared, not copied: the boxes here and the Function Generators
 tab's panels are two views on one FuncGenSetpoints object, so neither screen
 can show a stale value or silently overwrite what the other has typed.
 """
-import dataclasses
 import math
 
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel,
-    QPushButton, QMessageBox, QCheckBox,
+    QPushButton, QMessageBox, QCheckBox, QSizePolicy,
 )
 
 from rbl.config import hardware_config as SC
+from rbl.config.vacuum_config import GAUGE_DISPLAY_NAMES, UI_GOOD_VACUUM_TORR
 from rbl.hardware.amp_monitor import pair_correlation
 from rbl.hardware.current_monitor import format_current
 from rbl.hardware.funcgen_safety import (
@@ -58,9 +59,9 @@ from rbl.hardware.funcgen_safety import (
 from rbl.gui import theme
 from rbl.gui.widgets.axis_drive import AxisDriveControl
 from rbl.gui.widgets.beam_indicator import BeamPositionIndicator
-from rbl.gui.widgets.camera_widget import CameraWidget
 from rbl.gui.widgets.drag_panel import DragPanel, PanelArea
-from rbl.gui.widgets.mini import MiniBar, PairTrace
+from rbl.gui.widgets.recording_panel import RecordingPanel
+from rbl.gui.widgets.mini import MiniBar
 from rbl.gui.widgets.slit_control import SlitControl
 from rbl.state.beamline import Beamline
 from rbl.state.setpoints import AXIS_CHANNELS, AXIS_GENERATOR
@@ -91,12 +92,6 @@ class OverviewTab(QWidget):
     _STANDING_MESSAGE = ("Positions are absolute distance from beam centre; "
                          "the 0.2 mm home offset is applied for you.")
 
-    _STANDING_DRIVE_MESSAGE = (
-        "Triangle, 0 V offset, 0°/180° push-pull. Amplitude is PEAK volts at "
-        "the amplifier input — 1 V pk = 1 kV per plate. The Function "
-        "Generators tab shows the same setpoint peak-to-peak."
-    )
-
     # A perfect push-pull pair correlates at -1.0. The thresholds are loose
     # because a real pair is measured through two amplifier monitors with
     # their own noise — this has to flag a pair coming apart, not a pair that
@@ -119,6 +114,7 @@ class OverviewTab(QWidget):
         self._amps: AmpState = AmpState(connected=False)
         self._funcgens: FuncGenState = FuncGenState()
         self._scope: ScopeState = ScopeState(timestamp=0.0)
+        self._vacuum = None
 
         # Was the Galil connected on the previous redraw? Used to preload each
         # target box with the live position exactly once, when the link comes
@@ -142,19 +138,21 @@ class OverviewTab(QWidget):
         # BeamPositionIndicator brings its own titled group box.
         self.beam = BeamPositionIndicator(compact=True)
 
-        # Camera widget — live USB feed with photo/video capture.
-        self.camera = CameraWidget()
-        self.camera.set_metadata_provider(self._camera_metadata)
+        # Unified session recorder — CSV + optional synced video.  The
+        # SessionRecorder itself is owned by MainWindow and injected via
+        # attach_recorder() so the Camera tab can share one camera device.
+        self.recording = None
 
-        # Five independent draggable panels; FuncGen and HV are separate so
-        # they can be stacked in the same column or spread across columns.
-        # Initial layout: one panel per column (cols 0-4).
+        # Six independent draggable panels; slit control and beam current are
+        # separate so they can be stacked or spread.  FuncGen and HV are also
+        # separate so they can be stacked in the same column or spread across.
         self._panel_area = PanelArea()
-        self._panel_area.add(DragPanel(self.beam,                  stretch=0), col=0)
-        self._panel_area.add(DragPanel(self._build_slit_box(),     stretch=1), col=1)
-        self._panel_area.add(DragPanel(self.camera,                stretch=1), col=2)
-        self._panel_area.add(DragPanel(self._build_funcgen_box(),  stretch=1), col=3)
-        self._panel_area.add(DragPanel(self._build_hv_box(),       stretch=1), col=4)
+        self._panel_area.add(DragPanel(self.beam,                        stretch=0), col=0)
+        self._panel_area.add(DragPanel(self._build_slit_control_box(), stretch=1), col=1)
+        self._panel_area.add(DragPanel(self._build_current_box(),      stretch=1), col=1)
+        self._panel_area.add(DragPanel(self._build_vacuum_box(),       stretch=1), col=2)
+        self._panel_area.add(DragPanel(self._build_funcgen_box(),      stretch=1), col=3)
+        self._panel_area.add(DragPanel(self._build_hv_box(),           stretch=1), col=4)
         outer.addWidget(self._panel_area, stretch=1)
 
         # A move commanded on the Stepper Motors tab publishes its target
@@ -168,6 +166,7 @@ class OverviewTab(QWidget):
         beamline.amps_changed.connect(self._on_amps)
         beamline.funcgens_changed.connect(self._on_funcgens)
         beamline.scope_changed.connect(self._on_scope)
+        beamline.vacuum_changed.connect(self._on_vacuum)
         beamline.command_failed.connect(self._on_failure)
         beamline.timebase_changed.connect(self._on_timebase_changed)
 
@@ -201,14 +200,15 @@ class OverviewTab(QWidget):
         strip.addWidget(self.lbl_failure, stretch=1)
         return strip
 
-    def _build_slit_box(self) -> QGroupBox:
+    def _build_slit_control_box(self) -> QGroupBox:
         # "&&" because Qt eats a single '&' in a title as a mnemonic marker.
-        box = QGroupBox("Slits — Position && Control")
+        box = QGroupBox("Slit Position && Control")
         lay = QVBoxLayout(box)
-        lay.setSpacing(4)
+        lay.setSpacing(2)
+        lay.setContentsMargins(6, 4, 6, 4)
 
         grid = QGridLayout()
-        grid.setSpacing(4)
+        grid.setSpacing(2)
         self.slits: dict[str, SlitControl] = {}
         for i, slit in enumerate(SC.AXIS_LABELS):
             ctrl = SlitControl(slit)
@@ -234,8 +234,6 @@ class OverviewTab(QWidget):
         self.lbl_gaps.setStyleSheet(
             f"font-weight: bold; font-size: {theme.FS_BIG}px;")
         lay.addWidget(self.lbl_gaps)
-
-        lay.addWidget(self._build_current_box())
 
         return box
 
@@ -272,7 +270,8 @@ class OverviewTab(QWidget):
         """
         box = QGroupBox("Beam Current on Slits")
         grid = QGridLayout(box)
-        grid.setSpacing(4)
+        grid.setSpacing(2)
+        grid.setContentsMargins(6, 4, 6, 4)
         self.currents = {}
         for slit in SC.AXIS_LABELS:
             bar = MiniBar(
@@ -301,15 +300,16 @@ class OverviewTab(QWidget):
         The 0 deg / 180 deg phase split that makes it differential is held
         automatically and is deliberately not editable here.
         """
-        box = QGroupBox("Raster Drive — Function Generators")
+        box = QGroupBox("Function Generator")
         lay = QVBoxLayout(box)
-        lay.setSpacing(4)
+        lay.setSpacing(2)
+        lay.setContentsMargins(6, 4, 6, 4)
 
         # Both axes on one row: they are read together (is X sweeping as fast
         # as Y is slow?) and applied together, so stacking them put the two
         # halves of one comparison a screenful apart.
         axes_row = QHBoxLayout()
-        axes_row.setSpacing(6)
+        axes_row.setSpacing(4)
         self.drives: dict[str, AxisDriveControl] = {}
         for axis in AXIS_CHANNELS:
             ctrl = AxisDriveControl(axis)
@@ -321,8 +321,11 @@ class OverviewTab(QWidget):
 
         lay.addLayout(self._build_timebase_row())
 
-        self.btn_apply_all = QPushButton("Apply All — X && Y")
-        self.btn_apply_all.setMinimumHeight(42)
+        self.btn_apply_all = QPushButton("Apply All - X & Y")
+        self.btn_apply_all.setMinimumHeight(22)
+        self.btn_apply_all.setMinimumWidth(80)
+        self.btn_apply_all.setSizePolicy(QSizePolicy.Policy.Minimum,
+                                         QSizePolicy.Policy.Fixed)
         self.btn_apply_all.setStyleSheet(
             "QPushButton { background:#004e8c; color:white; font-weight:bold;"
             f" font-size:{theme.FS_VALUE}px; }}"
@@ -331,20 +334,13 @@ class OverviewTab(QWidget):
         )
         self.btn_apply_all.setToolTip(
             "Configure all four channels with outputs untouched, then enable "
-            "the outputs back-to-back, then phase-synchronise each unit — the "
+            "the outputs back-to-back, then phase-synchronise each unit - the "
             "same sequence as the Function Generators tab's Apply All, and the "
             "only ordering that brings the raster up aligned."
         )
         self.btn_apply_all.setEnabled(False)
         self.btn_apply_all.clicked.connect(self._on_apply_all)
         lay.addWidget(self.btn_apply_all)
-
-        self.lbl_drive_note = QLabel(self._STANDING_DRIVE_MESSAGE)
-        self.lbl_drive_note.setWordWrap(True)
-        self.lbl_drive_note.setStyleSheet(
-            theme.status_label(theme.NEUTRAL, bold=False)
-            + f"font-size: {theme.FS_CAPTION}px;")
-        lay.addWidget(self.lbl_drive_note)
         return box
 
     def _build_timebase_row(self) -> QHBoxLayout:
@@ -382,27 +378,19 @@ class OverviewTab(QWidget):
         return row
 
     def _build_hv_box(self) -> QGroupBox:
-        """One panel per AXIS, stacked, each with its pair's waveforms overlaid.
+        """One sub-group per AXIS, stacked, each showing its pair's peak bars.
 
-        Grouped by axis rather than four independent cells because the thing
-        worth checking is the RELATIONSHIP inside each pair: driven correctly,
-        X+ and X- are mirror images crossing at zero, and that is only visible
-        when they are drawn over each other on one scale. Four separately
-        auto-scaled traces in a 2x2 grid show four plausible-looking waves and
-        hide the one fault — the two units' clocks drifting apart — that
-        nothing else on this screen would catch.
-
-        Each panel's x span comes from the pair's own measured period, so the
-        two panels are free to be at different time scales — which they must
-        be, since a raster runs its fast and slow axes decades apart. The
-        caption is what keeps that honest.
+        The waveform overlay was removed — a moving trace on an always-on
+        overview screen is a distraction.  What matters is the push-pull
+        correlation between the two channels, which is still computed and shown
+        as a caption; the window caption keeps it honest by saying over how
+        long a span the correlation was measured.
         """
         box = QGroupBox("HV Amplifier Output")
         lay = QVBoxLayout(box)
         lay.setSpacing(4)
 
         self.hv_bars: dict[str, MiniBar] = {}
-        self.hv_traces: dict[str, PairTrace] = {}
         self.hv_phase: dict[str, QLabel] = {}
         self.hv_window: dict[str, QLabel] = {}
         for axis in ("X", "Y"):
@@ -420,21 +408,6 @@ class OverviewTab(QWidget):
                 self.hv_bars[amp] = bar
                 bars.addWidget(bar, stretch=1)
             cell.addLayout(bars)
-
-            trace = PairTrace(theme.SLIT_COLORS[plus], theme.SLIT_COLORS[minus])
-            trace.setToolTip(
-                f"{plus} and {minus} deflection waveforms, drawn on one shared "
-                "scale over a window sized to the measured drive — a couple of "
-                "cycles of whatever this pair is actually doing, triggered on "
-                "the rising edge so it holds still.\n"
-                "Driven push-pull they are mirror images crossing at zero. "
-                "Two traces sliding past each other mean the generators are "
-                "not sharing a timebase.\n"
-                "The caption below reads back the window it settled on; "
-                "'no cycle found' means one raw stream window, unmeasured."
-            )
-            self.hv_traces[axis] = trace
-            cell.addWidget(trace, stretch=1)
 
             # Window on the left, phase on the right: the caption says WHAT is
             # being shown, and a correlation is worth nothing until you know
@@ -459,6 +432,33 @@ class OverviewTab(QWidget):
             lay.addWidget(panel)
         return box
 
+    def _build_vacuum_box(self) -> QGroupBox:
+        box = QGroupBox("Vacuum Pressures")
+        self._pressure_lay = QVBoxLayout(box)
+        self._pressure_lay.setSpacing(2)
+        self._pressure_lay.setContentsMargins(6, 4, 6, 4)
+
+        # Compact rows: each is a clickable name+value pair at small font size.
+        self._pressure_rows: dict[str, dict] = {}   # key -> {name_lbl, val_lbl, row_widget, key, name, text, ok}
+        self._pressure_selected: set[str] = set()
+
+        self._pressure_no_data = QLabel("(not connected)")
+        self._pressure_no_data.setStyleSheet(
+            f"color: {theme.NEUTRAL}; font-size: {theme.FS_LABEL}px; font-style: italic;"
+        )
+        self._pressure_lay.addWidget(self._pressure_no_data)
+
+        # Large readouts shown below the compact list for selected channels.
+        self._pressure_detail_container = QWidget()
+        self._pressure_detail_lay = QVBoxLayout(self._pressure_detail_container)
+        self._pressure_detail_lay.setContentsMargins(0, 4, 0, 0)
+        self._pressure_detail_lay.setSpacing(2)
+        self._pressure_detail_widgets: dict[str, tuple[QLabel, QLabel]] = {}
+        self._pressure_lay.addWidget(self._pressure_detail_container)
+
+        self._pressure_lay.addStretch()
+        return box
+
     # ---- Signal handlers (cheap: cache only) -----------------------------------
 
     def _on_motors(self, state: MotorState):
@@ -476,6 +476,9 @@ class OverviewTab(QWidget):
     def _on_scope(self, state: ScopeState):
         self._scope = state
 
+    def _on_vacuum(self, state):
+        self._vacuum = state
+
     def _on_slit_target_changed(self, slit: str, mm: float):
         """Some screen commanded *slit* to *mm* — show it on that slit's bar."""
         ctrl = self.slits.get(slit)
@@ -488,25 +491,15 @@ class OverviewTab(QWidget):
             theme.status_label(theme.FAULT, bold=False)
             + f"font-size: {theme.FS_LABEL}px;")
 
-    # ---- Camera metadata provider ------------------------------------------
+    def attach_recorder(self, recorder) -> None:
+        """Bind the shared SessionRecorder, owned by MainWindow.
 
-    def _camera_metadata(self) -> dict:
-        """Snapshot of every live readout at the moment of photo/video capture.
-
-        Passed to CameraWidget so each sidecar JSON contains the full beamline
-        state — slit positions, beam currents, HV readings, and function-
-        generator setpoints — paired with the image by matching filename stem.
+        Injected rather than constructed here because the Camera tab renders
+        the same live feed, and a USB camera cannot be opened twice in one
+        process — one CameraSource, two views.
         """
-        def _dc(obj):
-            return dataclasses.asdict(obj) if dataclasses.is_dataclass(obj) else {}
-
-        return {
-            "motors":   _dc(self._motors),
-            "logamps":  _dc(self._logamps),
-            "amps":     _dc(self._amps),
-            "funcgens": _dc(self._funcgens),
-            "scope":    _dc(self._scope),
-        }
+        self.recording = RecordingPanel(recorder)
+        self._panel_area.add(DragPanel(self.recording, stretch=1), col=2)
 
     # ---- Commands out ----------------------------------------------------------
     #
@@ -658,12 +651,7 @@ class OverviewTab(QWidget):
         return answer == QMessageBox.StandardButton.Yes
 
     def _note_drive(self, text: str, role: str = theme.NEUTRAL):
-        """Show the result of the operator's last Apply, briefly, then let the
-        standing drive message come back (see _redraw_funcgens)."""
-        self.lbl_drive_note.setText(text)
-        self.lbl_drive_note.setStyleSheet(
-            theme.status_label(role, bold=False) + f"font-size: {theme.FS_CAPTION}px;")
-        self._drive_note_frames = self._NOTE_FRAMES
+        pass
 
     def _note(self, text: str, role: str = theme.NEUTRAL):
         """Show the operator's own last action, briefly outranking the
@@ -704,6 +692,7 @@ class OverviewTab(QWidget):
         self._redraw_scope()
         self._redraw_funcgens()
         self._redraw_amps()
+        self._redraw_vacuum()
 
     def _redraw_scope(self):
         scope = self._scope
@@ -799,18 +788,9 @@ class OverviewTab(QWidget):
         both = all(funcgens.connected.get(g, False) for g in ("A", "B"))
         self.chk_ext_ref.setEnabled(both)
         self._redraw_timebase(funcgens.timebase)
-        self._redraw_drive_message()
         for gen in ("A", "B"):
             self.pills[gen].setStyleSheet(theme.pill(funcgens.connected.get(gen, False)))
 
-    def _redraw_drive_message(self):
-        if self._drive_note_frames > 0:
-            self._drive_note_frames -= 1
-            return
-        self.lbl_drive_note.setText(self._STANDING_DRIVE_MESSAGE)
-        self.lbl_drive_note.setStyleSheet(
-            theme.status_label(theme.NEUTRAL, bold=False)
-            + f"font-size: {theme.FS_CAPTION}px;")
 
     def _redraw_amps(self):
         amps = self._amps
@@ -818,12 +798,11 @@ class OverviewTab(QWidget):
             ch = amps.channels.get(amp)
             bar.set(ch.peak_kv if ch is not None else None, stale=not amps.connected)
 
-        for axis, trace in self.hv_traces.items():
+        for axis in ("X", "Y"):
             plus = amps.channels.get(f"{axis}+")
             minus = amps.channels.get(f"{axis}-")
             wave_p = plus.wave_kv if plus is not None else ()
             wave_m = minus.wave_kv if minus is not None else ()
-            trace.set_pair(wave_p, wave_m)
             # Both members of a pair are windowed together, so either one
             # carries the answer — take whichever actually streamed.
             timed = next((c for c in (plus, minus)
@@ -833,13 +812,133 @@ class OverviewTab(QWidget):
 
         self.pills["amps"].setStyleSheet(theme.pill(amps.connected))
 
+    def _on_pressure_row_clicked(self, key: str):
+        """Toggle a vacuum channel in/out of the large detail readout."""
+        if key in self._pressure_selected:
+            self._pressure_selected.discard(key)
+        else:
+            self._pressure_selected.add(key)
+        self._update_pressure_selection()
+
+    def _update_pressure_selection(self):
+        """Restyle compact rows and refresh the detail readouts."""
+        for key, entry in self._pressure_rows.items():
+            selected = key in self._pressure_selected
+            border = f"border: 1px solid {theme.OK}; border-radius: 3px;" if selected else ""
+            entry["row_widget"].setStyleSheet(
+                f"QWidget {{ {border} padding: 1px; }}"
+            )
+
+        # Remove detail widgets for keys no longer selected
+        for key in list(self._pressure_detail_widgets):
+            if key not in self._pressure_selected:
+                name_lbl, val_lbl = self._pressure_detail_widgets.pop(key)
+                name_lbl.deleteLater()
+                val_lbl.deleteLater()
+
+        # Add / update detail widgets for each selected key
+        for key in self._pressure_selected:
+            if key not in self._pressure_rows:
+                continue
+            entry = self._pressure_rows[key]
+            color = theme.OK if entry["ok"] else theme.NEUTRAL
+            if key not in self._pressure_detail_widgets:
+                name_lbl = QLabel(entry["name"])
+                name_lbl.setStyleSheet(
+                    f"color: {theme.NEUTRAL}; font-size: {theme.FS_LABEL}px;"
+                )
+                val_lbl = QLabel(entry["text"])
+                val_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                val_lbl.setStyleSheet(
+                    f"font-size: 32px; font-weight: bold; color: {color};"
+                )
+                self._pressure_detail_lay.addWidget(name_lbl)
+                self._pressure_detail_lay.addWidget(val_lbl)
+                self._pressure_detail_widgets[key] = (name_lbl, val_lbl)
+            else:
+                name_lbl, val_lbl = self._pressure_detail_widgets[key]
+                name_lbl.setText(entry["name"])
+                val_lbl.setText(entry["text"])
+                val_lbl.setStyleSheet(
+                    f"font-size: 32px; font-weight: bold; color: {color};"
+                )
+
+    def _redraw_vacuum(self):
+        state = self._vacuum
+        if state is None:
+            self._pressure_no_data.setVisible(True)
+            self._pressure_detail_container.setVisible(False)
+            return
+        self._pressure_no_data.setVisible(False)
+
+        rows = []
+        for r in state.xgs_readings:
+            key  = f"xgs600:{r.channel.label}"
+            name = GAUGE_DISPLAY_NAMES.get(key, r.channel.label)
+            if r.pressure is not None and r.state == "OK":
+                text = f"{r.pressure:.2e}"
+                ok   = r.pressure <= UI_GOOD_VACUUM_TORR
+            else:
+                text = r.state
+                ok   = False
+            rows.append((key, name, text, ok))
+        for r in state.vgc_readings:
+            key  = f"vgc083:{r.channel}"
+            name = GAUGE_DISPLAY_NAMES.get(key, r.channel)
+            if r.pressure is not None and r.state == "OK":
+                text = f"{r.pressure:.2e}"
+                ok   = r.pressure <= UI_GOOD_VACUUM_TORR
+            else:
+                text = r.state
+                ok   = False
+            rows.append((key, name, text, ok))
+
+        for key, name, text, ok in rows:
+            if key not in self._pressure_rows:
+                row_w = QWidget()
+                row_w.setCursor(Qt.CursorShape.PointingHandCursor)
+                row_lay = QHBoxLayout(row_w)
+                row_lay.setContentsMargins(3, 1, 3, 1)
+                row_lay.setSpacing(4)
+                name_lbl = QLabel(name)
+                name_lbl.setStyleSheet(
+                    f"color: {theme.NEUTRAL}; font-size: {theme.FS_TINY}px;"
+                )
+                val_lbl = QLabel(text)
+                val_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
+                val_lbl.setStyleSheet(
+                    f"font-size: {theme.FS_TINY}px; font-weight: bold;"
+                )
+                row_lay.addWidget(name_lbl, stretch=1)
+                row_lay.addWidget(val_lbl)
+                row_w.mousePressEvent = lambda _ev, k=key: self._on_pressure_row_clicked(k)
+                # Insert before the detail labels and trailing stretch
+                insert_idx = len(self._pressure_rows)
+                self._pressure_lay.insertWidget(insert_idx + 1, row_w)  # +1 for no_data label
+                self._pressure_rows[key] = {
+                    "row_widget": row_w, "name_lbl": name_lbl, "val_lbl": val_lbl,
+                    "name": name, "text": text, "ok": ok,
+                }
+
+            entry = self._pressure_rows[key]
+            entry["text"] = text
+            entry["ok"] = ok
+            entry["name"] = name
+            color = theme.OK if ok else theme.NEUTRAL
+            entry["val_lbl"].setText(text)
+            entry["val_lbl"].setStyleSheet(
+                f"font-size: {theme.FS_TINY}px; font-weight: bold; color: {color};"
+            )
+
+        self._update_pressure_selection()
+
     def _redraw_window_label(self, axis: str, channel, connected: bool):
-        """Say what time window the trace above it is showing.
+        """Say what time window the push-pull correlation below was computed over.
 
         The window is no longer a fixed 0.1 s — it is however long two cycles
-        of the measured drive take — so the trace on its own gives no sense of
-        scale, and two panels showing the same-looking wave can be a decade
-        apart in frequency. This is the axis for both of them.
+        of the measured drive take — so two axes running at different frequencies
+        use different spans. The correlation number is meaningless unless a whole
+        cycle was captured, which is what this caption confirms.
         """
         lbl = self.hv_window[axis]
         if not connected or channel is None or not channel.wave_span_s > 0.0:

@@ -32,6 +32,7 @@ from rbl.config import hardware_config as SC
 from rbl.config.labjack_stream_config import (
     DEFAULT_PROFILE, STREAM_PROFILES, DEFAULT_SINGLE_CHANNEL,
     SINGLE_CHANNEL_CHOICES, is_single_channel,
+    DEFAULT_AMP_PAIR, is_pair_channel, pair_choices,
 )
 from rbl.hardware.amp_trace import AmpTraceBuilder
 from rbl.hardware.current_monitor import voltage_to_current
@@ -67,6 +68,11 @@ class LabJackLinkMixin:
         # Target channel for single-channel profiles (SINGLE_FAST/SINGLE_HIRES).
         # Ignored while a multi-channel profile is active.
         self.active_channel    = DEFAULT_SINGLE_CHANNEL
+        # Target AMP LABEL for pair profiles (AMP_PAIR).  Kept separate from
+        # active_channel rather than overloading it: they are different kinds
+        # of thing ("AIN7" vs "Y+"), and a sweep switching pairs must not
+        # disturb whatever single-channel target the amp tab last selected.
+        self.active_pair       = DEFAULT_AMP_PAIR
         self._profile_updating = False   # re-entrancy guard for set_profile / set_channel
         # Shared monotonic epoch for every stream worker this connection spawns.
         # Set on connect so payload timestamps stay continuous across the
@@ -185,11 +191,17 @@ class LabJackLinkMixin:
     def _start_stream_worker(self, profile_name: str):
         """Create and start a stream worker for *profile_name*.
 
-        For single-channel profiles the current channel target is passed as
-        the override. Caller is responsible for stopping any existing worker
-        first.
+        The override argument is profile-kind dependent: an AIN name for
+        single-channel profiles, an amp label for pair profiles, None for
+        multi-channel profiles whose scan list is fixed. Caller is
+        responsible for stopping any existing worker first.
         """
-        override = self.active_channel if is_single_channel(profile_name) else None
+        if is_single_channel(profile_name):
+            override = self.active_channel
+        elif is_pair_channel(profile_name):
+            override = self.active_pair
+        else:
+            override = None
         worker = LabJackStreamWorker(
             self.lj.handle, profile_name, override, t0=self._stream_t0
         )
@@ -265,12 +277,98 @@ class LabJackLinkMixin:
         finally:
             self._profile_updating = False
 
+    def set_stream_pair(self, amp_label: str):
+        """Change which amplifier's (current, voltage) pair AMP_PAIR streams.
+
+        The pair-profile analogue of set_stream_channel. Same hardware
+        constraint applies: the T7 cannot change its scan list mid-stream, so
+        this is a full stop -> reconfigure -> start cycle costing tens of ms.
+
+        A per-channel sweep calls this once per driven amplifier, between
+        setpoints -- never mid-capture. The runner is responsible for waiting
+        out the restart before it starts collecting again, exactly as it
+        already does for a profile switch.
+        """
+        if self._profile_updating:
+            return
+        if amp_label not in pair_choices("AMP_PAIR"):
+            return   # not a valid pair target
+
+        # Remember the target regardless of the active profile so a later
+        # switch to a pair profile starts on the amplifier picked.
+        changed = (amp_label != self.active_pair)
+        self.active_pair = amp_label
+        if not changed:
+            return
+        if not self.lj.connected or self._lj_worker is None:
+            return   # remembered; applied when a pair profile starts
+        if not is_pair_channel(self.active_profile):
+            return   # remembered; the live scan list is fixed in other modes
+
+        self._profile_updating = True
+        try:
+            self._restart_stream_worker(self.active_profile)
+        finally:
+            self._profile_updating = False
+
+    def set_stream_pair_profile(self, profile_name: str, amp_label: str):
+        """Switch to a pair profile AND its target amplifier in ONE restart.
+
+        Exists because doing it in two steps was unreliable in exactly the
+        situations a calibration run meets in practice:
+
+          * set_stream_profile returns early when the requested profile is
+            already active, so starting a run while the user had already
+            selected AMP_PAIR by hand did nothing at all — and, because the
+            early return also skips the profile_changed emit, no tab was told
+            to resync its UI.
+          * When the profile DID change, the restart used whatever active_pair
+            happened to hold, and the pair retarget that followed caused a
+            SECOND stop/reconfigure/start. Two restarts back to back means two
+            settling transients and two STREAM_SETTLE_DISCARD_S gaps
+            immediately before the first setpoint.
+          * Neither step re-armed anything when the profile was already
+            AMP_PAIR on a different pair, so which one you ended up on
+            depended on the order the two early-return guards fired in.
+
+        This sets both fields first, then restarts UNCONDITIONALLY — no
+        "changed" short-circuit. A caller asking for a specific stream
+        configuration gets exactly that configuration, from any prior state,
+        including from the same profile on a different pair. Restarting when
+        it was already correct costs one stream cycle and is the cheaper
+        mistake by far.
+
+        profile_changed is emitted at the end whether or not the profile name
+        actually changed, so every tab resyncs its controls to the truth.
+        """
+        if profile_name not in STREAM_PROFILES:
+            return
+        if amp_label and amp_label in pair_choices(profile_name):
+            self.active_pair = amp_label
+        self.active_profile = profile_name
+
+        if not self.lj.connected or self._lj_worker is None:
+            # Remembered; applied when the stream next starts. Still emit, so
+            # the UI reflects the request rather than the stale value.
+            self.profile_changed.emit(profile_name)
+            return
+        if self._profile_updating:
+            return   # a switch is already in flight; it will use the new fields
+
+        self._profile_updating = True
+        try:
+            self._restart_stream_worker(profile_name)
+        finally:
+            self._profile_updating = False
+        self.profile_changed.emit(profile_name)
+
     def _restart_stream_worker(self, profile_name: str):
         """Stop the running worker (if any) and start a fresh one.
 
         Hardware constraint: the T7 scan list cannot be changed mid-stream, so
-        both profile switches and single-channel target changes go through
-        this stop -> reconfigure -> start cycle. Callers hold _profile_updating.
+        profile switches, single-channel target changes and pair target
+        changes all go through this stop -> reconfigure -> start cycle.
+        Callers hold _profile_updating.
         """
         if self._lj_worker is not None:
             self._lj_worker.stop()

@@ -57,6 +57,32 @@ def monitor_to_ma(voltage: float) -> float:
     return ma
 
 
+def ma_to_monitor(ma: float) -> float:
+    """Inverse of monitor_to_ma: mA -> CURRENT MONITOR volts.
+
+    Deliberately unclamped, unlike monitor_to_ma.  Interlocks compare raw
+    monitor samples against a threshold, and it is cheaper to convert the one
+    threshold into volts than to convert every sample in a 5000-point window
+    into mA.  There is also no plausibility range to enforce here: the caller
+    supplies the limit, and a limit is by definition in range.
+    """
+    return ma / SC.CURRENT_MONITOR_MA_PER_VOLT
+
+
+def ma_unclamped(voltage: float) -> float:
+    """CURRENT MONITOR volts -> mA, with no plausibility clamp.
+
+    monitor_to_ma returns NaN above ~110 mA to flag a nonsense reading. That
+    is right for display but wrong for an interlock: NaN loses every numeric
+    comparison, so the single largest reading the hardware can produce — a
+    dead short railing the monitor — would silently fail an `if peak > limit`
+    test. Safety code needs the number, however implausible it looks.
+    """
+    if voltage is None or math.isnan(voltage):
+        return float("nan")
+    return voltage * SC.CURRENT_MONITOR_MA_PER_VOLT
+
+
 def format_kv(kv: float) -> str:
     """Auto-scale kV for display. Sub-kV values shown in volts."""
     if kv is None or (isinstance(kv, float) and math.isnan(kv)):

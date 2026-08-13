@@ -7,9 +7,11 @@ SCOPE
 Non-Qt class. Every method is synchronous and short (one SCPI write). Safe to
 call from a Qt slot. Nothing here sleeps or iterates over setpoints.
 
-Instantiated by CalibrationRunner (prefix "[CAL]") and AmpTestRunner (prefix
-"[AMT]"). Both share the identical shutdown path, which is the whole point of
-extracting this class.
+Instantiated by CalibrationRunner (prefix "[CAL]"). It was extracted when a
+second runner (the amp test matrix, since removed) needed the identical
+zero-and-off shutdown path; keeping it separate is still worth it, because the
+shutdown sequence is safety-critical and should have exactly one definition
+whatever ends up calling it.
 """
 import atexit
 import logging
@@ -78,16 +80,23 @@ class AmpDrive:
             log.error("%s ch%s: %s", label, channel, e)
             raise
 
-    def command_sine(self, label: str, peak_kv: float, freq_hz: float) -> None:
+    def command_sine(self, label: str, peak_kv: float, freq_hz: float,
+                     phase_deg: float = 0.0) -> None:
         """Command a symmetric sine wave; peak_kv clamped to [0, max_kv]."""
-        self._command_ac(label, peak_kv, freq_hz, "Sine", "SIN")
+        self._command_ac(label, peak_kv, freq_hz, "Sine", "SIN", phase_deg)
 
-    def command_square(self, label: str, peak_kv: float, freq_hz: float) -> None:
+    def command_triangle(self, label: str, peak_kv: float, freq_hz: float,
+                         phase_deg: float = 0.0) -> None:
+        """Command a 50%-symmetry triangle wave; peak_kv clamped to [0, max_kv]."""
+        self._command_ac(label, peak_kv, freq_hz, "Triangle", "TRI", phase_deg)
+
+    def command_square(self, label: str, peak_kv: float, freq_hz: float,
+                       phase_deg: float = 0.0) -> None:
         """Command a symmetric square wave; peak_kv clamped to [0, max_kv]."""
-        self._command_ac(label, peak_kv, freq_hz, "Square", "SQU")
+        self._command_ac(label, peak_kv, freq_hz, "Square", "SQU", phase_deg)
 
     def _command_ac(self, label: str, peak_kv: float, freq_hz: float,
-                    shape: str, abbrev: str) -> None:
+                    shape: str, abbrev: str, phase_deg: float = 0.0) -> None:
         clamped = max(0.0, min(self._max_kv, peak_kv))
         gen_vpp = clamped * 2.0 * 1000.0 / _AMP_GAIN
         if gen_vpp > MAX_AMP_VPP:
@@ -98,9 +107,9 @@ class AmpDrive:
             gen_vpp = MAX_AMP_VPP
         gen, channel = self._map[label]
         print(f"{self._pfx} {label} ch{channel}: {abbrev} {freq_hz:.1f} Hz "
-              f"{gen_vpp:.4f} Vpp ({clamped:.4f} kV peak)")
+              f"{gen_vpp:.4f} Vpp ({clamped:.4f} kV peak) phase={phase_deg:.1f}°")
         try:
-            warn = gen.set_waveform(channel, shape, freq_hz, gen_vpp, 0.0, 0.0)
+            warn = gen.set_waveform(channel, shape, freq_hz, gen_vpp, 0.0, phase_deg)
             if warn:
                 print(f"{self._pfx} WARN {label} ch{channel}: {warn}")
                 log.warning("%s ch%s: %s", label, channel, warn)

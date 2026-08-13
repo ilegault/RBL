@@ -73,6 +73,47 @@ STREAM_RANGE_VOLTS: float = 10.0
 # Hard ceiling on aggregate sample rate for the T7 at resolution index 0 or 1.
 T7_AGGREGATE_CEILING_HZ: int = 100_000
 
+# Leading samples to throw away from the FIRST window after every
+# eStreamStart, expressed as a duration so it means the same thing at every
+# profile rate.
+#
+# A scan-list change cannot be made mid-stream, so every profile switch and
+# every pair retarget is a full stop -> reconfigure -> start cycle.  Coming out
+# of that cycle the T7's multiplexer and PGA are still settling, and the very
+# first samples are not measurements of anything.  Switching WAVEFORM (8 ch @
+# 12.5 kS/s) to AMP_PAIR (2 ch @ 50 kS/s) changes the per-channel dwell by 4x,
+# which is exactly the case that provokes it.
+#
+# This matters beyond cosmetics: the calibration over-current interlock reads
+# the current monitor on every window including during SETTLE, so without this
+# trim the one moment the stream is guaranteed to be untrustworthy is a moment
+# the interlock is watching — and it was aborting runs at 0 V commanded.
+#
+# SIZING.  Set empirically from this hardware, not from the datasheet: 1 ms,
+# then 20 ms, then 100 ms, each raised because the interlock kept firing on
+# stream switches at the previous value.  100 ms is exactly one GUI window, so
+# at every profile the first window after a restart is now dropped whole and
+# the second is the first one delivered.  The worker consumes the discard
+# across however many windows it spans, so this may be raised past 100 ms
+# without anything special happening.
+#
+# THE COST, STATED PLAINLY: this is dead time in which the over-current
+# interlock sees nothing, and 100 ms is 25x the EEL5000's own 100 mA / 4 ms
+# transient rating.  A genuine short occurring inside the trim goes unseen
+# until the next window.  That is accepted because the trim only ever spans a
+# scan-list change, which the sweep performs BETWEEN setpoints with the driven
+# channel at or near 0 V — never while ramping.  Do not reach for this constant
+# to silence an over-current seen during an actual drive; there the reading is
+# real and the ladder is what should change.
+#
+# IF TRIPS PERSIST AT 100 ms, STOP RAISING THIS.  One whole window of settling
+# is already far longer than a mux/PGA needs, and the escalation is evidence
+# the cause may not be settling at all.  The worker prints, on every restart,
+# the peak it discarded and the peak at the trim's trailing edge.  If that edge
+# peak has decayed to the kept-window peak, the trim is long enough and the
+# current being flagged is real.
+STREAM_SETTLE_DISCARD_S: float = 0.100
+
 # ---------------------------------------------------------------------------
 # GUI / consumer timing
 # ---------------------------------------------------------------------------
@@ -113,6 +154,30 @@ SINGLE_CHANNEL_CHOICES: list = list(AMP_CHANNELS)
 # monitor (AIN13, the first amplifier in AMP_LABELS order).  The user picks a
 # different target from the amp tab's channel selector at runtime.
 DEFAULT_SINGLE_CHANNEL: str = "AIN13"
+
+# ---------------------------------------------------------------------------
+# Amplifier pairs — the (current, voltage) monitors of ONE amplifier
+# ---------------------------------------------------------------------------
+# A calibration or amp-test sweep drives exactly one amplifier at a time and
+# only ever analyses that amplifier's own two monitors.  Streaming all eight
+# monitors during such a sweep spends 3/4 of the T7's aggregate budget on
+# channels that are, by construction, sitting at zero — which costs the
+# channel under test a factor of 4 in sample density.
+#
+# Ordering is ascending physical AIN, same rule as every other list here.
+# For every amplifier the current monitor is the even AIN and the voltage
+# monitor the odd one directly above it, so (current, voltage) is already
+# ascending and no sort is needed.  Asserted at import.
+AMP_PAIR_CHANNELS: dict = {
+    "X+": ["AIN12", "AIN13"],   # current, voltage
+    "X-": ["AIN10", "AIN11"],
+    "Y+": ["AIN8",  "AIN9"],
+    "Y-": ["AIN6",  "AIN7"],
+}
+
+# Default pair when a pair profile is first selected: X+, matching
+# DEFAULT_SINGLE_CHANNEL's amplifier and AMP_LABELS order.
+DEFAULT_AMP_PAIR: str = "X+"
 
 # ---------------------------------------------------------------------------
 # Stream profiles
@@ -174,6 +239,34 @@ STREAM_PROFILES: dict = {
         "description": (
             "Single channel — 100 kS/s (max rate).  Full ceiling on one "
             "reading; 10 000 pts/window.  Best for fast transients."
+        ),
+    },
+    "AMP_PAIR": {
+        # The two monitors of ONE amplifier get the whole ceiling.
+        # 2 channels × 50 000 Hz = 100 000 S/s → 5 000 samples per channel
+        # per GUI window, against WAVEFORM's 1 250.  Four times the sample
+        # density on the only two channels a single-channel sweep actually
+        # measures.
+        #
+        # This is the profile a DC or AC sweep should run in.  WAVEFORM
+        # spends 75% of the T7's budget digitising three amplifiers that the
+        # sweep has deliberately commanded to zero.
+        #
+        # Nyquist headroom: at 50 kS/s a 5 kHz drive is sampled 10x per
+        # cycle, so the peak-detection the AC analysis depends on
+        # ((max-min)/2) stays honest well past the frequencies the amplifier
+        # can actually reproduce.
+        #
+        # "scan_list" is a placeholder default; the live scan list is the
+        # pair chosen at runtime (see pair_channel / pair_choices below).
+        "scan_list":           list(AMP_PAIR_CHANNELS[DEFAULT_AMP_PAIR]),
+        "per_channel_rate_hz": 50_000,
+        "resolution_index":    1,
+        "pair_channel":        True,
+        "pair_choices":        list(AMP_PAIR_CHANNELS.keys()),
+        "description": (
+            "One amplifier's current+voltage pair — 50 kS/s/ch (max rate).  "
+            "5 000 pts/window/ch, 4x WAVEFORM.  For single-channel sweeps."
         ),
     },
     "SINGLE_HIRES": {
@@ -238,6 +331,44 @@ def channel_choices(profile_name: str) -> list:
     return list(STREAM_PROFILES[profile_name].get("channel_choices", []))
 
 
+def is_pair_channel(profile_name: str) -> bool:
+    """True if *profile_name* streams one amplifier's (current, voltage) pair.
+
+    Distinct from ``is_single_channel``: a pair profile is targeted by AMP
+    LABEL ("X+"), not by AIN name, because the two AINs always travel
+    together and picking them independently is never what a sweep wants.
+    """
+    return bool(STREAM_PROFILES[profile_name].get("pair_channel", False))
+
+
+def pair_choices(profile_name: str) -> list:
+    """Amp labels the user may target for a pair profile ([] if not one)."""
+    return list(STREAM_PROFILES[profile_name].get("pair_choices", []))
+
+
+def pair_scan_list(amp_label: str) -> list:
+    """Ascending-AIN [current, voltage] scan list for *amp_label*.
+
+    Raises KeyError on an unknown label rather than returning a default:
+    silently streaming the wrong amplifier during a sweep would produce data
+    that looks valid and is attributed to the wrong channel, which is worse
+    than a crash.
+    """
+    return list(AMP_PAIR_CHANNELS[amp_label])
+
+
+def amp_for_pair_scan_list(scan_list_: list) -> str:
+    """Reverse of pair_scan_list: which amp a 2-channel scan list belongs to.
+
+    Returns "" if the list is not one of the defined pairs.
+    """
+    key = list(scan_list_)
+    for amp, chans in AMP_PAIR_CHANNELS.items():
+        if chans == key:
+            return amp
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # Validation — runs at import time so a mis-configured file fails immediately
 # ---------------------------------------------------------------------------
@@ -251,12 +382,33 @@ assert STREAM_RANGE_VOLTS == 10.0, (
     "other ranges trigger the anti-aliasing filter and lower the ceiling."
 )
 
+# Every pair must be [even AIN, odd AIN] with the odd one directly above --
+# that is what makes (current, voltage) already ascending, which the
+# de-interleave in LabJackStreamWorker relies on.
+for _amp, _pair in AMP_PAIR_CHANNELS.items():
+    assert len(_pair) == 2, f"AMP_PAIR_CHANNELS[{_amp}] must have 2 channels"
+    _lo, _hi = int(_pair[0][3:]), int(_pair[1][3:])
+    assert _lo % 2 == 0 and _hi == _lo + 1, (
+        f"AMP_PAIR_CHANNELS[{_amp}]={_pair}: expected an even current AIN "
+        f"followed by the odd voltage AIN directly above it"
+    )
+    for _ch in _pair:
+        assert _ch in AMP_CHANNELS, (
+            f"AMP_PAIR_CHANNELS[{_amp}]: '{_ch}' is not an amp monitor"
+        )
+assert sorted(c for p in AMP_PAIR_CHANNELS.values() for c in p) == \
+       sorted(AMP_CHANNELS), (
+    "AMP_PAIR_CHANNELS must partition AMP_CHANNELS exactly once each"
+)
+del _amp, _pair, _lo, _hi
+
 for _pname, _prof in STREAM_PROFILES.items():
     _n     = len(_prof["scan_list"])
     _r     = _prof["per_channel_rate_hz"]
     _agg   = _n * _r
     _res   = resolution_index(_pname)
     _single = is_single_channel(_pname)
+    _pair_p = is_pair_channel(_pname)
 
     assert _agg <= T7_AGGREGATE_CEILING_HZ, (
         f"Profile '{_pname}': {_n} ch × {_r} Hz = {_agg} S/s "
@@ -290,7 +442,29 @@ for _pname, _prof in STREAM_PROFILES.items():
             f"{_prof['scan_list'][0]} not in channel_choices"
         )
 
-del _pname, _prof, _n, _r, _agg, _res, _single, _ch, _choices
+    # Pair profiles must name real amps and default to one of them.
+    if _pair_p:
+        assert not _single, (
+            f"Profile '{_pname}': cannot be both single_channel and pair_channel"
+        )
+        _pchoices = _prof.get("pair_choices", [])
+        assert _pchoices, (
+            f"Profile '{_pname}': pair_channel profile needs 'pair_choices'"
+        )
+        for _amp in _pchoices:
+            assert _amp in AMP_PAIR_CHANNELS, (
+                f"Profile '{_pname}': pair_choice '{_amp}' is not a known amp"
+            )
+        assert _n == 2, (
+            f"Profile '{_pname}': pair profile scan_list must be 2 channels, "
+            f"got {_n}"
+        )
+        assert amp_for_pair_scan_list(_prof["scan_list"]), (
+            f"Profile '{_pname}': default scan_list {_prof['scan_list']} is "
+            f"not one of the AMP_PAIR_CHANNELS pairs"
+        )
+
+del _pname, _prof, _n, _r, _agg, _res, _single, _pair_p, _ch, _choices
 
 
 # ---------------------------------------------------------------------------
@@ -316,6 +490,29 @@ if __name__ == "__main__":
     # Single-channel profile invariants.
     assert is_single_channel("SINGLE_FAST")  and is_single_channel("SINGLE_HIRES")
     assert not is_single_channel("FULL") and not is_single_channel("WAVEFORM")
+    assert not is_single_channel("AMP_PAIR")
+
+    # Pair profile invariants.  The 4x claim in AMP_PAIR's docstring is the
+    # whole reason the profile exists, so it is asserted, not just asserted-to.
+    assert is_pair_channel("AMP_PAIR")
+    assert not is_pair_channel("WAVEFORM") and not is_pair_channel("SINGLE_FAST")
+    assert pair_choices("AMP_PAIR") == ["X+", "X-", "Y+", "Y-"]
+    assert window_samples("AMP_PAIR") == 5_000        # 50 kS/s / 10 Hz
+    assert window_samples("AMP_PAIR") == 4 * window_samples("WAVEFORM")
+    assert pair_scan_list("Y+") == ["AIN8", "AIN9"]
+    assert amp_for_pair_scan_list(["AIN8", "AIN9"]) == "Y+"
+    assert amp_for_pair_scan_list(["AIN9", "AIN8"]) == ""   # order matters
+    assert amp_for_pair_scan_list(["AIN6"]) == ""
+    for _a in pair_choices("AMP_PAIR"):
+        _sl = pair_scan_list(_a)
+        assert amp_for_pair_scan_list(_sl) == _a
+        assert [int(c[3:]) for c in _sl] == sorted(int(c[3:]) for c in _sl)
+    try:
+        pair_scan_list("Z+")
+    except KeyError:
+        pass
+    else:
+        raise AssertionError("pair_scan_list must raise on an unknown amp")
     assert channel_choices("SINGLE_FAST") == AMP_CHANNELS
     assert set(channel_choices("SINGLE_HIRES")).issubset(set(AMP_CHANNELS))
     assert DEFAULT_SINGLE_CHANNEL in channel_choices("SINGLE_FAST")

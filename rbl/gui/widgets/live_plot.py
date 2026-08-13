@@ -145,6 +145,36 @@ class LivePlotPanel(QObject):
         self.slider.setValue(10_000)
         self.enter_live_mode()
 
+    def freeze_at_live_edge(self) -> bool:
+        """Freeze with the right edge at the newest sample available.
+
+        The programmatic counterpart to dragging the slider all the way right
+        and stopping: it pins the view to "now" instead of to a fraction of the
+        history span, which is what an automatic freeze wants — an event just
+        happened and the operator needs to see the moments before it.
+
+        Returns True if the view was frozen. False means there was no history
+        to anchor to, in which case LIVE is left alone rather than freezing on
+        an empty axis.
+        """
+        span = self.span_provider()
+        if span is None:
+            return False
+        _t_oldest, t_newest = span
+        if t_newest is None:
+            return False
+
+        self.frozen_right_edge = float(t_newest)
+        self.is_live = False
+        # Move the slider to match without re-entering _on_slider_changed,
+        # which would recompute the edge from the slider fraction and undo
+        # the exact anchor set above.
+        self.slider.blockSignals(True)
+        self.slider.setValue(9_700)   # below the 9_800 live threshold
+        self.slider.blockSignals(False)
+        self.navigation_changed.emit()
+        return True
+
     # ---- Zoom ------------------------------------------------------------------
 
     def zoom_in(self):

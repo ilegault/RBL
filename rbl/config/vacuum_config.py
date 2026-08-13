@@ -8,8 +8,16 @@ exactly one home and a comment explaining the constraint it must satisfy.
 
 # ---- Baud rates -----------------------------------------------------------
 # Confirm against the instrument's front-panel setting before first use.
-XGS_BAUD_DEFAULT = 9600    # XGS-600 factory default; try 19200 if unresponsive
+# CONFIRMED ON HARDWARE 2026-08: this unit answers at 19200, not the 9600
+# factory default.  The XGS-600 front panel offers only these two rates.
+XGS_BAUD_DEFAULT = 19200
+XGS_BAUD_CANDIDATES = [19200, 9600]
 VGC_BAUD_DEFAULT = 19200   # VGC083 factory default and manual-specified rate
+
+# Baud rates the worker will sweep when the configured rate gets no answer.
+# A VGC083 set to 9600 on its front panel is silent at 19200, which looks
+# identical to "unplugged" unless we try both.
+VGC_BAUD_CANDIDATES = [19200, 9600]
 
 # ---- Polling --------------------------------------------------------------
 # Both controllers are polled on the same 1 Hz cycle, interleaved.

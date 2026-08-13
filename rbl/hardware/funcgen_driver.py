@@ -241,15 +241,27 @@ class DG1022Z:
             log.exception("get_state ch%s failed", ch)
             return {"error": str(e)}
 
-        # APPLy? returns e.g.: "SIN 1000.000000,1.000000,0.000000,0.000000"
+        # APPLy? returns either "SIN 1000.000000,1.000000,0.000000,0.000000"
+        # (space-separated) or "RAMP,517.0,1.637,0.0,0.0" (all comma-separated).
         parts = apply_resp.split(None, 1)
-        shape = parts[0] if parts else "?"
-        nums  = []
-        if len(parts) > 1:
-            try:
-                nums = [float(x) for x in parts[1].split(",")]
-            except Exception:
-                nums = []
+        if len(parts) == 1:
+            # Comma-only format: split the single token on commas
+            sub   = parts[0].split(",")
+            shape = sub[0]
+            nums  = []
+            if len(sub) > 1:
+                try:
+                    nums = [float(x) for x in sub[1:]]
+                except Exception:
+                    nums = []
+        else:
+            shape = parts[0] if parts else "?"
+            nums  = []
+            if len(parts) > 1:
+                try:
+                    nums = [float(x) for x in parts[1].split(",")]
+                except Exception:
+                    nums = []
 
         return {
             "shape":  shape,

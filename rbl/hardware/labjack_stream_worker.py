@@ -27,7 +27,13 @@ Emitted once per GUI refresh window (GUI_REFRESH_HZ = 10 Hz).
 
     {
       "profile":        str   — active profile name
-      "window_samples": int   — samples per channel in this window
+      "window_samples": int   — samples per channel actually in this window.
+                               Normally window_samples(profile), but the FIRST
+                               window after every eStreamStart is shorter by
+                               STREAM_SETTLE_DISCARD_S worth of scans, which
+                               are trimmed as mux/PGA settling. Consumers must
+                               read this (or len(waveform)) rather than assume
+                               the profile's nominal size.
       "t":              float — sample-accurate elapsed seconds at this
                                window's LAST sample (cumulative sample count
                                / actual scan rate; not a wall-clock read)
@@ -63,9 +69,10 @@ except Exception:
     _LJM_AVAILABLE = False
 
 from rbl.config.labjack_stream_config import (
-    STREAM_PROFILES, STREAM_RANGE_VOLTS,
+    STREAM_PROFILES, STREAM_RANGE_VOLTS, STREAM_SETTLE_DISCARD_S,
     AMP_CHANNELS, LOGAMP_CHANNELS, DEFAULT_PROFILE, window_samples,
     resolution_index, is_single_channel, channel_choices,
+    is_pair_channel, pair_choices, pair_scan_list, DEFAULT_AMP_PAIR,
 )
 
 
@@ -100,11 +107,16 @@ class LabJackStreamWorker(QThread):
         profile_name     : str
             One of the keys in STREAM_PROFILES.
         channel_override : str, optional
-            For single-channel profiles ("SINGLE_FAST" / "SINGLE_HIRES"), the
-            AIN name to stream (e.g. "AIN7").  Must be one of the profile's
-            channel_choices.  Ignored for multi-channel profiles, whose scan
-            list is fixed.  If None on a single-channel profile, the profile's
-            default scan_list channel is used.
+            What this means depends on the profile:
+              * single-channel ("SINGLE_FAST" / "SINGLE_HIRES") — the AIN
+                name to stream (e.g. "AIN7"), from the profile's
+                channel_choices.  Defaults to the profile's scan_list[0].
+              * pair ("AMP_PAIR") — the AMP LABEL whose (current, voltage)
+                pair to stream (e.g. "Y+"), from the profile's pair_choices.
+                Defaults to DEFAULT_AMP_PAIR.  It is an amp label and not an
+                AIN because the two AINs of a pair always travel together.
+              * multi-channel ("WAVEFORM" / "FULL") — ignored; the scan list
+                is fixed.
         t0               : float, optional
             Shared ``time.monotonic()`` epoch for the emitted ``t`` timestamps.
             Switching profiles/channels destroys this worker and builds a new
@@ -125,6 +137,45 @@ class LabJackStreamWorker(QThread):
         """Signal the read loop to exit.  Call wait(ms) afterwards."""
         self._running = False
 
+    def _resolve_scan_names(self):
+        """(scan_names, error_message) for the active profile and override.
+
+        Split out of run() so the mapping from (profile, override) to a scan
+        list can be tested without a T7 attached — it is the part most likely
+        to file data against the wrong amplifier if it is ever wrong, and
+        that is a failure that produces plausible-looking numbers rather than
+        an exception.
+
+        Returns ([], "reason") on a bad target.  Never falls back to a
+        default on an invalid override: streaming the wrong channel silently
+        is worse than refusing to stream.
+        """
+        profile = STREAM_PROFILES[self._profile_name]
+
+        # Ascending physical AIN order throughout — see
+        # rbl/config/labjack_stream_config.py's module docstring.
+        if is_single_channel(self._profile_name):
+            choices = channel_choices(self._profile_name)
+            ch      = self._channel_override or profile["scan_list"][0]
+            if ch not in choices:
+                return [], (f"[{self._profile_name}] channel '{ch}' is not a "
+                            f"valid single-channel target (choices: {choices}).")
+            return [ch], ""
+
+        if is_pair_channel(self._profile_name):
+            # A pair profile is targeted by AMP LABEL, not AIN name, so the
+            # override carries "Y+" rather than "AIN8".  The two AINs of a
+            # pair always travel together, so exposing them independently
+            # would only create ways to select an incoherent scan list.
+            choices = pair_choices(self._profile_name)
+            amp     = self._channel_override or DEFAULT_AMP_PAIR
+            if amp not in choices:
+                return [], (f"[{self._profile_name}] amp '{amp}' is not a "
+                            f"valid pair target (choices: {choices}).")
+            return pair_scan_list(amp), ""
+
+        return list(profile["scan_list"]), ""
+
     # ------------------------------------------------------------------
     # QThread entry point — runs on the worker thread
     # ------------------------------------------------------------------
@@ -138,21 +189,10 @@ class LabJackStreamWorker(QThread):
             return
 
         profile        = STREAM_PROFILES[self._profile_name]
-        # scan_names: ascending physical AIN order (see rbl/config/labjack_stream_config.py)
-        # For single-channel profiles the scan list is a single user-selected
-        # channel; for multi-channel profiles it is the profile's fixed list.
-        if is_single_channel(self._profile_name):
-            choices = channel_choices(self._profile_name)
-            ch      = self._channel_override or profile["scan_list"][0]
-            if ch not in choices:
-                self.error.emit(
-                    f"[{self._profile_name}] channel '{ch}' is not a valid "
-                    f"single-channel target (choices: {choices})."
-                )
-                return
-            scan_names = [ch]
-        else:
-            scan_names = list(profile["scan_list"])
+        scan_names, err = self._resolve_scan_names()
+        if err:
+            self.error.emit(err)
+            return
         scan_rate      = profile["per_channel_rate_hz"]
         res_index      = resolution_index(self._profile_name)
         n_ch           = len(scan_names)
@@ -202,6 +242,27 @@ class LabJackStreamWorker(QThread):
             t_base        = time.monotonic() - t0
             scans_total   = 0
 
+            # --- Post-start settling trim -------------------------------------
+            # The scan list was just reconfigured, so the mux and PGA are still
+            # settling when the first scans land. Those samples are not a
+            # measurement of anything, and downstream they are indistinguishable
+            # from a real signal — the calibration over-current interlock was
+            # reading them as a current spike and aborting runs at 0 V
+            # commanded.
+            #
+            # The discard is expressed in TIME and consumed across however many
+            # windows it spans. At 100 ms it is exactly one whole 100 ms window,
+            # which is then never emitted at all; at 20 ms it is a leading slice
+            # of the first window and the remainder is delivered normally. This
+            # has to handle both, because the setting was raised from 1 ms to
+            # 20 ms to 100 ms chasing an artifact that outlasted each estimate,
+            # and a trim that silently capped itself at one-window-minus-a-
+            # sample would have delivered a 1-sample payload instead.
+            settle_remaining = int(round(
+                STREAM_SETTLE_DISCARD_S * (actual_rate or scan_rate)))
+            settle_total = settle_remaining
+            settle_peak  = 0.0   # largest |sample| seen anywhere in the discard
+
             # --- Read loop ----------------------------------------------------
             while self._running:
                 # eStreamRead blocks until scans_per_read scans are ready.
@@ -234,12 +295,56 @@ class LabJackStreamWorker(QThread):
                 data = flat.reshape(-1, n_ch)   # shape: (scans_per_read, n_ch)
 
                 # Advance the sample-accurate clock by the scans just read, then
-                # stamp this window with the time of its LAST sample.
+                # stamp this window with the time of its LAST sample.  The clock
+                # counts every scan the device produced, INCLUDING any settling
+                # scans trimmed below — they occupied real time on the wire, and
+                # not counting them would shift the whole timeline earlier and
+                # reintroduce the seam this clock exists to avoid.
                 scans_total += data.shape[0]
                 t = t_base + scans_total * sample_period
 
+                if settle_remaining > 0:
+                    take    = min(settle_remaining, data.shape[0])
+                    dropped = data[:take]
+                    data    = data[take:]
+                    settle_remaining -= take
+                    try:
+                        settle_peak = max(settle_peak,
+                                          float(np.max(np.abs(dropped))))
+                        edge_pk = float(np.max(np.abs(
+                            dropped[-max(take // 10, 1):])))
+                    except Exception:
+                        edge_pk = float("nan")   # diagnostics never break the loop
+
+                    if settle_remaining > 0:
+                        # The trim spans more than this window: emit nothing.
+                        # Consumers see a gap, which is correct — there is no
+                        # measurement here to give them. The clock above has
+                        # already counted these scans, so the next window's
+                        # timestamp still lands where it belongs.
+                        continue
+
+                    # Trim complete. Report how big the artifact was and,
+                    # critically, whether it had decayed by the trim's edge. If
+                    # the edge peak is still far above the kept peak the
+                    # settling outlasted the trim, its tail is in the data
+                    # being delivered, and the number to raise is
+                    # STREAM_SETTLE_DISCARD_S. If the edge peak has come down
+                    # and the interlock still fires, the current is real and
+                    # the ladder is what should change.
+                    kept_pk = (float(np.max(np.abs(data)))
+                               if data.size else float("nan"))
+                    print(f"[STREAM] {self._profile_name}: discarded "
+                          f"{settle_total} settling scans "
+                          f"({settle_total * sample_period * 1e3:.1f} ms) "
+                          f"after stream start — peak in discard "
+                          f"{settle_peak:.3f} V, at trim edge {edge_pk:.3f} V, "
+                          f"kept-window peak {kept_pk:.3f} V")
+                    if data.shape[0] == 0:
+                        continue   # trim ended exactly on the window boundary
+
                 payload = self._build_payload(
-                    scan_names, data, scans_per_read, t, sample_period
+                    scan_names, data, data.shape[0], t, sample_period
                 )
                 self.window_ready.emit(payload)
 

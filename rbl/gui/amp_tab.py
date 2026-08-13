@@ -50,9 +50,10 @@ full eStreamStop -> reconfigure -> eStreamStart cycle on the T7, so committing
 them one deliberate click at a time avoids the churn (and transient glitches) of
 restarting the stream on every stray combo event.
 """
+import math
 import time
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QSize, QTimer, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel,
@@ -61,15 +62,19 @@ from PySide6.QtWidgets import (
 
 from rbl.hardware.labjack_driver import LJM_AVAILABLE
 from rbl.hardware.current_monitor import RollingBuffer
+from rbl.hardware.ac_metrics import fundamental
 from rbl.hardware.amp_monitor import (
-    format_kv, format_ma, monitor_to_kv, voltage_status, current_status,
+    monitor_to_kv, monitor_to_ma, voltage_status, current_status,
 )
 from rbl.hardware.waveform_ring import WaveformRing, decimate_minmax
+from rbl.hardware.funcgen_safety import CHANNEL_ROLE, _AMP_GAIN
 from rbl.state.snapshots import AmpState
 from rbl.config import hardware_config as SC
+from rbl.config.calibration_config import CAL_UNCERTAINTY_V
 from rbl.config.labjack_stream_config import (
     STREAM_PROFILES, GUI_REFRESH_HZ, window_samples, resolution_index,
     is_single_channel, DEFAULT_SINGLE_CHANNEL,
+    is_pair_channel, pair_choices, DEFAULT_AMP_PAIR,
 )
 from rbl.gui.widgets.connection_bar import LabJackPanel
 from rbl.gui.widgets.inputs import NoScrollComboBox
@@ -85,6 +90,26 @@ _STATUS_COLOR = {
 }
 
 
+# DG1022Z shape strings -> short labels for the Commanded row. The generator
+# reports a ramp as "RAMP,<symmetry>,..." so only the head is matched.
+_SHAPE_LABEL = {
+    "SIN": "SINE", "SINE": "SINE",
+    "SQU": "SQR",  "SQUARE": "SQR",
+    "RAMP": "TRI", "TRI": "TRI", "TRIANGLE": "TRI",
+    "DC": "DC",
+    "PULS": "PULSE", "NOIS": "NOISE",
+}
+
+
+def _fmt_hz(freq_hz: float) -> str:
+    """Compact frequency for a narrow table cell: 250 Hz, 1.50 kHz, 12.5 kHz."""
+    if not math.isfinite(freq_hz) or freq_hz <= 0:
+        return "—"
+    if freq_hz < 1000:
+        return f"{freq_hz:.0f} Hz"
+    return f"{freq_hz / 1000:.2f} kHz".replace(".00 ", " ")
+
+
 class AmpTab(QWidget):
     """The 'HV Amplifiers' outer tab."""
 
@@ -98,6 +123,30 @@ class AmpTab(QWidget):
     # ring this short (vs. the old 2 s) also keeps each snapshot redraw cheap,
     # which is what removes the sub-second scrolling lag.
     SNAPSHOT_MAX_SECONDS = 1.0
+
+    # Grid rows of the Live Amplifier Monitors table. Named so the build and
+    # the update path cannot drift apart, and so the order is changed in one
+    # place. Row 0 is the per-amplifier header.
+    R_MODE, R_CMD, R_MEAS, R_DELTA, R_PKPK, R_CUR, R_CURRMS = 1, 2, 3, 4, 5, 6, 7
+
+    # --- Safety-freeze sizing (see freeze_on_safety_event) --------------------
+    #
+    # Windows admitted after a freeze is requested. Beamline emits
+    # raw_window_ready (-> calibration runner -> interlock -> freeze) BEFORE
+    # ingest_labjack_window (-> this tab), so the window holding the
+    # over-current is always still in flight when the freeze arrives. 2 admits
+    # that one plus the one after it, which costs 100 ms of post-trip trace and
+    # buys confirmation that the current actually came down.
+    SAFETY_ADMIT_WINDOWS = 2
+
+    # Minimum viewport a safety freeze opens out to. The trip happens somewhere
+    # inside a 100 ms stream window, but the frozen right edge can only sit at
+    # that window's newest sample — so at a 1 ms view the visible slice is the
+    # last 1 ms and the excursion is off-screen to the left. That is why a
+    # freeze at a narrow window rendered an apparently empty frame. 0.25 s
+    # guarantees both admitted windows are fully visible, and zoom still works
+    # normally from there.
+    SAFETY_MIN_WINDOW_S = 0.25
 
     # Vertical (voltage / current) zoom step per ＋/－ click.  Matches the time
     # axis, which halves/doubles the window: <1 zooms in, its reciprocal zooms
@@ -122,6 +171,11 @@ class AmpTab(QWidget):
     # Emitted (with an AIN name) when the user applies a new single-channel
     # target.  MainWindow connects this to _set_stream_channel().
     single_channel_change_requested = Signal(str)
+
+    # (profile_name, amp_label) — acquire a pair profile and its target in ONE
+    # stream restart. See Beamline.set_stream_pair_profile for why the
+    # two-request version could not be made reliable.
+    pair_profile_requested = Signal(str, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -148,6 +202,30 @@ class AmpTab(QWidget):
         # Plot state (LIVE/FROZEN + window_seconds live on self.plot, built below)
         self._plot_mode         = "trend"   # "trend" | "snapshot"
         self._paused            = False     # user-toggled waveform freeze
+        # Set when a safety interlock trips (see freeze_on_safety_event).
+        # Distinct from _paused: _paused stops the REDRAW, this stops the
+        # INGEST.  Freezing the view alone would not preserve anything — the
+        # trend buffers and waveform ring keep overwriting themselves, so
+        # within a second of the trip the current excursion that caused it has
+        # already scrolled out of the history the operator wants to read.
+        self._safety_frozen     = False
+        self._safety_reason     = ""
+        # Windows still to be admitted after a freeze is requested.  Beamline
+        # emits raw_window_ready (which reaches the calibration runner, and so
+        # trips the interlock) BEFORE ingest_labjack_window (which reaches this
+        # tab), so at the instant freeze_on_safety_event is called the window
+        # that actually contains the over-current has not been ingested yet.
+        # Blocking immediately therefore threw away the single window the
+        # operator most needs.  This lets the in-flight one through, then shuts.
+        self._safety_admit_left = 0
+        # Funcgen readback (amp label -> ChannelSnapshot) and the latest
+        # measured channels, both cached so the Commanded / Δ rows can repaint
+        # from whichever of the two arrives second.
+        self._cmd: dict = {}
+        self._last_channels: dict = {}
+        # Per-sample interval of the last window, needed to convert raw samples
+        # into a fundamental-frequency amplitude. None until the first window.
+        self._sample_period = None
 
         # Vertical scale state.  The plot never auto-centers the voltage axis;
         # it holds these limits and the user zooms/pans them.  Voltage defaults
@@ -168,6 +246,12 @@ class AmpTab(QWidget):
         # Apply is enabled only when a staged choice differs from these.
         self._applied_profile   = "FULL"
         self._applied_channel   = DEFAULT_SINGLE_CHANNEL
+        self._applied_pair      = DEFAULT_AMP_PAIR
+        # Staged targets are held per KIND. One combo serves both, so without
+        # this, staging AMP_PAIR and back would lose the single-channel choice.
+        self._staged_profile    = None
+        self._staged_channel    = DEFAULT_SINGLE_CHANNEL
+        self._staged_pair       = DEFAULT_AMP_PAIR
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -177,35 +261,86 @@ class AmpTab(QWidget):
         self.lj_panel = LabJackPanel()
 
         # ── Per-amplifier numeric readouts ────────────────────────────────
-        ro_box = QGroupBox("Live Amplifier Monitors")
+        #
+        # Organised around COMMANDED vs MEASURED, because that is the question
+        # this screen exists to answer: is each amplifier doing what it was
+        # told.  The previous layout listed four unconditional statistics
+        # (peak kV, pk-pk kV, RMS kV, RMS mA) with nothing to compare them
+        # against, and half of them were meaningless in whichever mode was
+        # running — RMS of a DC hold is just noise, and the mean of a
+        # zero-centred AC drive is ~0 no matter how hard the amp is working.
+        #
+        # AMPLITUDE CONVENTION, FIXED THROUGHOUT THIS FILE:
+        #   "pk"    = peak amplitude = half of pk-pk, for a zero-offset
+        #             waveform.  Always a MAGNITUDE, never signed.
+        #   "pk-pk" = full excursion, max - min.  Always positive.
+        #   DC rows show a signed LEVEL and say "DC", never "pk".
+        # The generator speaks Vpp natively, the amplifier rating is quoted in
+        # pk, and mixing the two silently is a factor-of-two error, so every
+        # label here states which one it is.
+        ro_box = QGroupBox("Live Amplifier Monitors — commanded vs measured")
         ro_box.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         ro_box.setMinimumWidth(0)
         ro = QGridLayout(ro_box)
-        ro.setSpacing(1)
-        ro.setContentsMargins(6, 4, 6, 4)
+        ro.setHorizontalSpacing(10)
+        ro.setVerticalSpacing(2)
+        ro.setContentsMargins(8, 6, 8, 6)
 
-        mono = QFont("Consolas", 13)
+        mono  = QFont("Consolas", 12)
         mono.setBold(True)
         small = QFont("Consolas", 9)
+        tiny  = QFont("Consolas", 8)
 
         ro.addWidget(QLabel(""), 0, 0)
 
-        def _make_hdr(text):
+        def _make_hdr(text, tip=""):
             lbl = QLabel(text)
             lbl.setFont(small)
             lbl.setStyleSheet("color: #666;")
             lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            if tip:
+                lbl.setToolTip(tip)
             return lbl
 
-        ro.addWidget(_make_hdr("Peak kV"), 1, 0)
-        ro.addWidget(_make_hdr("Peak-to-Peak kV"), 2, 0)
-        ro.addWidget(_make_hdr("RMS kV"), 3, 0)
-        ro.addWidget(_make_hdr("RMS mA"), 4, 0)
+        # Row set is FIXED. Mode changes alter the text and colour in these
+        # rows, never which rows exist — so switching between DC and AC, or
+        # between sessions, cannot make the table jump around under the cursor.
+        ro.addWidget(_make_hdr("Mode", "Waveform and frequency read back from the generator."),
+                     self.R_MODE, 0)
+        ro.addWidget(_make_hdr("Commanded", "AC: peak amplitude (half of the generator's Vpp).\n"
+                                            "DC: the held level, signed."), self.R_CMD, 0)
+        ro.addWidget(_make_hdr("Measured", "AC: pk-pk / 2, so it is sign-free and directly\n"
+                                           "comparable with the commanded peak.\n"
+                                           "DC: window mean, signed."), self.R_MEAS, 0)
+        ro.addWidget(_make_hdr("Δ", "Measured minus commanded. Green inside the\n"
+                                    f"±{CAL_UNCERTAINTY_V:.0f} V uncertainty budget."), self.R_DELTA, 0)
+        ro.addWidget(_make_hdr("Output pk-pk", "Full measured excursion, max - min."), self.R_PKPK, 0)
+        ro.addWidget(_make_hdr("Current", "AC: amplitude at the drive frequency (noise-rejected).\n"
+                                          "DC: window mean current."), self.R_CUR, 0)
+        ro.addWidget(_make_hdr("Current RMS", "True RMS about zero — the heating-relevant figure."),
+                     self.R_CURRMS, 0)
 
-        self.lbl_kv   = {}   # peak output voltage
-        self.lbl_pp   = {}   # pk-pk output voltage
-        self.lbl_rms  = {}   # RMS output voltage
-        self.lbl_ma   = {}   # RMS current draw
+        self.lbl_mode_c = {}   # commanded waveform + frequency
+        self.lbl_cmd    = {}   # commanded amplitude (pk) or DC level
+        self.lbl_meas   = {}   # measured amplitude (pk) or DC level
+        self.lbl_dev    = {}   # measured - commanded
+        self.lbl_pp     = {}   # measured pk-pk
+        self.lbl_cur    = {}   # fundamental (AC) or mean (DC) current
+        self.lbl_currms = {}   # RMS current
+
+        # Fixed, generous column widths. The overlap in the old layout came
+        # from four value columns with no minimum sharing whatever width was
+        # left over: a long string in one column pushed into its neighbour
+        # instead of widening the box. Reserving the width up front, and giving
+        # every value column equal stretch, means text can never collide.
+        # 148 px fits the widest cell the table can produce — "3.071 mA pk@f"
+        # at 12 pt Consolas is ~123 px — with margin for a longer number.
+        ro.setColumnMinimumWidth(0, 96)
+        ro.setColumnStretch(0, 0)
+        for col in range(1, len(SC.AMP_LABELS) + 1):
+            ro.setColumnMinimumWidth(col, 148)
+            ro.setColumnStretch(col, 1)
+
         for col, amp in enumerate(SC.AMP_LABELS, start=1):
             v_ain = SC.AMP_CHANNEL_MAP[amp]["voltage"]
             i_ain = SC.AMP_CHANNEL_MAP[amp]["current"]
@@ -215,7 +350,7 @@ class AmpTab(QWidget):
                 f"color: {SC.AMP_COLORS[amp]}; font-weight: bold; font-size: 14px;"
             )
             sub = QLabel(f"{v_ain}/{i_ain}")
-            sub.setFont(small)
+            sub.setFont(tiny)
             sub.setStyleSheet("color: #888;")
             hdr_w = QWidget()
             hdr_box = QVBoxLayout(hdr_w)
@@ -225,77 +360,34 @@ class AmpTab(QWidget):
             hdr_box.addWidget(sub)
             ro.addWidget(hdr_w, 0, col)
 
-            # One grid row per metric — aligns perfectly with col-0 headers
-            for row, attr in enumerate(("lbl_kv", "lbl_pp", "lbl_rms"), start=1):
+            for row, attr, font in (
+                (self.R_MODE,   "lbl_mode_c", small),
+                (self.R_CMD,    "lbl_cmd",    mono),
+                (self.R_MEAS,   "lbl_meas",   mono),
+                (self.R_DELTA,  "lbl_dev",    small),
+                (self.R_PKPK,   "lbl_pp",     small),
+                (self.R_CUR,    "lbl_cur",    mono),
+                (self.R_CURRMS, "lbl_currms", small),
+            ):
                 lbl = QLabel("—")
-                lbl.setFont(mono)
+                lbl.setFont(font)
                 lbl.setStyleSheet("color: #555;")
+                lbl.setAlignment(Qt.AlignmentFlag.AlignRight
+                                 | Qt.AlignmentFlag.AlignVCenter)
+                # Values are right-aligned and never wrap: a wrapped number
+                # changes the row height and drags the whole grid with it.
+                lbl.setWordWrap(False)
+                lbl.setSizePolicy(QSizePolicy.Policy.Ignored,
+                                  QSizePolicy.Policy.Fixed)
                 getattr(self, attr)[amp] = lbl
                 ro.addWidget(lbl, row, col)
 
-            # Current: single RMS mA value
-            lbl_ma = QLabel("—")
-            lbl_ma.setFont(mono)
-            lbl_ma.setStyleSheet("color: #555;")
-            self.lbl_ma[amp] = lbl_ma
-            ro.addWidget(lbl_ma, 4, col)
-
-        # ── Raw analog inputs: the 8 physical LabJack channels ───────────────
-        # The table above shows DERIVED kV/mA statistics (peak/pk-pk/RMS).  This
-        # separate box shows the 8 raw analog signals exactly as they arrive
-        # from the EEL5000 front-panel monitors into the LabJack — one value per
-        # physical AIN, in volts, with NO scaling applied.  There are only 8
-        # real inputs: each amplifier contributes exactly two, a VOLTAGE monitor
-        # and a CURRENT monitor.  (The value shown is the window average = the
-        # DC level the input sits at, i.e. what a meter on the BNC would read.)
-        raw_box = QGroupBox("Raw Analog Inputs (V, unscaled)")
-        raw_box.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
-        raw_box.setMinimumWidth(0)
-        rawg = QGridLayout(raw_box)
-        rawg.setSpacing(1)
-        rawg.setContentsMargins(6, 4, 6, 4)
-        rawmono = QFont("Consolas", 11)
-        rawmono.setBold(True)
-
-        # Column 0: signal-type row labels.  One column per amplifier after that.
-        _hdr = QLabel("")
-        _hdr.setFixedHeight(18)
-        rawg.addWidget(_hdr, 0, 0)
-        for text, row in (("Voltage monitor (V)", 1), ("Current monitor (V)", 2)):
-            rl = QLabel(text)
-            rl.setFont(small)
-            rl.setStyleSheet("color: #666;")
-            rl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            rawg.addWidget(rl, row, 0)
-
-        self.lbl_raw_v = {}   # raw voltage-monitor ADC reading (V)
-        self.lbl_raw_i = {}   # raw current-monitor ADC reading (V)
-        for col, amp in enumerate(SC.AMP_LABELS, start=1):
-            v_ain = SC.AMP_CHANNEL_MAP[amp]["voltage"]
-            i_ain = SC.AMP_CHANNEL_MAP[amp]["current"]
-
-            hdr = QLabel(amp)
-            hdr.setStyleSheet(
-                f"color: {SC.AMP_COLORS[amp]}; font-weight: bold; font-size: 11px;"
-            )
-            hdr.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-            hdr.setContentsMargins(0, 0, 0, 0)
-            rawg.addWidget(hdr, 0, col)
-
-            lv = QLabel(f"{v_ain}:  —")
-            lv.setFont(rawmono)
-            lv.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
-            lv.setStyleSheet("color: #1a6b9a; font-weight: bold;")
-            self.lbl_raw_v[amp] = lv
-            rawg.addWidget(lv, 1, col)
-
-            li = QLabel(f"{i_ain}:  —")
-            li.setFont(rawmono)
-            li.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
-            li.setStyleSheet("color: #1a6b9a; font-weight: bold;")
-            self.lbl_raw_i[amp] = li
-            rawg.addWidget(li, 2, col)
-
+        # The "Raw Analog Inputs (V, unscaled)" box that used to sit here was
+        # removed: it showed each AIN's window mean in raw monitor volts, which
+        # is the same number the table above already reports in kV and mA after
+        # applying the monitor ratios. The AIN each amplifier uses is on the
+        # column header, so the wiring context it also carried is still present.
+        #
         # ── Profile selector (placed right of lj_panel in top_row below) ────
         prof_box = QGroupBox("Stream Profile")
         prof_col = QVBoxLayout(prof_box)
@@ -315,21 +407,15 @@ class AmpTab(QWidget):
 
         target_row = QHBoxLayout()
         target_row.addWidget(QLabel("Target:"))
+        # ONE target combo, repopulated for whichever profile is staged.
+        # Single-channel profiles target an AIN ("AIN8"); pair profiles target
+        # an AMP LABEL ("Y+") because a pair's two AINs always travel together
+        # and exposing them separately would only allow an incoherent scan
+        # list. Two different kinds of thing, so the combo is rebuilt rather
+        # than trying to hold both at once — and multi-channel profiles have no
+        # target at all, which is why it can also be empty and disabled.
         self._single_combo = NoScrollComboBox()
-        for amp in SC.AMP_LABELS:
-            for kind in ("voltage", "current"):
-                ain = SC.AMP_CHANNEL_MAP[amp][kind]
-                self._single_combo.addItem(
-                    f"{amp} {kind.capitalize()}  ({ain})", userData=ain
-                )
-        default_idx = self._single_combo.findData(DEFAULT_SINGLE_CHANNEL)
-        if default_idx >= 0:
-            self._single_combo.setCurrentIndex(default_idx)
         self._single_combo.setEnabled(False)
-        self._single_combo.setToolTip(
-            "In single-channel mode, choose which amplifier monitor gets the "
-            "full stream bandwidth."
-        )
         self._single_combo.currentIndexChanged.connect(self._on_selection_staged)
         target_row.addWidget(self._single_combo, stretch=1)
 
@@ -350,6 +436,15 @@ class AmpTab(QWidget):
         self._profile_status.setStyleSheet("color: #555; font-style: italic; font-size: 10px;")
         prof_col.addWidget(self._profile_status)
 
+        # Populate the target combo for the initially-selected profile. The
+        # profile combo's index was set before its signal was connected (so
+        # construction does not fire a staging callback), which means nothing
+        # has built the target list yet — without this it starts empty and
+        # stays empty until the first profile change.
+        self._staged_profile = self._profile_combo.currentData()
+        self._populate_target_combo(self._staged_profile)
+        self._on_selection_staged()
+
         # ── Assemble upper section: left col (connection + profile) | right (monitors) ──
         left_col = QVBoxLayout()
         left_col.setSpacing(8)
@@ -357,11 +452,10 @@ class AmpTab(QWidget):
         left_col.addWidget(prof_box)
         left_col.addStretch()
 
-        # Right side: Live Amplifier Monitors | Raw Analog Inputs (side by side)
+        # Right side: the monitors table, now the only box here.
         monitors_row = QHBoxLayout()
         monitors_row.setSpacing(8)
         monitors_row.addWidget(ro_box)
-        monitors_row.addWidget(raw_box)
 
         upper_row = QHBoxLayout()
         upper_row.setSpacing(8)
@@ -429,13 +523,36 @@ class AmpTab(QWidget):
         btn_vzoom_out.clicked.connect(self._v_zoom_out)
         btn_vreset = QPushButton("⤢")
         btn_vreset.setFixedWidth(28)
-        btn_vreset.setToolTip("Reset the vertical scale to the full ±5 kV rating "
-                              "(and ±20 mA on current).  Drag the plot vertically to pan.")
+        btn_vreset.setToolTip("Reset the voltage axis to the full ±5 kV rating. "
+                              "Drag the plot vertically to pan.")
         btn_vreset.setStyleSheet("font-weight: bold; padding: 1px 4px;")
         btn_vreset.clicked.connect(self._v_reset)
         nav_row.addWidget(btn_vzoom_in)
         nav_row.addWidget(btn_vzoom_out)
         nav_row.addWidget(btn_vreset)
+
+        # Vertical (current) scale controls — independent of the voltage axis.
+        lbl_amps = QLabel("Amps:")
+        lbl_amps.setStyleSheet("color: #555; font-size: 10px; padding-left: 10px;")
+        nav_row.addWidget(lbl_amps)
+        btn_izoom_in = QPushButton("＋")
+        btn_izoom_in.setFixedWidth(28)
+        btn_izoom_in.setToolTip("Zoom in the vertical (current) scale about its centre.")
+        btn_izoom_in.setStyleSheet("font-weight: bold; padding: 1px 4px;")
+        btn_izoom_in.clicked.connect(self._i_zoom_in)
+        btn_izoom_out = QPushButton("－")
+        btn_izoom_out.setFixedWidth(28)
+        btn_izoom_out.setToolTip("Zoom out the vertical (current) scale about its centre.")
+        btn_izoom_out.setStyleSheet("font-weight: bold; padding: 1px 4px;")
+        btn_izoom_out.clicked.connect(self._i_zoom_out)
+        btn_ireset = QPushButton("⤢")
+        btn_ireset.setFixedWidth(28)
+        btn_ireset.setToolTip("Reset the current axis to the full ±20 mA rating.")
+        btn_ireset.setStyleSheet("font-weight: bold; padding: 1px 4px;")
+        btn_ireset.clicked.connect(self._i_reset)
+        nav_row.addWidget(btn_izoom_in)
+        nav_row.addWidget(btn_izoom_out)
+        nav_row.addWidget(btn_ireset)
         self._btn_pause = QPushButton("Pause")
         self._btn_pause.setToolTip("Pause / resume the waveform plot updates")
         self._btn_pause.setStyleSheet("padding: 2px 8px;")
@@ -450,7 +567,10 @@ class AmpTab(QWidget):
             " padding:2px 8px; }"
             "QPushButton:hover { background:#0063b1; }"
         )
-        self.btn_jump_live.clicked.connect(self.plot.jump_to_live)
+        # Routed through the tab, not straight to the panel: this button is
+        # also how the operator releases a safety freeze, which has to restart
+        # ingestion as well as move the view.
+        self.btn_jump_live.clicked.connect(self._on_jump_live_clicked)
         nav_row.addWidget(self.btn_jump_live)
         pv.addLayout(nav_row)
 
@@ -556,6 +676,23 @@ class AmpTab(QWidget):
         if not LJM_AVAILABLE:
             self.lj_panel.set_enabled(False)
 
+    # ---- Size hints (compressibility) ----------------------------------------
+    #
+    # The default sizeHint() propagates up from the canvas figsize (700 px)
+    # plus the very wide upper row (LabJack panel + monitor grids, ~1400 px
+    # combined).  QScrollArea with widgetResizable=True always sizes the inner
+    # widget to max(viewport, sizeHint), so without an override the tab is
+    # locked to ~1400 px even in a narrow split pane, and the canvas never
+    # visually compresses.  Returning a small preferred width here lets the
+    # scroll area give the tab exactly the pane width, making the canvas fill
+    # and respond to the splitter handle.
+
+    def sizeHint(self):
+        return QSize(400, super().sizeHint().height())
+
+    def minimumSizeHint(self):
+        return QSize(150, super().minimumSizeHint().height())
+
     # ---- Connection lifecycle (driven by MainWindow) --------------------------
 
     def on_labjack_connected(self, serial: str):
@@ -631,13 +768,23 @@ class AmpTab(QWidget):
 
         Called by MainWindow after a switch completes, and by us during Apply.
         """
+        if profile_name not in STREAM_PROFILES:
+            return   # unknown name (e.g. a stale restore); leave the UI alone
         idx = list(STREAM_PROFILES.keys()).index(profile_name)
         self._profile_combo.blockSignals(True)
         self._profile_combo.setCurrentIndex(idx)
         self._profile_combo.blockSignals(False)
 
+        # Rebuild the target list for the profile that is now live. Needed
+        # because a calibration run switches the profile out from under this
+        # tab, so the combo can be holding targets of the wrong kind entirely.
+        if profile_name != self._staged_profile:
+            self._staged_profile = profile_name
+            self._populate_target_combo(profile_name)
+
         self._single_mode = is_single_channel(profile_name)
-        self._single_combo.setEnabled(self._single_mode)
+        pair_mode = is_pair_channel(profile_name)
+        self._single_combo.setEnabled(self._single_mode or pair_mode)
 
         rate = STREAM_PROFILES[profile_name]["per_channel_rate_hz"]
         res  = resolution_index(profile_name)
@@ -649,6 +796,14 @@ class AmpTab(QWidget):
                 f"target {amp} {kind} ({self._single_target_ain})  |  "
                 f"window {window_samples(profile_name)} pts"
             )
+        elif pair_mode:
+            pair = self._single_combo.currentData() or DEFAULT_AMP_PAIR
+            self._profile_status.setText(
+                f"{rate / 1000:.1f} kS/s/ch  |  res idx {res}  |  "
+                f"pair {pair} ({SC.AMP_CHANNEL_MAP[pair]['current']}+"
+                f"{SC.AMP_CHANNEL_MAP[pair]['voltage']})  |  "
+                f"window {window_samples(profile_name)} pts"
+            )
         else:
             self._profile_status.setText(
                 f"{rate / 1000:.1f} kS/s/ch  |  res idx {res}  |  "
@@ -657,7 +812,12 @@ class AmpTab(QWidget):
 
         # This profile/target is now the live one; clear any pending Apply state.
         self._applied_profile = profile_name
-        self._applied_channel = self._single_combo.currentData()
+        if self._single_mode:
+            self._applied_channel = self._single_combo.currentData()
+            self._staged_channel  = self._applied_channel
+        elif pair_mode:
+            self._applied_pair = self._single_combo.currentData()
+            self._staged_pair  = self._applied_pair
         self._refresh_apply_state()
 
         self._apply_paused_styling()
@@ -671,32 +831,27 @@ class AmpTab(QWidget):
         mistaken for a current reading.  In multi-channel mode nothing is muted
         (every monitor updates each window).
         """
-        muted    = "color: #bbb; font-weight: bold;"
-        neutral  = "color: #555; font-weight: bold;"
-        raw_live = "color: #1a6b9a; font-weight: bold;"
+        muted = "color: #bbb; font-weight: bold;"
         for amp in SC.AMP_LABELS:
             v_ain = SC.AMP_CHANNEL_MAP[amp]["voltage"]
             i_ain = SC.AMP_CHANNEL_MAP[amp]["current"]
             v_live = (not self._single_mode) or v_ain == self._single_target_ain
             i_live = (not self._single_mode) or i_ain == self._single_target_ain
+            # Only the MEASURED cells are muted. The Mode / Commanded cells are
+            # deliberately left alone: they come from the generator readback,
+            # not the stream, so they stay true even when a monitor is not
+            # being sampled — and knowing what a paused channel was told to do
+            # is exactly what makes the pause readable rather than just blank.
+            # Live cells are not restyled here; _refresh_monitors sets their
+            # colour from the value on every window.
             if not v_live:
-                for lbl in (self.lbl_kv[amp], self.lbl_pp[amp], self.lbl_rms[amp]):
+                for lbl in (self.lbl_meas[amp], self.lbl_pp[amp], self.lbl_dev[amp]):
                     lbl.setStyleSheet(muted)
                     lbl.setText("—")
-                self.lbl_raw_v[amp].setStyleSheet(muted)
-                self.lbl_raw_v[amp].setText(f"{v_ain}:  —")
-            else:
-                for lbl in (self.lbl_kv[amp], self.lbl_pp[amp], self.lbl_rms[amp]):
-                    lbl.setStyleSheet(neutral)
-                self.lbl_raw_v[amp].setStyleSheet(raw_live)
             if not i_live:
-                self.lbl_ma[amp].setStyleSheet(muted)
-                self.lbl_ma[amp].setText("—")
-                self.lbl_raw_i[amp].setStyleSheet(muted)
-                self.lbl_raw_i[amp].setText(f"{i_ain}:  —")
-            else:
-                self.lbl_ma[amp].setStyleSheet(neutral)
-                self.lbl_raw_i[amp].setStyleSheet(raw_live)
+                for lbl in (self.lbl_cur[amp], self.lbl_currms[amp]):
+                    lbl.setStyleSheet(muted)
+                    lbl.setText("—")
 
     def _update_history_layout(self):
         """Show only the relevant subplot in single-channel mode.
@@ -735,25 +890,82 @@ class AmpTab(QWidget):
 
     # ---- Profile / target staging + Apply ------------------------------------
 
+    def _populate_target_combo(self, profile_name: str):
+        """Rebuild the target combo for *profile_name*, preserving the choice.
+
+        Rebuilt rather than filtered because the three cases carry different
+        userData types — AIN name, amp label, or nothing — and a combo holding
+        a mix of them would let _refresh_apply_state compare an AIN against an
+        amp label and conclude they differ forever.
+        """
+        prev_single = self._staged_channel
+        prev_pair   = self._staged_pair
+        self._single_combo.blockSignals(True)
+        self._single_combo.clear()
+        if is_single_channel(profile_name):
+            for amp in SC.AMP_LABELS:
+                for kind in ("voltage", "current"):
+                    ain = SC.AMP_CHANNEL_MAP[amp][kind]
+                    self._single_combo.addItem(
+                        f"{amp} {kind.capitalize()}  ({ain})", userData=ain)
+            idx = self._single_combo.findData(prev_single or DEFAULT_SINGLE_CHANNEL)
+            self._single_combo.setCurrentIndex(max(idx, 0))
+            self._single_combo.setToolTip(
+                "Single-channel mode: choose which amplifier monitor gets the "
+                "full stream bandwidth.")
+        elif is_pair_channel(profile_name):
+            for amp in pair_choices(profile_name):
+                v_ain = SC.AMP_CHANNEL_MAP[amp]["voltage"]
+                i_ain = SC.AMP_CHANNEL_MAP[amp]["current"]
+                self._single_combo.addItem(
+                    f"{amp}  ({i_ain}+{v_ain})", userData=amp)
+            idx = self._single_combo.findData(prev_pair or DEFAULT_AMP_PAIR)
+            self._single_combo.setCurrentIndex(max(idx, 0))
+            self._single_combo.setToolTip(
+                "Dual-channel mode: choose which amplifier's CURRENT and "
+                "VOLTAGE monitors are streamed together. Both AINs of the pair "
+                "always travel together — this is the pair a calibration sweep "
+                "re-points as it moves from channel to channel.")
+        else:
+            self._single_combo.setToolTip(
+                "This profile streams a fixed scan list — no target to choose.")
+        self._single_combo.blockSignals(False)
+
     def _on_selection_staged(self, *_):
         """A combo changed — stage it and light up Apply if it differs from live.
 
-        Nothing touches the hardware here.  The single-channel target combo is
-        enabled whenever a single-channel profile is *staged*, so the user can
-        pick the target before applying.
+        Nothing touches the hardware here.  The target combo is repopulated for
+        whichever profile is *staged*, so the target can be chosen before
+        applying.
         """
         staged_profile = self._profile_combo.currentData()
-        self._single_combo.setEnabled(is_single_channel(staged_profile))
+        if staged_profile != self._staged_profile:
+            # Profile changed: rebuild the target list for its kind.
+            self._staged_profile = staged_profile
+            self._populate_target_combo(staged_profile)
+        # Remember the staged target per kind, so switching profile back and
+        # forth does not lose the other one's selection.
+        data = self._single_combo.currentData()
+        if is_single_channel(staged_profile):
+            self._staged_channel = data
+        elif is_pair_channel(staged_profile):
+            self._staged_pair = data
+        self._single_combo.setEnabled(
+            bool(is_single_channel(staged_profile)
+                 or is_pair_channel(staged_profile)))
         self._refresh_apply_state()
 
     def _refresh_apply_state(self):
         """Enable/highlight Apply iff the staged selection differs from live."""
         staged_profile = self._profile_combo.currentData()
-        staged_channel = self._single_combo.currentData()
-        pending = (staged_profile != self._applied_profile) or (
-            is_single_channel(staged_profile)
-            and staged_channel != self._applied_channel
-        )
+        staged_target  = self._single_combo.currentData()
+        if is_single_channel(staged_profile):
+            target_differs = staged_target != self._applied_channel
+        elif is_pair_channel(staged_profile):
+            target_differs = staged_target != self._applied_pair
+        else:
+            target_differs = False
+        pending = (staged_profile != self._applied_profile) or target_differs
         self._apply_btn.setEnabled(pending)
         if pending:
             self._apply_btn.setStyleSheet(
@@ -788,20 +1000,29 @@ class AmpTab(QWidget):
     def _apply_stream_settings(self):
         """Commit the staged profile/target to the hardware (one atomic action).
 
-        The channel is emitted before the profile so that a switch INTO a
-        single-channel profile starts directly on the chosen target — a single
-        stream restart instead of two.
+        A pair profile goes through pair_profile_requested, which sets profile
+        and target together in ONE stream restart. The two-request version was
+        unreliable: each request early-returns when its own field already
+        matches, so selecting a different pair while already on AMP_PAIR did
+        nothing, and switching into AMP_PAIR from elsewhere restarted twice.
+
+        Single-channel emits the channel BEFORE the profile so a switch into a
+        single-channel profile starts directly on the chosen target — same
+        one-restart reasoning, via the older path.
         """
         staged_profile = self._profile_combo.currentData()
-        staged_channel = self._single_combo.currentData()
+        staged_target  = self._single_combo.currentData()
         if staged_profile is None:
             return
 
-        if (is_single_channel(staged_profile) and staged_channel
-                and staged_channel != self._applied_channel):
-            self.single_channel_change_requested.emit(staged_channel)
-        if staged_profile != self._applied_profile:
-            self.profile_change_requested.emit(staged_profile)
+        if is_pair_channel(staged_profile):
+            self.pair_profile_requested.emit(staged_profile, staged_target or "")
+        else:
+            if (is_single_channel(staged_profile) and staged_target
+                    and staged_target != self._applied_channel):
+                self.single_channel_change_requested.emit(staged_target)
+            if staged_profile != self._applied_profile:
+                self.profile_change_requested.emit(staged_profile)
 
         # Update our own UI immediately.  When connected, MainWindow also calls
         # on_profile_changed after the restart; both are idempotent.
@@ -835,10 +1056,28 @@ class AmpTab(QWidget):
         if not state.connected:
             return
 
+        # A safety interlock has frozen this tab: stop taking new data in.
+        # Everything already in the buffers, the waveform ring and the numeric
+        # labels is the state at the moment of the trip, which is exactly what
+        # there is to look at. Returning here (rather than gating the redraw)
+        # keeps the plot fully interactive — the operator can still scrub the
+        # slider and zoom around the event.
+        if self._safety_frozen:
+            if self._safety_admit_left <= 0:
+                return
+            # Admit this window, then anchor the view once it has landed —
+            # see _safety_admit_left. Falls through to the normal ingest below.
+            self._safety_admit_left -= 1
+            if self._safety_admit_left == 0:
+                QTimer.singleShot(0, self._anchor_safety_freeze)
+
         t = state.t
         # Adopt the stream's true sample period when present so stitched
         # waveform chunks use the real per-sample step (not a nominal guess).
         self.wave_ring.set_sample_period(state.sample_period)
+        # Cache for the commanded-vs-measured comparison, which is driven by
+        # the funcgen readback and so can arrive between windows.
+        self._last_channels = dict(state.channels or {})
 
         for amp in SC.AMP_LABELS:
             ch = state.channels.get(amp)
@@ -855,37 +1094,20 @@ class AmpTab(QWidget):
                 # which equals kV (1000:1 monitor ratio).
                 self.buffers[v_ain].append(t, monitor_to_kv(ch.raw_v))
 
-                self.lbl_kv[amp].setText(format_kv(ch.peak_kv))
-                self.lbl_kv[amp].setStyleSheet(
-                    f"color: {_STATUS_COLOR[voltage_status(ch.peak_kv)]}; font-weight: bold;"
-                )
-                self.lbl_pp[amp].setText(format_kv(ch.pkpk_kv))
-                self.lbl_pp[amp].setStyleSheet("color: #444; font-weight: bold;")
-                self.lbl_rms[amp].setText(format_kv(ch.rms_kv))
-                self.lbl_rms[amp].setStyleSheet("color: #444; font-weight: bold;")
-
-                # Raw analog input: the actual volts arriving from the EEL5000
-                # VOLTAGE monitor into the LabJack, with NO kV scaling — the
-                # window average, i.e. what a meter on the BNC would read.
-                self.lbl_raw_v[amp].setText(f"{v_ain}:  {ch.raw_v:+.4f} V")
-
                 if ch.window_kv is not None:
                     self.wave_ring.store(v_ain, t, ch.window_kv)
 
             if ch.i_live:
                 self.buffers[i_ain].append(t, ch.rms_ma)
 
-                self.lbl_ma[amp].setText(format_ma(ch.rms_ma))
-                self.lbl_ma[amp].setStyleSheet(
-                    f"color: {_STATUS_COLOR[current_status(ch.rms_ma)]}; font-weight: bold;"
-                )
-
-                # Raw analog input: the actual volts from the EEL5000 CURRENT
-                # monitor into the LabJack, with NO mA scaling (window average).
-                self.lbl_raw_i[amp].setText(f"{i_ain}:  {ch.raw_i:+.4f} V")
-
                 if ch.window_ma is not None:
                     self.wave_ring.store(i_ain, t, ch.window_ma)
+
+        # One repaint of the whole table per window, driven off the cached
+        # measurement and the cached readback together — the two arrive on
+        # independent signals and either may be the later one.
+        self._sample_period = state.sample_period
+        self._refresh_monitors()
 
         if self.plot.is_live:
             self.plot.force_to_live()
@@ -926,8 +1148,302 @@ class AmpTab(QWidget):
             "color: #8c6000; font-weight: bold; padding: 2px 6px;"
         )
 
+    # ---- Commanded vs measured -------------------------------------------------
+
+    def on_funcgens_changed(self, state):
+        """Cache the funcgen READBACK so the table can show what was asked for.
+
+        Readback, not command intent: this is what the generator reports being
+        set to, so it catches a command that silently failed to take, and it
+        works outside a calibration run — the amp tab is the health screen, and
+        it should say what the hardware is doing whoever asked it to.
+        """
+        self._cmd = {}
+        channels = getattr(state, "channels", None) or {}
+        for key, snap in channels.items():
+            amp = CHANNEL_ROLE.get(key)
+            if amp is None or snap is None:
+                continue
+            self._cmd[amp] = snap
+        self._refresh_monitors()
+
+    @staticmethod
+    def _commanded(snap):
+        """(is_dc, shape_label, freq_hz, amplitude_kv, output_on) from a readback.
+
+        amplitude_kv is a PEAK amplitude on AC and a SIGNED LEVEL on DC, which
+        is the distinction the rest of this file is careful about.
+
+        The generator reports amplitude as Vpp — peak-to-PEAK — while the
+        amplifier's rating, the calibration ladder and every "kV pk" on this
+        screen are peak amplitudes. Halving happens HERE, once, so no caller
+        has to remember which convention it is holding.
+        """
+        shape = str(getattr(snap, "shape", "") or "").upper()
+        head  = shape.split(",")[0]
+        freq  = float(getattr(snap, "freq_hz", 0.0) or 0.0)
+        gain  = _AMP_GAIN / 1000.0        # generator volts -> output kV
+        on    = bool(getattr(snap, "output_on", False))
+        if head.startswith("DC") or freq <= 0:
+            return (True, "DC", 0.0,
+                    float(getattr(snap, "offset_v", 0.0) or 0.0) * gain, on)
+        label = _SHAPE_LABEL.get(head, head[:4] or "AC")
+        amp_kv = abs(float(getattr(snap, "amp_vpp", 0.0) or 0.0)) / 2.0 * gain
+        return (False, label, freq, amp_kv, on)
+
+    def _measured_amplitude_kv(self, ch, is_dc: bool) -> float:
+        """Measured output in kV, in the same convention as the command.
+
+        THIS IS THE COMPARISON THAT HAS TO BE RIGHT.
+
+        On AC the drive is a zero-centred waveform, so the peak amplitude is
+        pk-pk / 2 — computed from pkpk_kv, which is max-min and therefore
+        always positive. It deliberately does NOT use AmpChannelSnapshot.peak_kv:
+        that is the SIGNED sample of largest magnitude, so on a symmetric
+        triangle it is +Vpk or -Vpk depending on nothing more than which
+        extreme the window happened to catch. Subtracting a positive commanded
+        peak from that flips the delta to about -200% every time the negative
+        excursion wins, which is a comparison the operator would rightly stop
+        trusting.
+
+        On DC the held level is signed and polarity is part of the answer, so
+        it uses the window mean.
+        """
+        if ch is None:
+            return float("nan")
+        if is_dc:
+            return monitor_to_kv(ch.raw_v)
+        pkpk = ch.pkpk_kv
+        return (pkpk / 2.0) if math.isfinite(pkpk) else float("nan")
+
+    def _measured_current(self, amp: str, ch, is_dc: bool, freq_hz: float):
+        """(display_ma, suffix) for the Current row.
+
+        AC uses the amplitude at the DRIVE FREQUENCY, extracted from this
+        window's raw samples. Neither of the obvious alternatives works here:
+        the mean of a symmetric drive is ~0 however hard the amplifier is
+        working, and the peak is dominated by the monitor's noise floor —
+        against this rig's ~1.4 mA rms noise a peak reading biases +181% where
+        the fundamental biases +0.2%.
+
+        Falls back to RMS, flagged as such, when the window is too short to
+        hold enough whole cycles (below ~40 Hz at a 100 ms window) — better to
+        show a cruder number and say so than to show a blank.
+        """
+        if ch is None or not getattr(ch, "i_live", False):
+            return float("nan"), ""
+        if is_dc:
+            return monitor_to_ma(ch.raw_i), "mean"
+        wave = getattr(ch, "window_ma", None)
+        sp   = getattr(self, "_sample_period", None)
+        if wave is not None and sp:
+            amp_ma, _phase = fundamental(wave, 1.0 / sp, freq_hz)
+            if math.isfinite(amp_ma):
+                return amp_ma, "pk@f"
+        return ch.rms_ma, "rms*"
+
+    def _refresh_monitors(self):
+        """Repaint the whole commanded-vs-measured table.
+
+        Driven by both the funcgen readback and the stream, so it is written to
+        be safe to call from either at any time and to tolerate one of them
+        being absent — at startup the readback arrives before any window, and
+        on a single-channel profile half the monitors are simply not sampled.
+        """
+        for amp in SC.AMP_LABELS:
+            snap = self._cmd.get(amp)
+            ch   = self._last_channels.get(amp)
+            l_mode = self.lbl_mode_c[amp]
+            l_cmd  = self.lbl_cmd[amp]
+            l_meas = self.lbl_meas[amp]
+            l_dev  = self.lbl_dev[amp]
+            l_pp   = self.lbl_pp[amp]
+            l_cur  = self.lbl_cur[amp]
+            l_rms  = self.lbl_currms[amp]
+
+            # ---- Commanded side -----------------------------------------
+            if snap is None:
+                l_mode.setText("—")
+                l_mode.setStyleSheet("color: #888;")
+                l_cmd.setText("—")
+                l_cmd.setStyleSheet("color: #555;")
+                is_dc, freq, cmd_kv, out_on = True, 0.0, float("nan"), False
+            else:
+                is_dc, label, freq, cmd_kv, out_on = self._commanded(snap)
+                l_mode.setText(label if is_dc else f"{label} {_fmt_hz(freq)}")
+                l_mode.setStyleSheet(
+                    "color: #333; font-weight: bold;" if out_on
+                    else "color: #999;")
+                if is_dc:
+                    l_cmd.setText(f"{cmd_kv:+.3f} kV")
+                else:
+                    l_cmd.setText(f"{cmd_kv:.3f} kV pk")
+                l_cmd.setStyleSheet(
+                    "color: #004e8c; font-weight: bold;" if out_on
+                    else "color: #999; font-weight: bold;")
+                if not out_on:
+                    l_mode.setText(l_mode.text() + " · OFF")
+
+            # ---- Measured side ------------------------------------------
+            v_live = ch is not None and getattr(ch, "v_live", False)
+            meas_kv = self._measured_amplitude_kv(ch, is_dc) if v_live else float("nan")
+            if not v_live or not math.isfinite(meas_kv):
+                l_meas.setText("—")
+                l_meas.setStyleSheet("color: #999;")
+                l_pp.setText("—")
+                l_pp.setStyleSheet("color: #999;")
+            else:
+                l_meas.setText(f"{meas_kv:+.3f} kV" if is_dc
+                               else f"{meas_kv:.3f} kV pk")
+                l_meas.setStyleSheet(
+                    f"color: {_STATUS_COLOR[voltage_status(meas_kv)]}; "
+                    f"font-weight: bold;")
+                l_pp.setText(f"{ch.pkpk_kv:.3f} kV pk-pk")
+                l_pp.setStyleSheet("color: #444;")
+
+            # ---- Delta ---------------------------------------------------
+            # Suppressed when the output is off: the generator still reports
+            # the amplitude it is configured for, but nothing is driving the
+            # amplifier, so a comparison would flag -100% on a channel behaving
+            # exactly as intended.
+            if (not out_on or not math.isfinite(cmd_kv) or abs(cmd_kv) < 1e-9
+                    or not math.isfinite(meas_kv)):
+                l_dev.setText("—")
+                l_dev.setStyleSheet("color: #999;")
+            else:
+                d_kv = meas_kv - cmd_kv
+                pct  = 100.0 * d_kv / abs(cmd_kv)
+                # Inside the documented uncertainty budget is agreement, not a
+                # finding — the same threshold the calibration tab refuses to
+                # report deviations below.
+                ok = abs(d_kv) * 1000.0 <= CAL_UNCERTAINTY_V
+                l_dev.setText(f"{d_kv * 1000:+.0f} V ({pct:+.1f}%)")
+                l_dev.setStyleSheet(
+                    f"color: {'#1a7000' if ok else '#a05000'}; font-weight: bold;")
+
+            # ---- Current -------------------------------------------------
+            cur_ma, suffix = self._measured_current(amp, ch, is_dc, freq)
+            if not math.isfinite(cur_ma):
+                l_cur.setText("—")
+                l_cur.setStyleSheet("color: #999;")
+            else:
+                l_cur.setText(f"{cur_ma:+.3f} mA {suffix}" if is_dc
+                              else f"{cur_ma:.3f} mA {suffix}")
+                l_cur.setStyleSheet(
+                    f"color: {_STATUS_COLOR[current_status(cur_ma)]}; "
+                    f"font-weight: bold;")
+            if ch is not None and getattr(ch, "i_live", False) \
+                    and math.isfinite(ch.rms_ma):
+                l_rms.setText(f"{ch.rms_ma:.3f} mA rms")
+                l_rms.setStyleSheet("color: #444;")
+            else:
+                l_rms.setText("—")
+                l_rms.setStyleSheet("color: #999;")
+
+    # ---- Safety freeze ---------------------------------------------------------
+
+    def freeze_on_safety_event(self, reason: str):
+        """Freeze the plot and stop ingesting, because an interlock fired.
+
+        Called from MainWindow when the calibration over-current interlock
+        trips. The point is forensic: by the time the operator has read the
+        warning dialog the amplifier has been zeroed for several seconds, and
+        in RMS/trend mode each point is a whole window's average, so the
+        excursion that caused the trip is both averaged down and about to
+        scroll away. Stopping the ingest at the trip keeps the last
+        BUFFER_CAPACITY points and the whole waveform ring exactly as they
+        were, and pinning the view to the newest sample puts the event at the
+        right-hand edge where it can be zoomed into.
+
+        Works the same in both modes because both read the same frozen
+        buffers: RMS/trend gets the last few minutes of history, waveform gets
+        the raw ring at full sample rate — which is the only view that shows
+        how high the current actually went, rather than its window average.
+
+        Safe to call repeatedly; the first call wins, so a second interlock
+        event cannot overwrite the data from the first.
+        """
+        if self._safety_frozen:
+            return
+        self._safety_frozen = True
+        self._safety_reason = reason
+        # Do NOT anchor the view here. The window carrying the over-current has
+        # not been ingested yet (see _safety_admit_left), so there is nothing
+        # to anchor to; _anchor_safety_freeze runs once it has landed.
+        self._safety_admit_left = self.SAFETY_ADMIT_WINDOWS
+
+        # Drive the Pause button into its paused state so the freeze reads as
+        # one thing on screen rather than two: the plot is stopped, the button
+        # says Resume, and pressing Resume is what restarts it.
+        self._paused = True
+        self._btn_pause.setText("Resume")
+        self._btn_pause.setStyleSheet(
+            "background: #a00000; color: white; font-weight: bold; padding: 2px 8px;")
+        self._update_safety_label()
+
+    def _anchor_safety_freeze(self):
+        """Pin the view now that the triggering window has been ingested.
+
+        Also widens the time window if needed. The trip lands somewhere inside
+        a 100 ms stream window, but the right edge can only be placed at that
+        window's newest sample — so at a 1 ms view the visible slice is the
+        last 1 ms of the window and the excursion is almost certainly outside
+        it. That is why the frozen frame looked blank. Opening out to at least
+        one full stream window guarantees the whole triggering window is on
+        screen; the operator can then zoom back in and scrub to the spike.
+        """
+        if not self._safety_frozen:
+            return   # released before the window arrived
+        if self.plot.window_seconds < self.SAFETY_MIN_WINDOW_S:
+            self.plot.window_seconds = self.SAFETY_MIN_WINDOW_S
+        self.plot.freeze_at_live_edge()
+        self.btn_jump_live.setText("Resume Live")
+        self.btn_jump_live.setVisible(True)
+        self._update_safety_label()
+        self._redraw_plot()   # render the frozen frame immediately
+
+    def _on_jump_live_clicked(self):
+        if self._safety_frozen:
+            self.clear_safety_freeze()
+        else:
+            self.plot.jump_to_live()
+
+    def clear_safety_freeze(self):
+        """Resume ingestion and return to live. Operator-initiated only."""
+        if not self._safety_frozen:
+            return
+        self._safety_frozen = False
+        self._safety_reason = ""
+        self._safety_admit_left = 0
+        self.btn_jump_live.setText("Jump to Live")
+        # Release the pause this freeze imposed. Deliberately unconditional:
+        # the freeze set it, so the freeze clears it. A pause the operator set
+        # themselves before the trip is not worth preserving across an
+        # interlock event — they pressed Resume, they want it running.
+        self._paused = False
+        self._btn_pause.setText("Pause")
+        self._btn_pause.setStyleSheet("padding: 2px 8px;")
+        # The buffers now have a gap spanning the freeze. Clearing the ring
+        # prevents the waveform view from stitching across it and drawing a
+        # cycle that never existed — the same reason a profile switch clears
+        # it (see AmpTraceBuilder.clear).
+        self.wave_ring.clear()
+        self.plot.jump_to_live()
+
+    def _update_safety_label(self):
+        self.lbl_mode.setText(f"⛔ FROZEN — {self._safety_reason}")
+        self.lbl_mode.setStyleSheet(
+            "color: white; background: #a00000; font-weight: bold; "
+            "padding: 2px 6px; border-radius: 3px;"
+        )
+
     def _on_navigation_changed(self):
         self.btn_jump_live.setVisible(not self.plot.is_live)
+        if self._safety_frozen:
+            # Keep the interlock banner up while scrubbing; it outranks the
+            # ordinary frozen/live wording until the operator resumes.
+            self._update_safety_label()
+            return
         if self.plot.is_live:
             self.lbl_mode.setText(f"● LIVE  ({self._window_label()})")
             self.lbl_mode.setStyleSheet(
@@ -937,6 +1453,9 @@ class AmpTab(QWidget):
             self._update_frozen_label()
 
     def _on_zoom_changed(self):
+        if self._safety_frozen:
+            self._update_safety_label()
+            return
         if self.plot.is_live:
             self.lbl_mode.setText(f"● LIVE  ({self._window_label()})")
         elif self.plot.frozen_right_edge is not None:
@@ -964,9 +1483,8 @@ class AmpTab(QWidget):
         return [centre - half, centre + half]
 
     def _v_zoom(self, factor: float):
-        """Zoom the vertical scale of both axes about their centres."""
+        """Zoom the voltage axis only about its centre."""
         self._ylim_v = self._zoom_span(self._ylim_v, factor)
-        self._ylim_i = self._zoom_span(self._ylim_i, factor)
         self._apply_ylimits()
         self.canvas.draw_idle()
 
@@ -977,8 +1495,25 @@ class AmpTab(QWidget):
         self._v_zoom(1.0 / self.V_ZOOM_FACTOR)    # wider span
 
     def _v_reset(self):
-        """Return the vertical scale to the full rating envelope."""
+        """Reset the voltage axis to the full ±kV rating."""
         self._ylim_v = [-SC.AMP_MAX_KV, SC.AMP_MAX_KV]
+        self._apply_ylimits()
+        self.canvas.draw_idle()
+
+    def _i_zoom(self, factor: float):
+        """Zoom the current axis only about its centre."""
+        self._ylim_i = self._zoom_span(self._ylim_i, factor)
+        self._apply_ylimits()
+        self.canvas.draw_idle()
+
+    def _i_zoom_in(self):
+        self._i_zoom(self.V_ZOOM_FACTOR)
+
+    def _i_zoom_out(self):
+        self._i_zoom(1.0 / self.V_ZOOM_FACTOR)
+
+    def _i_reset(self):
+        """Reset the current axis to the full ±mA rating."""
         self._ylim_i = [-SC.AMP_MAX_MA_DC, SC.AMP_MAX_MA_DC]
         self._apply_ylimits()
         self.canvas.draw_idle()
@@ -1024,7 +1559,15 @@ class AmpTab(QWidget):
     # ---- Plot redraw ---------------------------------------------------------
 
     def _toggle_pause(self):
-        """Pause / resume the waveform plot updates."""
+        """Pause / resume the waveform plot updates.
+
+        While a safety freeze is in force this button is the release for it:
+        the freeze put the button into its paused state, so pressing Resume
+        has to undo the whole thing — restart ingestion, not just redrawing.
+        """
+        if self._safety_frozen:
+            self.clear_safety_freeze()
+            return
         self._paused = not self._paused
         if self._paused:
             self._btn_pause.setText("Resume")
@@ -1036,7 +1579,12 @@ class AmpTab(QWidget):
 
     def _redraw_plot(self):
         """Dispatch to the trend or waveform-snapshot renderer for this window."""
-        if self._paused:
+        # A safety freeze sets _paused, but must still redraw: ingestion has
+        # stopped, so a redraw cannot show anything new — it only reflects the
+        # operator scrubbing the slider or zooming, which is the entire point
+        # of freezing. Honouring _paused here would leave the plot showing
+        # whatever happened to be on it and ignore every navigation input.
+        if self._paused and not self._safety_frozen:
             return
         if self._is_snapshot():
             self._set_plot_mode("snapshot")

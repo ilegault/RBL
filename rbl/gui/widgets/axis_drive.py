@@ -28,7 +28,7 @@ generator still goes through Beamline.
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtWidgets import (
     QGroupBox, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel, QPushButton,
-    QSizePolicy, QSpacerItem,
+    QSizePolicy,
 )
 
 from rbl.hardware.funcgen_driver import MAX_AMP_VPP
@@ -77,18 +77,18 @@ class AxisDriveControl(QGroupBox):
                            QSizePolicy.Policy.Maximum)
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(6, 4, 6, 4)
-        lay.setSpacing(3)
+        lay.setContentsMargins(4, 4, 4, 4)
+        lay.setSpacing(2)
 
         # The bar sits BESIDE the entry boxes rather than under them: vertical,
         # it costs ~50 px of width instead of ~40 px of height, which is what
         # lets both axis panels fit side by side on one row.
         row = QHBoxLayout()
-        row.setSpacing(6)
+        row.setSpacing(4)
 
         form = QFormLayout()
         form.setContentsMargins(0, 0, 0, 0)
-        form.setSpacing(6)
+        form.setSpacing(3)
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight
                                | Qt.AlignmentFlag.AlignVCenter)
 
@@ -96,9 +96,9 @@ class AxisDriveControl(QGroupBox):
         self.spn_amp.setRange(0.0, MAX_AMP_PEAK_V)
         self.spn_amp.setDecimals(3)
         self.spn_amp.setSingleStep(0.05)
-        self.spn_amp.setMinimumWidth(90)
-        self.spn_amp.setMaximumWidth(130)
-        self.spn_amp.setMinimumHeight(30)
+        self.spn_amp.setMinimumWidth(20)
+        self.spn_amp.setMaximumWidth(120)
+        self.spn_amp.setMinimumHeight(22)
         self.spn_amp.setStyleSheet(f"font-size: {theme.FS_LABEL}px;")
         self.spn_amp.setToolTip(
             f"Peak drive on both {self.slits[0]} and {self.slits[1]}, in volts "
@@ -121,9 +121,9 @@ class AxisDriveControl(QGroupBox):
         self.spn_freq = QuietDoubleSpinBox()
         self.spn_freq.setRange(0.0001, 25_000_000.0)
         self.spn_freq.setDecimals(4)
-        self.spn_freq.setMinimumWidth(90)
-        self.spn_freq.setMaximumWidth(130)
-        self.spn_freq.setMinimumHeight(30)
+        self.spn_freq.setMinimumWidth(20)
+        self.spn_freq.setMaximumWidth(120)
+        self.spn_freq.setMinimumHeight(22)
         self.spn_freq.setStyleSheet(f"font-size: {theme.FS_LABEL}px;")
         self.spn_freq.setToolTip(
             f"Sweep rate on this axis. Both {self.slits[0]} and {self.slits[1]} "
@@ -134,8 +134,6 @@ class AxisDriveControl(QGroupBox):
         self.spn_freq.valueChanged.connect(self._on_edited)
         form.addRow(self._form_label("Frequency:"),
                     unit_row(self.spn_freq, "Hz", font_size=theme.FS_LABEL))
-        form.addItem(QSpacerItem(0, 0, QSizePolicy.Policy.Minimum,
-                                 QSizePolicy.Policy.Expanding))
 
         row.addLayout(form, stretch=1)
 
@@ -145,10 +143,9 @@ class AxisDriveControl(QGroupBox):
         self.bar = VMiniBar(f"{self.slits[0]}/{self.slits[1]}", 0.0, MAX_AMP_PEAK_V,
                             unit="V pk", color=theme.SLIT_COLORS[self.slits[0]],
                             decimals=2)
-        # Wide enough for the widest thing this bar ever shows —
-        # "2.40 V pk" at the Overview type scale. Sized to the text,
-        # because a clipped readout is not a readout.
-        self.bar.setFixedWidth(84)
+        # Minimum wide enough for the value label; no fixed cap so the bar
+        # can grow with available space and compress when squeezed.
+        self.bar.setMinimumWidth(20)
         row.addWidget(self.bar)
         lay.addLayout(row)
 
@@ -164,7 +161,7 @@ class AxisDriveControl(QGroupBox):
 
         self.btn_output = QPushButton("Output OFF")
         self.btn_output.setCheckable(True)
-        self.btn_output.setMinimumHeight(34)
+        self.btn_output.setMinimumHeight(24)
         self.btn_output.setStyleSheet(
             "QPushButton { background:#8c0000; color:white; font-weight:bold;"
             f" font-size:{theme.FS_LABEL}px; }}"

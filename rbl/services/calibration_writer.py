@@ -34,9 +34,21 @@ CSV_COLUMNS = [
     "run_id", "timestamp_iso", "t_elapsed_s", "pass_index", "pass_type",
     "driven_amp", "commanded_kv", "commanded_gen_v",
     "ain", "amp_label", "kind",
-    "mean_v", "std_v", "min_v", "max_v", "n_samples", "n_windows",
+    "mean_v", "std_v", "rms_v", "min_v", "max_v", "abs_p999_v",
+    "fund_v", "fund_phase_rad", "crest", "n_cycles",
+    "n_samples", "n_windows",
     "converted_value", "converted_unit", "stream_profile",
 ]
+# Two columns added 2026-08; older CSVs simply lack them.
+#
+#   rms_v      std_v alone is RMS about the MEAN, so it drops the DC term and
+#              understates a waveform sitting on an offset. Reconstructible
+#              from old files as sqrt(mean_v**2 + std_v**2), since both were
+#              computed over the same samples.
+#   abs_p999_v 99.9th percentile of |x|. max_v is a single sample out of ~100k
+#              and so is pure extreme-value noise; this is the robust peak.
+#              NOT reconstructible from old files — it needs the raw samples,
+#              which are not retained. Pre-2026-08 runs have max_v only.
 
 
 def new_run_id() -> str:

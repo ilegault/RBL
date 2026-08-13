@@ -10,9 +10,9 @@ import logging
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget,
-    QVBoxLayout, QTabBar, QStackedWidget, QMessageBox, QScrollArea,
+    QVBoxLayout, QTabBar, QStackedWidget, QMessageBox, QScrollArea, QSplitter,
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QPalette
 
 from rbl.gui.motor_tab import MotorTab
@@ -23,7 +23,29 @@ from rbl.gui.overview_tab import OverviewTab
 from rbl.gui.calibration_tab import CalibrationTab
 from rbl.gui.vacuum_tab import VacuumTab
 from rbl.gui.profiler_tab import ProfilerTab
+from rbl.gui.camera_tab import CameraTab
+from rbl.gui import theme
+from rbl.hardware.camera_source import CameraSource
+from rbl.services.beamline_snapshot import BeamlineSnapshotProvider
+from rbl.services.session_recorder import SessionRecorder
 from rbl.state.beamline import Beamline
+
+
+# ─── Split-aware tab bar ──────────────────────────────────────────────────────
+
+class SplitTabBar(QTabBar):
+    """QTabBar that emits a separate signal on right-click without changing the
+    current tab (left-click keeps normal behaviour)."""
+    tab_right_clicked = Signal(int)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.RightButton:
+            index = self.tabAt(event.pos())
+            if index >= 0:
+                self.tab_right_clicked.emit(index)
+            # Do NOT call super() — prevents tabBarClicked / current-index change
+        else:
+            super().mousePressEvent(event)
 
 
 # ─── Main Window ──────────────────────────────────────────────────────────────
@@ -46,21 +68,49 @@ class MainWindow(QMainWindow):
         outer_layout.setContentsMargins(0, 0, 0, 0)
         outer_layout.setSpacing(0)
 
-        self._outer_tabbar = QTabBar()
+        self._outer_tabbar = SplitTabBar()
         self._outer_tabbar.addTab("Stepper Motors")
         self._outer_tabbar.addTab("Beam Current")
         self._outer_tabbar.addTab("HV Amplifiers")
         self._outer_tabbar.addTab("Function Generators")
         self._outer_tabbar.addTab("Overview")
+        self._outer_tabbar.addTab("Camera")
         self._outer_tabbar.addTab("HV Calibration")
         self._outer_tabbar.addTab("Vacuum")
         self._outer_tabbar.addTab("Beam Profiler")
         self._outer_tabbar.setExpanding(False)
         self._outer_tabbar.setDocumentMode(True)
+        self._outer_tabbar.setToolTip("Left-click: switch tab  |  Right-click: open in split view")
         outer_layout.addWidget(self._outer_tabbar)
 
+        # Content area: horizontal splitter with a primary stack (always
+        # visible) and a secondary stack (right pane, hidden unless split).
+        self._content_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._content_splitter.setHandleWidth(8)
+        self._content_splitter.setChildrenCollapsible(False)
+        self._content_splitter.setStyleSheet(
+            "QSplitter::handle {"
+            f"  background: {theme.TRACK};"
+            f"  border-left: 1px solid {theme.TRACK_EDGE};"
+            f"  border-right: 1px solid {theme.TRACK_EDGE};"
+            "}"
+            "QSplitter::handle:hover   { background: #0078d7; }"
+            "QSplitter::handle:pressed { background: #005a9e; }"
+        )
+        outer_layout.addWidget(self._content_splitter, stretch=1)
+
         self._outer_stack = QStackedWidget()
-        outer_layout.addWidget(self._outer_stack, stretch=1)
+        self._outer_stack.setMinimumSize(0, 0)  # let splitter compress freely
+        self._content_splitter.addWidget(self._outer_stack)
+
+        self._split_stack = QStackedWidget()
+        self._split_stack.setMinimumSize(0, 0)
+        self._content_splitter.addWidget(self._split_stack)
+        self._split_stack.hide()
+
+        # -1 = not in split mode; otherwise = tab index shown in right pane
+        self._split_index: int = -1
+        self._split_scroll: QScrollArea | None = None
 
         # Beamline: the single owner of every instrument (LabJack T7, Galil,
         # both DG1022Z) plus the state-snapshot layer built on top of them.
@@ -76,6 +126,15 @@ class MainWindow(QMainWindow):
         self.calibration_tab = CalibrationTab(self.beamline, self)
         self.vacuum_tab      = VacuumTab(self.beamline, self)
         self.profiler_tab    = ProfilerTab(self.beamline, self)
+
+        # Session recorder — shared between Overview panel and Camera tab.
+        self.snapshots        = BeamlineSnapshotProvider(self.beamline, self)
+        self.camera_source    = CameraSource(self)
+        self.session_recorder = SessionRecorder(
+            self.snapshots.snapshot, self.camera_source, self)
+        self.overview_tab.attach_recorder(self.session_recorder)
+        self.camera_tab = CameraTab(self.session_recorder, self.camera_source, self)
+
         # Each page goes inside a scroll area: when the window is narrowed past
         # what a tab's content can reflow to, a scrollbar appears rather than
         # forcing the window to stay wide. This is what makes the app
@@ -85,6 +144,7 @@ class MainWindow(QMainWindow):
         self._outer_stack.addWidget(self._wrap_scroll(self.amp_tab))
         self._outer_stack.addWidget(self._wrap_scroll(self.funcgen_tab))
         self._outer_stack.addWidget(self._wrap_scroll(self.overview_tab))
+        self._outer_stack.addWidget(self._wrap_scroll(self.camera_tab))
         self._outer_stack.addWidget(self._wrap_scroll(self.calibration_tab))
         self._outer_stack.addWidget(self._wrap_scroll(self.vacuum_tab))
         self._outer_stack.addWidget(self._wrap_scroll(self.profiler_tab))
@@ -112,6 +172,12 @@ class MainWindow(QMainWindow):
         # target selector drives which channel a single-channel profile streams.
         self.amp_tab.profile_change_requested.connect(self.beamline.set_stream_profile)
         self.amp_tab.single_channel_change_requested.connect(self.beamline.set_stream_channel)
+        # Pair profiles set profile + target together in one restart.
+        self.amp_tab.pair_profile_requested.connect(self.beamline.set_stream_pair_profile)
+        # Funcgen readback into the amp tab so its table can show what each
+        # amplifier was ASKED for beside what it is doing. Readback rather than
+        # command intent, so it also catches a command that failed to take.
+        self.beamline.funcgens_changed.connect(self.amp_tab.on_funcgens_changed)
 
         # Calibration tab forces CAL_PROFILE at run start and restores the
         # prior profile afterward, via the same profile_change_requested ->
@@ -120,12 +186,30 @@ class MainWindow(QMainWindow):
         # already-converted kV/mA state — so it is wired to
         # Beamline.raw_window_ready instead of amps_changed.
         self.calibration_tab.profile_change_requested.connect(self.beamline.set_stream_profile)
-        self.calibration_tab.channel_change_requested.connect(self.beamline.set_stream_channel)
+        # A per-channel sweep re-points AMP_PAIR at each amplifier as it comes
+        # up in the sequence; the runner asks, the beamline owns the handle.
+        self.calibration_tab.pair_change_requested.connect(self.beamline.set_stream_pair)
+        # Run start and run end acquire/restore profile + pair together, in one
+        # stream restart. Two separate requests were unreliable from some prior
+        # stream states — see Beamline.set_stream_pair_profile.
+        self.calibration_tab.pair_profile_requested.connect(
+            self.beamline.set_stream_pair_profile)
         self.beamline.raw_window_ready.connect(self.calibration_tab.on_window)
         # A calibration run switching the stream profile out from under
         # AmpTab would corrupt the run if AmpTab's own Apply fired mid-run.
         self.calibration_tab.run_state_changed.connect(
             lambda running: self.amp_tab.set_profile_controls_enabled(not running)
+        )
+        # An over-current trip freezes AmpTab's plot and stops it ingesting, so
+        # the current trace leading up to the trip survives long enough to be
+        # read. Without this the interlock aborts the run, the stream keeps
+        # flowing, and the excursion scrolls out of the history before anyone
+        # can look at it — worst in RMS mode, where each point is a whole
+        # window's average and the peak is averaged away as well.
+        self.calibration_tab.overcurrent_tripped.connect(
+            lambda amp, ma, limit: self.amp_tab.freeze_on_safety_event(
+                f"over-current on {amp}: {ma:.1f} mA (limit {limit:.0f} mA)"
+            )
         )
 
         # Motor poll data feeds Beamline, which derives MotorState (typed,
@@ -139,6 +223,7 @@ class MainWindow(QMainWindow):
         # Start on Stepper Motors
         self._outer_stack.setCurrentIndex(0)
         self._outer_tabbar.tabBarClicked.connect(self._on_outer_tab_clicked)
+        self._outer_tabbar.tab_right_clicked.connect(self._on_tab_right_clicked)
 
     # ── Layout helpers ────────────────────────────────────────────────────────
 
@@ -147,13 +232,15 @@ class MainWindow(QMainWindow):
         """Put *widget* in a resizable scroll area.
 
         With widgetResizable=True the tab fills the viewport normally; only when
-        the window shrinks below what the tab can reflow to do scrollbars appear.
-        That decouples the window's minimum size from each tab's content width,
-        which is what lets the app be compressed horizontally.
+        the viewport shrinks below the content's minimumSizeHint do scrollbars
+        appear.  setMinimumSize(0, 0) removes the scroll area's own minimum so
+        the splitter (in split-screen mode) can compress either pane freely
+        without the boundary overlapping the neighbouring pane.
         """
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setMinimumSize(0, 0)
         scroll.setWidget(widget)
         return scroll
 
@@ -195,6 +282,15 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         try:
+            if self.session_recorder.is_recording():
+                self.session_recorder.stop()
+        except Exception:
+            pass
+        try:
+            self.camera_source.close()
+        except Exception:
+            pass
+        try:
             self.motor_tab.abort_and_close()
         except Exception:
             pass
@@ -231,7 +327,96 @@ class MainWindow(QMainWindow):
     # ── Outer tab switching ───────────────────────────────────────────────────
 
     def _on_outer_tab_clicked(self, index: int):
-        self._outer_stack.setCurrentIndex(index)
+        if self._split_index == index:
+            # Left-click on the right-pane tab → collapse split, show full-screen
+            self._exit_split(show_in_left=True)
+        else:
+            self._outer_stack.setCurrentIndex(self._stack_index(index))
+
+    def _on_tab_right_clicked(self, index: int):
+        if self._split_index == index:
+            # Right-click same tab again → dismiss split
+            self._exit_split(show_in_left=False)
+        elif self._split_index >= 0:
+            # Already split — change the right pane to a different tab
+            self._exit_split(show_in_left=False)
+            self._enter_split(index)
+        else:
+            if index == self._outer_stack.currentIndex():
+                return  # can't split the same tab onto both sides
+            self._enter_split(index)
+
+    def _enter_split(self, index: int):
+        """Move the scroll area at *index* into the right split pane.
+
+        Uses QStackedWidget.removeWidget / addWidget — the documented safe way
+        to migrate a widget between stacked widgets without touching Qt's
+        internal viewport/scroll-area bookkeeping.
+        """
+        left_index = self._outer_stack.currentIndex()
+
+        scroll = self._outer_stack.widget(index)
+        self._outer_stack.removeWidget(scroll)
+        # Removing index shifts all positions above it down by 1 in _outer_stack
+        if left_index > index:
+            self._outer_stack.setCurrentIndex(left_index - 1)
+
+        self._split_scroll = scroll
+        self._split_stack.addWidget(scroll)
+        self._split_stack.setCurrentWidget(scroll)
+        self._split_stack.show()
+
+        total = self._content_splitter.width()
+        half = max(total // 2, 300)
+        self._content_splitter.setSizes([half, half])
+
+        self._split_index = index
+        self._mark_split_tab(index)
+
+    def _exit_split(self, *, show_in_left: bool):
+        """Restore the right-pane scroll area back to _outer_stack."""
+        if self._split_index < 0:
+            return
+
+        left_index = self._outer_stack.currentIndex()
+
+        scroll = self._split_scroll
+        self._split_stack.removeWidget(scroll)
+        self._split_stack.hide()
+
+        # Re-insert at the original position; positions >= split_index shift up
+        self._outer_stack.insertWidget(self._split_index, scroll)
+        if left_index >= self._split_index:
+            left_index += 1
+
+        old_index = self._split_index
+        self._split_index = -1
+        self._split_scroll = None
+        self._mark_split_tab(-1)
+
+        if show_in_left:
+            self._outer_stack.setCurrentIndex(old_index)
+            self._outer_tabbar.setCurrentIndex(old_index)
+        else:
+            self._outer_stack.setCurrentIndex(left_index)
+
+    def _stack_index(self, tab_index: int) -> int:
+        """Map a tab-bar index to the current _outer_stack index.
+
+        While in split mode the scroll area for self._split_index has been
+        removed from _outer_stack, so every tab-bar position above that slot
+        is shifted down by one inside the stack.
+        """
+        if self._split_index < 0 or tab_index < self._split_index:
+            return tab_index
+        return tab_index - 1
+
+    def _mark_split_tab(self, index: int):
+        """Colour the right-pane tab blue; reset all others to default."""
+        blue = QColor(0, 120, 215)
+        default = QColor()  # invalid = use palette default
+        for i in range(self._outer_tabbar.count()):
+            self._outer_tabbar.setTabTextColor(i, blue if i == index else default)
 
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
