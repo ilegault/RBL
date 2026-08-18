@@ -213,6 +213,48 @@ class TestSetWaveform:
         assert warn == ""
 
 
+# ── Ramp-safe amplitude/offset primitives (do not use :APPLy:) ──────────────
+
+class TestRampPrimitives:
+    def test_set_amplitude_sends_voltage_not_apply(self, mock_inst, mock_pyvisa):
+        gen = DG1022Z("USB0::...::INSTR")
+        warn = gen.set_amplitude(1, 2.0)
+        mock_inst.write.assert_called_with(":SOURce1:VOLTage 2.0")
+        assert warn == ""
+        assert not any("APPLy" in c.args[0] for c in mock_inst.write.call_args_list)
+
+    def test_set_amplitude_clamps_with_warning(self, mock_inst, mock_pyvisa):
+        gen = DG1022Z("USB0::...::INSTR")
+        warn = gen.set_amplitude(1, MAX_AMP_VPP + 5.0)
+        mock_inst.write.assert_called_with(f":SOURce1:VOLTage {MAX_AMP_VPP}")
+        assert "clamped amplitude" in warn
+
+    def test_set_amplitude_clamps_negative(self, mock_inst, mock_pyvisa):
+        gen = DG1022Z("USB0::...::INSTR")
+        warn = gen.set_amplitude(1, -(MAX_AMP_VPP + 5.0))
+        assert "clamped amplitude" in warn
+
+    def test_set_offset_sends_voltage_offset_not_apply(self, mock_inst, mock_pyvisa):
+        gen = DG1022Z("USB0::...::INSTR")
+        warn = gen.set_offset(2, 1.5)
+        mock_inst.write.assert_called_with(":SOURce2:VOLTage:OFFSet 1.5")
+        assert warn == ""
+        assert not any("APPLy" in c.args[0] for c in mock_inst.write.call_args_list)
+
+    def test_set_offset_clamps_with_warning(self, mock_inst, mock_pyvisa):
+        gen = DG1022Z("USB0::...::INSTR")
+        warn = gen.set_offset(1, MAX_GEN_VOLTS + 3.0)
+        mock_inst.write.assert_called_with(f":SOURce1:VOLTage:OFFSet {MAX_GEN_VOLTS}")
+        assert "clamped offset" in warn
+
+    def test_write_fast_skips_error_poll(self, mock_inst, mock_pyvisa):
+        gen = DG1022Z("USB0::...::INSTR")
+        calls_before = mock_inst.query.call_count
+        gen.write_fast(":SOURce1:VOLTage 3.0")
+        mock_inst.write.assert_called_with(":SOURce1:VOLTage 3.0")
+        assert mock_inst.query.call_count == calls_before
+
+
 # ── Output control ───────────────────────────────────────────────────────────
 
 class TestOutputControl:

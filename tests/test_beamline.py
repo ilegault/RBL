@@ -375,6 +375,86 @@ class TestCommandSurface:
         assert gen_a.output_off.call_count == 2
         assert gen_b.output_off.call_count == 2
 
+class TestRampedSetChannel:
+    """set_channel(..., ramped=True) — Section 5.4's GUI path to a target.
+    Only amplitude-only or offset-only changes on an already-running,
+    otherwise-unchanged channel may ramp; anything else falls back to the
+    normal immediate :APPLy: path."""
+
+    RUNNING_STATE = {"shape": "SIN", "freq": 1000.0, "amp": 1.0, "offset": 0.5,
+                      "phase": 0.0, "output": True, "load": "INFinity"}
+
+    SAME_SHAPE_NEW_OFFSET = ChannelParams(
+        shape="Sine", freq_hz=1000.0, amp_vpp=1.0, offset_v=1.0,
+        phase_deg=0.0, start_phase_deg=0.0, load="INFinity", output_on=True)
+    SAME_SHAPE_NEW_AMP = ChannelParams(
+        shape="Sine", freq_hz=1000.0, amp_vpp=2.0, offset_v=0.5,
+        phase_deg=0.0, start_phase_deg=0.0, load="INFinity", output_on=True)
+    SAME_SHAPE_NEW_BOTH = ChannelParams(
+        shape="Sine", freq_hz=1000.0, amp_vpp=2.0, offset_v=1.0,
+        phase_deg=0.0, start_phase_deg=0.0, load="INFinity", output_on=True)
+    NEW_FREQ = ChannelParams(
+        shape="Sine", freq_hz=2000.0, amp_vpp=1.0, offset_v=1.0,
+        phase_deg=0.0, start_phase_deg=0.0, load="INFinity", output_on=True)
+
+    def _connected_gen(self, beamline):
+        from unittest.mock import MagicMock
+        gen = MagicMock()
+        gen.set_waveform.return_value = ""
+        gen.get_state.return_value = dict(self.RUNNING_STATE)
+        beamline.dg_a = gen
+        return gen
+
+    def test_offset_only_change_ramps_instead_of_apply(self, beamline):
+        gen = self._connected_gen(beamline)
+        ok = beamline.set_channel("A1", self.SAME_SHAPE_NEW_OFFSET, ramped=True)
+        assert ok is True
+        gen.set_waveform.assert_not_called()
+        assert beamline.funcgen_ramp.is_ramping("A1")
+
+    def test_amplitude_only_change_ramps_instead_of_apply(self, beamline):
+        gen = self._connected_gen(beamline)
+        ok = beamline.set_channel("A1", self.SAME_SHAPE_NEW_AMP, ramped=True)
+        assert ok is True
+        gen.set_waveform.assert_not_called()
+        assert beamline.funcgen_ramp.is_ramping("A1")
+
+    def test_both_amp_and_offset_changing_falls_back_to_apply(self, beamline):
+        gen = self._connected_gen(beamline)
+        ok = beamline.set_channel("A1", self.SAME_SHAPE_NEW_BOTH, ramped=True)
+        assert ok is True
+        gen.set_waveform.assert_called_once()
+        assert not beamline.funcgen_ramp.is_ramping("A1")
+
+    def test_frequency_change_falls_back_to_apply(self, beamline):
+        gen = self._connected_gen(beamline)
+        ok = beamline.set_channel("A1", self.NEW_FREQ, ramped=True)
+        assert ok is True
+        gen.set_waveform.assert_called_once()
+
+    def test_output_currently_off_falls_back_to_apply(self, beamline):
+        gen = self._connected_gen(beamline)
+        gen.get_state.return_value = {**self.RUNNING_STATE, "output": False}
+        ok = beamline.set_channel("A1", self.SAME_SHAPE_NEW_OFFSET, ramped=True)
+        assert ok is True
+        gen.set_waveform.assert_called_once()
+
+    def test_get_state_error_falls_back_to_apply(self, beamline):
+        gen = self._connected_gen(beamline)
+        gen.get_state.return_value = {"error": "VISA timeout"}
+        ok = beamline.set_channel("A1", self.SAME_SHAPE_NEW_OFFSET, ramped=True)
+        assert ok is True
+        gen.set_waveform.assert_called_once()
+
+    def test_unramped_call_is_unaffected(self, beamline):
+        gen = self._connected_gen(beamline)
+        ok = beamline.set_channel("A1", self.SAME_SHAPE_NEW_OFFSET)
+        assert ok is True
+        gen.set_waveform.assert_called_once()
+        assert not beamline.funcgen_ramp.is_ramping("A1")
+
+
+class TestMoveSlit:
     def test_move_slit_converts_label_to_axis_and_mm_to_counts(self, beamline):
         from unittest.mock import MagicMock
         beamline.galil = MagicMock(connected=True)

@@ -38,6 +38,7 @@ class AmpDrive:
         self._map    = funcgen_map
         self._max_kv = max_kv
         self._pfx    = log_prefix
+        self._ramp_engine = None   # attached lazily; see attach_ramp_engine()
 
     # ------------------------------------------------------------------
     # State snapshot
@@ -118,6 +119,45 @@ class AmpDrive:
             print(f"{self._pfx} ERROR {label} ch{channel}: {e}")
             log.error("%s ch%s: %s", label, channel, e)
             raise
+
+    # ------------------------------------------------------------------
+    # Ramped drive commands (Section 5.4) — the GUI's path to a target.
+    # These delegate to a RampEngine; command_dc/command_sine/etc. above stay
+    # unramped and are what the calibration/characterization services keep
+    # using, since they deliberately step.
+    # ------------------------------------------------------------------
+
+    def attach_ramp_engine(self, ramp_engine) -> None:
+        """Attach the RampEngine that command_*_ramped() delegate to."""
+        self._ramp_engine = ramp_engine
+
+    def command_dc_ramped(self, label: str, kv: float) -> None:
+        """Ramp toward a DC setpoint (kV) instead of stepping immediately.
+
+        Converts to generator volts the same way command_dc() does, then
+        hands the target to RampEngine in ITS units (raw generator volts —
+        see ramp_engine.py's module docstring for why the conversion lives
+        here and not in the engine).
+        """
+        if self._ramp_engine is None:
+            raise RuntimeError("no RampEngine attached; call attach_ramp_engine() first")
+        clamped = max(-self._max_kv, min(self._max_kv, kv))
+        gen_v = clamped * 1000.0 / _AMP_GAIN
+        self._ramp_engine.retarget(label, gen_v, mode="offset")
+
+    def command_ac_amplitude_ramped(self, label: str, peak_kv: float) -> None:
+        """Ramp an AC drive's amplitude toward `peak_kv`.
+
+        Frequency, shape, and phase are NOT ramped — they must already be
+        configured on the channel (via command_sine/triangle/square) before
+        this is called; only the amplitude changes, exactly like the front
+        panel's amplitude knob.
+        """
+        if self._ramp_engine is None:
+            raise RuntimeError("no RampEngine attached; call attach_ramp_engine() first")
+        clamped = max(0.0, min(self._max_kv, peak_kv))
+        gen_vpp = clamped * 2.0 * 1000.0 / _AMP_GAIN
+        self._ramp_engine.retarget(label, gen_vpp, mode="amplitude")
 
     # ------------------------------------------------------------------
     # Shutdown primitives
@@ -285,5 +325,34 @@ if __name__ == "__main__":
     sw = next(c for c in fake_a.calls if c[0] == "set_waveform")
     assert sw[2] == "Square", f"shape should be 'Square', got {sw[2]!r}"
     print(f"[OK] command_square uses shape 'Square'")
+
+    # command_dc_ramped / command_ac_amplitude_ramped delegate to an attached
+    # RampEngine, in generator volts, without touching the hardware directly.
+    class _FakeRampEngine:
+        def __init__(self):
+            self.calls = []
+        def retarget(self, label, target_v, mode="offset"):
+            self.calls.append((label, target_v, mode))
+
+    try:
+        drive.command_dc_ramped("X+", 2.0)
+        raise AssertionError("expected RuntimeError with no ramp engine attached")
+    except RuntimeError:
+        print("[OK] command_dc_ramped requires an attached RampEngine")
+
+    ramp = _FakeRampEngine()
+    drive.attach_ramp_engine(ramp)
+    drive.command_dc_ramped("X+", 2.5)
+    label, target_v, mode = ramp.calls[0]
+    assert label == "X+" and mode == "offset"
+    assert abs(target_v - 2.5 * 1000.0 / _AMP_GAIN) < 1e-9
+    print(f"[OK] command_dc_ramped(X+, 2.5) -> retarget(offset, {target_v:.4f} V)")
+
+    ramp.calls.clear()
+    drive.command_ac_amplitude_ramped("X+", 1.5)
+    label, target_v, mode = ramp.calls[0]
+    assert mode == "amplitude"
+    assert abs(target_v - 1.5 * 2.0 * 1000.0 / _AMP_GAIN) < 1e-9
+    print(f"[OK] command_ac_amplitude_ramped(X+, 1.5) -> retarget(amplitude, {target_v:.4f} Vpp)")
 
     print("\n[OK] amp_drive self-test passed")
