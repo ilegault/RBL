@@ -20,7 +20,7 @@ one place it applies here (the load-condition + operator checklist gate
 before Run), and its lj_panel embedding for the shared LabJackPanel.
 """
 import logging
-import random
+import time
 
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtWidgets import (
@@ -232,19 +232,14 @@ class CalibrationTab(QWidget):
         cfg_form.addRow("Note:", self.le_note)
 
         # ── Keep-awake ─────────────────────────────────────────────────────
-        self.chk_keep_awake = QCheckBox(
-            "Keep PC awake (nudges mouse ~every 4 min)"
-        )
+        self.chk_keep_awake = QCheckBox("Keep PC awake")
         self.chk_keep_awake.setToolTip(
-            "Moves the mouse cursor by a random few pixels at irregular "
-            "intervals so Windows does not lock the screen during a long run.\n"
-            "The cursor returns to its original position immediately."
+            "Calls SetThreadExecutionState(ES_DISPLAY_REQUIRED | "
+            "ES_SYSTEM_REQUIRED) so Windows does not lock the screen or "
+            "sleep during a long calibration run.  No cursor movement."
         )
         cfg_form.addRow("", self.chk_keep_awake)
 
-        self._keep_awake_timer = QTimer(self)
-        self._keep_awake_timer.setSingleShot(True)
-        self._keep_awake_timer.timeout.connect(self._on_keep_awake_tick)
         self.chk_keep_awake.toggled.connect(self._on_keep_awake_toggled)
 
         # Sweep info — display-only, derived from calibration_config.
@@ -293,6 +288,42 @@ class CalibrationTab(QWidget):
         self.cbo_step_mode.currentIndexChanged.connect(self._on_step_mode_changed)
         cfg_form.addRow("Step approach:", self.cbo_step_mode)
 
+        # Zero-dwell duration — only meaningful when return-to-zero is selected.
+        self._dwell_widget = QWidget()
+        _dwell_lay = QHBoxLayout(self._dwell_widget)
+        _dwell_lay.setContentsMargins(0, 0, 0, 0)
+        _dwell_lay.setSpacing(4)
+        self.spn_zero_dwell = QuietDoubleSpinBox()
+        self.spn_zero_dwell.setRange(0.1, 60.0)
+        self.spn_zero_dwell.setValue(CAL_ZERO_DWELL_S)
+        self.spn_zero_dwell.setDecimals(1)
+        self.spn_zero_dwell.setSingleStep(0.5)
+        self.spn_zero_dwell.setToolTip(
+            "How long the output is held at 0 V before each rung in "
+            "return-to-zero mode."
+        )
+        self.spn_zero_dwell.valueChanged.connect(self._on_step_mode_changed)
+        _dwell_lay.addWidget(self.spn_zero_dwell)
+        _dwell_lay.addWidget(QLabel("s"))
+        _dwell_lay.addStretch()
+        self._dwell_label = QLabel("Zero dwell:")
+        cfg_form.addRow(self._dwell_label, self._dwell_widget)
+
+        self.chk_dwell_output_off = QCheckBox(
+            "Disable funcgen output during dwell (instead of commanding 0 V)"
+        )
+        self.chk_dwell_output_off.setToolTip(
+            "When checked, the function generator output is turned OFF for the "
+            "dwell period rather than being set to 0 V DC.\n\n"
+            "0 V DC leaves the amplifier enabled and presenting a low-impedance "
+            "path, which still draws quiescent current. Disabling the output "
+            "removes the drive signal entirely, so the amplifier goes fully idle "
+            "between rungs. The output is automatically re-enabled when the next "
+            "rung is commanded."
+        )
+        self._dwell_output_off_label = QLabel("")
+        cfg_form.addRow(self._dwell_output_off_label, self.chk_dwell_output_off)
+
         self.lbl_step_cost = QLabel("")
         self.lbl_step_cost.setWordWrap(True)
         self.lbl_step_cost.setStyleSheet(f"color: {theme.NEUTRAL}; font-size: 10px;")
@@ -333,7 +364,10 @@ class CalibrationTab(QWidget):
         self.spn_drift_kv.setRange(-CAL_MAX_KV, CAL_MAX_KV)
         self.spn_drift_kv.setValue(DRIFT_DEFAULT_KV)
         self.spn_drift_kv.setDecimals(3)
-        cfg_form.addRow("Drift setpoint:", unit_row(self.spn_drift_kv, "kV"))
+        self._drift_setpoint_label = QLabel("Drift setpoint:")
+        self._drift_setpoint_row = QWidget()
+        self._drift_setpoint_row.setLayout(unit_row(self.spn_drift_kv, "kV"))
+        cfg_form.addRow(self._drift_setpoint_label, self._drift_setpoint_row)
 
         self.spn_drift_h = QuietDoubleSpinBox()
         self.spn_drift_h.setRange(0.0, DRIFT_MAX_UNATTENDED_H)
@@ -344,7 +378,10 @@ class CalibrationTab(QWidget):
             f"amplifier DISCONNECTED from the steerer (unattended cap "
             f"{DRIFT_MAX_UNATTENDED_H:.1f} h)."
         )
-        cfg_form.addRow("Drift duration:", unit_row(self.spn_drift_h, "h"))
+        self._drift_duration_label = QLabel("Drift duration:")
+        self._drift_duration_row = QWidget()
+        self._drift_duration_row.setLayout(unit_row(self.spn_drift_h, "h"))
+        cfg_form.addRow(self._drift_duration_label, self._drift_duration_row)
 
         # ── Drift AC mode ──────────────────────────────────────────────────
         self.chk_drift_ac = QCheckBox("AC sine (per-channel frequency below)")
@@ -497,9 +534,23 @@ class CalibrationTab(QWidget):
         self.progress.setRange(0, 1)
         left_col.addWidget(self.progress)
 
+        self._dwell_bar = QProgressBar()
+        self._dwell_bar.setRange(0, 1000)
+        self._dwell_bar.setValue(0)
+        self._dwell_bar.setTextVisible(True)
+        self._dwell_bar.setFormat("Zero dwell — 0.0 s remaining")
+        self._dwell_bar.setVisible(False)
+        left_col.addWidget(self._dwell_bar)
+
         self.lbl_state = QLabel("Idle")
         self.lbl_state.setStyleSheet(f"color: {theme.NEUTRAL}; font-size: 10px;")
         left_col.addWidget(self.lbl_state)
+
+        self._dwell_tick = QTimer(self)
+        self._dwell_tick.setInterval(50)   # 50 ms → smooth countdown
+        self._dwell_tick.timeout.connect(self._update_dwell_bar)
+        self._dwell_start_t: float = None
+        self._dwell_total_s: float = 0.0
 
         left_col.addStretch()
         # The live scatter plot and live-fit readout that used to occupy a
@@ -511,6 +562,7 @@ class CalibrationTab(QWidget):
         layout.addLayout(top_row, stretch=1)
 
         self._on_mode_toggled()
+        self._on_step_mode_changed()   # initialise dwell row visibility
         self._refresh_run_enabled()
         self.lj_panel.set_enabled(True)
 
@@ -530,34 +582,28 @@ class CalibrationTab(QWidget):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _next_keep_awake_ms() -> int:
-        """Random interval 200–280 s (3.3–4.7 min)."""
-        return random.randint(200_000, 280_000)
+    def _set_execution_state(active: bool) -> None:
+        """Set or clear the Windows thread execution state.
 
-    def _on_keep_awake_toggled(self, checked: bool):
-        if checked:
-            self._keep_awake_timer.start(self._next_keep_awake_ms())
-        else:
-            self._keep_awake_timer.stop()
+        ES_CONTINUOUS (0x80000000) — make the new state persist until changed.
+        ES_SYSTEM_REQUIRED (0x00000001) — prevent system sleep.
+        ES_DISPLAY_REQUIRED (0x00000002) — prevent display sleep/lock.
 
-    def _on_keep_awake_tick(self):
-        """Nudge the mouse cursor by a small random offset and back."""
+        Silently no-ops on non-Windows platforms.
+        """
         try:
             import ctypes
-
-            class _POINT(ctypes.Structure):
-                _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
-
-            pt = _POINT()
-            ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
-            dx = random.randint(1, 4)
-            dy = random.randint(1, 4)
-            ctypes.windll.user32.SetCursorPos(pt.x + dx, pt.y + dy)
-            ctypes.windll.user32.SetCursorPos(pt.x, pt.y)
+            ES_CONTINUOUS       = 0x80000000
+            ES_SYSTEM_REQUIRED  = 0x00000001
+            ES_DISPLAY_REQUIRED = 0x00000002
+            flags = (ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED
+                     if active else ES_CONTINUOUS)
+            ctypes.windll.kernel32.SetThreadExecutionState(flags)
         except Exception:
-            pass   # non-fatal; keep the timer going regardless
-        if self.chk_keep_awake.isChecked():
-            self._keep_awake_timer.start(self._next_keep_awake_ms())
+            pass
+
+    def _on_keep_awake_toggled(self, checked: bool) -> None:
+        self._set_execution_state(checked)
 
     # ------------------------------------------------------------------
     # Mode toggling
@@ -567,9 +613,6 @@ class CalibrationTab(QWidget):
         is_drift = self.rb_drift.isChecked()
         is_ac    = self.rb_ac.isChecked()
 
-        self.spn_drift_kv.setEnabled(is_drift)
-        self.spn_drift_h.setEnabled(is_drift)
-
         # Channel selector only applies to DC/AC sweep; drift always drives all.
         self._chan_label.setVisible(not is_drift)
         self._chan_widget.setVisible(not is_drift)
@@ -578,7 +621,11 @@ class CalibrationTab(QWidget):
         self._ac_freq_label.setVisible(is_ac)
         self._ac_freq_widget.setVisible(is_ac)
 
-        # Drift AC controls — visible only in drift mode.
+        # Drift-only rows.
+        self._drift_setpoint_label.setVisible(is_drift)
+        self._drift_setpoint_row.setVisible(is_drift)
+        self._drift_duration_label.setVisible(is_drift)
+        self._drift_duration_row.setVisible(is_drift)
         self._drift_ac_label.setVisible(is_drift)
         self.chk_drift_ac.setVisible(is_drift)
         drift_ac_on = is_drift and self.chk_drift_ac.isChecked()
@@ -653,7 +700,10 @@ class CalibrationTab(QWidget):
             funcgen_map, load_condition, writer=self._writer,
         )
         self._runner.operator_note = self.le_note.text().strip()
+        self._runner._zero_dwell_s = self.spn_zero_dwell.value()
+        self._runner._dwell_output_off = self.chk_dwell_output_off.isChecked()
         self._runner.progress.connect(self._on_progress)
+        self._runner.dwell_started.connect(self._on_dwell_started)
         # row_recorded is intentionally not connected. The writer already
         # persists every row to CSV; the only GUI consumer was the live
         # scatter/fit, and rendering 50+ points per pass bought nothing the
@@ -744,22 +794,53 @@ class CalibrationTab(QWidget):
         length. Better to see the number before starting than to discover it
         two hours in.
         """
-        if not self.cbo_step_mode.currentData():
+        rtz = bool(self.cbo_step_mode.currentData())
+        self._dwell_label.setVisible(rtz)
+        self._dwell_widget.setVisible(rtz)
+        self._dwell_output_off_label.setVisible(rtz)
+        self.chk_dwell_output_off.setVisible(rtz)
+        if not rtz:
             self.lbl_step_cost.setText("")
             return
+        dwell = self.spn_zero_dwell.value()
         n_dc = len(sweep_points("up")) * len(CAL_PASSES) * len(SC.AMP_LABELS)
         n_ac = len(ac_sweep_points()) * len(SC.AMP_LABELS)
         self.lbl_step_cost.setText(
-            f"Adds ~{CAL_ZERO_DWELL_S:.1f} s per setpoint: "
-            f"+{n_dc * CAL_ZERO_DWELL_S / 60:.0f} min on a full DC sweep, "
-            f"+{n_ac * CAL_ZERO_DWELL_S / 60:.0f} min on a full AC sweep."
+            f"Adds ~{dwell:.1f} s per setpoint: "
+            f"+{n_dc * dwell / 60:.0f} min on a full DC sweep, "
+            f"+{n_ac * dwell / 60:.0f} min on a full AC sweep."
         )
 
     def _on_abort_clicked(self):
         if self._runner is not None:
             self._runner.abort()
 
+    def _on_dwell_started(self, total_s: float):
+        self._dwell_start_t = time.monotonic()
+        self._dwell_total_s = total_s
+        self._dwell_bar.setRange(0, 1000)
+        self._dwell_bar.setValue(0)
+        self._dwell_bar.setFormat(f"Zero dwell — {total_s:.1f} s remaining")
+        self._dwell_bar.setVisible(True)
+        self._dwell_tick.start()
+
+    def _update_dwell_bar(self):
+        if self._dwell_start_t is None:
+            return
+        elapsed = time.monotonic() - self._dwell_start_t
+        total = max(self._dwell_total_s, 0.001)
+        frac = min(elapsed / total, 1.0)
+        remaining = max(total - elapsed, 0.0)
+        self._dwell_bar.setValue(int(frac * 1000))
+        self._dwell_bar.setFormat(f"Zero dwell — {remaining:.1f} s remaining")
+
+    def _stop_dwell_bar(self):
+        self._dwell_tick.stop()
+        self._dwell_bar.setVisible(False)
+        self._dwell_start_t = None
+
     def _on_progress(self, done: int, total: int, label: str):
+        self._stop_dwell_bar()
         self.progress.setRange(0, max(total, 1))
         self.progress.setValue(done)
         self.lbl_state.setText(label)
@@ -811,6 +892,7 @@ class CalibrationTab(QWidget):
         ))
 
     def _on_finished(self, csv_path: str):
+        self._stop_dwell_bar()
         self.btn_run.setEnabled(True)
         self.btn_abort.setEnabled(False)
         self.run_state_changed.emit(False)
@@ -867,6 +949,6 @@ class CalibrationTab(QWidget):
     # ------------------------------------------------------------------
 
     def shutdown(self):
-        self._keep_awake_timer.stop()
+        self._set_execution_state(False)   # always release the sleep lock on exit
         if self._runner is not None:
             self._runner.abort()

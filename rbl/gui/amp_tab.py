@@ -349,9 +349,11 @@ class AmpTab(QWidget):
             hdr.setStyleSheet(
                 f"color: {SC.AMP_COLORS[amp]}; font-weight: bold; font-size: 14px;"
             )
+            hdr.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             sub = QLabel(f"{v_ain}/{i_ain}")
             sub.setFont(tiny)
             sub.setStyleSheet("color: #888;")
+            sub.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             hdr_w = QWidget()
             hdr_box = QVBoxLayout(hdr_w)
             hdr_box.setContentsMargins(0, 0, 0, 0)

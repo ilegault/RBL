@@ -8,6 +8,7 @@
 # Output: dist\RBL\RBL.exe  (one-folder distribution)
 # Distribute the entire dist\RBL\ folder to the target machine.
 
+import glob
 import os
 from PyInstaller.utils.hooks import collect_data_files
 
@@ -25,9 +26,15 @@ RBL_GUI  = os.path.join(RBL_PKG, "gui")       # C:\...\RBL\rbl\gui
 # for PySide6, scipy, matplotlib automatically via the dependency graph.
 # We just need to ensure data files (fonts, styles, .pyi stubs) are copied.
 # ---------------------------------------------------------------------------
+def _vendor_datas():
+    """Bundle any LabJack installer dropped in vendor\\ so the app can
+    offer a one-click driver install.  Empty vendor\\ => nothing added."""
+    return [(exe, 'vendor') for exe in glob.glob(os.path.join(ROOT, 'vendor', '*.exe'))]
+
 all_datas = (
     collect_data_files("matplotlib")   # fonts, style sheets, matplotlibrc
     + collect_data_files("scipy")      # .pyi stubs, cython data
+    + _vendor_datas()                  # bundled LabJack installer (if present)
 )
 
 # ---------------------------------------------------------------------------

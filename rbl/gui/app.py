@@ -9,7 +9,7 @@ import sys
 import logging
 
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget,
+    QApplication, QMainWindow, QWidget, QHBoxLayout, QLabel, QPushButton,
     QVBoxLayout, QTabBar, QStackedWidget, QMessageBox, QScrollArea, QSplitter,
 )
 from PySide6.QtCore import Qt, Signal
@@ -29,6 +29,7 @@ from rbl.hardware.camera_source import CameraSource
 from rbl.services.beamline_snapshot import BeamlineSnapshotProvider
 from rbl.services.session_recorder import SessionRecorder
 from rbl.state.beamline import Beamline
+from rbl import driver as ljm_driver
 
 
 # ─── Split-aware tab bar ──────────────────────────────────────────────────────
@@ -82,6 +83,19 @@ class MainWindow(QMainWindow):
         self._outer_tabbar.setDocumentMode(True)
         self._outer_tabbar.setToolTip("Left-click: switch tab  |  Right-click: open in split view")
         outer_layout.addWidget(self._outer_tabbar)
+
+        # ── Prerequisite warning bar (hidden unless a driver is missing) ──
+        self._prereq_bar = QWidget()
+        self._prereq_bar.setStyleSheet(
+            "background: #fff3cd; border-bottom: 1px solid #ffc107;"
+        )
+        self._prereq_layout = QVBoxLayout(self._prereq_bar)
+        self._prereq_layout.setContentsMargins(8, 4, 8, 4)
+        self._prereq_layout.setSpacing(2)
+        self._prereq_bar.hide()
+        outer_layout.addWidget(self._prereq_bar)
+        # Populated dynamically by _refresh_driver_state(); each failure
+        # gets a row with a label and (optionally) an Install button.
 
         # Content area: horizontal splitter with a primary stack (always
         # visible) and a secondary stack (right pane, hidden unless split).
@@ -225,6 +239,9 @@ class MainWindow(QMainWindow):
         self._outer_tabbar.tabBarClicked.connect(self._on_outer_tab_clicked)
         self._outer_tabbar.tab_right_clicked.connect(self._on_tab_right_clicked)
 
+        # ── Driver preflight check ───────────────────────────────────────
+        self._refresh_driver_state()
+
     # ── Layout helpers ────────────────────────────────────────────────────────
 
     @staticmethod
@@ -256,6 +273,10 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "LabJack connect failed", str(e))
             self.beamline.disconnect_labjack()
+            # If the connect failed because the driver is missing, let the
+            # driver warning bar (with its actionable Install button) win
+            # over the generic error dialog the user just dismissed.
+            self._refresh_driver_state()
 
     def _labjack_disconnect(self):
         self.beamline.disconnect_labjack()
@@ -277,6 +298,88 @@ class MainWindow(QMainWindow):
         for tab in self._lj_tabs:
             if hasattr(tab, "on_profile_changed"):
                 tab.on_profile_changed(profile_name)
+
+    # ── Prerequisite checks: detect missing drivers, offer one-click install ─
+
+    def _refresh_driver_state(self) -> None:
+        """Check every system-level prerequisite and populate the warning bar.
+
+        Each missing dependency gets its own row with a message and, when a
+        bundled installer is available, an Install button.  The bar hides
+        itself entirely when everything is present.
+        """
+        # Clear previous rows
+        while self._prereq_layout.count():
+            item = self._prereq_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        failures = ljm_driver.check_all()
+        if not failures:
+            self._prereq_bar.hide()
+            return
+
+        _DOWNLOAD_HINTS = {
+            "ljm":    "install the LJM software from labjack.com",
+            "visa":   "install NI-VISA Runtime from ni.com/visa",
+            "serial": "install the driver for your USB-serial adapter",
+        }
+
+        for failure in failures:
+            row = QWidget()
+            row_lay = QHBoxLayout(row)
+            row_lay.setContentsMargins(0, 0, 0, 0)
+            row_lay.setSpacing(8)
+
+            lbl = QLabel()
+            lbl.setStyleSheet("color: #664d03; font-weight: bold;")
+
+            installer = failure["installer"]
+            key = failure["key"]
+
+            if installer:
+                lbl.setText(failure["message"]
+                            + f"  —  click 'Install {failure['name']}'")
+                btn = QPushButton(f"Install {failure['name']}")
+                btn.setToolTip(f"Launch the bundled {failure['name']} installer "
+                               "(requires admin).")
+                # Capture installer path and name in the lambda closure
+                btn.clicked.connect(
+                    lambda _checked=False, p=installer, n=failure["name"]:
+                        self._install_prerequisite(p, n)
+                )
+                row_lay.addWidget(lbl, stretch=1)
+                row_lay.addWidget(btn)
+            else:
+                hint = _DOWNLOAD_HINTS.get(key, "install the required driver")
+                lbl.setText(failure["message"] + f"  —  {hint}.")
+                row_lay.addWidget(lbl, stretch=1)
+
+            self._prereq_layout.addWidget(row)
+
+        self._prereq_bar.show()
+
+    def _install_prerequisite(self, path: str, name: str) -> None:
+        """Launch a bundled installer with a UAC prompt, then update the bar."""
+        if QMessageBox.question(
+                self, f"Install {name}",
+                f"This will launch the {name} installer.\n\n"
+                "Windows will ask for administrator permission.  When it "
+                "finishes, close and reopen RBL so it can find the "
+                f"driver.\n\nContinue?") != QMessageBox.StandardButton.Yes:
+            return
+
+        if ljm_driver.launch_installer(path):
+            QMessageBox.information(
+                self, f"Install {name}",
+                f"{name} installer launched — finish it, then restart RBL.")
+            # Re-check; the install is async so the driver may still appear
+            # missing until the user restarts, but re-checking is harmless.
+            self._refresh_driver_state()
+        else:
+            QMessageBox.warning(
+                self, f"Install {name}",
+                "Could not launch the installer:\n" + path)
 
     # ── Close ─────────────────────────────────────────────────────────────────
 

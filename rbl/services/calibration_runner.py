@@ -156,6 +156,9 @@ class CalibrationRunner(QObject):
     # Separate from `error` so the GUI can present it as a safety event
     # rather than a malfunction: an expected outcome of probing an envelope.
     overcurrent = Signal(str, float, float)
+    # Emitted when a zero-dwell begins (return-to-zero mode only).
+    # Carries the dwell duration in seconds so the GUI can show a countdown.
+    dwell_started = Signal(float)
 
     def __init__(self, funcgen_map: dict, load_condition: LoadCondition,
                  parent=None, writer=None, run_id: str = None):
@@ -191,6 +194,13 @@ class CalibrationRunner(QObject):
         # Approach every rung from 0 V instead of from the previous rung.
         # See CAL_ZERO_DWELL_S for why this is worth an extra settle per point.
         self._return_to_zero = False
+        # Dwell time at 0 V before each rung in return-to-zero mode.
+        # Override via ._zero_dwell_s before calling start_sweep/start_ac_sweep.
+        self._zero_dwell_s = CAL_ZERO_DWELL_S
+        # When True, the zero-dwell disables the funcgen output instead of
+        # commanding 0 V. The output comes back on automatically when
+        # _command_setpoint calls command_dc/command_ac (which call output_on).
+        self._dwell_output_off = False
         # Per-sample interval from the last window, for the fundamental-bin
         # measurement. Taken from the stream rather than assumed, since the
         # rate differs by profile and the first window after a restart is short.
@@ -735,9 +745,12 @@ class CalibrationRunner(QObject):
         step = self._sequence[self._seq_idx]
         self._state = _State.ZERO
         try:
-            # Zero the channel this rung will drive. Other channels are handled
-            # in _enter_settle on a driven-channel change, as before.
-            self._command_channel(step.driven_amp, 0.0)
+            # Silence the driven channel for the dwell. Other channels are
+            # handled in _enter_settle on a driven-channel change, as before.
+            if self._dwell_output_off:
+                self._drive.output_off(step.driven_amp)
+            else:
+                self._command_channel(step.driven_amp, 0.0)
         except Exception as e:
             self._print_err(f"_enter_step zero: {e}")
             self.error.emit(str(e))
@@ -747,7 +760,8 @@ class CalibrationRunner(QObject):
         # commanding 0 V is a fault whatever the ladder is doing.
         self._trip_consec     = 0
         self._trip_blank_left = CAL_TRIP_BLANK_WINDOWS
-        self._settle_timer.start(int(CAL_ZERO_DWELL_S * 1000))
+        self.dwell_started.emit(self._zero_dwell_s)
+        self._settle_timer.start(int(self._zero_dwell_s * 1000))
 
     def _on_zero_elapsed(self):
         if self._state != _State.ZERO:
@@ -1169,7 +1183,8 @@ class CalibrationRunner(QObject):
             "drive_freq_hz": float(self._ac_freq_hz) if ac else 0.0,
             "step_approach": ("return_to_zero" if self._return_to_zero
                               else "ascending"),
-            "zero_dwell_s": (CAL_ZERO_DWELL_S if self._return_to_zero else 0.0),
+            "zero_dwell_s": (self._zero_dwell_s if self._return_to_zero else 0.0),
+            "zero_method": ("output_off" if self._dwell_output_off else "command_zero") if self._return_to_zero else "n/a",
             "collect_s": (CAL_AC_COLLECT_S if ac else CAL_COLLECT_S),
             "settle_s": (CAL_AC_SETTLE_S if ac else CAL_SETTLE_S),
             "trip_ma": self._trip_ma,

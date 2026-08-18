@@ -133,6 +133,16 @@ class AmpDrive:
                 log.error("zero %s ch%s: %s", label, channel, e)
                 raise
 
+    def output_off(self, label: str) -> None:
+        """Disable output on a single channel."""
+        gen, channel = self._map[label]
+        try:
+            gen.output_off(channel)
+        except Exception as e:
+            print(f"{self._pfx} ERROR output_off {label} ch{channel}: {e}")
+            log.error("output_off %s ch%s: %s", label, channel, e)
+            raise
+
     def outputs_off_all(self) -> None:
         """Disable output on all channels."""
         for label, (gen, channel) in self._map.items():
