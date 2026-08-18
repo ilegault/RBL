@@ -142,6 +142,13 @@ class FuncGenControlMixin:
             )
             return False
 
+        # Vacuum <-> HV interlock (hv_interlock_link.py). `peak` is numerically
+        # the plate kV at this rig's 1000x gain (see this module's docstring).
+        hv_status, hv_reason = self.hv_interlock_status_for(peak)
+        if hv_status == "block":
+            self.command_failed.emit("funcgen", f"{key}: blocked by HV interlock — {hv_reason}")
+            return False
+
         if ramped:
             handled = self._try_ramped_set_channel(key, gen, channel, params)
             if handled:
@@ -230,15 +237,26 @@ class FuncGenControlMixin:
             return False
 
         blocked = []
+        hv_blocked = []
         for key, _, _, _, params in active:
             peak = channel_peak_volts(params.shape, params.amp_vpp, params.offset_v)
             if peak > PEAK_MAX_VOLTS + 1e-9:
                 blocked.append(key)
+                continue
+            hv_status, _ = self.hv_interlock_status_for(peak)
+            if hv_status == "block":
+                hv_blocked.append(key)
         if blocked:
             self.command_failed.emit(
                 "funcgen",
                 "Apply All blocked — over the "
                 f"{PEAK_MAX_VOLTS:.0f} V limit: " + ", ".join(blocked),
+            )
+            return False
+        if hv_blocked:
+            self.command_failed.emit(
+                "funcgen",
+                "Apply All blocked by HV interlock: " + ", ".join(hv_blocked),
             )
             return False
 

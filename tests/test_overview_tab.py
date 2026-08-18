@@ -728,3 +728,40 @@ def test_the_bars_come_out_equal_once_laid_out(tab, qapp):
             assert abs(left_gap - right_gap) <= 2, (y, left_gap, right_gap)
     finally:
         tab.hide()
+
+
+class TestHvInterlockIndicator:
+    """Section 3.3: the interlock state must be visible on the Overview tab,
+    not buried, and a stale reading must read distinctly from a real
+    pressure-based block."""
+
+    def test_no_payload_yet_shows_placeholder(self, tab):
+        tab._hv_interlock = None
+        tab._redraw_hv_interlock()
+        assert "—" in tab.lbl_hv_interlock.text()
+
+    def test_ok_state_is_shown(self, tab):
+        tab._hv_interlock = {"state": "ok", "reason": "2 kV permitted at 1e-06 torr",
+                              "pressure_torr": 1e-6, "pressure_stale": False,
+                              "commanded_kv": 2.0}
+        tab._redraw_hv_interlock()
+        assert "OK" in tab.lbl_hv_interlock.text()
+
+    def test_block_state_is_shown(self, tab):
+        tab._hv_interlock = {"state": "block", "reason": "pressure too high",
+                              "pressure_torr": 2e-3, "pressure_stale": False,
+                              "commanded_kv": 2.0}
+        tab._redraw_hv_interlock()
+        assert "BLOCKED" in tab.lbl_hv_interlock.text()
+
+    def test_stale_reading_reads_distinctly_from_a_pressure_block(self, tab):
+        tab._hv_interlock = {"state": "block", "reason": "pressure too high",
+                              "pressure_torr": 2e-3, "pressure_stale": True,
+                              "commanded_kv": 2.0}
+        tab._redraw_hv_interlock()
+        assert "stale" in tab.lbl_hv_interlock.text().lower()
+
+    def test_beamline_signal_reaches_the_tab(self, tab):
+        tab.beamline._recompute_hv_interlock()
+        assert tab._hv_interlock is not None
+        assert tab._hv_interlock["state"] in ("ok", "warn", "block")

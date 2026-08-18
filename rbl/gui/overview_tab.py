@@ -115,6 +115,7 @@ class OverviewTab(QWidget):
         self._funcgens: FuncGenState = FuncGenState()
         self._scope: ScopeState = ScopeState(timestamp=0.0)
         self._vacuum = None
+        self._hv_interlock = None   # last hv_interlock_changed payload dict
 
         # Was the Galil connected on the previous redraw? Used to preload each
         # target box with the live position exactly once, when the link comes
@@ -167,6 +168,7 @@ class OverviewTab(QWidget):
         beamline.funcgens_changed.connect(self._on_funcgens)
         beamline.scope_changed.connect(self._on_scope)
         beamline.vacuum_changed.connect(self._on_vacuum)
+        beamline.hv_interlock_changed.connect(self._on_hv_interlock)
         beamline.command_failed.connect(self._on_failure)
         beamline.timebase_changed.connect(self._on_timebase_changed)
 
@@ -438,6 +440,15 @@ class OverviewTab(QWidget):
         self._pressure_lay.setSpacing(2)
         self._pressure_lay.setContentsMargins(6, 4, 6, 4)
 
+        # HV interlock state (hv_interlock_link.py) — deliberately at the top
+        # of this box, not buried: it is the one number that decides whether
+        # a commanded voltage will actually reach the plates.
+        self.lbl_hv_interlock = QLabel("HV interlock: —")
+        self.lbl_hv_interlock.setWordWrap(True)
+        self.lbl_hv_interlock.setStyleSheet(
+            theme.status_label(theme.NEUTRAL) + f"font-size: {theme.FS_LABEL}px;")
+        self._pressure_lay.addWidget(self.lbl_hv_interlock)
+
         # Compact rows: each is a clickable name+value pair at small font size.
         self._pressure_rows: dict[str, dict] = {}   # key -> {name_lbl, val_lbl, row_widget, key, name, text, ok}
         self._pressure_selected: set[str] = set()
@@ -478,6 +489,9 @@ class OverviewTab(QWidget):
 
     def _on_vacuum(self, state):
         self._vacuum = state
+
+    def _on_hv_interlock(self, payload: dict):
+        self._hv_interlock = payload
 
     def _on_slit_target_changed(self, slit: str, mm: float):
         """Some screen commanded *slit* to *mm* — show it on that slit's bar."""
@@ -863,7 +877,35 @@ class OverviewTab(QWidget):
                     f"font-size: 32px; font-weight: bold; color: {color};"
                 )
 
+    def _redraw_hv_interlock(self):
+        payload = self._hv_interlock
+        if payload is None:
+            self.lbl_hv_interlock.setText("HV interlock: —")
+            self.lbl_hv_interlock.setStyleSheet(
+                theme.status_label(theme.NEUTRAL) + f"font-size: {theme.FS_LABEL}px;")
+            return
+
+        if payload["pressure_stale"]:
+            # Visibly distinct from "blocked on pressure" — a stale/missing
+            # reading is a different failure than a real high-pressure block,
+            # and Section 3.3 requires the two not be conflated in the UI.
+            text = "HV interlock: BLOCKED — vacuum reading stale/unavailable"
+            color = theme.FAULT
+        elif payload["state"] == "block":
+            text = f"HV interlock: BLOCKED — {payload['reason']}"
+            color = theme.FAULT
+        elif payload["state"] == "warn":
+            text = f"HV interlock: WARN — {payload['reason']}"
+            color = theme.WARN
+        else:
+            text = f"HV interlock: OK — {payload['reason']}"
+            color = theme.OK
+        self.lbl_hv_interlock.setText(text)
+        self.lbl_hv_interlock.setStyleSheet(
+            theme.status_label(color) + f"font-size: {theme.FS_LABEL}px;")
+
     def _redraw_vacuum(self):
+        self._redraw_hv_interlock()
         state = self._vacuum
         if state is None:
             self._pressure_no_data.setVisible(True)

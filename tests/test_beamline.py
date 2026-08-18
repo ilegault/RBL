@@ -16,7 +16,20 @@ from rbl.state.snapshots import (
 
 @pytest.fixture
 def beamline():
-    return Beamline()
+    """A Beamline with a healthy, fresh vacuum reading already cached.
+
+    Without this, every command through set_channel()/apply_all_channels()
+    would be blocked by the HV interlock (hv_interlock_link.py): "no vacuum
+    reading yet" is deliberately treated as stale/unknown, per
+    docs/AMP_ENVELOPE_AND_HV_SAFETY_PLAN.md Section 3.3 ("do not treat a
+    missing vacuum reading as a good vacuum"). Tests that specifically
+    exercise the interlock itself (TestHvInterlock) override this.
+    """
+    import time
+    b = Beamline()
+    b._hv_pressure_torr = 1e-6
+    b._hv_pressure_at = time.monotonic()
+    return b
 
 
 class TestMotorIngestion:
@@ -452,6 +465,83 @@ class TestRampedSetChannel:
         assert ok is True
         gen.set_waveform.assert_called_once()
         assert not beamline.funcgen_ramp.is_ramping("A1")
+
+
+class TestHvInterlock:
+    """docs/AMP_ENVELOPE_AND_HV_SAFETY_PLAN.md Section 3: the vacuum <-> HV
+    interlock, enforced at the same chokepoint as the peak-volts interlock.
+    Most tests here construct a raw Beamline() rather than using the shared
+    `beamline` fixture, since that fixture deliberately pre-seeds a healthy
+    reading for every OTHER test in this file."""
+
+    SAFE_DC = ChannelParams(shape="DC", freq_hz=0.0, amp_vpp=0.0, offset_v=2.0,
+                             phase_deg=0.0, start_phase_deg=0.0, load="INFinity",
+                             output_on=True)
+
+    def _connected_gen(self, beamline, output=False, offset=0.0):
+        from unittest.mock import MagicMock
+        gen = MagicMock()
+        gen.set_waveform.return_value = ""
+        gen.get_state.return_value = {"shape": "DC", "freq": 0.0, "amp": 0.0,
+                                       "offset": offset, "phase": 0.0,
+                                       "output": output, "load": "INFinity"}
+        beamline.dg_a = gen
+        return gen
+
+    def test_no_vacuum_reading_blocks_a_nonzero_command(self):
+        beamline = Beamline()
+        gen = self._connected_gen(beamline)
+        failures = []
+        beamline.command_failed.connect(lambda s, m: failures.append((s, m)))
+        ok = beamline.set_channel("A1", self.SAFE_DC)
+        assert ok is False
+        assert failures and "interlock" in failures[0][1].lower()
+        gen.set_waveform.assert_not_called()
+
+    def test_healthy_reading_permits_the_command(self, beamline):
+        gen = self._connected_gen(beamline)
+        ok = beamline.set_channel("A1", self.SAFE_DC)
+        assert ok is True
+        gen.set_waveform.assert_called_once()
+
+    def test_high_pressure_blocks_even_with_a_fresh_reading(self):
+        import time
+        beamline = Beamline()
+        beamline._hv_pressure_torr = 1e-3   # at the absolute lockout
+        beamline._hv_pressure_at = time.monotonic()
+        gen = self._connected_gen(beamline)
+        ok = beamline.set_channel("A1", self.SAFE_DC)
+        assert ok is False
+
+    def test_stale_reading_blocks_even_though_pressure_value_was_once_good(self):
+        import time
+        beamline = Beamline()
+        beamline._hv_pressure_torr = 1e-6
+        beamline._hv_pressure_at = time.monotonic() - 3600   # long expired
+        gen = self._connected_gen(beamline)
+        ok = beamline.set_channel("A1", self.SAFE_DC)
+        assert ok is False
+
+    def test_apply_all_channels_blocked_by_interlock_too(self):
+        beamline = Beamline()
+        gen = self._connected_gen(beamline)
+        ok = beamline.apply_all_channels({"A1": self.SAFE_DC})
+        assert ok is False
+        gen.set_waveform.assert_not_called()
+
+    def test_transition_into_block_ramps_live_channel_to_zero(self, beamline):
+        gen = self._connected_gen(beamline, output=True, offset=2.0)
+        beamline._recompute_hv_interlock()   # baseline: healthy, no transition
+        beamline._hv_pressure_torr = 2e-3    # now above the absolute lockout
+        beamline._recompute_hv_interlock()
+        assert beamline.funcgen_ramp.is_ramping("A1:off")
+
+    def test_hv_interlock_changed_is_emitted_on_recompute(self, beamline):
+        self._connected_gen(beamline)
+        received = []
+        beamline.hv_interlock_changed.connect(received.append)
+        beamline._recompute_hv_interlock()
+        assert received and received[0]["state"] == "ok"
 
 
 class TestMoveSlit:
