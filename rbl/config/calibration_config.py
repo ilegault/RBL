@@ -27,6 +27,7 @@ import random
 from enum import Enum
 from pathlib import Path
 
+from rbl.config.load_calibration_store import capacitance_pf_for
 from rbl.hardware.funcgen_driver import MAX_GEN_VOLTS
 
 # --- Sweep ---------------------------------------------------------------
@@ -198,8 +199,27 @@ def ac_shape_k(shape: str = None) -> float:
     return _AC_PEAK_CURRENT_K.get(str(shape).strip().lower(), 2.0 * math.pi)
 
 
-def ac_peak_current_ma(freq_hz: float, peak_kv: float,
-                       load_pf: float = None, shape: str = None) -> float:
+def _resolve_load_pf(load_pf: float = None, amp_label: str = None) -> float:
+    """load_pf if given; else the Phase 1 measured value for amp_label if one
+    has ever been recorded; else CAL_LOAD_CAP_PF.
+
+    Per-channel measurement (rbl.config.load_calibration_store) shortens the
+    ladder more accurately than the single global guess once it exists, but
+    the fallback chain ends at CAL_LOAD_CAP_PF exactly as before this
+    existed — see that constant's docstring: this is used only to size a
+    ladder before a run, never to correct a measurement already recorded.
+    """
+    if load_pf is not None:
+        return load_pf
+    if amp_label is not None:
+        measured = capacitance_pf_for(amp_label)
+        if measured is not None:
+            return measured
+    return CAL_LOAD_CAP_PF
+
+
+def ac_peak_current_ma(freq_hz: float, peak_kv: float, load_pf: float = None,
+                       shape: str = None, amp_label: str = None) -> float:
     """I_pk in mA for a capacitive load driven at *freq_hz* to *peak_kv*.
 
     I_pk = k * f * C * V_pk, with k from the waveform shape (see ac_shape_k)
@@ -208,19 +228,22 @@ def ac_peak_current_ma(freq_hz: float, peak_kv: float,
         V_pk [V]  = peak_kv * 1000
         I_pk [mA] = k * f * load_pf * peak_kv * 1e-6
 
+    `load_pf` wins if given; otherwise `amp_label` (if given) tries the
+    Phase 1 per-channel measurement store before falling back to
+    CAL_LOAD_CAP_PF — see `_resolve_load_pf`.
+
     PREDICTIVE ONLY.  This sizes the ladder before a run from an assumed
     capacitance; it is not how current is measured.  The measured current comes
     straight off the amplifier's CURRENT monitor and is interpreted from the raw
     samples (see rbl.hardware.ac_metrics) — nothing downstream back-solves a
     capacitance to get it.
     """
-    if load_pf is None:
-        load_pf = CAL_LOAD_CAP_PF
+    load_pf = _resolve_load_pf(load_pf, amp_label)
     return ac_shape_k(shape) * freq_hz * load_pf * peak_kv * 1e-6
 
 
-def ac_max_peak_kv(freq_hz: float, load_pf: float = None,
-                   trip_ma: float = None, shape: str = None) -> float:
+def ac_max_peak_kv(freq_hz: float, load_pf: float = None, trip_ma: float = None,
+                   shape: str = None, amp_label: str = None) -> float:
     """Highest AC peak amplitude that stays under the current limit.
 
     Inverts ac_peak_current_ma for the given shape, then clamps to the
@@ -229,14 +252,18 @@ def ac_max_peak_kv(freq_hz: float, load_pf: float = None,
     crossover sits near 530 Hz for a sine and near 830 Hz for a triangle,
     because a triangle draws less peak current at the same amplitude.
 
+    `load_pf`/`amp_label` resolve exactly as in `ac_peak_current_ma` — this
+    stays the authoritative clamp for the calibration runner regardless of
+    which load figure it resolves to; nothing else clamps to the hardware
+    (docs/AMP_ENVELOPE_AND_HV_SAFETY_PLAN.md Section 9).
+
     Returns 0.0 for a non-positive frequency rather than raising: callers use
     this to size a ladder, and a zero-length ladder is a better failure than
     an exception inside sequence construction.
     """
     if freq_hz <= 0:
         return 0.0
-    if load_pf is None:
-        load_pf = CAL_LOAD_CAP_PF
+    load_pf = _resolve_load_pf(load_pf, amp_label)
     if trip_ma is None:
         trip_ma = CAL_AC_TRIP_MA
     denom = ac_shape_k(shape) * freq_hz * load_pf * 1e-6
