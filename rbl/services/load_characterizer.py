@@ -22,6 +22,14 @@ measurement every later phase consumes, per channel, on demand:
   Mode C - Charge integral (cross-check). Low-frequency square wave; the
            charge under each edge gives C independent of the monitor's
            bandwidth (rbl.hardware.load_model.capacitance_from_charge).
+           Streams BOTH the voltage and current monitor for the driven
+           channel (AMP_PAIR), not current alone as Section 2.3 originally
+           suggests: the measured voltage swing at each edge is the ground
+           truth delta_v for the charge integral, more robust than assuming
+           the commanded peak_kv was reached exactly (an amplitude clamp or
+           warning would otherwise go unnoticed). The cost is a lower
+           per-channel sample rate (AMP_PAIR's 50 kS/s vs. a single-channel
+           100 kS/s) — still comfortably above what a 10 Hz edge needs.
 
 SHAPE
 -----

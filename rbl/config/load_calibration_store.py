@@ -6,13 +6,22 @@ produces, replacing `calibration_config.CAL_LOAD_CAP_PF`'s single global
 guess with a number the app can reproduce and refresh on demand, per amp
 channel.
 
+WHY KEYED BY (amp_label, load_condition)
+-------------------------------------------
+Section 2.4 of docs/AMP_ENVELOPE_AND_HV_SAFETY_PLAN.md makes answering the
+~1 nF capacitance discrepancy a first-class feature: run Mode A once with
+`LoadCondition.DISCONNECTED` (amplifier + internal network only) and once
+with `LoadCondition.ON_PLATES` (everything), then let the app show the two
+side by side and their difference. A store that overwrote one condition's
+measurement with the other's would make that comparison impossible the
+moment the second sweep finished — so both are kept, per channel.
+
 WHY A SEPARATE FILE FROM rbl/config/persistence.py
 -----------------------------------------------------
 `persistence.py` is scoped to funcgen SCPI config, keyed by instrument
 serial. This is a different kind of fact (a MEASUREMENT, not a setting) with
-a different key (amp label, not serial), so it gets its own small on-disk
-store rather than growing persistence.py's schema into two unrelated shapes
-under one file.
+a different key, so it gets its own small on-disk store rather than growing
+persistence.py's schema into two unrelated shapes under one file.
 
 WHAT THIS DOES NOT DO
 ----------------------
@@ -32,7 +41,7 @@ STORE_PATH = Path.home() / ".config" / "rbl" / "load_calibration.json"
 
 
 def load_all() -> dict:
-    """{amp_label: {"c_pf", "g_us", "measured_at", "load_condition", "method"}}.
+    """{amp_label: {load_condition: {"c_pf", "g_us", "measured_at", "method"}}}.
 
     Returns {} on any failure (missing file, corrupt JSON) — a bad or absent
     store must never prevent the app from starting, and callers fall back to
@@ -48,15 +57,16 @@ def load_all() -> dict:
 def save_measurement(amp_label: str, c_pf: float, g_us: float,
                       load_condition: str, method: str,
                       measured_at: float = None) -> None:
-    """Persist one channel's measurement, overwriting any prior one for that
-    label. Never raises — a failure to persist must not fail a measurement
-    run that already completed successfully."""
+    """Persist one channel's measurement under its load_condition, leaving
+    any OTHER load_condition already recorded for this channel untouched —
+    see the module docstring. Never raises: a failure to persist must not
+    fail a measurement run that already completed successfully."""
     data = load_all()
-    data[amp_label] = {
+    per_channel = data.setdefault(amp_label, {})
+    per_channel[load_condition] = {
         "c_pf": c_pf,
         "g_us": g_us,
         "measured_at": measured_at if measured_at is not None else time.time(),
-        "load_condition": load_condition,
         "method": method,
     }
     try:
@@ -67,24 +77,53 @@ def save_measurement(amp_label: str, c_pf: float, g_us: float,
         pass
 
 
-def capacitance_pf_for(amp_label: str):
-    """Stored c_pf for `amp_label`, or None if this channel has never been
-    measured (the "fall back to CAL_LOAD_CAP_PF" case)."""
-    entry = load_all().get(amp_label)
-    return entry["c_pf"] if entry else None
+def measurement_for(amp_label: str, load_condition: str = None):
+    """The stored record for `amp_label`.
+
+    With `load_condition` given, returns that specific record or None.
+    Without it, returns the MOST RECENTLY measured record across whichever
+    condition(s) exist for this channel — the convenient default for
+    ladder-sizing, which does not care which condition produced the estimate.
+    """
+    per_channel = load_all().get(amp_label)
+    if not per_channel:
+        return None
+    if load_condition is not None:
+        return per_channel.get(load_condition)
+    return max(per_channel.values(), key=lambda r: r.get("measured_at", 0.0))
 
 
-def measurement_for(amp_label: str):
-    """The full stored record for `amp_label`, or None."""
-    return load_all().get(amp_label)
+def capacitance_pf_for(amp_label: str, load_condition: str = None):
+    """Stored c_pf for `amp_label` (see `measurement_for`), or None if never
+    measured under the requested condition (or at all)."""
+    record = measurement_for(amp_label, load_condition)
+    return record["c_pf"] if record else None
+
+
+def comparison_for(amp_label: str) -> dict:
+    """Both load conditions' records for `amp_label`, plus their difference —
+    the Section 2.4 "DISCONNECTED vs ON_PLATES" view.
+
+    Returns {"DISCONNECTED": record|None, "ON_PLATES": record|None,
+             "diff_c_pf": float|None}. `diff_c_pf` is ON_PLATES.c_pf minus
+    DISCONNECTED.c_pf (the external load's own capacitance, per Section 2.4:
+    "the difference is the external load"), or None if either side is
+    missing.
+    """
+    per_channel = load_all().get(amp_label, {})
+    disconnected = per_channel.get("DISCONNECTED")
+    on_plates = per_channel.get("ON_PLATES")
+    diff = None
+    if disconnected and on_plates:
+        diff = on_plates["c_pf"] - disconnected["c_pf"]
+    return {"DISCONNECTED": disconnected, "ON_PLATES": on_plates, "diff_c_pf": diff}
 
 
 if __name__ == "__main__":
     import tempfile
-    import rbl.config.load_calibration_store as mod
 
     with tempfile.TemporaryDirectory() as d:
-        mod.STORE_PATH = Path(d) / "sub" / "load_calibration.json"
+        STORE_PATH = Path(d) / "sub" / "load_calibration.json"
 
         assert load_all() == {}
         assert capacitance_pf_for("X+") is None
@@ -93,22 +132,31 @@ if __name__ == "__main__":
         save_measurement("X+", c_pf=1180.0, g_us=0.02,
                           load_condition="ON_PLATES", method="impedance_sweep")
         assert capacitance_pf_for("X+") == 1180.0
+        assert capacitance_pf_for("X+", "ON_PLATES") == 1180.0
+        assert capacitance_pf_for("X+", "DISCONNECTED") is None
         assert capacitance_pf_for("X-") is None
-        print("[OK] save_measurement/capacitance_pf_for round-trip, per-channel")
+        print("[OK] save_measurement/capacitance_pf_for round-trip, per-channel and per-condition")
 
-        record = measurement_for("X+")
+        record = measurement_for("X+", "ON_PLATES")
         assert record["method"] == "impedance_sweep"
-        assert record["load_condition"] == "ON_PLATES"
         assert "measured_at" in record
-        print("[OK] full record carries method/load_condition/measured_at")
+        print("[OK] full record carries method/measured_at")
 
-        # Overwriting a channel does not disturb another channel's record.
+        # Both conditions coexist for the same channel — the whole point.
+        save_measurement("X+", c_pf=125.0, g_us=0.0,
+                          load_condition="DISCONNECTED", method="impedance_sweep")
+        assert capacitance_pf_for("X+", "ON_PLATES") == 1180.0
+        assert capacitance_pf_for("X+", "DISCONNECTED") == 125.0
+        cmp = comparison_for("X+")
+        assert cmp["diff_c_pf"] == 1180.0 - 125.0
+        print(f"[OK] DISCONNECTED and ON_PLATES coexist: diff_c_pf={cmp['diff_c_pf']:.1f} pF "
+              "(the external load)")
+
+        # Overwriting a channel's condition does not disturb another channel.
         save_measurement("Y+", c_pf=1250.0, g_us=0.0,
                           load_condition="DISCONNECTED", method="charge_integral")
-        save_measurement("X+", c_pf=1195.0, g_us=0.05,
-                          load_condition="ON_PLATES", method="impedance_sweep")
-        assert capacitance_pf_for("X+") == 1195.0
-        assert capacitance_pf_for("Y+") == 1250.0
-        print("[OK] per-channel overwrite does not disturb other channels")
+        assert capacitance_pf_for("X+", "ON_PLATES") == 1180.0
+        assert capacitance_pf_for("Y+", "DISCONNECTED") == 1250.0
+        print("[OK] per-channel writes do not disturb other channels")
 
     print("\n[OK] load_calibration_store self-test passed")
