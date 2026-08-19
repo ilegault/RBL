@@ -24,6 +24,7 @@ from rbl.gui.calibration_tab import CalibrationTab
 from rbl.gui.load_characterization_tab import LoadCharacterizationTab
 from rbl.gui.vacuum_tab import VacuumTab
 from rbl.gui.profiler_tab import ProfilerTab
+from rbl.gui.raster_planner_tab import RasterPlannerTab
 from rbl.gui.camera_tab import CameraTab
 from rbl.gui import theme
 from rbl.hardware.camera_source import CameraSource
@@ -81,6 +82,7 @@ class MainWindow(QMainWindow):
         self._outer_tabbar.addTab("Load Characterization")
         self._outer_tabbar.addTab("Vacuum")
         self._outer_tabbar.addTab("Beam Profiler")
+        self._outer_tabbar.addTab("Raster Planner")
         self._outer_tabbar.setExpanding(False)
         self._outer_tabbar.setDocumentMode(True)
         self._outer_tabbar.setToolTip("Left-click: switch tab  |  Right-click: open in split view")
@@ -143,6 +145,7 @@ class MainWindow(QMainWindow):
         self.load_char_tab   = LoadCharacterizationTab(self.beamline, self)
         self.vacuum_tab      = VacuumTab(self.beamline, self)
         self.profiler_tab    = ProfilerTab(self.beamline, self)
+        self.raster_planner_tab = RasterPlannerTab(self)
 
         # Session recorder — shared between Overview panel and Camera tab.
         self.snapshots        = BeamlineSnapshotProvider(self.beamline, self)
@@ -166,6 +169,7 @@ class MainWindow(QMainWindow):
         self._outer_stack.addWidget(self._wrap_scroll(self.load_char_tab))
         self._outer_stack.addWidget(self._wrap_scroll(self.vacuum_tab))
         self._outer_stack.addWidget(self._wrap_scroll(self.profiler_tab))
+        self._outer_stack.addWidget(self._wrap_scroll(self.raster_planner_tab))
 
         # ── Shared LabJack T7 ─────────────────────────────────────────────────
         #
