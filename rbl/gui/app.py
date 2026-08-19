@@ -21,8 +21,11 @@ from rbl.gui.amp_tab import AmpTab
 from rbl.gui.funcgen_tab import FuncGenTab
 from rbl.gui.overview_tab import OverviewTab
 from rbl.gui.calibration_tab import CalibrationTab
+from rbl.gui.load_characterization_tab import LoadCharacterizationTab
 from rbl.gui.vacuum_tab import VacuumTab
 from rbl.gui.profiler_tab import ProfilerTab
+from rbl.gui.raster_planner_tab import RasterPlannerTab
+from rbl.gui.dynamic_adjustment_tab import DynamicAdjustmentTab
 from rbl.gui.camera_tab import CameraTab
 from rbl.gui import theme
 from rbl.hardware.camera_source import CameraSource
@@ -77,8 +80,11 @@ class MainWindow(QMainWindow):
         self._outer_tabbar.addTab("Overview")
         self._outer_tabbar.addTab("Camera")
         self._outer_tabbar.addTab("HV Calibration")
+        self._outer_tabbar.addTab("Load Characterization")
         self._outer_tabbar.addTab("Vacuum")
         self._outer_tabbar.addTab("Beam Profiler")
+        self._outer_tabbar.addTab("Raster Planner")
+        self._outer_tabbar.addTab("Dynamic Adjustment")
         self._outer_tabbar.setExpanding(False)
         self._outer_tabbar.setDocumentMode(True)
         self._outer_tabbar.setToolTip("Left-click: switch tab  |  Right-click: open in split view")
@@ -138,8 +144,11 @@ class MainWindow(QMainWindow):
         self.funcgen_tab = FuncGenTab(self.beamline, self)
         self.overview_tab = OverviewTab(self.beamline, self)
         self.calibration_tab = CalibrationTab(self.beamline, self)
+        self.load_char_tab   = LoadCharacterizationTab(self.beamline, self)
         self.vacuum_tab      = VacuumTab(self.beamline, self)
         self.profiler_tab    = ProfilerTab(self.beamline, self)
+        self.raster_planner_tab = RasterPlannerTab(self)
+        self.dynamic_adjustment_tab = DynamicAdjustmentTab(self.beamline, self)
 
         # Session recorder — shared between Overview panel and Camera tab.
         self.snapshots        = BeamlineSnapshotProvider(self.beamline, self)
@@ -160,8 +169,11 @@ class MainWindow(QMainWindow):
         self._outer_stack.addWidget(self._wrap_scroll(self.overview_tab))
         self._outer_stack.addWidget(self._wrap_scroll(self.camera_tab))
         self._outer_stack.addWidget(self._wrap_scroll(self.calibration_tab))
+        self._outer_stack.addWidget(self._wrap_scroll(self.load_char_tab))
         self._outer_stack.addWidget(self._wrap_scroll(self.vacuum_tab))
         self._outer_stack.addWidget(self._wrap_scroll(self.profiler_tab))
+        self._outer_stack.addWidget(self._wrap_scroll(self.raster_planner_tab))
+        self._outer_stack.addWidget(self._wrap_scroll(self.dynamic_adjustment_tab))
 
         # ── Shared LabJack T7 ─────────────────────────────────────────────────
         #
@@ -170,7 +182,8 @@ class MainWindow(QMainWindow):
         # (AIN0-3, the log amps) and an AmpState (AIN6-13, the EEL5000
         # monitors); each tab subscribes to the one it renders. No tab sees
         # the raw payload, so no tab can convert volts a second way.
-        self._lj_tabs = (self.current_tab, self.amp_tab, self.calibration_tab)
+        self._lj_tabs = (self.current_tab, self.amp_tab, self.calibration_tab,
+                          self.load_char_tab, self.dynamic_adjustment_tab)
 
         for tab in self._lj_tabs:
             tab.lj_panel.connect_requested.connect(self._labjack_connect)
@@ -224,6 +237,30 @@ class MainWindow(QMainWindow):
             lambda amp, ma, limit: self.amp_tab.freeze_on_safety_event(
                 f"over-current on {amp}: {ma:.1f} mA (limit {limit:.0f} mA)"
             )
+        )
+
+        # Load Characterization tab (Phase 1): same profile/pair/raw-window
+        # wiring as the calibration tab, for the same reason — it needs the
+        # RAW per-monitor waveform to compute lock-in fundamentals, not the
+        # already-converted kV/mA snapshots.
+        self.load_char_tab.profile_change_requested.connect(self.beamline.set_stream_profile)
+        self.load_char_tab.pair_profile_requested.connect(
+            self.beamline.set_stream_pair_profile)
+        self.beamline.raw_window_ready.connect(self.load_char_tab.on_window)
+        self.load_char_tab.run_state_changed.connect(
+            lambda running: self.amp_tab.set_profile_controls_enabled(not running)
+        )
+
+        # Dynamic Adjustment tab (Phase 8): single-channel 100 kS/s
+        # (SINGLE_FAST), retargeted between the voltage and current monitor
+        # as the trial moves between its two streaming passes.
+        self.dynamic_adjustment_tab.profile_change_requested.connect(
+            self.beamline.set_stream_profile)
+        self.dynamic_adjustment_tab.single_channel_change_requested.connect(
+            self.beamline.set_stream_channel)
+        self.beamline.raw_window_ready.connect(self.dynamic_adjustment_tab.on_window)
+        self.dynamic_adjustment_tab.run_state_changed.connect(
+            lambda running: self.amp_tab.set_profile_controls_enabled(not running)
         )
 
         # Motor poll data feeds Beamline, which derives MotorState (typed,
@@ -411,6 +448,14 @@ class MainWindow(QMainWindow):
             pass
         try:
             self.calibration_tab.shutdown()
+        except Exception:
+            pass
+        try:
+            self.load_char_tab.shutdown()
+        except Exception:
+            pass
+        try:
+            self.dynamic_adjustment_tab.shutdown()
         except Exception:
             pass
         try:

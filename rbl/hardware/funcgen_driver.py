@@ -211,6 +211,53 @@ class DG1022Z:
 
         return ", ".join(warnings)
 
+    def set_amplitude(self, channel: int, vpp: float) -> str:
+        """Change amplitude in place WITHOUT restarting the phase generator.
+
+        `:SOURce{ch}:VOLTage` scales the DAC output. Unlike `:APPLy:` it does
+        not reconfigure the channel or reset the phase generator, so it is
+        safe to call repeatedly on a running waveform — the ramp engine
+        (`rbl/services/ramp_engine.py`) exists entirely because `set_waveform`
+        cannot be called mid-ramp without producing exactly the discontinuity
+        a ramp is meant to avoid. Using `:APPLy:` for this is the single most
+        likely way to get that feature wrong.
+
+        Clamped to ±MAX_AMP_VPP exactly as `set_waveform` clamps amplitude —
+        the coarse backstop must not be bypassed by this path. Returns a
+        warning string on clamp, "" otherwise.
+        """
+        ch = int(channel)
+        orig = vpp
+        vpp = max(-MAX_AMP_VPP, min(MAX_AMP_VPP, vpp))
+        self._write_checked(f":SOURce{ch}:VOLTage {vpp}")
+        return f"clamped amplitude {orig:.4g}->{vpp:.4g} V" if vpp != orig else ""
+
+    def set_offset(self, channel: int, volts: float) -> str:
+        """Change DC offset in place WITHOUT restarting the phase generator.
+
+        See `set_amplitude` — same `:APPLy:`-avoidance reasoning, same clamp
+        discipline, this time against ±MAX_GEN_VOLTS as `set_waveform` does.
+        """
+        ch = int(channel)
+        orig = volts
+        volts = max(-MAX_GEN_VOLTS, min(MAX_GEN_VOLTS, volts))
+        self._write_checked(f":SOURce{ch}:VOLTage:OFFSet {volts}")
+        return f"clamped offset {orig:.4g}->{volts:.4g} V" if volts != orig else ""
+
+    def write_fast(self, cmd: str):
+        """Write WITHOUT the per-command `:SYSTem:ERRor?` poll.
+
+        `_write_checked` costs two USB round trips. A 25-step ramp on four
+        channels is 200 round trips — several seconds of wall time, which
+        defeats the point of a ramp meant to complete in about a second. Ramp
+        steps use this; the caller MUST call `get_error()` once when the ramp
+        completes, so errors are still detected, just not per-step.
+
+        Do not use this outside a ramp.
+        """
+        log.debug("WRITE (fast) %s", cmd)
+        self._inst.write(cmd)
+
     # ---- Output control ------------------------------------------------------
 
     def output_on(self, channel: int):

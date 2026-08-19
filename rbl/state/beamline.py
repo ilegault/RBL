@@ -36,13 +36,15 @@ from PySide6.QtCore import QObject, Signal
 
 from rbl.hardware import beam_reconstruction as BR
 from rbl.state.funcgen_control import FuncGenControlMixin
+from rbl.state.hv_interlock_link import HvInterlockLinkMixin
 from rbl.state.labjack_link import LabJackLinkMixin
 from rbl.state.motor_control import MotorControlMixin
 from rbl.state.vacuum_link import VacuumLinkMixin
 from rbl.state.scope_link import ScopeLinkMixin
 
 
-class Beamline(LabJackLinkMixin, FuncGenControlMixin, MotorControlMixin, VacuumLinkMixin, ScopeLinkMixin, QObject):
+class Beamline(LabJackLinkMixin, FuncGenControlMixin, MotorControlMixin, VacuumLinkMixin,
+               ScopeLinkMixin, HvInterlockLinkMixin, QObject):
     motors_changed   = Signal(object)   # MotorState
     logamps_changed  = Signal(object)   # LogAmpState
     amps_changed     = Signal(object)   # AmpState
@@ -53,6 +55,11 @@ class Beamline(LabJackLinkMixin, FuncGenControlMixin, MotorControlMixin, VacuumL
     vacuum_error     = Signal(str)
     scope_changed    = Signal(object)   # ScopeState
     scope_error      = Signal(str)
+
+    # Vacuum <-> HV interlock (hv_interlock_link.py). dict:
+    # {"state": "ok"|"warn"|"block", "reason": str, "pressure_torr": float,
+    #  "pressure_stale": bool, "commanded_kv": float}
+    hv_interlock_changed = Signal(object)
 
     # Motion commanded from ANY screen, published so every screen sees it.
     # See motor_control.py's module docstring for why a move is published and
@@ -82,6 +89,7 @@ class Beamline(LabJackLinkMixin, FuncGenControlMixin, MotorControlMixin, VacuumL
         self._init_motors()
         self._init_vacuum()
         self._init_scope()
+        self._init_hv_interlock()
 
         # Last-resort safety net: if the process is torn down without a clean
         # closeEvent (e.g. an unhandled exit), still stop the LabJack stream

@@ -102,6 +102,7 @@ from rbl.hardware.amp_monitor import (
     monitor_to_kv, monitor_to_ma, ma_to_monitor, ma_unclamped,
 )
 from rbl.hardware.funcgen_safety import _AMP_GAIN
+from rbl.hardware.regulation import regulation_ratio, classify
 from rbl.services.amp_drive import AmpDrive
 from rbl.services.calibration_writer import (
     config_snapshot, git_commit_hash, new_run_id, now_iso,
@@ -1020,6 +1021,10 @@ class CalibrationRunner(QObject):
         else:
             converted_value = monitor_to_ma(source_v)
             converted_unit  = "mA_pk_fund" if ac else "mA"
+
+        regulation_state, regulation_reason = self._regulation_state_for(
+            amp, commanded_kv, freq_hz, ac)
+
         return {
             "run_id": self._run_id, "timestamp_iso": ts_iso,
             "t_elapsed_s": t_elapsed,
@@ -1043,7 +1048,39 @@ class CalibrationRunner(QObject):
             # every pair-mode sweep recorded a profile it never ran under, and
             # with it an implied 12.5 kS/s that was really 50 kS/s.
             "stream_profile": self._last_profile or "",
+            # Phase 6 (regulation.py): "ok"/"current_limited"/"amp_off"/"idle"
+            # for THIS amp at THIS setpoint. A row taken while the amplifier
+            # was not following its commanded input is not deleted — it is
+            # flagged, so the user decides whether to keep or discard it.
+            "regulation_state": regulation_state,
+            "regulation_reason": regulation_reason,
         }
+
+    def _regulation_state_for(self, amp: str, commanded_kv: float,
+                               freq_hz: float, ac: bool) -> tuple:
+        """Joint voltage+current classification for one amp at one setpoint
+        (rbl/hardware/regulation.py). Needs BOTH monitors regardless of which
+        `kind` row is being built, so this reads both AINs directly rather
+        than reusing whichever one `_make_row` already had in hand."""
+        ain_v = AMP_CHANNEL_MAP[amp]["voltage"]
+        ain_i = AMP_CHANNEL_MAP[amp]["current"]
+        mean_v, *_ = self._window_stats(ain_v)
+        mean_i, *_ = self._window_stats(ain_i)
+        if ac:
+            fund_v, _, _, _ = self._fundamental_stats(ain_v, freq_hz)
+            fund_i, _, _, _ = self._fundamental_stats(ain_i, freq_hz)
+            source_v = fund_v if math.isfinite(fund_v) else mean_v
+            source_i = fund_i if math.isfinite(fund_i) else mean_i
+        else:
+            source_v, source_i = mean_v, mean_i
+
+        measured_kv = monitor_to_kv(source_v)
+        measured_ma = abs(ma_unclamped(source_i))
+        if math.isnan(measured_kv) or math.isnan(measured_ma):
+            return "idle", "no data collected for this amp at this setpoint"
+
+        v_ratio = regulation_ratio(measured_kv, commanded_kv)
+        return classify(v_ratio, measured_ma, self._trip_ma, commanded_kv)
 
     def _emit_row(self, row: dict):
         self.row_recorded.emit(row)

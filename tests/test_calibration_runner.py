@@ -306,6 +306,60 @@ class TestReproducibility:
         print("[OK] a random pass with a fixed seed reproduces exactly")
 
 
+class TestRegulationState:
+    """Section 7.5: every recorded row is tagged with the joint V+I
+    classification from rbl.hardware.regulation, so a row taken while the
+    amplifier was not following its input is flagged, not silently dropped.
+    `_regulation_state_for`/`_make_row` are exercised directly against a
+    hand-populated `_collect_windows`, the same private-method-under-test
+    convention this file already uses for `_on_settle_elapsed` etc."""
+
+    @staticmethod
+    def _seed_windows(runner, amp, v_v, i_v, n=10):
+        ain_v = AMP_CHANNEL_MAP[amp]["voltage"]
+        ain_i = AMP_CHANNEL_MAP[amp]["current"]
+        runner._collect_windows = {
+            ain_v: [np.full(n, v_v)], ain_i: [np.full(n, i_v)],
+        }
+        runner._last_sample_period = 1e-4
+
+    def test_healthy_point_is_ok(self, qapp, funcgen_map):
+        runner = CalibrationRunner(funcgen_map, LoadCondition.ON_PLATES)
+        self._seed_windows(runner, "X+", v_v=2.0, i_v=0.5)   # 2 kV, 5 mA
+        state, _ = runner._regulation_state_for("X+", commanded_kv=2.0,
+                                                 freq_hz=0.0, ac=False)
+        assert state == "ok"
+
+    def test_amp_off_when_both_monitors_near_zero(self, qapp, funcgen_map):
+        runner = CalibrationRunner(funcgen_map, LoadCondition.ON_PLATES)
+        self._seed_windows(runner, "X+", v_v=0.01, i_v=0.001)
+        state, _ = runner._regulation_state_for("X+", commanded_kv=3.0,
+                                                 freq_hz=0.0, ac=False)
+        assert state == "amp_off"
+
+    def test_current_limited_when_voltage_low_current_pinned(self, qapp, funcgen_map):
+        runner = CalibrationRunner(funcgen_map, LoadCondition.ON_PLATES)
+        self._seed_windows(runner, "X+", v_v=1.0, i_v=1.95)   # 1 kV of 5 kV, 19.5 mA
+        state, reason = runner._regulation_state_for("X+", commanded_kv=5.0,
+                                                       freq_hz=0.0, ac=False)
+        assert state == "current_limited"
+        assert "invalid" in reason
+
+    def test_idle_when_no_data_collected_for_this_amp(self, qapp, funcgen_map):
+        runner = CalibrationRunner(funcgen_map, LoadCondition.ON_PLATES)
+        state, _ = runner._regulation_state_for("X+", commanded_kv=2.0,
+                                                 freq_hz=0.0, ac=False)
+        assert state == "idle"
+
+    def test_make_row_includes_regulation_columns(self, qapp, funcgen_map):
+        runner = CalibrationRunner(funcgen_map, LoadCondition.ON_PLATES)
+        self._seed_windows(runner, "X+", v_v=2.0, i_v=0.5)
+        row = runner._make_row(0, "up", "X+", 2.0, "X+", "voltage",
+                                0.0, "2026-01-01T00:00:00")
+        assert row["regulation_state"] == "ok"
+        assert "regulation_reason" in row
+
+
 class TestWriterIntegration:
     def test_rows_and_metadata_reach_a_real_writer(self, qapp, funcgen_map, tmp_path):
         writer = CalibrationWriter(output_dir=tmp_path)

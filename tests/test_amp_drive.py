@@ -64,6 +64,68 @@ def _drive_with_fakes(max_kv=AMP_MAX_KV):
 
 
 # ---------------------------------------------------------------------------
+# command_dc_ramped / command_ac_amplitude_ramped
+# ---------------------------------------------------------------------------
+
+class FakeRampEngine:
+    """Records retarget() calls; no Qt, no timers."""
+
+    def __init__(self):
+        self.calls: list[tuple] = []
+
+    def retarget(self, label, target_v, mode="offset"):
+        self.calls.append((label, target_v, mode))
+
+
+class TestRampedCommands:
+    def test_command_dc_ramped_requires_attached_engine(self):
+        drive, _, _ = _drive_with_fakes()
+        with pytest.raises(RuntimeError):
+            drive.command_dc_ramped("X+", 2.0)
+
+    def test_command_dc_ramped_converts_kv_to_generator_volts(self):
+        drive, _, _ = _drive_with_fakes()
+        ramp = FakeRampEngine()
+        drive.attach_ramp_engine(ramp)
+        drive.command_dc_ramped("X+", 2.5)
+        label, target_v, mode = ramp.calls[0]
+        assert label == "X+"
+        assert mode == "offset"
+        assert target_v == pytest.approx(2.5 * 1000.0 / _AMP_GAIN)
+
+    def test_command_dc_ramped_clamps_to_max_kv(self):
+        drive, _, _ = _drive_with_fakes(max_kv=5.0)
+        ramp = FakeRampEngine()
+        drive.attach_ramp_engine(ramp)
+        drive.command_dc_ramped("X+", 9.0)
+        _, target_v, _ = ramp.calls[0]
+        assert target_v == pytest.approx(5.0 * 1000.0 / _AMP_GAIN)
+
+    def test_command_ac_amplitude_ramped_requires_attached_engine(self):
+        drive, _, _ = _drive_with_fakes()
+        with pytest.raises(RuntimeError):
+            drive.command_ac_amplitude_ramped("X+", 2.0)
+
+    def test_command_ac_amplitude_ramped_converts_peak_kv_to_vpp(self):
+        drive, _, _ = _drive_with_fakes()
+        ramp = FakeRampEngine()
+        drive.attach_ramp_engine(ramp)
+        drive.command_ac_amplitude_ramped("X+", 1.5)
+        label, target_v, mode = ramp.calls[0]
+        assert label == "X+"
+        assert mode == "amplitude"
+        assert target_v == pytest.approx(1.5 * 2.0 * 1000.0 / _AMP_GAIN)
+
+    def test_command_ac_amplitude_ramped_clamps_negative_to_zero(self):
+        drive, _, _ = _drive_with_fakes()
+        ramp = FakeRampEngine()
+        drive.attach_ramp_engine(ramp)
+        drive.command_ac_amplitude_ramped("X+", -1.0)
+        _, target_v, _ = ramp.calls[0]
+        assert target_v == pytest.approx(0.0)
+
+
+# ---------------------------------------------------------------------------
 # command_dc
 # ---------------------------------------------------------------------------
 

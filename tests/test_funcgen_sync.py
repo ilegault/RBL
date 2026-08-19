@@ -34,10 +34,18 @@ def qapp():
 @pytest.fixture
 def tab_and_mgr(qapp):
     """A FuncGenTab wired to two mocked generators sharing one call recorder."""
+    import time
     from rbl.gui.funcgen_tab import FuncGenTab
     from rbl.state.beamline import Beamline
 
-    tab = FuncGenTab(Beamline())
+    beamline = Beamline()
+    # A healthy, fresh vacuum reading — without it every command would be
+    # blocked by the HV interlock's "no reading yet" stale guard (Section 3.3
+    # of docs/AMP_ENVELOPE_AND_HV_SAFETY_PLAN.md); this file tests apply
+    # ordering, not the interlock itself.
+    beamline._hv_pressure_torr = 1e-6
+    beamline._hv_pressure_at = time.monotonic()
+    tab = FuncGenTab(beamline)
 
     # One manager mock records the ordering of calls across BOTH units:
     # every call to mgr.A.* / mgr.B.* lands in mgr.mock_calls in order.

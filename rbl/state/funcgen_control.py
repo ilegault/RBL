@@ -24,8 +24,17 @@ command from a screen cannot take down the Qt event loop.
 import time
 
 from rbl.hardware.funcgen_safety import channel_peak_volts, PEAK_MAX_VOLTS
+from rbl.services.ramp_engine import RampEngine
 from rbl.state.setpoints import FuncGenSetpoints
 from rbl.state.snapshots import ChannelSnapshot, ChannelParams, FuncGenState
+
+# SCPI shape token get_state() reports back for each shape set_waveform()
+# sends — used to confirm a "ramped" set_channel() request isn't secretly
+# also asking for a shape change, which needs :APPLy: and cannot be ramped.
+_SHAPE_ABBREV = {
+    "Sine": "SIN", "Triangle": "RAMP", "Square": "SQU",
+    "Pulse": "PULS", "DC": "DC",
+}
 
 
 class FuncGenControlMixin:
@@ -52,6 +61,13 @@ class FuncGenControlMixin:
         # Last-read clock source per unit, refreshed by read_timebase() and
         # republished on every FuncGenState — see that method's docstring.
         self._timebase = {"A": "—", "B": "—"}
+
+        # The GUI's path to an amplitude/offset target (Section 5.4). A live
+        # dict, not a fresh one per call — RampEngine keeps a reference to it
+        # and picks up updates as generators (re)connect. Keyed by channel
+        # key ("A1", ...), the same key space set_channel() itself uses.
+        self._funcgen_ramp_map = {}
+        self.funcgen_ramp = RampEngine(self._funcgen_ramp_map)
 
     # ---- Readback -------------------------------------------------------------
 
@@ -93,13 +109,23 @@ class FuncGenControlMixin:
     def _gen_for(self, gen_letter: str):
         return self.dg_a if gen_letter == "A" else self.dg_b
 
-    def set_channel(self, key: str, params: ChannelParams) -> bool:
+    def set_channel(self, key: str, params: ChannelParams, ramped: bool = False) -> bool:
         """Push one channel's parameters to its generator.
 
         `key` is e.g. "A1" (generator letter + channel number). Returns True
         on success. The combined-peak interlock (|offset| + amp/2) is
         enforced unconditionally: a peak above PEAK_MAX_VOLTS is rejected
         here regardless of what any caller already checked.
+
+        `ramped=True` is the GUI's path to a target
+        (docs/AMP_ENVELOPE_AND_HV_SAFETY_PLAN.md Section 5.4): if the channel
+        is already running with the SAME shape/frequency/phase and only
+        `amp_vpp` OR `offset_v` differs, that one value is walked to its new
+        value through `self.funcgen_ramp` instead of being applied
+        immediately. `:SOURce{ch}:APPLy:...` resets the phase generator, so a
+        shape/frequency/phase change — or a request to change BOTH amplitude
+        and offset in the same call — cannot be ramped and falls back to the
+        normal immediate path below.
         """
         gen_letter, channel = key[0], int(key[1])
         gen = self._gen_for(gen_letter)
@@ -116,6 +142,18 @@ class FuncGenControlMixin:
             )
             return False
 
+        # Vacuum <-> HV interlock (hv_interlock_link.py). `peak` is numerically
+        # the plate kV at this rig's 1000x gain (see this module's docstring).
+        hv_status, hv_reason = self.hv_interlock_status_for(peak)
+        if hv_status == "block":
+            self.command_failed.emit("funcgen", f"{key}: blocked by HV interlock — {hv_reason}")
+            return False
+
+        if ramped:
+            handled = self._try_ramped_set_channel(key, gen, channel, params)
+            if handled:
+                return True
+
         try:
             warn = gen.set_waveform(channel, params.shape, params.freq_hz,
                                      params.amp_vpp, params.offset_v, params.phase_deg)
@@ -131,6 +169,45 @@ class FuncGenControlMixin:
         except Exception as e:
             self.command_failed.emit("funcgen", f"{key}: {e}")
             return False
+
+    def _try_ramped_set_channel(self, key: str, gen, channel: int,
+                                 params: ChannelParams) -> bool:
+        """Attempt the ramped path for set_channel(); returns True if it
+        handled the request (ramped or a no-op), False to fall back to the
+        normal immediate apply."""
+        try:
+            live = gen.get_state(channel)
+        except Exception:
+            return False
+        if "error" in live or not live.get("output"):
+            return False
+        if live.get("shape") != _SHAPE_ABBREV.get(params.shape):
+            return False
+        if abs(live.get("freq", -1.0) - params.freq_hz) > 1e-6:
+            return False
+        if abs(live.get("phase", -1.0) - params.phase_deg) > 1e-6:
+            return False
+
+        offset_changed = abs(live.get("offset", 0.0) - params.offset_v) > 1e-9
+        amp_changed = abs(live.get("amp", 0.0) - params.amp_vpp) > 1e-9
+        if offset_changed and amp_changed:
+            # Two independent knobs moving at once — simpler and safer to
+            # reconfigure directly than to run two ramps on one channel key.
+            return False
+
+        try:
+            gen.set_output_load(channel, params.load)
+            gen.set_start_phase(channel, params.start_phase_deg)
+        except Exception as e:
+            self.command_failed.emit("funcgen", f"{key}: {e}")
+            return True   # handled (as a failure) — do not also fall through
+
+        self._funcgen_ramp_map[key] = (gen, channel)
+        if offset_changed:
+            self.funcgen_ramp.retarget(key, params.offset_v, mode="offset")
+        elif amp_changed:
+            self.funcgen_ramp.retarget(key, params.amp_vpp, mode="amplitude")
+        return True
 
     def apply_all_channels(self, params_by_key: dict) -> bool:
         """Configure + enable every given channel together.
@@ -160,15 +237,26 @@ class FuncGenControlMixin:
             return False
 
         blocked = []
+        hv_blocked = []
         for key, _, _, _, params in active:
             peak = channel_peak_volts(params.shape, params.amp_vpp, params.offset_v)
             if peak > PEAK_MAX_VOLTS + 1e-9:
                 blocked.append(key)
+                continue
+            hv_status, _ = self.hv_interlock_status_for(peak)
+            if hv_status == "block":
+                hv_blocked.append(key)
         if blocked:
             self.command_failed.emit(
                 "funcgen",
                 "Apply All blocked — over the "
                 f"{PEAK_MAX_VOLTS:.0f} V limit: " + ", ".join(blocked),
+            )
+            return False
+        if hv_blocked:
+            self.command_failed.emit(
+                "funcgen",
+                "Apply All blocked by HV interlock: " + ", ".join(hv_blocked),
             )
             return False
 
