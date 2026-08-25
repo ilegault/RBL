@@ -51,6 +51,7 @@ from rbl.hardware.camera_source import CameraSource
 from rbl.services.csv_log_writer import CsvLogWriter, flatten
 from rbl.services.video_recorder import VideoRecorder
 from rbl.services.video_transcoder import TranscodeQueue, find_ffmpeg, ffmpeg_version
+from rbl.services.snapshot_json import dump_json
 
 
 def _logs_dir() -> str:
@@ -306,18 +307,19 @@ class SessionRecorder(QObject):
         self._photo_index += 1
 
         # Write JSON sidecar alongside the PNG.
+        snap = self._snapshot_fn()
         sidecar = {
             "timestamp": datetime.now().isoformat(),
             "media_file": name,
             "type": "photo",
-            "beamline": self._snapshot_fn(),
+            "beamline": snap,
         }
+        # dump_json, not json.dump: the old writer emitted bare NaN (not JSON —
+        # nothing outside Python can read it) and turned any numpy array it met
+        # into its repr string via default=str.  See snapshot_json.py.
         sidecar_path = os.path.splitext(path)[0] + ".json"
-        try:
-            with open(sidecar_path, "w", encoding="utf-8") as fh:
-                json.dump(sidecar, fh, indent=2, default=str)
-        except OSError:
-            pass
+        if not dump_json(sidecar_path, sidecar):
+            self._write_event("sidecar_failed", os.path.basename(sidecar_path))
 
         if self._recording:
             self._photo_list.append(rel)
@@ -601,9 +603,9 @@ class SessionRecorder(QObject):
             },
             "notes": self._notes_count,
         }
+        # Strict + atomic: a manifest is rewritten on every segment close, so a
+        # crash mid-write used to be able to leave a truncated session.json as
+        # the only record of the run.  dump_json writes to a temp name and
+        # renames, and refuses to emit NaN.
         path = os.path.join(self._folder, "session.json")
-        try:
-            with open(path, "w", encoding="utf-8") as fh:
-                json.dump(manifest, fh, indent=2)
-        except OSError:
-            pass
+        dump_json(path, manifest)

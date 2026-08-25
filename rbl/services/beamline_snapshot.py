@@ -1,105 +1,144 @@
 """
 beamline_snapshot.py
-Decouples the session recorder from the GUI layer.
+Concise beamline state for the session recorder.
 
-The old logger_widget.py relied on OverviewTab._camera_metadata() to get its
-data — a service depending on a GUI tab.  That made the logger unusable
-without an Overview tab instance and impossible to test in isolation.
+Subscribes to Beamline's signals and builds a compact, digestible summary of
+just the numbers that matter: slit aperture, beam current, function-generator
+commands, amplifier readings (commanded vs measured), pressure, and scope FWHM.
 
-This class subscribes to Beamline's signals directly, caches the latest state
-of each subsystem, and exposes snapshot() -> dict.  No QWidget needed; no tab
-needed.  The session recorder calls snapshot() on its CSV timer; the result
-is the same dict that _camera_metadata() used to produce, but vacuum is now
-included (the old logger silently omitted it) and the class lives in services/
-where it belongs.
+No raw waveforms, no switch states, no numpy arrays.  The snapshot is what a
+human wants to read in a JSON sidecar or CSV — not an internal dataclass dump.
 
-Threading: snapshot() is called from the GUI thread (the CSV timer runs
-there).  All signal callbacks also run on the GUI thread because Beamline
-emits from there.  No locking needed.
+The amp summary is computed AT STORE TIME because the "pk@f" current is derived
+from window_ma via a single-bin DFT, and that buffer is a reference to the
+stream worker's array.
+
+Threading: all callbacks and snapshot() run on the GUI thread.  No locking.
 """
 import dataclasses
 
 from PySide6.QtCore import QObject
 
 from rbl.state.beamline import Beamline
-
-
-def _json_safe(obj):
-    """Recursively make a dataclasses.asdict() result JSON-serializable.
-
-    Handles three cases that asdict() leaves as raw Python objects:
-
-    * numpy arrays  — window_kv / window_ma in AmpChannelSnapshot are stripped
-      entirely (they are large raw buffers meant for the live scope, not for
-      sidecars); any other ndarray falls back to .tolist().
-    * Plain-class instances (e.g. BeamEstimate) — converted to a dict of their
-      instance attributes so the beam-position estimate survives in the JSON.
-    * IEEE special floats — NaN/Inf survive json.dump() only on some platforms;
-      they are left as-is here and callers should use default=str if needed.
-    """
-    if isinstance(obj, dict):
-        return {k: _json_safe(v) for k, v in obj.items()
-                if k not in ("window_kv", "window_ma")}
-    if isinstance(obj, (list, tuple)):
-        return [_json_safe(v) for v in obj]
-    # numpy arrays that slipped through (shouldn't happen after the key filter
-    # above, but guard anyway so we never raise on serialisation)
-    if type(obj).__name__ == "ndarray":
-        return obj.tolist()
-    # Plain (non-dataclass) class instance — e.g. BeamEstimate
-    if (hasattr(obj, "__dict__")
-            and not isinstance(obj, (bool, int, float, str, bytes, type))):
-        return {k: _json_safe(v) for k, v in vars(obj).items()}
-    return obj
+from rbl.services.snapshot_json import (
+    amp_summary, slit_summary, funcgen_summary,
+    current_summary, pressure_summary, scope_summary,
+)
 
 
 class BeamlineSnapshotProvider(QObject):
-    """Cache the latest snapshot of every beamline subsystem.
+    """Cache the latest beamline state as concise, digestible summaries.
 
     Connects to all six Beamline signals at construction time; thereafter
-    snapshot() returns a consistent dict without touching any hardware.
+    snapshot() returns a compact, JSON-safe dict of just the numbers that
+    matter — no raw waveforms, no switch states, no internal metadata.
     """
 
     def __init__(self, beamline: Beamline, parent=None):
         super().__init__(parent)
-        self._latest: dict = {
-            "motors":   {},
-            "logamps":  {},
-            "amps":     {},
-            "funcgens": {},
-            "scope":    {},
-            "vacuum":   {},
-        }
 
-        beamline.motors_changed.connect(
-            lambda s: self._store("motors", s))
-        beamline.logamps_changed.connect(
-            lambda s: self._store("logamps", s))
-        beamline.amps_changed.connect(
-            lambda s: self._store("amps", s))
-        beamline.funcgens_changed.connect(
-            lambda s: self._store("funcgens", s))
-        beamline.scope_changed.connect(
-            lambda s: self._store("scope", s))
-        beamline.vacuum_changed.connect(
-            lambda s: self._store("vacuum", s))
+        # Live dataclass refs — kept for amp_summary which needs window_ma.
+        self._live_amps = None
+        self._live_funcgens = None
 
-    # ---- internal ----------------------------------------------------------
+        # Derived concise blocks, refreshed on each signal.
+        self._slits: dict = {}
+        self._currents: dict = {}
+        self._funcgen: dict = {}
+        self._amps: dict = {}
+        self._pressure: dict = {}
+        self._scope: dict = {}
 
-    def _store(self, key: str, obj) -> None:
-        if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
-            self._latest[key] = _json_safe(dataclasses.asdict(obj))
-        else:
-            self._latest[key] = {}
+        beamline.motors_changed.connect(self._on_motors)
+        beamline.logamps_changed.connect(self._on_logamps)
+        beamline.amps_changed.connect(self._on_amps)
+        beamline.funcgens_changed.connect(self._on_funcgens)
+        beamline.scope_changed.connect(self._on_scope)
+        beamline.vacuum_changed.connect(self._on_vacuum)
+
+    # ---- signal handlers ---------------------------------------------------
+
+    @staticmethod
+    def _is_snap(obj) -> bool:
+        return dataclasses.is_dataclass(obj) and not isinstance(obj, type)
+
+    def _on_motors(self, obj) -> None:
+        if not self._is_snap(obj):
+            return
+        try:
+            self._slits = slit_summary(obj)
+        except Exception:
+            pass
+
+    def _on_logamps(self, obj) -> None:
+        if not self._is_snap(obj):
+            return
+        try:
+            self._currents = current_summary(obj)
+        except Exception:
+            pass
+
+    def _on_amps(self, obj) -> None:
+        if not self._is_snap(obj):
+            return
+        self._live_amps = obj
+        self._refresh_amp_summary()
+
+    def _on_funcgens(self, obj) -> None:
+        if not self._is_snap(obj):
+            return
+        self._live_funcgens = obj
+        try:
+            self._funcgen = funcgen_summary(obj)
+        except Exception:
+            pass
+        self._refresh_amp_summary()
+
+    def _on_scope(self, obj) -> None:
+        if not self._is_snap(obj):
+            return
+        try:
+            self._scope = scope_summary(obj)
+        except Exception:
+            pass
+
+    def _on_vacuum(self, obj) -> None:
+        if not self._is_snap(obj):
+            return
+        try:
+            self._pressure = pressure_summary(obj)
+        except Exception:
+            pass
+
+    def _refresh_amp_summary(self) -> None:
+        if self._live_amps is None:
+            return
+        try:
+            self._amps = amp_summary(self._live_amps, self._live_funcgens)
+        except Exception:
+            pass
 
     # ---- public API --------------------------------------------------------
 
     def snapshot(self) -> dict:
-        """Return a copy of the latest beamline state as a plain dict.
+        """Return a concise, JSON-safe beamline state dict.
 
-        Each top-level key ("motors", "logamps", "amps", "funcgens", "scope",
-        "vacuum") holds {} until that subsystem has reported at least once.
-        The returned dict is a shallow copy of the top level; callers must not
-        mutate the nested dicts.
+        Six top-level keys, each a compact summary:
+
+            slits         aperture width/height in mm, jaw positions, zeroed
+            beam_current  per-jaw current in Amps
+            funcgen       per-axis commanded shape/freq/amplitude/output
+            amplifiers    per-axis commanded-vs-measured kV, current, status
+            pressure      gauge readings keyed by label
+            scope         connected, FWHM, peak count
+
+        No raw waveforms, no switch states, no bulk buffers.
         """
-        return dict(self._latest)
+        return {
+            "slits":        dict(self._slits),
+            "beam_current": dict(self._currents),
+            "funcgen":      dict(self._funcgen),
+            "amplifiers":   dict(self._amps),
+            "pressure":     dict(self._pressure),
+            "scope":        dict(self._scope),
+        }

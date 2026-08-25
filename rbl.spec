@@ -8,7 +8,6 @@
 # Output: dist\RBL\RBL.exe  (one-folder distribution)
 # Distribute the entire dist\RBL\ folder to the target machine.
 
-import glob
 import os
 from PyInstaller.utils.hooks import collect_data_files
 
@@ -26,15 +25,38 @@ RBL_GUI  = os.path.join(RBL_PKG, "gui")       # C:\...\RBL\rbl\gui
 # for PySide6, scipy, matplotlib automatically via the dependency graph.
 # We just need to ensure data files (fonts, styles, .pyi stubs) are copied.
 # ---------------------------------------------------------------------------
-def _vendor_datas():
-    """Bundle any LabJack installer dropped in vendor\\ so the app can
-    offer a one-click driver install.  Empty vendor\\ => nothing added."""
-    return [(exe, 'vendor') for exe in glob.glob(os.path.join(ROOT, 'vendor', '*.exe'))]
-
+# ---------------------------------------------------------------------------
+# vendor\ installers — SHIPPED BESIDE THE APP, NOT INSIDE IT.
+#
+# These used to be added as datas, which buries them in dist\RBL\_internal\
+# vendor\ — i.e. INSIDE the PyInstaller archive.  That is the same shape that
+# got this app quarantined once already with ffmpeg (see the note below), and
+# it is worse here, because vendor\ now holds:
+#
+#   LabJackBasic_*.exe   18 MB third-party driver installer
+#   ni-visa_*_online.exe  9 MB ONLINE installer - a stub that downloads and
+#                         runs more code from the internet at first launch
+#
+# What a scanner sees statically is then: an unsigned executable that carries
+# other executables inside it, one of which is a network downloader, plus code
+# (driver.py: ShellExecuteW "runas") that launches them ELEVATED.  Read
+# without context that is the textbook description of a dropper, and no amount
+# of it being true and well-intentioned changes what the heuristic matches.
+#
+# Nothing is lost by moving them out.  driver._candidate_dirs() looks in
+# exe_dir\vendor\ BEFORE sys._MEIPASS\vendor\, so installers sitting next to
+# RBL.exe are found first and one-click driver install behaves identically.
+# build.bat copies vendor\ into dist\RBL\ after PyInstaller finishes, and the
+# USB deploy picks it up with the rest of the folder.
+#
+# This is a real reduction in what the app IS - it no longer contains other
+# programs - not a way of hiding what it does.  If IT still objects, the right
+# answer is to drop vendor\ entirely and have them install the LabJack and
+# NI-VISA drivers once, system-wide; the app already degrades gracefully.
+# ---------------------------------------------------------------------------
 all_datas = (
     collect_data_files("matplotlib")   # fonts, style sheets, matplotlibrc
     + collect_data_files("scipy")      # .pyi stubs, cython data
-    + _vendor_datas()                  # bundled LabJack installer (if present)
 )
 
 # ---------------------------------------------------------------------------
@@ -223,6 +245,28 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name="RBL",
+    # ---- VERSION RESOURCE: OFF BY DEFAULT, AND THAT IS DELIBERATE ----------
+    #
+    # This is the ONLY change in this session that alters the structure of the
+    # .exe itself. Everything else was Python source, which adds no imports,
+    # no DLLs and no new strings, and therefore cannot move an ML score.
+    #
+    # It was added on the reasoning that "unsigned AND anonymous" scores worse
+    # than "unsigned but clearly identified". That reasoning is not free: an
+    # unsigned binary that CLAIMS an organisational identity is also the exact
+    # shape of metadata-spoofing malware, and which way a model reads it is an
+    # empirical question, not a deducible one. It was asserted, not tested.
+    #
+    # So it defaults OFF -- matching the build that was passing -- and is a
+    # one-variable A/B you can run yourself:
+    #
+    #     pyinstaller rbl.spec --clean                      -> no resource
+    #     set RBL_VERSION_RESOURCE=1 && pyinstaller rbl.spec --clean  -> with
+    #
+    # Scan both. Whichever passes, keep, and write the answer down here.
+    # ------------------------------------------------------------------------
+    version=("version_info.txt"
+             if os.environ.get("RBL_VERSION_RESOURCE") == "1" else None),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

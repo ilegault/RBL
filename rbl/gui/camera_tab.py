@@ -221,6 +221,11 @@ class CameraTab(QWidget):
         self._btn_oneto1.toggled.connect(self._on_oneto1_toggled)
         s1.addWidget(self._btn_oneto1)
 
+        self._chk_video = QCheckBox("Record video")
+        self._chk_video.setChecked(self._recorder._video_enabled)
+        self._chk_video.toggled.connect(self._on_video_enabled_changed)
+        s1.addWidget(self._chk_video)
+
         s1.addStretch(1)
         lay.addLayout(s1)
 
@@ -291,6 +296,8 @@ class CameraTab(QWidget):
         self._lbl_res.setText(f"{w}x{h} @ {fps:.0f} fps")
         self._btn_open.setText("Close")
         self._combo_cam.setEnabled(False)
+        if not self._recorder.is_recording():
+            self._recorder.set_video_enabled(True)
         self._render()
 
     def _on_camera_closed_ui(self):
@@ -335,6 +342,11 @@ class CameraTab(QWidget):
         if self._blocking:
             return
         self._recorder.set_quality(label)
+
+    def _on_video_enabled_changed(self, on: bool):
+        if self._blocking:
+            return
+        self._recorder.set_video_enabled(on)
 
     def _on_crosshair_toggled(self, on: bool):
         self._feed.set_crosshair(on)
@@ -406,10 +418,14 @@ class CameraTab(QWidget):
         self._blocking = True
         self._spin_rec_fps.setValue(self._recorder._record_fps)
         self._combo_quality.setCurrentText(self._recorder._quality_label)
+        self._chk_video.setChecked(self._recorder._video_enabled)
         self._blocking = False
 
-        for w in (self._spin_rec_fps, self._combo_quality):
+        for w in (self._spin_rec_fps, self._combo_quality, self._chk_video):
             w.setEnabled(not rec)
+
+        if not self._camera.is_open() or not _CV2_OK:
+            self._chk_video.setEnabled(False)
 
         if rec:
             elapsed = st["elapsed_s"]

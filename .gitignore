@@ -250,7 +250,7 @@ bash.exe.stackdump
 build.bat
 
 /data/
-/docs/
+# /docs/
 /processing/
 
 /logs/

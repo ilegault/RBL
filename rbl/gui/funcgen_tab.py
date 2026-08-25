@@ -496,6 +496,9 @@ class _GenProxy:
     def values(self):
         return [self._beamline.dg_a, self._beamline.dg_b]
 
+    def items(self):
+        return [("A", self._beamline.dg_a), ("B", self._beamline.dg_b)]
+
 
 class FuncGenTab(QWidget):
     """The 'Function Generators' outer tab."""
@@ -510,6 +513,7 @@ class FuncGenTab(QWidget):
         # accesses them through a dict-like proxy, not a dict of its own.
         self.beamline = beamline
         self.beamline.command_failed.connect(self._on_command_failed)
+        self.beamline.timebase_changed.connect(self._on_timebase_changed)
         self._gen = _GenProxy(beamline)
         self._discovered: list[dict] = []   # last discover() result
         self._config = _load_config()
@@ -766,6 +770,28 @@ class FuncGenTab(QWidget):
         else:
             self._do_connect()
 
+    def connect_if_needed(self) -> tuple:
+        """Discover if necessary, then connect whatever is assigned.
+
+        (status, detail), for the Overview tab's Connect All.  Discovery
+        runs first when nothing has been discovered this session, because
+        the serial -> resource map _do_connect() needs is built by it and is
+        empty on a fresh launch - without this, Connect All on a cold start
+        would report "run Discover first" and stop.
+        """
+        if any(v is not None for v in self._gen.values()):
+            up = [k for k, v in self._gen.items() if v is not None]
+            return "already", f"Gen {', '.join(sorted(up))} already connected"
+        if not self._discovered:
+            self._do_discover()
+        if not self._discovered:
+            return "failed", "no DG1022Z found"
+        self._do_connect()
+        up = [k for k, v in self._gen.items() if v is not None]
+        if up:
+            return "connected", f"Gen {', '.join(sorted(up))}"
+        return "failed", "generators discovered but none assigned/connected"
+
     def _do_connect(self):
         self._poll_timer.stop()
         errors = []
@@ -887,15 +913,10 @@ class FuncGenTab(QWidget):
                 QMessageBox.warning(self, "Reference clock", message)
         self._refresh_clock_status()
 
-    def _refresh_clock_status(self):
-        """Query each connected unit's active timebase and update the status labels.
-
-        Also refreshes the combined lbl_timebase indicator.  Never displays a
-        locked state when the readback returned INT.
-        """
-        clk = self.beamline.read_timebase()
+    def _on_timebase_changed(self, clocks: dict):
+        """React to a timebase change emitted by Beamline (from either tab)."""
         for gen_letter, lbl in (("A", self.lbl_clk_a), ("B", self.lbl_clk_b)):
-            src = clk.get(gen_letter, "—")
+            src = clocks.get(gen_letter, "—")
             lbl.setText(f"● Gen {gen_letter}: timebase {src}")
             if src == "EXT":
                 lbl.setStyleSheet("color: #1a7a1a; font-size: 10px;")
@@ -903,18 +924,22 @@ class FuncGenTab(QWidget):
                 lbl.setStyleSheet("color: #888; font-size: 10px;")
             else:
                 lbl.setStyleSheet("color: #555; font-size: 10px;")
-        # Combined indicator — green only when A=INT and B=EXT (locked config).
-        clk_a = clk.get("A", "—")
-        clk_b = clk.get("B", "—")
+        clk_a = clocks.get("A", "—")
+        clk_b = clocks.get("B", "—")
+        locked = clk_a == "INT" and clk_b == "EXT"
         self.lbl_timebase.setText(f"Timebase:  A: {clk_a}   B: {clk_b}")
-        if clk_a == "INT" and clk_b == "EXT":
-            self.lbl_timebase.setStyleSheet(
-                "color: #1a7a1a; font-weight: bold; font-size: 10px; padding: 2px;"
-            )
-        else:
-            self.lbl_timebase.setStyleSheet(
-                "color: #333; font-weight: bold; font-size: 10px; padding: 2px;"
-            )
+        self.lbl_timebase.setStyleSheet(
+            "color: #1a7a1a; font-weight: bold; font-size: 10px; padding: 2px;"
+            if locked else
+            "color: #333; font-weight: bold; font-size: 10px; padding: 2px;"
+        )
+        self.chk_ext_ref.blockSignals(True)
+        self.chk_ext_ref.setChecked(locked)
+        self.chk_ext_ref.blockSignals(False)
+
+    def _refresh_clock_status(self):
+        """Query each connected unit's active timebase and update the UI."""
+        self._on_timebase_changed(self.beamline.read_timebase())
 
     # ---- Shared setpoints ----------------------------------------------------
 

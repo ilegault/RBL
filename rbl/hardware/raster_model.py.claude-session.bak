@@ -95,7 +95,7 @@ def displacement_mm(differential_kv: float, plate_length_cm: float,
 def required_differential_kv(target_half_width_mm: float, fwhm_mm: float,
                               plate_length_cm: float, plate_gap_cm: float,
                               charge_state: int, beam_energy_ev: float,
-                              drift_cm: float, turnaround_k: float = 1.5) -> float:
+                              drift_cm: float, turnaround_k: float = 1.0) -> float:
     """Plate-to-plate kV needed to put the raster turnaround off the sample.
 
     Uniform dwell requires the direction change to happen off the sample.
@@ -105,9 +105,16 @@ def required_differential_kv(target_half_width_mm: float, fwhm_mm: float,
 
         required half-amplitude = target_half_width_mm + turnaround_k * fwhm_mm
 
-    `turnaround_k` defaults to 1.5 (a beam-widths-and-a-half margin) but is a
-    parameter, not a hard-coded fact — `raster_model.dwell_uniformity` is what
-    justifies a particular value to a reviewer instead of asserting one.
+    `turnaround_k` defaults to 1.0 — the reversal happens with the beam CENTRE
+    one full beam width past the sample edge, which is the condition this
+    beamline actually wants: far enough out that the turnaround's dwell pileup
+    lands off the sample, and no further, because every millimetre beyond that
+    is dose sprayed past the target for nothing.
+
+    It stays a parameter rather than a hard-coded fact, and
+    `raster_model.dwell_uniformity` is what justifies a particular value to a
+    reviewer instead of asserting one. Raise it for a beam with heavy tails;
+    below 1.0 the turnaround starts depositing on the sample edge.
     Inverts `displacement_mm`, which is linear in `differential_kv`, so a
     single-point unit-voltage probe gives the required scale factor exactly
     (no root-finding needed).
@@ -123,7 +130,7 @@ def required_differential_kv(target_half_width_mm: float, fwhm_mm: float,
 def required_drive(target_width_mm: float, fwhm_mm: float,
                     plate_length_cm: float, plate_gap_cm: float,
                     charge_state: int, beam_energy_ev: float,
-                    drift_cm: float, turnaround_k: float = 1.5,
+                    drift_cm: float, turnaround_k: float = 1.0,
                     center_offset_mm: float = 0.0) -> dict:
     """Everything one axis needs, from the FULL sample width and where its
     centre sits relative to the beam axis.
@@ -262,6 +269,62 @@ def dwell_uniformity(fwhm_mm: float, scan_half_width_mm: float,
         "profile_dose": profile_dose,
         "edge_rolloff_mm": edge_rolloff_mm,
     }
+
+
+def sweep_at_plane(amplitude_kv: float, offset_kv: float,
+                   plate_length_cm: float, plate_gap_cm: float,
+                   charge_state: int, beam_energy_ev: float,
+                   drift_mm: float, aperture_half_mm: float = None) -> dict:
+    """How wide the raster is, and where it sits, at ONE plane down the line.
+
+    WHY THIS IS NOT JUST `displacement_mm` WITH A SMALLER NUMBER
+    -----------------------------------------------------------
+    It is exactly that -- and that is the point. Deflection is an ANGLE fixed
+    at the plates; the millimetres are that angle times however far the beam
+    has flown since. So a raster sized to +/-9.5 mm at the sample is not
+    +/-9.5 mm at the slits 1 m short of it, it is that times the drift ratio.
+    Nothing here is new physics. What is new is asking the question at a
+    plane other than the sample, which is the question the slits raise.
+
+    `drift_mm` is measured from THAT AXIS'S OWN plate exit -- see
+    steerer_geometry.drift_mm_for. The X and Y pairs are in series, so the two
+    axes have different drifts to the same plane and must be called
+    separately.
+
+    `aperture_half_mm`, if given, is the half-opening of whatever is at that
+    plane. The verdict it produces is deliberately NOT phrased as pass/fail,
+    because at a slit both answers are things an operator wants on purpose:
+    an aperture wider than the sweep passes the whole raster through
+    untouched, and one narrower than the sweep intercepts it -- which is how
+    the slits are used as a profile monitor in the first place. Naming which
+    of those is happening is the useful output; calling either one an error
+    is not.
+
+    Returns:
+        half_span_mm    swept half-width at this plane
+        center_mm       where the scan centre sits (the DC term, also scaled)
+        min_mm/max_mm   the swept interval
+        clearance_mm    aperture_half - |extreme excursion|  (nan if no aperture)
+        intercepts      True when the aperture cuts into the sweep
+    """
+    nan = float("nan")
+    drift_cm = drift_mm / 10.0
+    half = displacement_mm(amplitude_kv, plate_length_cm, plate_gap_cm,
+                           charge_state, beam_energy_ev, drift_cm)
+    ctr = displacement_mm(offset_kv, plate_length_cm, plate_gap_cm,
+                          charge_state, beam_energy_ev, drift_cm)
+    if math.isnan(half) or math.isnan(ctr):
+        return {"half_span_mm": nan, "center_mm": nan, "min_mm": nan,
+                "max_mm": nan, "clearance_mm": nan, "intercepts": False}
+
+    half = abs(half)
+    lo, hi = ctr - half, ctr + half
+    clearance_mm, intercepts = nan, False
+    if aperture_half_mm is not None and math.isfinite(aperture_half_mm):
+        clearance_mm = aperture_half_mm - max(abs(lo), abs(hi))
+        intercepts = clearance_mm < 0.0
+    return {"half_span_mm": half, "center_mm": ctr, "min_mm": lo, "max_mm": hi,
+            "clearance_mm": clearance_mm, "intercepts": intercepts}
 
 
 # ---------------------------------------------------------------------------

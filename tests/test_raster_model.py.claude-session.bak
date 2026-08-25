@@ -7,7 +7,7 @@ import pytest
 
 from rbl.hardware.raster_model import (
     deflection_mrad, displacement_mm, required_differential_kv,
-    required_drive, dwell_uniformity,
+    required_drive, dwell_uniformity, sweep_at_plane,
 )
 
 # The installed steerer: NEC 2EA021441 (ES10 plates).
@@ -218,3 +218,128 @@ class TestRequiredDrive:
                            drift_cm=DRIFT_CM)
         assert math.isnan(d["amplitude_kv"])
         assert d["sample_half_mm"] == pytest.approx(8.0)
+
+
+class TestSweepAtAPlane:
+    """The raster is an ANGLE fixed at the plates; the millimetres are that
+    angle times however far the beam has flown.  So the same drive is a
+    different width at every plane, and asking at the slits is a different
+    question from asking at the sample."""
+
+    L_CM, D_CM = 12.5, 3.8
+    Q, E_EV = 1, 3.0e6
+
+    def _sweep(self, drift_mm, amplitude_kv=2.0, offset_kv=0.0, aperture=None):
+        return sweep_at_plane(amplitude_kv, offset_kv, self.L_CM, self.D_CM,
+                                 self.Q, self.E_EV, drift_mm,
+                                 aperture_half_mm=aperture)
+
+    def test_half_span_is_linear_in_drift(self):
+        near = self._sweep(1000.0)["half_span_mm"]
+        far = self._sweep(2000.0)["half_span_mm"]
+        assert far == pytest.approx(2.0 * near)
+
+    def test_a_nearer_plane_sees_a_narrower_raster(self):
+        """The whole answer to 'why don't the slits cover the raster'."""
+        slits = self._sweep(1500.0)["half_span_mm"]
+        sample = self._sweep(2500.0)["half_span_mm"]
+        assert slits < sample
+        assert slits / sample == pytest.approx(1500.0 / 2500.0)
+
+    def test_it_agrees_with_displacement_mm_at_the_same_drift(self):
+        """No new physics here -- it is displacement_mm asked at another
+        plane, and that must stay literally true."""
+        got = self._sweep(1830.0)["half_span_mm"]
+        expect = displacement_mm(2.0, self.L_CM, self.D_CM, self.Q,
+                                    self.E_EV, 183.0)
+        assert got == pytest.approx(expect)
+
+    def test_the_dc_offset_scales_with_drift_too(self):
+        """A centre offset is a deflection like any other, so the scan centre
+        moves with distance as well -- it is not a fixed millimetre shift."""
+        near = self._sweep(1000.0, offset_kv=0.5)["center_mm"]
+        far = self._sweep(2000.0, offset_kv=0.5)["center_mm"]
+        assert far == pytest.approx(2.0 * near)
+        assert near > 0
+
+    def test_the_interval_is_the_centre_plus_and_minus_the_half_span(self):
+        r = self._sweep(2000.0, offset_kv=0.3)
+        assert r["min_mm"] == pytest.approx(r["center_mm"] - r["half_span_mm"])
+        assert r["max_mm"] == pytest.approx(r["center_mm"] + r["half_span_mm"])
+
+    def test_no_aperture_means_no_verdict_rather_than_a_pass(self):
+        r = self._sweep(2000.0)
+        assert math.isnan(r["clearance_mm"])
+        assert r["intercepts"] is False
+
+    def test_a_wide_aperture_clears_and_a_narrow_one_intercepts(self):
+        half = self._sweep(2000.0)["half_span_mm"]
+        wide = self._sweep(2000.0, aperture=half + 1.0)
+        assert wide["clearance_mm"] == pytest.approx(1.0)
+        assert wide["intercepts"] is False
+        narrow = self._sweep(2000.0, aperture=half - 1.0)
+        assert narrow["clearance_mm"] == pytest.approx(-1.0)
+        assert narrow["intercepts"] is True
+
+    def test_clearance_is_measured_against_the_worse_side_when_offset(self):
+        """With the sweep pushed off centre, the side that reaches furthest is
+        the one that has to clear -- averaging the two would clear an aperture
+        the beam is actually painting."""
+        r = self._sweep(2000.0, offset_kv=0.5, aperture=1000.0)
+        assert r["clearance_mm"] == pytest.approx(
+            1000.0 - max(abs(r["min_mm"]), abs(r["max_mm"])))
+
+    def test_degenerate_inputs_do_not_raise(self):
+        bad = sweep_at_plane(2.0, 0.0, self.L_CM, self.D_CM, self.Q,
+                                0.0, 2000.0)
+        assert math.isnan(bad["half_span_mm"])
+        assert bad["intercepts"] is False
+
+
+class TestTurnaroundDefaultsToOneFullBeamWidth:
+    """The reversal happens with the beam CENTRE one full beam width past the
+    sample edge -- far enough that the turnaround's dwell pileup lands off the
+    sample, and no further, because past that the sweep is dose sprayed beyond
+    the target for nothing."""
+
+    def test_required_drive_default_is_one_fwhm(self):
+        d = required_drive(target_width_mm=16.0, fwhm_mm=1.0,
+                           plate_length_cm=L_CM, plate_gap_cm=D_CM,
+                           charge_state=Q, beam_energy_ev=E_EV,
+                           drift_cm=DRIFT_CM)
+        assert d["sample_half_mm"] == pytest.approx(8.0)
+        assert d["scan_half_span_mm"] == pytest.approx(8.0 + 1.0)
+
+    def test_required_differential_kv_default_is_one_fwhm(self):
+        kv = required_differential_kv(target_half_width_mm=5.0, fwhm_mm=2.0,
+                                      plate_length_cm=L_CM, plate_gap_cm=D_CM,
+                                      charge_state=Q, beam_energy_ev=E_EV,
+                                      drift_cm=DRIFT_CM)
+        x = displacement_mm(kv, L_CM, D_CM, Q, E_EV, DRIFT_CM)
+        assert x == pytest.approx(5.0 + 1.0 * 2.0)
+
+    def test_the_margin_is_exactly_one_beam_width_whatever_the_beam(self):
+        for fwhm in (0.25, 1.0, 3.7):
+            d = required_drive(target_width_mm=16.0, fwhm_mm=fwhm,
+                               plate_length_cm=L_CM, plate_gap_cm=D_CM,
+                               charge_state=Q, beam_energy_ev=E_EV,
+                               drift_cm=DRIFT_CM)
+            margin = d["scan_half_span_mm"] - d["sample_half_mm"]
+            assert margin == pytest.approx(fwhm)
+
+    def test_the_margin_shrinks_with_drift_like_everything_else(self):
+        """The one-beam-width gap is an ANGLE difference, so upstream of the
+        sample it is narrower by the drift ratio -- at the slits it is a
+        fraction of a millimetre, not a millimetre. Worth pinning, because it
+        is the reason a slit set 'at the turnaround' is a tighter setting than
+        it sounds."""
+        d = required_drive(target_width_mm=16.0, fwhm_mm=1.0,
+                           plate_length_cm=L_CM, plate_gap_cm=D_CM,
+                           charge_state=Q, beam_energy_ev=E_EV,
+                           drift_cm=DRIFT_CM)
+        kv = d["amplitude_kv"]
+        near = sweep_at_plane(kv, 0.0, L_CM, D_CM, Q, E_EV, 600.0)["half_span_mm"]
+        far = sweep_at_plane(kv, 0.0, L_CM, D_CM, Q, E_EV, 1000.0)["half_span_mm"]
+        frac = d["sample_half_mm"] / d["scan_half_span_mm"]
+        assert (near - near * frac) == pytest.approx(
+            (far - far * frac) * 600.0 / 1000.0)

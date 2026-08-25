@@ -32,12 +32,28 @@ class MotorState:
 
 @dataclass(frozen=True)
 class ChannelSnapshot:
+    """One generator channel's READBACK — what the instrument reports it is set to.
+
+    `shape` is the bare head token ("RAMP", "SIN", "DC"); `shape_raw` is the
+    untouched `:APPLy?` response it was parsed out of, carried so a log can be
+    audited against the wire rather than trusted.
+
+    `load` / `load_ohms` are here because a wrong output-load setting is the
+    one fault on this rig that is completely invisible in every other number:
+    the EEL5000 input is high-Z, so a generator left on 50 ohm delivers HALF
+    the commanded voltage while still reporting the full amplitude in
+    `amp_vpp`.  Nothing else in this snapshot would show it.  load_ohms is
+    inf for high-Z, NaN when unparseable.
+    """
     shape: str
     freq_hz: float
     amp_vpp: float
     offset_v: float
     phase_deg: float
     output_on: bool
+    shape_raw: str = ""
+    load: str = ""
+    load_ohms: float = float("nan")
 
 
 @dataclass(frozen=True)
@@ -191,6 +207,16 @@ class ScopeState:
     """
     timestamp:          float
     connected:          bool  = False
+
+    # Idle means the link is UP but no waveform is being transferred - the
+    # default, not a fault and not a disconnect.  An idle snapshot is a
+    # heartbeat carrying no measurement, so a view should keep showing the
+    # last one rather than blanking it.
+    idle:               bool  = False
+
+    # Whether the worker is free-running.  False means it takes a shot only
+    # when asked.
+    continuous:         bool  = False
     channel:            str   = "CH1"
     fwhm_samples:       float = float("nan")
     fwhm_seconds:       float = float("nan")
@@ -199,6 +225,87 @@ class ScopeState:
     volts_downsampled:  list  = field(default_factory=list)
     preamble:           dict  = field(default_factory=dict)
     error:              str   = ""
+
+    # ---- multi-peak profile -------------------------------------------
+    # The sweep crosses the aperture twice per period, so one channel
+    # carries two peaks OF THE SAME BEAM.  `peaks` holds one entry per
+    # detected peak, left to right, with every position already converted
+    # to SECONDS relative to the trigger - a consumer never has to know the
+    # sample index or the downsampling factor to draw a marker.
+    #
+    # Each entry:
+    #   index             sample index of the maximum (full resolution)
+    #   peak_volts        height above baseline, sign-corrected
+    #   half_volts        the half-maximum level used for this peak
+    #   left_seconds      interpolated half-maximum crossing, left
+    #   right_seconds     interpolated half-maximum crossing, right
+    #   centre_seconds    midpoint of the two crossings
+    #   fwhm_seconds      right - left; NaN when unresolved
+    #   fit_fwhm_seconds  the same peak's width from the Gaussian fit
+    #   resolved          False when the peak never falls to half maximum
+    #                     before its neighbour - the fit may still measure it
+    #   note              why it is unresolved, for display
+    peaks:                list  = field(default_factory=list)
+    n_peaks:              int   = 0
+    n_resolved:           int   = 0
+
+    # The two peaks are the X profile and the Y profile - DIFFERENT
+    # DIRECTIONS measured in one trace, not one beam measured twice.  So
+    # `mean_fwhm_seconds` is only a rough single-number "beam size" (kept
+    # because the Overview wants one scalar), `xy_ratio` is the beam's
+    # aspect, and `fwhm_spread` is NOT a fault indicator - a round beam has
+    # a ratio near 1, an elliptical one does not, and both are healthy.
+    mean_fwhm_seconds:    float = float("nan")
+    fwhm_spread:          float = float("nan")
+    fwhm_x_seconds:       float = float("nan")
+    fwhm_y_seconds:       float = float("nan")
+    xy_ratio:             float = float("nan")
+    separations_seconds:  list  = field(default_factory=list)
+
+    # Sum-of-Gaussians fit across the whole trace.
+    fit_fwhm_seconds:     float = float("nan")
+    fit_r_squared:        float = float("nan")
+
+    # Which number `fwhm_seconds` above actually came from: "fit",
+    # "half-max", or "none".  Displayed, never guessed at by the consumer.
+    fwhm_source:          str   = ""
+
+    # The scope's own PWIDTH measurement - an independent cross-check.
+    scope_pwidth_seconds: float = float("nan")
+
+    # Trace context and quality
+    baseline_volts:       float = float("nan")
+    signal_to_noise:      float = float("nan")
+    smooth_window:        int   = 1
+    flipped:              bool  = False
+
+    # Raster envelope: the period, in samples, that the analysis treated as
+    # raster ripple.  0 means the raw trace was measured directly.
+    envelope_samples:     int   = 0
+
+    # How many of the scope's 2500 record points were transferred, and how
+    # long that took.  Fewer points means a SHORTER TIME WINDOW at the same
+    # sample interval - the transfer is a slice of the record, never a
+    # decimation of it - so `points` is also what the plotted window covers.
+    points:               int   = 0
+    transfer_seconds:     float = float("nan")
+
+    # Off-screen detection.  A clipped peak has no true maximum, so its
+    # half-maximum level - and every width from it - is wrong while still
+    # looking like a plausible number.
+    clipped_low:          bool  = False
+    clipped_high:         bool  = False
+    clipped_fraction:     float = 0.0
+
+    # Plot-ready traces.  `corrected_downsampled` is smoothed, baseline
+    # subtracted and sign corrected - the same signal the half-maximum
+    # levels refer to, so markers land where the eye expects them.
+    # `xincr_downsampled` is the time step BETWEEN DOWNSAMPLED POINTS, which
+    # is not xincr: plotting downsampled data against xincr silently
+    # compresses the time axis.
+    corrected_downsampled: list  = field(default_factory=list)
+    fit_curve_downsampled: list  = field(default_factory=list)
+    xincr_downsampled:     float = float("nan")
 
 
 @dataclass(frozen=True)

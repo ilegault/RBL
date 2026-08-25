@@ -56,7 +56,7 @@ the keyboardTracking fix above.
 """
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QComboBox, QDoubleSpinBox, QHBoxLayout, QLabel, QWidget,
+    QComboBox, QDoubleSpinBox, QHBoxLayout, QLabel, QSpinBox, QWidget,
 )
 
 
@@ -79,6 +79,26 @@ class NoScrollComboBox(QComboBox):
         # parent, so a dropdown inside a scroll area scrolls the AREA rather
         # than eating the gesture. Swallowing it would trade a surprise for a
         # dead spot.
+        event.ignore()
+
+
+class NoScrollSpinBox(QSpinBox):
+    """An integer QSpinBox that cannot be changed with the mouse wheel.
+
+    The whole-number counterpart to NoScrollComboBox, and it exists for the
+    same reason: a wheel notch over a spin box the pointer merely passed
+    across silently re-commands it. On the Beam Profiler those boxes decide
+    how many peaks the analysis looks for and how hard the trace is
+    smoothed — scroll past one and the FWHM on screen changes with nothing
+    to say why.
+
+    Keyboard tracking stays ON here, unlike QuietDoubleSpinBox: these are
+    small integers with no sub-unit prefix, so no partially-typed value is
+    a valid-but-wrong number the way "0" is for "0.514".
+    """
+
+    def wheelEvent(self, event):
+        # ignore(), not accept() — see NoScrollComboBox.
         event.ignore()
 
 

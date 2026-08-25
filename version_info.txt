@@ -1,0 +1,47 @@
+# version_info.txt - Windows version resource for RBL.exe
+#
+# WHY THIS EXISTS
+# ---------------
+# The build had NO version resource at all: no product name, no company, no
+# version, no description. Windows shows such a binary as a blank-property
+# .exe, and reputation/ML scoring treats "unsigned AND anonymous" worse than
+# "unsigned but clearly identified". More practically, it gives lab IT
+# something to identify the file BY when they look at a block event -- right
+# now the properties tab is empty and the only clue is the filename.
+#
+# Every field here is TRUE. This declares what the app is; it does not
+# disguise anything. Keep filevers/prodvers in step with the deploy folder
+# name (RBL3.86 -> 3.86.0.0) so a blocked binary can be traced to a build.
+#
+# Wired in by rbl.spec:  EXE(..., version='version_info.txt', ...)
+
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(3, 86, 0, 0),
+    prodvers=(3, 86, 0, 0),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo([
+      StringTable(
+        '040904B0',
+        [StringStruct('CompanyName',
+                      'University of Wisconsin-Madison, NEEP - Ion Beam Laboratory'),
+         StringStruct('FileDescription',
+                      'RBL - Right Beam Line control, raster planning and diagnostics'),
+         StringStruct('FileVersion', '3.86.0.0'),
+         StringStruct('InternalName', 'RBL'),
+         StringStruct('LegalCopyright',
+                      'University of Wisconsin-Madison'),
+         StringStruct('OriginalFilename', 'RBL.exe'),
+         StringStruct('ProductName', 'RBL - Right Beam Line'),
+         StringStruct('ProductVersion', '3.86.0.0')])
+    ]),
+    VarFileInfo([VarStruct('Translation', [1033, 1200])])
+  ]
+)

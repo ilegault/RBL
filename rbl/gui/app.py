@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QLabel, QPushButton,
     QVBoxLayout, QTabBar, QStackedWidget, QMessageBox, QScrollArea, QSplitter,
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPalette
 
 from rbl.gui.motor_tab import MotorTab
@@ -53,6 +53,13 @@ class SplitTabBar(QTabBar):
 
 
 # ─── Main Window ──────────────────────────────────────────────────────────────
+
+# Position of "Overview" in the outer tab bar (see the addTab calls below).
+# The app opens here.
+OVERVIEW_TAB_INDEX = 4
+
+log = logging.getLogger(__name__)
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -243,6 +250,13 @@ class MainWindow(QMainWindow):
         # wiring as the calibration tab, for the same reason — it needs the
         # RAW per-monitor waveform to compute lock-in fundamentals, not the
         # already-converted kV/mA snapshots.
+        self.overview_tab.connect_all_requested.connect(self._on_connect_all)
+
+        # A finished characterisation run changes the numbers the Raster
+        # Planner plans from.  It reads them out of a JSON file, which
+        # cannot announce itself, so the tab that wrote it says so.
+        self.load_char_tab.measurements_changed.connect(
+            self.raster_planner_tab.refresh_capacitance)
         self.load_char_tab.profile_change_requested.connect(self.beamline.set_stream_profile)
         self.load_char_tab.pair_profile_requested.connect(
             self.beamline.set_stream_pair_profile)
@@ -271,8 +285,12 @@ class MainWindow(QMainWindow):
         self.motor_tab.motors_disconnected.connect(self.beamline.motors_disconnected)
         self.beamline.motors_changed.connect(self.current_tab.on_motor_state)
 
-        # Start on Stepper Motors
-        self._outer_stack.setCurrentIndex(0)
+        # Start on Overview.  It is the screen that answers "what is this
+        # beamline doing right now" without pressing anything, and it is
+        # where Connect All lives - so it is the first thing an operator
+        # wants on opening the app, not the Stepper Motors tab.
+        self._outer_stack.setCurrentIndex(OVERVIEW_TAB_INDEX)
+        self._outer_tabbar.setCurrentIndex(OVERVIEW_TAB_INDEX)
         self._outer_tabbar.tabBarClicked.connect(self._on_outer_tab_clicked)
         self._outer_tabbar.tab_right_clicked.connect(self._on_tab_right_clicked)
 
@@ -303,6 +321,83 @@ class MainWindow(QMainWindow):
     # Beamline owns the LabJackT7 + stream worker and does the actual connect/
     # disconnect/profile-switch work; MainWindow's role here is purely GUI:
     # show a dialog on failure and fan the resulting events out to the tabs.
+
+    # ── Connect All ───────────────────────────────────────────────────────
+    #
+    # Every subsystem in this app has its own connect button on its own tab,
+    # each with the context that makes it safe to press.  Connect All does
+    # not replace any of them: it presses them, in order, through each tab's
+    # connect_if_needed().  Anything already connected is left alone, and
+    # nothing is ever disconnected here.
+    #
+    # WHY ONE STEP PER EVENT-LOOP TURN
+    # --------------------------------
+    # Each connect blocks: a socket to the Galil, a USB open on the T7, a
+    # VISA discover, a serial handshake per gauge controller.  Run back to
+    # back in one slot they add up to seconds of frozen window, which reads
+    # as a crash.  Stepping through them with singleShot(0) gives Qt the
+    # turn it needs to repaint the progress line between instruments, so the
+    # operator can see which one is taking the time.
+
+    def _connect_all_steps(self) -> list:
+        """[(display name, callable -> (status, detail))], in press order."""
+        return [
+            ("Galil",              self.motor_tab.connect_if_needed),
+            ("LabJack T7",         self._labjack_connect_if_needed),
+            ("Function generators", self.funcgen_tab.connect_if_needed),
+            ("Scope",              self.profiler_tab.connect_if_needed),
+            ("Vacuum gauges",      self.vacuum_tab.connect_if_needed),
+        ]
+
+    def _labjack_connect_if_needed(self) -> tuple:
+        """The T7 is owned here, not by a tab, so its step lives here too."""
+        if self.beamline.lj.connected:
+            return "already", "T7 already connected"
+        panel = self._lj_tabs[0].lj_panel
+        conn_type = panel.cbo_conn.currentText()
+        identifier = panel.le_ident.text().strip() or "ANY"
+        try:
+            self.beamline.connect_labjack(conn_type, identifier)
+        except Exception as exc:
+            return "failed", f"T7: {exc}"
+        return "connected", f"T7 {conn_type}/{identifier}"
+
+    def _on_connect_all(self):
+        self._connect_all_queue = self._connect_all_steps()
+        self._connect_all_results = []
+        self.overview_tab.set_connect_all_busy(True, "starting…")
+        QTimer.singleShot(0, self._connect_all_next)
+
+    def _connect_all_next(self):
+        if not self._connect_all_queue:
+            self._connect_all_done()
+            return
+        name, fn = self._connect_all_queue.pop(0)
+        self.overview_tab.set_connect_all_status(f"connecting {name}…")
+        try:
+            status, detail = fn()
+        except Exception as exc:
+            log.exception("connect all: %s raised", name)
+            status, detail = "failed", f"{name}: {exc}"
+        self._connect_all_results.append((name, status, detail))
+        QTimer.singleShot(0, self._connect_all_next)
+
+    def _connect_all_done(self):
+        results = self._connect_all_results
+        failed = [r for r in results if r[1] in ("failed", "partial")]
+        ok     = [r for r in results if r[1] in ("connected", "already")]
+        if failed:
+            # Name what did NOT come up, with its reason.  A bare "3 of 5
+            # connected" sends the operator round every tab to find out
+            # which two.
+            text = ("Connected: " + ", ".join(n for n, _s, _d in ok) + ".  "
+                    if ok else "")
+            text += "  |  ".join(f"{n}: {d}" for n, _s, d in failed)
+            self.overview_tab.set_connect_all_status(text, theme.WARN)
+        else:
+            self.overview_tab.set_connect_all_status(
+                "Connected: " + ", ".join(n for n, _s, _d in ok), theme.OK)
+        self.overview_tab.set_connect_all_busy(False)
 
     def _labjack_connect(self, conn_type: str, identifier: str):
         try:

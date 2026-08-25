@@ -59,3 +59,48 @@ class TestChamberPressureTorr:
     def test_all_channels_non_numeric_is_nan(self):
         state = VacuumState(timestamp=0.0, vgc_readings=[_vgc(None)], vgc_connected=True)
         assert math.isnan(chamber_pressure_torr(state))
+
+
+class TestChamberPressureGaugeSelection:
+    """Gauge selection: only readings matching selected_keys are used."""
+
+    def test_selected_key_filters_to_single_gauge(self):
+        state = VacuumState(
+            timestamp=0.0,
+            xgs_readings=[_xgs(1e-6, label="IG1"), _xgs(5e-4, label="IG2")],
+            xgs_connected=True,
+        )
+        # Select only IG1 — the good gauge
+        assert chamber_pressure_torr(state, {"xgs600:IG1"}) == 1e-6
+
+    def test_selected_key_filters_cross_instrument(self):
+        state = VacuumState(
+            timestamp=0.0,
+            xgs_readings=[_xgs(9e-1, label="IG1")], xgs_connected=True,
+            vgc_readings=[_vgc(2e-6, channel="IG")], vgc_connected=True,
+        )
+        # Select only the VGC IG — ignore the high XGS reading
+        assert chamber_pressure_torr(state, {"vgc083:IG"}) == 2e-6
+
+    def test_empty_selection_returns_nan(self):
+        state = VacuumState(
+            timestamp=0.0,
+            vgc_readings=[_vgc(1e-6)], vgc_connected=True,
+        )
+        assert math.isnan(chamber_pressure_torr(state, set()))
+
+    def test_none_selection_uses_all(self):
+        state = VacuumState(
+            timestamp=0.0,
+            xgs_readings=[_xgs(1e-6)], xgs_connected=True,
+            vgc_readings=[_vgc(5e-4)], vgc_connected=True,
+        )
+        # None = legacy mode, worst-case across all
+        assert chamber_pressure_torr(state, None) == 5e-4
+
+    def test_selected_key_no_match_returns_nan(self):
+        state = VacuumState(
+            timestamp=0.0,
+            vgc_readings=[_vgc(1e-6, channel="CG1")], vgc_connected=True,
+        )
+        assert math.isnan(chamber_pressure_torr(state, {"vgc083:IG"}))

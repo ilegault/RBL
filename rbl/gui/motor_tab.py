@@ -976,6 +976,21 @@ class MotorTab(QWidget):
         else:
             self._do_connect()
 
+    def connect_if_needed(self) -> tuple:
+        """Connect the Galil if it is not already up.  (status, detail).
+
+        Used by the Overview tab's Connect All.  Deliberately routed
+        through the SAME _do_connect() the button uses - a second
+        connection path would be a second startup sequence to keep in step
+        with this one.
+        """
+        if self.galil.connected:
+            return "already", "Galil already connected"
+        self._do_connect()
+        if self.galil.connected:
+            return "connected", f"Galil on {self.ip_edit.text().strip()}"
+        return "failed", "Galil did not connect (see the tab's log)"
+
     def _do_connect(self):
         ip = self.ip_edit.text().strip()
         try:

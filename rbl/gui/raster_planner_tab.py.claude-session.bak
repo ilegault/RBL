@@ -89,14 +89,19 @@ from rbl.config.calibration_config import (
 from rbl.config.hardware_config import AMP_LABELS
 from rbl.config.load_calibration_store import capacitance_pf_for
 from rbl.config.steerer_geometry import (
-    DRIFT_TO_SAMPLE_CM, PLATE_GAP_CM, PLATE_LENGTH_CM, PLATE_RATING_KV,
+    BEAMLINE_AFTER_STEERER_IN, DRIFT_TO_SAMPLE_CM, DT_BORE_RADIUS_MM,
+    PLATE_EXIT_TO_FLANGE_MM, PLATE_GAP_CM, PLATE_LENGTH_CM, PLATE_RATING_KV,
+    PLATE_XY_SEPARATION_CM, PLATE_XY_SEPARATION_VERIFIED, SLIT_MODEL,
+    SLIT_PLANE_FRACTIONS_VERIFIED, SLIT_X_PLANE_FRACTION, SLIT_Y_PLANE_FRACTION,
+    Y_PLATES_UPSTREAM, beamline_planes_mm, drift_mm_for,
     describe as steerer_description,
 )
 from rbl.gui import theme
 from rbl.gui.widgets.inputs import QuietDoubleSpinBox
+from rbl.hardware.funcgen_driver import MAX_GEN_VOLTS
 from rbl.hardware.load_model import envelope_walls
 from rbl.hardware.raster_model import (
-    required_drive, dwell_uniformity, displacement_mm,
+    required_drive, dwell_uniformity, displacement_mm, sweep_at_plane,
 )
 
 AMP_MAX_BANDWIDTH_HZ = 10_000.0   # EEL5000 large-signal BW, no load (manual p.1-3)
@@ -108,6 +113,19 @@ AXIS_OF_CHANNEL = {"X+": "X", "X-": "X", "Y+": "Y", "Y-": "Y"}
 SPECIES_COLUMNS = ["Species", "Mass [amu]", "Energy [MeV]", "q",
                    "X deflection [mm]", "Y deflection [mm]"]
 N_EDITABLE_COLS = 4
+
+# The downstream-plane table.  Two of these columns are typed into (length and
+# aperture); the rest are computed and locked.
+PLANE_COLUMNS = ["Plane", "Length [in]", "z from steerer [mm]",
+                 "X sweep ± [mm]", "Y sweep ± [mm]",
+                 "Aperture ± [mm]", "Clearance"]
+PLANE_COL_NAME, PLANE_COL_LENGTH, PLANE_COL_Z = 0, 1, 2
+PLANE_COL_X, PLANE_COL_Y, PLANE_COL_APERTURE, PLANE_COL_VERDICT = 3, 4, 5, 6
+
+# Slit half-opening the table opens on, per axis.  A starting point to type
+# over, not a reading -- this tab has no hardware and does not know where the
+# jaws actually are.
+DEFAULT_SLIT_HALF_GAP_MM = 5.0
 
 
 def _spin(minimum, maximum, value, decimals=3, step=0.1):
@@ -131,6 +149,7 @@ class RasterPlannerTab(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._updating = False       # guards the species table's itemChanged
+        self._updating_planes = False  # ... and the plane table's
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -182,7 +201,19 @@ class RasterPlannerTab(QWidget):
         self.sb_offset_y_mm = _spin(-500.0, 500.0, 0.0, decimals=2, step=0.5)
         form.addRow("Scan centre offset Y [mm]:", self.sb_offset_y_mm)
 
-        self.sb_turnaround_k = _spin(0.0, 10.0, 1.5, decimals=2, step=0.1)
+        # 1.0 = the reversal happens with the beam CENTRE one full beam width
+        # past the sample edge.  That is the condition this beamline wants:
+        # the turnaround's dwell pileup lands off the sample, and not a
+        # millimetre further, because past that point the extra sweep is dose
+        # sprayed beyond the target for nothing.  Editable, because a beam
+        # with heavy tails may need more.
+        self.sb_turnaround_k = _spin(0.0, 10.0, 1.0, decimals=2, step=0.1)
+        self.sb_turnaround_k.setToolTip(
+            "Scan half-span = sample/2 + k x FWHM.\n\n"
+            "k = 1.0 puts the turnaround one full beam width past the sample "
+            "edge, so the reversal deposits nothing on the sample.\n"
+            "Below 1.0 the turnaround starts landing dose on the edge; above "
+            "it, the extra sweep is wasted off the sample.")
         form.addRow("Turnaround margin (k x FWHM):", self.sb_turnaround_k)
 
         top_row.addWidget(in_box, stretch=0)
@@ -241,24 +272,38 @@ class RasterPlannerTab(QWidget):
         self.lbl_design_species.setStyleSheet(f"font-size: {theme.FS_LABEL}px;")
         out_form.addRow("Designed for:", self.lbl_design_species)
 
-        self.lbl_kv_x = QLabel("—")
-        self.lbl_kv_x.setStyleSheet(f"font-weight: bold; font-size: {theme.FS_BIG}px;")
-        out_form.addRow("X plate-to-plate (differential) kV:", self.lbl_kv_x)
+        # TWO LINES PER AXIS: what to DIAL IN, then what that PRODUCES.
+        #
+        # WHY THE OLD SINGLE LINE WAS UNREADABLE
+        # --------------------------------------
+        # The EEL5000 is a 1000x amplifier, so 1 V on the generator is 1 kV on
+        # the plate. A channel driven to +/-0.3688 kV therefore has to be sent
+        # 0.7377 Vpp -- and 0.7377 is ALSO the plate-to-plate kV, because both
+        # are "twice the per-plate peak". One number, two meanings, no unit
+        # anywhere on screen saying which was which. Every readout below now
+        # carries its unit and names the thing it belongs to.
+        self.lbl_gen_x = QLabel("—")
+        self.lbl_gen_x.setWordWrap(True)
+        self.lbl_gen_x.setStyleSheet(f"font-weight: bold; font-size: {theme.FS_BIG}px;")
+        out_form.addRow("X axis — set on the generator:", self.lbl_gen_x)
 
         self.lbl_plate_kv_x = QLabel("—")
-        out_form.addRow("X per-plate kV (push-pull, /2):", self.lbl_plate_kv_x)
+        self.lbl_plate_kv_x.setWordWrap(True)
+        out_form.addRow("X axis — lands on the plates:", self.lbl_plate_kv_x)
 
         self.lbl_sweep_x = QLabel("—")
         self.lbl_sweep_x.setWordWrap(True)
         self.lbl_sweep_x.setStyleSheet(f"font-size: {theme.FS_CAPTION}px;")
         out_form.addRow("X sweep on sample:", self.lbl_sweep_x)
 
-        self.lbl_kv_y = QLabel("—")
-        self.lbl_kv_y.setStyleSheet(f"font-weight: bold; font-size: {theme.FS_BIG}px;")
-        out_form.addRow("Y plate-to-plate (differential) kV:", self.lbl_kv_y)
+        self.lbl_gen_y = QLabel("—")
+        self.lbl_gen_y.setWordWrap(True)
+        self.lbl_gen_y.setStyleSheet(f"font-weight: bold; font-size: {theme.FS_BIG}px;")
+        out_form.addRow("Y axis — set on the generator:", self.lbl_gen_y)
 
         self.lbl_plate_kv_y = QLabel("—")
-        out_form.addRow("Y per-plate kV (push-pull, /2):", self.lbl_plate_kv_y)
+        self.lbl_plate_kv_y.setWordWrap(True)
+        out_form.addRow("Y axis — lands on the plates:", self.lbl_plate_kv_y)
 
         self.lbl_sweep_y = QLabel("—")
         self.lbl_sweep_y.setWordWrap(True)
@@ -315,6 +360,9 @@ class RasterPlannerTab(QWidget):
 
         layout.addWidget(sp_box, stretch=0)
 
+        # ── Down the beamline ─────────────────────────────────────────────
+        layout.addWidget(self._build_plane_box(), stretch=0)
+
         # ── Plots ─────────────────────────────────────────────────────────
         plot_row = QHBoxLayout()
         plot_row.setSpacing(8)
@@ -328,19 +376,361 @@ class RasterPlannerTab(QWidget):
         env_lay.addWidget(self._canvas_env)
         plot_row.addWidget(env_box, stretch=1)
 
-        dwell_box = QGroupBox("Dwell Uniformity")
-        dwell_lay = QVBoxLayout(dwell_box)
-        self._fig_dwell = Figure(figsize=(5, 4))
-        self._canvas_dwell = FigureCanvasQTAgg(self._fig_dwell)
-        self._canvas_dwell.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self._ax_dwell = self._fig_dwell.add_subplot(111)
-        dwell_lay.addWidget(self._canvas_dwell)
-        plot_row.addWidget(dwell_box, stretch=1)
+        # NO DWELL CHART.
+        #
+        # It plotted a dose profile that, once the turnaround is set to one
+        # full beam width off the sample, is flat across the sample every
+        # time -- a chart whose only job was to show a straight line.  The
+        # number it produced is still worth having and is still on screen as
+        # "Dwell uniformity (on sample)" in the Required Drive block, and
+        # raster_model.dwell_uniformity still computes it, so the turnaround
+        # margin can still be justified to a reviewer rather than asserted.
+        # What is gone is the picture of it.  The envelope plot takes the
+        # whole row.
 
         layout.addLayout(plot_row, stretch=1)
 
         self.tbl_species.selectRow(DEFAULT_SPECIES_ROW)
         self._recompute()
+
+    # ------------------------------------------------------------------
+    # Downstream planes
+    # ------------------------------------------------------------------
+
+    def _build_plane_box(self):
+        """The beamline after the steerer, and what the raster is doing at each
+        plane of it.
+
+        WHY THIS EXISTS
+        ---------------
+        The raster is sized at the SAMPLE, and everything upstream of the
+        sample sees a narrower one -- deflection is an angle fixed at the
+        plates, so the millimetres grow with distance flown and nothing else.
+        The slits sit roughly 1.5 m short of the sample, so they see something
+        like 60 % of the swept width the sample gets. That is not a fault and
+        it is not something to correct: it is geometry, and the only real
+        problem it causes is a surprised operator wondering why the slit
+        signal does not span the raster they set.
+
+        WHY THE TWO AXES GET DIFFERENT DRIFTS
+        -------------------------------------
+        The X and Y plate pairs are in SERIES inside the steerer, ~17 cm
+        apart, with Y upstream. So the Y beam has been turning for 17 cm
+        longer than the X beam by the time either reaches any given plane, and
+        the two axes shrink by different factors on the way in. Every drift
+        below is measured from THAT axis's own plate exit.
+
+        WHAT THIS DELIBERATELY DOES NOT DO
+        ----------------------------------
+        It does not change the sizing block above. Those numbers still use the
+        lab sheet's single drift for both axes, so the app still reproduces
+        every deflection figure this beamline has published (see
+        steerer-geometry-decision: the sheet wins). The per-axis drift lives
+        HERE, where it is labelled, and the sample row shows both so the
+        difference is visible instead of silent.
+        """
+        box = QGroupBox("Down the beamline — what the raster is doing at each plane")
+        lay = QVBoxLayout(box)
+
+        cfg = QHBoxLayout()
+        cfg_form = QFormLayout()
+        # Where inside the slit housing each pair sits.  Editable because the
+        # BDS18 partlist gives no internal dimension -- see steerer_geometry.
+        self.sb_slit_x_frac = _spin(0.0, 1.0, SLIT_X_PLANE_FRACTION,
+                                    decimals=3, step=0.05)
+        cfg_form.addRow("X slit plane, fraction into XYSL:", self.sb_slit_x_frac)
+        self.sb_slit_y_frac = _spin(0.0, 1.0, SLIT_Y_PLANE_FRACTION,
+                                    decimals=3, step=0.05)
+        cfg_form.addRow("Y slit plane, fraction into XYSL:", self.sb_slit_y_frac)
+        cfg.addLayout(cfg_form)
+        cfg.addStretch(1)
+        lay.addLayout(cfg)
+
+        self.lbl_plane_note = QLabel()
+        self.lbl_plane_note.setWordWrap(True)
+        self.lbl_plane_note.setStyleSheet(
+            f"font-size: {theme.FS_CAPTION}px; color: {theme.MUTED};")
+        unverified = []
+        if not PLATE_XY_SEPARATION_VERIFIED:
+            unverified.append(f"the {PLATE_XY_SEPARATION_CM:.2f} cm X–Y plate "
+                              f"separation (borrowed from the manual's ES5 row)")
+        if not SLIT_PLANE_FRACTIONS_VERIFIED:
+            unverified.append("where each slit pair sits inside the XYSL body "
+                              "(the housing quartered)")
+        self.lbl_plane_note.setText(
+            f"{'Y' if Y_PLATES_UPSTREAM else 'X'} plates are upstream, so "
+            f"{'Y' if Y_PLATES_UPSTREAM else 'X'} has "
+            f"{abs(PLATE_EXIT_TO_FLANGE_MM['Y'] - PLATE_EXIT_TO_FLANGE_MM['X']):.0f} mm "
+            f"more drift to every plane below.   Slits: {SLIT_MODEL}, X pair first."
+            + ("   UNMEASURED, edit if you measure it: " + "; ".join(unverified)
+               if unverified else "")
+            + "   Length and Aperture cells are editable; leave an aperture "
+              "blank for a plane you do not want checked.")
+        lay.addWidget(self.lbl_plane_note)
+
+        # Row structure is fixed: it comes from the component table in
+        # steerer_geometry, which is a hardware fact, not a preference.  Only
+        # the numbers in it are typed over.
+        seed = beamline_planes_mm()
+        self._plane_meta = []
+        comp_i = 0
+        for name, _z, kind in seed:
+            if kind == "component":
+                self._plane_meta.append({"name": name, "kind": kind,
+                                         "comp_index": comp_i})
+                comp_i += 1
+            else:
+                self._plane_meta.append({"name": name, "kind": kind,
+                                         "comp_index": None,
+                                         "axis": name.split()[0]})
+
+        self.tbl_planes = QTableWidget(len(self._plane_meta), len(PLANE_COLUMNS))
+        self.tbl_planes.setHorizontalHeaderLabels(PLANE_COLUMNS)
+        self.tbl_planes.verticalHeader().setVisible(False)
+        self.tbl_planes.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch)
+        self.tbl_planes.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.tbl_planes.setMinimumHeight(240)
+        self._populate_planes()
+        self.tbl_planes.itemChanged.connect(self._on_plane_edited)
+        lay.addWidget(self.tbl_planes)
+
+        for sb in (self.sb_slit_x_frac, self.sb_slit_y_frac):
+            sb.valueChanged.connect(self._recompute)
+        return box
+
+    def _populate_planes(self):
+        self._updating_planes = True
+        try:
+            for row, meta in enumerate(self._plane_meta):
+                for col in range(len(PLANE_COLUMNS)):
+                    item = QTableWidgetItem("—")
+                    editable = (col == PLANE_COL_APERTURE
+                                or (col == PLANE_COL_LENGTH
+                                    and meta["comp_index"] is not None))
+                    if not editable:
+                        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                    if col != PLANE_COL_NAME:
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignRight
+                                              | Qt.AlignmentFlag.AlignVCenter)
+                    self.tbl_planes.setItem(row, col, item)
+
+                self.tbl_planes.item(row, PLANE_COL_NAME).setText(meta["name"])
+                if meta["comp_index"] is not None:
+                    self.tbl_planes.item(row, PLANE_COL_LENGTH).setText(
+                        f"{BEAMLINE_AFTER_STEERER_IN[meta['comp_index']][1]:g}")
+                else:
+                    # A slit plane is a POSITION inside its housing, not a
+                    # length of beamline.  Its place is set by the fraction
+                    # spin box above, so this cell has nothing to hold.
+                    self.tbl_planes.item(row, PLANE_COL_LENGTH).setText("")
+
+                ap = self.tbl_planes.item(row, PLANE_COL_APERTURE)
+                if meta["kind"] == "slit":
+                    ap.setText(f"{DEFAULT_SLIT_HALF_GAP_MM:g}")
+                elif meta["name"] == "DT":
+                    ap.setText(f"{DT_BORE_RADIUS_MM:g}")
+                else:
+                    ap.setText("")
+        finally:
+            self._updating_planes = False
+
+    def _on_plane_edited(self, item):
+        if getattr(self, "_updating_planes", False):
+            return
+        if item.column() in (PLANE_COL_LENGTH, PLANE_COL_APERTURE):
+            self._recompute()
+
+    def _plane_components_in(self):
+        """The component lengths as currently typed, falling back per-row.
+
+        A half-typed cell is a normal transient state, not an error worth a
+        dialog: that one row reverts to the configured length and the rest of
+        the table keeps working.
+        """
+        comps = []
+        for row, meta in enumerate(self._plane_meta):
+            if meta["comp_index"] is None:
+                continue
+            name, default_in = BEAMLINE_AFTER_STEERER_IN[meta["comp_index"]]
+            try:
+                length_in = float(self.tbl_planes.item(row, PLANE_COL_LENGTH).text())
+                if length_in <= 0:
+                    raise ValueError
+            except (AttributeError, ValueError):
+                length_in = default_in
+            comps.append((name, length_in))
+        return comps
+
+    def _plane_aperture(self, row):
+        """Half-opening typed into this row, or None for 'do not check'."""
+        try:
+            text = self.tbl_planes.item(row, PLANE_COL_APERTURE).text().strip()
+        except AttributeError:
+            return None
+        if not text:
+            return None
+        try:
+            value = float(text)
+        except ValueError:
+            return None
+        return value if value > 0 else None
+
+    def _fill_planes(self, drive, charge_state, beam_energy_ev,
+                     plate_length_cm, plate_gap_cm):
+        """Sweep half-width at every plane, per axis, from each axis's own
+        plate exit.
+
+        The percentage beside each sweep is the point of the whole table: it
+        is what fraction of the raster the sample sees is present at that
+        plane. A slit reading ~60 % is not a slit that is failing to cover the
+        raster -- it is a slit standing 1.5 m closer to the source of the
+        angle.
+        """
+        planes = beamline_planes_mm(self._plane_components_in(),
+                                    self.sb_slit_x_frac.value(),
+                                    self.sb_slit_y_frac.value())
+        # The sample is the last plane; its sweep is the reference for "% of".
+        sample_half = {}
+        if planes:
+            _n, sample_z, _k = planes[-1]
+            for axis in ("X", "Y"):
+                r = sweep_at_plane(drive[axis]["amplitude_kv"], drive[axis]["offset_kv"],
+                                   plate_length_cm, plate_gap_cm, charge_state,
+                                   beam_energy_ev, drift_mm_for(axis, sample_z))
+                sample_half[axis] = r["half_span_mm"]
+
+        self._updating_planes = True
+        try:
+            for row, (name, z_mm, kind) in enumerate(planes):
+                if row >= len(self._plane_meta):
+                    break
+                meta = self._plane_meta[row]
+                self.tbl_planes.item(row, PLANE_COL_NAME).setText(name)
+                self.tbl_planes.item(row, PLANE_COL_Z).setText(f"{z_mm:.1f}")
+
+                aperture = self._plane_aperture(row)
+                results = {}
+                for axis, col in (("X", PLANE_COL_X), ("Y", PLANE_COL_Y)):
+                    # A round bore has to be cleared by BOTH axes; a slit pair
+                    # only constrains its own.  So the aperture is handed to
+                    # the axis (or axes) it actually applies to, and to no
+                    # others -- an X slit does not stop Y going anywhere.
+                    applies = (kind != "slit") or (meta.get("axis") == axis)
+                    drift = drift_mm_for(axis, z_mm)
+                    r = sweep_at_plane(
+                        drive[axis]["amplitude_kv"], drive[axis]["offset_kv"],
+                        plate_length_cm, plate_gap_cm, charge_state,
+                        beam_energy_ev, drift,
+                        aperture_half_mm=aperture if applies else None)
+                    results[axis] = r
+                    item = self.tbl_planes.item(row, col)
+                    half = r["half_span_mm"]
+                    if math.isnan(half):
+                        item.setText("—")
+                        continue
+                    ref = sample_half.get(axis, float("nan"))
+                    pct = (f"  ({100.0 * half / ref:.0f}%)"
+                           if ref == ref and ref > 0 else "")
+                    item.setText(f"±{half:.3f}{pct}")
+                    item.setToolTip(
+                        f"{axis} drift from the {axis} plate exit to this "
+                        f"plane: {drift:.1f} mm")
+
+                # On a slit row, work out where the jaws would have to sit to
+                # land ON the raster turnaround, and where the sample edge
+                # projects to at this plane. Both scale with drift exactly as
+                # the sweep does, so the ratio sample_half/scan_half_span --
+                # which is fixed -- carries them here without needing the
+                # sample's own drift again.
+                jaw = None
+                if kind == "slit":
+                    axis = meta.get("axis", "X")
+                    r = results[axis]
+                    scan_half = drive[axis]["scan_half_span_mm"]
+                    samp_half = drive[axis]["sample_half_mm"]
+                    if (scan_half > 0 and not math.isnan(r["half_span_mm"])
+                            and not math.isnan(scan_half)):
+                        jaw = {
+                            "turnaround_mm": r["half_span_mm"],
+                            "sample_edge_mm": r["half_span_mm"] * samp_half / scan_half,
+                        }
+                self._set_plane_verdict(row, kind, meta, results, aperture, jaw)
+        finally:
+            self._updating_planes = False
+
+    def _set_plane_verdict(self, row, kind, meta, results, aperture, jaw=None):
+        """What the aperture at this plane does to the sweep.
+
+        Deliberately NOT pass/fail on the slit rows. Slits narrower than the
+        sweep are how the slits are used as a profile monitor -- that is the
+        intended condition, not a fault. Slits wider than the sweep are also
+        legitimate, and mean the raster passes through untouched. Both are
+        worth naming; neither is worth colouring red. A pipe the beam is
+        painting, on the other hand, is red.
+
+        A slit row with no aperture typed is not blank: it prints the half-gap
+        that would put the jaws ON the turnaround, and where the sample edge
+        projects to at that plane. Those are the two numbers you would
+        otherwise work out by hand from the drift ratio, and the gap between
+        them is the turnaround margin as it appears HERE rather than at the
+        sample -- shrunk by the same ratio as everything else.
+        """
+        item = self.tbl_planes.item(row, PLANE_COL_VERDICT)
+
+        if kind == "slit":
+            axis = meta.get("axis", "X")
+            target = ""
+            if jaw is not None:
+                target = (f"turnaround at ±{jaw['turnaround_mm']:.3f} mm"
+                          f", sample edge → ±{jaw['sample_edge_mm']:.3f} mm")
+
+            if aperture is None:
+                item.setText(f"set {axis} jaws ±{jaw['turnaround_mm']:.3f} mm to sit "
+                             f"on the turnaround (sample edge → "
+                             f"±{jaw['sample_edge_mm']:.3f} mm)"
+                             if jaw is not None else "—")
+                item.setForeground(Qt.GlobalColor.darkBlue if jaw is not None
+                                   else Qt.GlobalColor.gray)
+                return
+
+            clearance = results[axis]["clearance_mm"]
+            if math.isnan(clearance):
+                item.setText("—")
+                item.setForeground(Qt.GlobalColor.gray)
+                return
+            if clearance < 0:
+                item.setText(f"{axis} jaws cut {-clearance:.3f} mm into the sweep "
+                             f"— intercepting   ·   {target}")
+                item.setForeground(Qt.GlobalColor.darkBlue)
+            else:
+                item.setText(f"sweep clears the {axis} jaws by {clearance:.3f} mm "
+                             f"— passes untouched   ·   {target}")
+                item.setForeground(Qt.GlobalColor.darkGreen)
+            return
+
+        if aperture is None:
+            item.setText("—")
+            item.setForeground(Qt.GlobalColor.gray)
+            return
+
+        worst_axis, worst = None, None
+        for axis, r in results.items():
+            c = r["clearance_mm"]
+            if math.isnan(c):
+                continue
+            if worst is None or c < worst:
+                worst_axis, worst = axis, c
+        if worst is None:
+            item.setText("—")
+            item.setForeground(Qt.GlobalColor.gray)
+        elif worst < 0:
+            item.setText(f"⚠ {worst_axis} over the aperture by {-worst:.3f} mm "
+                         f"— beam on the wall")
+            item.setForeground(Qt.GlobalColor.red)
+        else:
+            item.setText(f"clears by {worst:.3f} mm ({worst_axis} tightest)")
+            item.setForeground(Qt.GlobalColor.darkGreen)
 
     # ------------------------------------------------------------------
     # Species table
@@ -498,8 +888,8 @@ class RasterPlannerTab(QWidget):
         # I = k*f*C*V, it just sits there.
         plate_kv = {"X": drive["X"]["ac_plate_kv"], "Y": drive["Y"]["ac_plate_kv"]}
 
-        self.lbl_kv_x.setText("—" if math.isnan(kv_x) else f"{kv_x:.4f} kV differential")
-        self.lbl_kv_y.setText("—" if math.isnan(kv_y) else f"{kv_y:.4f} kV differential")
+        self._set_generator(self.lbl_gen_x, "X", drive["X"])
+        self._set_generator(self.lbl_gen_y, "Y", drive["Y"])
         self._set_plate_kv(self.lbl_plate_kv_x, drive["X"])
         self._set_plate_kv(self.lbl_plate_kv_y, drive["Y"])
         self._set_sweep(self.lbl_sweep_x, drive["X"], width_x_mm, offset_x_mm)
@@ -545,7 +935,6 @@ class RasterPlannerTab(QWidget):
 
         self.lbl_uniformity.setText(
             f"X {_pct(du_x)} peak-to-peak     Y {_pct(du_y)} peak-to-peak")
-        self._draw_dwell(du_x, half_x_mm, du_y, half_y_mm)
 
         # --- Species table -------------------------------------------------
         offset_note = ""
@@ -558,6 +947,51 @@ class RasterPlannerTab(QWidget):
             f"X ±{scan_half_x:.3f} mm    Y ±{scan_half_y:.3f} mm{offset_note}")
         self._fill_species_deflections(kv_x, kv_y, plate_length_cm, plate_gap_cm,
                                         drift_cm, scan_half_x, scan_half_y, sel_row)
+
+        # --- Down the beamline ---------------------------------------------
+        self._fill_planes(drive, charge_state, beam_energy_ev,
+                          plate_length_cm, plate_gap_cm)
+
+    def _set_generator(self, label, axis, drive):
+        """The generator settings for this axis, in the units the box takes.
+
+        The DG1022Z is set in Vpp per channel, and the EEL5000 is 1000x, so
+        the amplitude one channel needs is twice that channel's peak kV --
+        numerically the same figure as the plate-to-plate kV, which is why
+        showing only one of them was ambiguous. Both are stated, each with
+        its unit and the thing it is a property of.
+
+        BOTH CHANNELS OF THE PAIR GET THE SAME AMPLITUDE. The asymmetry, when
+        there is one, is in the DC offset and its SIGN -- +O on one plate and
+        -O on the other. Equal-and-opposite offsets are what move the sweep
+        centre; a common-mode offset cancels, and unequal amplitudes only
+        change the width (see the module docstring).
+        """
+        ac_plate_kv     = drive["ac_plate_kv"]
+        offset_plate_kv = drive["offset_plate_kv"]
+        if math.isnan(ac_plate_kv):
+            label.setText("—")
+            label.setStyleSheet("")
+            return
+
+        pos, neg = f"{axis}+", f"{axis}-"
+        vpp = 2.0 * ac_plate_kv        # 1 V in == 1 kV out on the EEL5000
+        body = (f"{vpp:.4f} Vpp on {pos} and {neg}, 180° apart")
+        if abs(offset_plate_kv) > 1e-9:
+            body += (f"   ·   DC offset {offset_plate_kv:+.4f} V on {pos}, "
+                     f"{-offset_plate_kv:+.4f} V on {neg}")
+
+        # The generator's own interlock: |offset| + amplitude/2 <= 5 V. That is
+        # the same arithmetic as peak_plate_kv, one gain factor away, so it is
+        # checked here in the units the operator is about to type.
+        peak_v = abs(offset_plate_kv) + vpp / 2.0
+        if peak_v > MAX_GEN_VOLTS:
+            label.setText(f"{body}   ⚠ peak {peak_v:.4f} V exceeds the "
+                          f"{MAX_GEN_VOLTS:.0f} V generator/amplifier input rail")
+            label.setStyleSheet(theme.status_label(theme.FAULT))
+        else:
+            label.setText(body)
+            label.setStyleSheet("")
 
     def _set_plate_kv(self, label, drive):
         """Per-plate voltage, checked against the rating at its WORST instant.
@@ -578,11 +1012,16 @@ class RasterPlannerTab(QWidget):
             label.setStyleSheet("")
             return
 
+        # Both figures, both labelled. "0.7377" on its own was the thing that
+        # could be read as either of them.
+        differential_kv = drive["amplitude_kv"]
         if abs(offset_plate_kv) > 1e-9:
-            body = (f"{peak_plate_kv:.4f} kV peak per plate "
-                    f"({ac_plate_kv:.4f} AC ± {abs(offset_plate_kv):.4f} DC)")
+            body = (f"±{peak_plate_kv:.4f} kV peak per plate "
+                    f"({ac_plate_kv:.4f} kV AC ± {abs(offset_plate_kv):.4f} kV DC)"
+                    f"   ·   {differential_kv:.4f} kV plate-to-plate")
         else:
-            body = f"{ac_plate_kv:.4f} kV per plate"
+            body = (f"±{ac_plate_kv:.4f} kV per plate"
+                    f"   ·   {differential_kv:.4f} kV plate-to-plate")
 
         if peak_plate_kv > PLATE_RATING_KV:
             label.setText(f"{body}  ⚠ OVER the "
@@ -739,21 +1178,3 @@ class RasterPlannerTab(QWidget):
         ax.legend(fontsize="small")
         self._fig_env.tight_layout()
         self._canvas_env.draw_idle()
-
-    def _draw_dwell(self, du_x, half_x_mm, du_y, half_y_mm):
-        ax = self._ax_dwell
-        ax.clear()
-        if du_x["profile_mm"].size:
-            ax.plot(du_x["profile_mm"], du_x["profile_dose"], label="X")
-            ax.axvspan(-half_x_mm, half_x_mm, color="tab:green", alpha=0.12,
-                       label="Sample (X)")
-        if du_y["profile_mm"].size:
-            ax.plot(du_y["profile_mm"], du_y["profile_dose"], "--", label="Y")
-            ax.axvspan(-half_y_mm, half_y_mm, color="tab:blue", alpha=0.10,
-                       label="Sample (Y)")
-        ax.set_xlabel("Position (mm)")
-        ax.set_ylabel("Relative dose")
-        ax.grid(True, alpha=0.3)
-        ax.legend(fontsize="small")
-        self._fig_dwell.tight_layout()
-        self._canvas_dwell.draw_idle()

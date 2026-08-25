@@ -308,6 +308,22 @@ _CANDIDATES = [
 _PROBE_TIMEOUT_S = 0.3
 
 
+def candidate_keys() -> list:
+    """Every instrument key this module knows how to probe for."""
+    return [c["key"] for c in _CANDIDATES]
+
+
+def candidates_for(keys) -> list:
+    """The probe candidates for *keys*, in the table's own order.
+
+    Lets a caller scan for ONE instrument instead of all of them.  Probing
+    is not free - every port is opened and waited on at each candidate baud
+    - so a tab that only wants its own instrument should say so.
+    """
+    wanted = set(keys)
+    return [c for c in _CANDIDATES if c["key"] in wanted]
+
+
 # ---------------------------------------------------------------------------
 # Probing
 # ---------------------------------------------------------------------------

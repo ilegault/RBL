@@ -62,6 +62,11 @@ class LoadCharacterizationTab(QWidget):
     profile_change_requested = Signal(str)
     pair_profile_requested   = Signal(str, str)   # (profile_name, amp_label)
     run_state_changed        = Signal(bool)
+    # A run has written a new per-channel measurement to
+    # load_calibration_store.  Anything planning from that store (the Raster
+    # Planner) has to be told: it reads the file, and a file does not emit
+    # anything when it changes.  Wired in app.py.
+    measurements_changed     = Signal()
 
     def __init__(self, beamline, parent=None):
         super().__init__(parent)
@@ -234,6 +239,7 @@ class LoadCharacterizationTab(QWidget):
         if self._prior_profile:
             self.profile_change_requested.emit(self._prior_profile)
         self._refresh_table()
+        self.measurements_changed.emit()
 
     def _on_characterizer_error(self, msg: str):
         QMessageBox.warning(self, "Load characterization error", msg)

@@ -26,7 +26,9 @@ from PySide6.QtWidgets import (
     QApplication, QComboBox, QDoubleSpinBox, QAbstractSpinBox,
 )
 
-from rbl.gui.widgets.inputs import NoScrollComboBox, QuietDoubleSpinBox
+from rbl.gui.widgets.inputs import (
+    NoScrollComboBox, NoScrollSpinBox, QuietDoubleSpinBox,
+)
 
 
 @pytest.fixture(scope="module")
@@ -154,6 +156,30 @@ class TestQuietDoubleSpinBox:
         assert spn.value() == pytest.approx(0.514)
 
 
+class TestNoScrollSpinBox:
+
+    def test_wheel_does_not_change_the_value(self, qapp):
+        spn = NoScrollSpinBox()
+        spn.setRange(1, 99)
+        spn.setValue(15)
+        _wheel(spn)
+        assert spn.value() == 15
+
+    def test_wheel_event_is_ignored_so_a_scroll_area_still_scrolls(self, qapp):
+        spn = NoScrollSpinBox()
+        event = _wheel(spn)
+        assert not event.isAccepted()
+
+    def test_arrow_keys_still_work(self, qapp):
+        from PySide6.QtGui import QKeyEvent
+        from PySide6.QtCore import QEvent
+        spn = NoScrollSpinBox()
+        spn.setRange(0, 10)
+        spn.setValue(4)
+        spn.stepUp()
+        assert spn.value() == 5
+
+
 class TestEveryDropdownInTheApp:
     """A bare QComboBox or QDoubleSpinBox anywhere is the bug back again on
     that one screen."""
@@ -168,8 +194,14 @@ class TestEveryDropdownInTheApp:
         # QSpinBox is caught too. Not every screen has numeric boxes — the HV
         # amplifier tab is read-only — so this asserts none are BAD rather than
         # that any exist; test_every_numeric_box_is_quiet covers the presence.
+        #
+        # NoScrollSpinBox counts as safe: it is the whole-number sibling of
+        # QuietDoubleSpinBox and ignores the wheel the same way. It does not
+        # need the keyboardTracking half of the fix, because a partially
+        # typed integer is never a valid-but-wrong number the way "0" is for
+        # "0.514".
         bad = [s for s in widget.findChildren(QAbstractSpinBox)
-               if not isinstance(s, QuietDoubleSpinBox)]
+               if not isinstance(s, (QuietDoubleSpinBox, NoScrollSpinBox))]
         assert not bad, [s.objectName() or type(s).__name__ for s in bad]
 
     def test_stepper_motors_tab(self, qapp):
@@ -185,6 +217,22 @@ class TestEveryDropdownInTheApp:
     def test_hv_amplifier_tab(self, qapp):
         from rbl.gui.amp_tab import AmpTab
         self._assert_all_safe(AmpTab())
+
+    def test_beam_profiler_tab(self, qapp):
+        # Peaks and Smoothing decide what FWHM the screen reports, and the
+        # acquisition dropdowns decide how hard the link is worked — a wheel
+        # notch over any of them changes a measurement with nothing to say
+        # why.
+        from rbl.state.beamline import Beamline
+        from rbl.gui.profiler_tab import ProfilerTab
+        self._assert_all_safe(ProfilerTab(Beamline()))
+
+    def test_vacuum_tab(self, qapp):
+        # The port dropdowns choose which physical instrument each half of
+        # this screen is talking to.
+        from rbl.state.beamline import Beamline
+        from rbl.gui.vacuum_tab import VacuumTab
+        self._assert_all_safe(VacuumTab(Beamline()))
 
     def test_beam_position_indicator(self, qapp):
         from rbl.gui.widgets.beam_indicator import BeamPositionIndicator

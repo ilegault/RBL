@@ -87,6 +87,11 @@ class FuncGenControlMixin:
                 offset_v=state["offset"],
                 phase_deg=state["phase"],
                 output_on=state["output"],
+                # Carried so the log records what the generator actually said
+                # and what load it thinks it is driving — see ChannelSnapshot.
+                shape_raw=state.get("shape_raw", ""),
+                load=state.get("load", ""),
+                load_ohms=state.get("load_ohms", float("nan")),
             )
         # An empty `timebase` means "no fresh reading" — carry the cached one
         # rather than publishing blanks that would flicker a second screen's

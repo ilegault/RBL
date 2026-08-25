@@ -15,6 +15,7 @@ or opens a serial port.
 """
 import logging
 import time
+from collections import deque
 
 from rbl.services.vacuum_logger import VacuumLogger
 
@@ -33,6 +34,7 @@ from PySide6.QtWidgets import (
 
 from rbl.gui import theme
 from rbl.gui.widgets.connection_bar import StatusPill
+from rbl.gui.widgets.port_picker import PortPicker, PortScanWorker
 from rbl.gui.widgets.live_plot import LivePlotPanel
 from rbl.config.vacuum_config import (
     GAUGE_DISPLAY_NAMES, UI_GOOD_VACUUM_TORR, STALE_THRESHOLD_S,
@@ -41,8 +43,8 @@ from rbl.config.vacuum_config import (
 
 log = logging.getLogger(__name__)
 
-# Maximum pressure history retained per gauge (1 Hz poll → 1 h)
-_MAX_HISTORY = 3600
+# Maximum pressure history retained per gauge (1 Hz poll → 24 h)
+_MAX_HISTORY = 86_400
 
 # Default visible time window, and the floor for zoom-in.  Pressure is polled
 # at 1 Hz, so zooming below a few seconds shows nothing useful.
@@ -142,25 +144,44 @@ class VacuumTab(QWidget):
         conn_lay = QVBoxLayout(conn_box)
         conn_box.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
 
-        # Auto-detect & Connect All — single button for the common case.
-        self._btn_auto = QPushButton("Auto-detect && Connect All")
+        # Detect both, and stop there. This used to be "Auto-detect &
+        # Connect All", which ran the scan ON THE GUI THREAD - seconds of
+        # frozen window - and then started polling whatever it found. Now
+        # the scan runs on its own thread and only fills the two dropdowns;
+        # connecting stays a deliberate press per instrument.
+        detect_row = QHBoxLayout()
+        self._btn_auto = QPushButton("Detect both controllers")
         self._btn_auto.setToolTip(
-            "Scan COM ports to find both gauge controllers,\n"
-            "then start polling.  Discovered ports are saved\n"
-            "for next launch."
+            "Scan the COM ports for both gauge controllers and select what\n"
+            "each one is on.  Does not connect.  Findings are saved so the\n"
+            "next launch tries them first."
         )
         self._btn_auto.setStyleSheet(
             "QPushButton { font-weight: bold; padding: 6px 14px; }"
         )
         self._btn_auto.clicked.connect(self._on_auto_detect)
-        conn_lay.addWidget(self._btn_auto)
+        detect_row.addWidget(self._btn_auto)
 
-        self._xgs_bar  = _InstrumentBar("XGS-600",  "Agilent XGS-600")
-        self._vgc_bar  = _InstrumentBar("VGC083",   "INFICON VGC083")
+        self._lbl_scan = QLabel("")
+        self._lbl_scan.setStyleSheet(
+            f"color: {theme.NEUTRAL}; font-style: italic;")
+        detect_row.addWidget(self._lbl_scan, stretch=1)
+        conn_lay.addLayout(detect_row)
+        self._scan_worker = None
+
+        # First argument is the serial_transport PROBE KEY, not a label -
+        # Detect matches on it, and a display string there would probe for
+        # an instrument that does not exist.
+        self._xgs_bar  = _InstrumentBar("xgs600", "Agilent XGS-600",
+                                        short_name="XGS-600")
+        self._vgc_bar  = _InstrumentBar("vgc083", "INFICON VGC083",
+                                        short_name="VGC083")
         self._xgs_bar.connect_clicked.connect(self._on_xgs_connect)
         self._vgc_bar.connect_clicked.connect(self._on_vgc_connect)
         self._xgs_bar.disconnect_clicked.connect(self._on_xgs_disconnect)
         self._vgc_bar.disconnect_clicked.connect(self._on_vgc_disconnect)
+        self._xgs_bar.status_message.connect(self._on_scan_status)
+        self._vgc_bar.status_message.connect(self._on_scan_status)
 
         conn_lay.addWidget(self._xgs_bar)
         conn_lay.addWidget(self._vgc_bar)
@@ -363,47 +384,108 @@ class VacuumTab(QWidget):
     # -----------------------------------------------------------------------
 
     def _on_auto_detect(self):
-        """Discover COM ports for both instruments and connect them."""
+        """Scan for both controllers on a background thread, then select them."""
+        if self._scan_worker is not None:
+            return
         self._btn_auto.setEnabled(False)
         self._btn_auto.setText("Scanning…")
-        try:
-            ports = self.beamline.discover_vacuum_ports()
-        finally:
-            self._btn_auto.setText("Auto-detect && Connect All")
-            self._btn_auto.setEnabled(True)
+        self._on_scan_status("probing serial ports for both controllers…",
+                             theme.NEUTRAL)
+        self._scan_worker = PortScanWorker(["xgs600", "vgc083"], self)
+        self._scan_worker.scan_done.connect(self._on_auto_detect_done)
+        self._scan_worker.start()
 
-        if not ports:
-            log.info("vacuum_tab: auto-detect found no instruments")
-            return
+    def _on_auto_detect_done(self, ports: dict):
+        self._btn_auto.setEnabled(True)
+        self._btn_auto.setText("Detect both controllers")
+        self._scan_worker = None
 
-        # Fill in the port fields so the operator can see what was found.
+        self._xgs_bar.refresh_ports()
+        self._vgc_bar.refresh_ports()
         if "xgs600" in ports:
             self._xgs_bar.set_port_text(ports["xgs600"])
         if "vgc083" in ports:
             self._vgc_bar.set_port_text(ports["vgc083"])
 
-        self.beamline.connect_vacuum(ports)
+        if not ports:
+            log.info("vacuum_tab: detect found no instruments")
+            self._on_scan_status(
+                "no gauge controller answered — check the cables and that "
+                "each adapter has a driver", theme.WARN)
+            return
+        found = ", ".join(f"{k} on {v}" for k, v in sorted(ports.items()))
+        missing = [k for k in ("xgs600", "vgc083") if k not in ports]
+        msg = f"found {found}"
+        if missing:
+            msg += f"  —  no answer from {', '.join(missing)}"
+        self._on_scan_status(msg, theme.OK if not missing else theme.WARN)
+
+    def _on_scan_status(self, message: str, colour: str):
+        self._lbl_scan.setText(message)
+        self._lbl_scan.setStyleSheet(f"color: {colour}; font-style: italic;")
 
     def _on_xgs_connect(self):
-        port = self._xgs_bar.port_text()
-        if port:
-            self.beamline.connect_vacuum({"xgs600": port})
-        else:
-            # No port typed — run discovery for just this instrument.
-            ports = self.beamline.discover_vacuum_ports()
-            if "xgs600" in ports:
-                self._xgs_bar.set_port_text(ports["xgs600"])
-                self.beamline.connect_vacuum({"xgs600": ports["xgs600"]})
+        self._connect_one("xgs600", self._xgs_bar)
 
     def _on_vgc_connect(self):
-        port = self._vgc_bar.port_text()
+        self._connect_one("vgc083", self._vgc_bar)
+
+    def _connect_one(self, key: str, bar):
+        """Connect one controller to the port selected in its dropdown.
+
+        With 'Auto-detect' selected there is nothing to open yet, so this
+        runs the probe FIRST - on the picker's own background thread, not
+        this one - and the operator presses Connect again once a port is
+        selected.  The old code called discover() inline here, which froze
+        the window for the length of the scan.
+        """
+        port = bar.port_text()
         if port:
-            self.beamline.connect_vacuum({"vgc083": port})
-        else:
-            ports = self.beamline.discover_vacuum_ports()
-            if "vgc083" in ports:
-                self._vgc_bar.set_port_text(ports["vgc083"])
-                self.beamline.connect_vacuum({"vgc083": ports["vgc083"]})
+            self.beamline.connect_vacuum({key: port})
+            return
+        self._on_scan_status(
+            f"no port selected for {key} — detecting, then press Connect",
+            theme.NEUTRAL)
+        bar.detect()
+
+    def connect_if_needed(self) -> tuple:
+        """Connect both gauge controllers on their selected/saved ports.
+
+        (status, detail), for the Overview tab's Connect All.  A controller
+        whose picker is on 'Auto-detect' falls back to the port saved by
+        the last successful scan rather than starting one here: a probe
+        opens every port in turn and can take seconds, and Connect All is
+        already doing four other things.  Press 'Detect both controllers'
+        on this tab once and the saved port is what Connect All uses from
+        then on.
+        """
+        from rbl.hardware.serial_transport import load_saved_ports
+        saved = {}
+        try:
+            saved = load_saved_ports() or {}
+        except Exception:
+            saved = {}
+
+        live = self.beamline.vacuum_connected
+        results, failed = [], []
+        for key, bar, name in (("xgs600", self._xgs_bar, "XGS-600"),
+                               ("vgc083", self._vgc_bar, "VGC083")):
+            if live.get(key):
+                results.append(f"{name} already connected")
+                continue
+            port = bar.port_text() or saved.get(key, "")
+            if not port:
+                failed.append(f"{name}: no port known — run Detect on the "
+                              f"Vacuum tab")
+                continue
+            self.beamline.connect_vacuum({key: port})
+            results.append(f"{name} on {port}")
+
+        if failed and not results:
+            return "failed", "; ".join(failed)
+        if failed:
+            return "partial", "; ".join(results + failed)
+        return "connected", "; ".join(results)
 
     def _on_xgs_disconnect(self):
         self.beamline.disconnect_xgs600()
@@ -430,19 +512,19 @@ class VacuumTab(QWidget):
         self._xgs_bar.set_connected(state.xgs_connected)
         self._vgc_bar.set_connected(state.vgc_connected)
 
-        # Append to history
+        # Append to history (deque caps automatically at _MAX_HISTORY)
         now = time.time()
         for r in state.xgs_readings:
             key = f"xgs600:{r.channel.label}"
-            self._history.setdefault(key, []).append((now, r.pressure))
-            if len(self._history[key]) > _MAX_HISTORY:
-                self._history[key] = self._history[key][-_MAX_HISTORY:]
+            if key not in self._history:
+                self._history[key] = deque(maxlen=_MAX_HISTORY)
+            self._history[key].append((now, r.pressure))
 
         for r in state.vgc_readings:
             key = f"vgc083:{r.channel}"
-            self._history.setdefault(key, []).append((now, r.pressure))
-            if len(self._history[key]) > _MAX_HISTORY:
-                self._history[key] = self._history[key][-_MAX_HISTORY:]
+            if key not in self._history:
+                self._history[key] = deque(maxlen=_MAX_HISTORY)
+            self._history[key].append((now, r.pressure))
 
         # Forward to active logger; reopen if gauge set changed
         if self._logger is not None:
@@ -797,7 +879,7 @@ class VacuumTab(QWidget):
                 line.set_data([], [])
                 continue
 
-            # Decimate to ≤600 points so an hour-long window stays responsive.
+            # Decimate to ≤600 points so wide time windows stay responsive.
             if len(xs) > 600:
                 step = len(xs) // 600
                 xs   = xs[::step]
@@ -851,27 +933,36 @@ class VacuumTab(QWidget):
 # ---------------------------------------------------------------------------
 
 class _InstrumentBar(QGroupBox):
-    """Simple row: instrument name | port entry | status | connect/disconnect."""
+    """One gauge controller: port picker | status | connect/disconnect.
+
+    The port is CHOSEN, not typed. COM numbers move when a USB adapter is
+    replugged into a different socket, and a wrong number fails as a
+    timeout - which reads like a dead controller rather than a wrong port.
+    Detect asks each port what it is and selects the one that answers as
+    this instrument; it deliberately stops there rather than connecting,
+    so finding out what is plugged in is separate from starting to drive it.
+    """
 
     from PySide6.QtCore import Signal
     connect_clicked    = Signal()
     disconnect_clicked = Signal()
+    status_message     = Signal(str, str)
 
-    def __init__(self, key: str, display_name: str, parent=None):
+    def __init__(self, key: str, display_name: str, short_name: str = "",
+                 parent=None):
+        """key is the PROBE key ("xgs600"), display_name titles the box,
+        short_name is what status messages call it."""
         super().__init__(display_name, parent)
-        self._key       = key
+        self._key       = key            # serial_transport candidate key
         self._connected = False
 
         outer = QVBoxLayout(self)
         lay = QHBoxLayout()
         outer.addLayout(lay)
 
-        lay.addWidget(QLabel("Port:"))
-
-        self._le_port = QLineEdit()
-        self._le_port.setPlaceholderText("e.g. COM4  (leave blank to auto-discover)")
-        self._le_port.setMaximumWidth(200)
-        lay.addWidget(self._le_port)
+        self._picker = PortPicker(key, display_name=short_name or display_name)
+        self._picker.status.connect(self.status_message)
+        lay.addWidget(self._picker)
 
         self._btn = QPushButton("Connect")
         self._btn.clicked.connect(self._on_click)
@@ -888,14 +979,23 @@ class _InstrumentBar(QGroupBox):
             self.connect_clicked.emit()
 
     def port_text(self) -> str:
-        return self._le_port.text().strip()
+        """Selected port, or "" when 'Auto-detect' is chosen."""
+        return self._picker.current_port() or ""
 
     def set_port_text(self, text: str):
-        """Fill the port field (used by auto-detect to show what was found)."""
-        self._le_port.setText(text)
+        """Select a port (used after a scan to show what was found)."""
+        self._picker.set_port(text)
+
+    def detect(self):
+        """Probe for this instrument and select it. Does not connect."""
+        self._picker.detect()
+
+    def refresh_ports(self):
+        self._picker.refresh()
 
     def set_connected(self, connected: bool, detail: str = ""):
         self._connected = connected
         self._btn.setText("Disconnect" if connected else "Connect")
+        self._picker.set_busy(connected)
         text = f"● Connected  {detail}".strip() if connected else "● Disconnected"
         self._pill.set_connected(connected, text)

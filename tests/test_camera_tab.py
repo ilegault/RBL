@@ -34,6 +34,7 @@ class _StubRecorder(QObject):
     status           = Signal(str, str)
     session_started  = Signal(str)
     session_stopped  = Signal(str)
+    photo_taken      = Signal(str)
 
     _recording       = False
     _csv_interval_s  = 5

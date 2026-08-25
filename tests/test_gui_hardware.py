@@ -112,8 +112,13 @@ class TestTabNavigation:
         3 = Function Generators
     """
 
-    def test_starts_on_motors(self, win):
-        assert win._outer_stack.currentIndex() == 0
+    def test_starts_on_the_overview(self, win):
+        # The app opens on Overview: it answers "what is the beamline doing"
+        # without pressing anything, and it is where Connect All lives.
+        from rbl.gui.app import OVERVIEW_TAB_INDEX
+        assert win._outer_stack.currentIndex() == OVERVIEW_TAB_INDEX
+        assert win._outer_tabbar.currentIndex() == OVERVIEW_TAB_INDEX
+        assert win._outer_tabbar.tabText(OVERVIEW_TAB_INDEX) == "Overview"
 
     def test_click_motors_shows_motors(self, win):
         win._on_outer_tab_clicked(0)
@@ -514,3 +519,102 @@ class TestGalilPollWorkerErrorHandling:
         qapp.processEvents()
         assert col.errors, "poll worker should have reported the error"
         assert not gw.isRunning()
+
+
+class TestConnectAll:
+    """MainWindow presses each tab's own connect, in order, one per turn of
+    the event loop.  Nothing here talks to hardware: every step is replaced
+    with a recorder, which is the point - what is under test is the
+    sequencing and the reporting, not the drivers."""
+
+    def _fake_steps(self, win, results):
+        calls = []
+
+        def step(name, outcome):
+            def run():
+                calls.append(name)
+                return outcome
+            return run
+
+        win._connect_all_steps = lambda: [
+            (name, step(name, outcome)) for name, outcome in results]
+        return calls
+
+    def _drain(self, win, qapp):
+        # The sequence advances on singleShot(0); pump until it settles.
+        for _ in range(50):
+            qapp.processEvents()
+            if win.overview_tab.btn_connect_all.isEnabled():
+                break
+
+    def test_every_step_runs_in_order(self, win, qapp):
+        calls = self._fake_steps(win, [
+            ("Galil", ("connected", "ok")),
+            ("LabJack T7", ("already", "already connected")),
+            ("Scope", ("connected", "COM5")),
+        ])
+        win._on_connect_all()
+        self._drain(win, qapp)
+        assert calls == ["Galil", "LabJack T7", "Scope"]
+
+    def test_the_button_is_re_armed_when_the_sequence_finishes(self, win, qapp):
+        self._fake_steps(win, [("Galil", ("connected", "ok"))])
+        win._on_connect_all()
+        self._drain(win, qapp)
+        assert win.overview_tab.btn_connect_all.isEnabled() is True
+
+    def test_one_failure_does_not_stop_the_rest(self, win, qapp):
+        calls = self._fake_steps(win, [
+            ("Galil", ("failed", "no route to host")),
+            ("Scope", ("connected", "COM5")),
+        ])
+        win._on_connect_all()
+        self._drain(win, qapp)
+        assert calls == ["Galil", "Scope"]
+
+    def test_a_failure_is_named_with_its_reason(self, win, qapp):
+        self._fake_steps(win, [
+            ("Galil", ("failed", "no route to host")),
+            ("Scope", ("connected", "COM5")),
+        ])
+        win._on_connect_all()
+        self._drain(win, qapp)
+        text = win.overview_tab.lbl_connect_all.text()
+        assert "Galil" in text and "no route to host" in text
+        assert "Scope" in text          # what DID come up is still reported
+
+    def test_a_raising_step_is_caught_and_reported(self, win, qapp):
+        def boom():
+            raise RuntimeError("driver exploded")
+
+        win._connect_all_steps = lambda: [("Galil", boom),
+                                          ("Scope", lambda: ("connected", "COM5"))]
+        win._on_connect_all()
+        self._drain(win, qapp)
+        assert "driver exploded" in win.overview_tab.lbl_connect_all.text()
+        assert win.overview_tab.btn_connect_all.isEnabled() is True
+
+    def test_all_good_reports_everything_connected(self, win, qapp):
+        self._fake_steps(win, [
+            ("Galil", ("connected", "ok")),
+            ("Scope", ("already", "already connected")),
+        ])
+        win._on_connect_all()
+        self._drain(win, qapp)
+        text = win.overview_tab.lbl_connect_all.text()
+        assert text.startswith("Connected:")
+        assert "Galil" in text and "Scope" in text
+
+    def test_the_real_step_list_covers_every_subsystem(self, win):
+        names = [name for name, _fn in win._connect_all_steps()]
+        assert names == ["Galil", "LabJack T7", "Function generators",
+                         "Scope", "Vacuum gauges"]
+
+    def test_connect_all_never_disconnects_anything(self, win):
+        # Each step is a tab's connect_if_needed(); none of them is a
+        # toggle.  A Connect All that could disconnect a live instrument
+        # because it was already up would be a hazard, not a convenience.
+        import inspect
+        for _name, fn in win._connect_all_steps():
+            src = inspect.getsource(fn)
+            assert "disconnect" not in src.lower()

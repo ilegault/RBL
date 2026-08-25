@@ -755,9 +755,12 @@ class TestHvInterlockIndicator:
         assert "BLOCKED" in tab.lbl_hv_interlock.text()
 
     def test_stale_reading_reads_distinctly_from_a_pressure_block(self, tab):
-        tab._hv_interlock = {"state": "block", "reason": "pressure too high",
-                              "pressure_torr": 2e-3, "pressure_stale": True,
-                              "commanded_kv": 2.0}
+        tab._hv_interlock = {
+            "state": "block",
+            "reason": "vacuum reading is stale or unavailable — HV blocked",
+            "pressure_torr": 2e-3, "pressure_stale": True,
+            "commanded_kv": 2.0,
+        }
         tab._redraw_hv_interlock()
         assert "stale" in tab.lbl_hv_interlock.text().lower()
 
@@ -765,3 +768,30 @@ class TestHvInterlockIndicator:
         tab.beamline._recompute_hv_interlock()
         assert tab._hv_interlock is not None
         assert tab._hv_interlock["state"] in ("ok", "warn", "block")
+
+
+# ---------------------------------------------------------------------------
+# Connect All
+# ---------------------------------------------------------------------------
+
+class TestConnectAllButton:
+    """This tab requests; MainWindow performs.  See the class comment on
+    OverviewTab.connect_all_requested for why the tab owns no ports."""
+
+    def test_the_button_only_emits_a_request(self, tab):
+        seen = []
+        tab.connect_all_requested.connect(lambda: seen.append(True))
+        tab.btn_connect_all.click()
+        assert seen == [True]
+
+    def test_busy_disables_the_button_so_it_cannot_be_double_pressed(self, tab):
+        tab.set_connect_all_busy(True, "starting…")
+        assert tab.btn_connect_all.isEnabled() is False
+        assert tab.btn_connect_all.text() == "Connecting…"
+        tab.set_connect_all_busy(False)
+        assert tab.btn_connect_all.isEnabled() is True
+        assert tab.btn_connect_all.text() == "Connect All"
+
+    def test_status_text_is_displayed(self, tab):
+        tab.set_connect_all_status("connecting Galil…")
+        assert "Galil" in tab.lbl_connect_all.text()

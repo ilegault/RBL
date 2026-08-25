@@ -62,6 +62,7 @@ TdsTimeoutError   — SerialTimeout propagated from the transport.
 """
 import logging
 import struct
+import time
 
 from rbl.hardware.serial_transport import SerialTimeout
 
@@ -159,35 +160,91 @@ _FLOAT_FIELDS = {"YMULT", "YOFF", "YZERO", "XINCR", "XZERO", "PT_OFF"}
 _INT_FIELDS   = {"BYT_NR", "BIT_NR", "NR_PT"}
 
 
+def strip_scpi_header(text: str) -> str:
+    """':MEASUREMENT:IMMED:VALUE 1.23E-3'  ->  '1.23E-3'.
+
+    With HEADer ON the scope prefixes every reply with the command that
+    produced it.  Scalar queries need that prefix removed before float().
+    """
+    t = text.strip()
+    if t.startswith(":") and " " in t:
+        return t.split(" ", 1)[1].strip()
+    return t
+
+
+def _split_top_level(text: str, sep: str) -> list[str]:
+    """Split on *sep*, but never inside a double-quoted string.
+
+    Required because WFID is a quoted string full of commas and spaces:
+        WFID "Ch1, DC coupling, 1.0E-1 V/div, 5.0E-3 s/div, 2500 points"
+    Splitting naively on ',' tears it into fragments that then parse as
+    garbage keys.
+    """
+    out, buf, in_quote = [], [], False
+    for ch in text:
+        if ch == '"':
+            in_quote = not in_quote
+            buf.append(ch)
+        elif ch == sep and not in_quote:
+            out.append("".join(buf))
+            buf = []
+        else:
+            buf.append(ch)
+    out.append("".join(buf))
+    return [tok.strip() for tok in out if tok.strip()]
+
+
 def _parse_preamble(text: str) -> dict:
     """Parse a WFMPRE? response string into a dict.
 
-    The scope returns comma-separated 'KEY:VALUE' pairs, e.g.::
+    TWO WIRE FORMATS ARE ACCEPTED, because TDS firmware revisions differ and
+    the answer also depends on whether HEADer is ON:
 
-        BYT_NR:1,BIT_NR:8,ENCDG:BIN,...,YMULT:4E-4,YOFF:-50,...
+      headers on   :WFMPRE:BYT_NR 1;BIT_NR 8;ENCDG BIN;...;XINCR 2.0E-5;...
+                   -> ':WFMPRE:' leader, ';' between pairs, SPACE between
+                      key and value.  This is what the TDS 2012 with the
+                      TDS2CM module actually sends.
 
-    Known numeric fields are converted to float (floats) or int (integers).
-    All other fields are kept as stripped strings.
+      headers off  BYT_NR:1,BIT_NR:8,ENCDG:BIN,...,XINCR:4E-09,...
+                   -> ',' between pairs, ':' between key and value.
+
+    Known numeric fields are converted to float or int.  Everything else is
+    kept as a stripped, unquoted string.  Tokens that are neither
+    'KEY VALUE' nor 'KEY:VALUE' are skipped with a debug log.
 
     Raises
     ------
     TdsProtocolError
-        If the text cannot be parsed as a preamble at all (no ':' separators).
+        If the text yields no usable pairs at all.
     """
-    pairs = [tok.strip() for tok in text.strip().split(",") if tok.strip()]
-    if not pairs:
-        raise TdsProtocolError(
-            f"WFMPRE? returned an empty or unparseable preamble: {text!r}"
-        )
+    t = text.strip()
+    if not t:
+        raise TdsProtocolError("WFMPRE? returned an empty preamble")
+
+    # Drop the ':WFMPRE:' leader while keeping the key it is glued to:
+    #   ':WFMPRE:BYT_NR 1;...'  ->  'BYT_NR 1;...'
+    if t.startswith(":"):
+        head, sep, rest = t.partition(" ")
+        if sep:
+            t = f"{head.rsplit(':', 1)[-1]} {rest}"
+
+    tokens = _split_top_level(t, ";")
+    if len(tokens) < 3:
+        tokens = _split_top_level(t, ",")
 
     result: dict = {}
-    for pair in pairs:
-        if ":" not in pair:
-            log.debug("tds2012: preamble token without ':' — skipped: %r", pair)
+    for tok in tokens:
+        before_space = tok.split(" ", 1)[0]
+        if ":" in before_space:
+            key, _, val = tok.partition(":")
+        elif " " in tok:
+            key, _, val = tok.partition(" ")
+        else:
+            log.debug("tds2012: preamble token without ':' or ' ' — skipped: %r",
+                      tok)
             continue
-        key, _, val = pair.partition(":")
         key = key.strip().upper()
-        val = val.strip()
+        val = val.strip().strip('"')
         if key in _FLOAT_FIELDS:
             try:
                 result[key] = float(val)
@@ -197,14 +254,11 @@ def _parse_preamble(text: str) -> dict:
                 result[key] = val
         elif key in _INT_FIELDS:
             try:
-                result[key] = int(val)
+                result[key] = int(float(val))
             except ValueError:
-                try:
-                    result[key] = int(float(val))
-                except ValueError:
-                    log.warning("tds2012: could not convert preamble field %s=%r to int",
-                                key, val)
-                    result[key] = val
+                log.warning("tds2012: could not convert preamble field %s=%r to int",
+                            key, val)
+                result[key] = val
         else:
             result[key] = val
 
@@ -288,21 +342,39 @@ class Tds2012:
         """Send a command string (no response expected)."""
         self._t.write(command.encode() + self._LF)
 
-    def _query(self, command: str) -> str:
+    def _query(self, command: str, retries: int = 1) -> str:
         """Send a query and return the response as a stripped string.
 
-        Raises TdsTimeoutError on silence, TdsProtocolError if the scope
-        replies with an error indicator (response starting with '?').
+        ONE RETRY BY DEFAULT.  Observed on the real instrument: the first
+        query issued after a burst of setup commands reliably times out -
+        the TDS2CM module is still digesting the writes and simply does not
+        answer.  A single retry turns that into a non-event; without it the
+        worker tears the connection down and reconnects every time it
+        reconfigures.
+
+        Raises TdsTimeoutError on persistent silence, TdsProtocolError if
+        the scope replies with an error indicator (response starting '?').
         """
-        try:
-            raw = self._t.query_line(
-                command.encode() + self._LF,
-                terminator=self._LF,
-            )
-        except SerialTimeout as exc:
+        raw = None
+        last_exc = None
+        for _attempt in range(retries + 1):
+            try:
+                raw = self._t.query_line(
+                    command.encode() + self._LF,
+                    terminator=self._LF,
+                )
+                break
+            except SerialTimeout as exc:
+                last_exc = exc
+                try:
+                    self._t.reset_buffers()
+                except Exception:
+                    pass
+                time.sleep(0.25)
+        if raw is None:
             raise TdsTimeoutError(
-                f"TDS 2012 did not reply to {command!r}: {exc}"
-            ) from exc
+                f"TDS 2012 did not reply to {command!r}: {last_exc}"
+            ) from last_exc
 
         text = raw.decode(errors="replace").strip()
         if text.startswith("?"):
@@ -325,11 +397,16 @@ class Tds2012:
             raise TdsProtocolError(
                 f"ID? reply does not look like a Tektronix response: {ident!r}"
             )
-        log.info("tds2012: identified — %s", ident)
+        # DEBUG, not INFO: the idle keepalive calls this on a timer, and at
+        # INFO it printed a line every few seconds forever, burying every
+        # message that mattered.  Nothing is lost - ScopeWorker._connect()
+        # already reports the identity at INFO, once, where it is news.
+        log.debug("tds2012: identified — %s", ident)
         return ident
 
     def set_data_encoding(self, channel: str = "CH1", *,
-                          encoding: str = "BIN", width: int = 1) -> None:
+                          encoding: str = "BIN", width: int = 1,
+                          start: int = None, stop: int = None) -> None:
         """Configure the waveform transfer to binary, 1-byte-per-sample.
 
         Parameters
@@ -337,12 +414,30 @@ class Tds2012:
         channel  : "CH1" or "CH2"
         encoding : "BIN" (binary, default) or "ASC" (ASCII)
         width    : bytes per sample — 1 or 2
+        start    : first record point to transfer (1-based), or None to leave
+        stop     : last record point to transfer, or None to leave
+
+        START/STOP select a CONTIGUOUS SLICE of the 2500-point record — they
+        do not decimate.  Transferring 1000 points means 1000 consecutive
+        samples at full resolution and the remaining 1500 discarded, i.e.
+        40 % of the time window, not a coarser view of all of it.
         """
+        # HEADer ON is deliberate: with headers off the scope answers
+        # WFMPRE? with bare values in a fixed order, and the parser would be
+        # trusting firmware to keep that order.  With headers on every value
+        # arrives labelled, so a reordering can never silently line up the
+        # wrong number against the wrong field.
+        self._cmd("HEADER ON")
+        self._cmd("VERBOSE OFF")
         self._cmd(f"DATA SOURCE {channel}")
         self._cmd(f"DATA ENCDG {encoding}")
         self._cmd(f"DATA WIDTH {width}")
-        log.debug("tds2012: data source=%s encdg=%s width=%d",
-                  channel, encoding, width)
+        if start is not None:
+            self._cmd(f"DATA START {int(start)}")
+        if stop is not None:
+            self._cmd(f"DATA STOP {int(stop)}")
+        log.debug("tds2012: data source=%s encdg=%s width=%d start=%s stop=%s",
+                  channel, encoding, width, start, stop)
 
     def read_preamble(self) -> dict:
         """Query WFMPRE? and return the parsed preamble dict.
@@ -354,7 +449,9 @@ class Tds2012:
         log.debug("tds2012: preamble — %s", pre)
         return pre
 
-    def acquire_waveform(self, channel: str = "CH1") -> tuple[bytes, dict]:
+    def acquire_waveform(self, channel: str = "CH1", *,
+                         start: int = None,
+                         stop: int = None) -> tuple[bytes, dict]:
         """Acquire one waveform from *channel*.
 
         Steps:
@@ -368,6 +465,10 @@ class Tds2012:
         Parameters
         ----------
         channel : "CH1" or "CH2"
+        start   : first record point to transfer, or None for the scope's
+                  current setting
+        stop    : last record point — the transfer is a SLICE of the record,
+                  not a decimation of it
 
         Returns
         -------
@@ -377,7 +478,7 @@ class Tds2012:
 
         Raises TdsTimeoutError or TdsProtocolError on any failure.
         """
-        self.set_data_encoding(channel)
+        self.set_data_encoding(channel, start=start, stop=stop)
         preamble = self.read_preamble()
 
         n_bytes = int(preamble.get("NR_PT", 0)) * int(preamble.get("BYT_NR", 1))
@@ -457,6 +558,57 @@ class Tds2012:
 
         log.debug("tds2012: acquired %d bytes from %s", len(payload), channel)
         return bytes(payload), preamble
+
+    def set_average(self, sweeps: int | None) -> None:
+        """Put the scope in average mode over *sweeps* sweeps.
+
+        Averaging on the INSTRUMENT beats smoothing on the host: it cleans
+        the trace before it is digitised into the transfer, so the half
+        maximum level is computed from a cleaner peak.  Valid sweep counts
+        are 4, 16, 64 and 128; 1 restores Sample mode; None leaves the
+        scope's acquisition mode untouched.
+        """
+        if sweeps is None:
+            return
+        if sweeps <= 1:
+            self._cmd("ACQUIRE:MODE SAMPLE")
+        else:
+            self._cmd("ACQUIRE:MODE AVERAGE")
+            self._cmd(f"ACQUIRE:NUMAVG {int(sweeps)}")
+        self._cmd("ACQUIRE:STATE RUN")
+        log.debug("tds2012: acquisition averaging set to %s", sweeps)
+
+    def measure_immediate(self, meas_type: str = "PWIDTH",
+                          channel: str = "CH1") -> float:
+        """Read one of the scope's OWN automatic measurements, in seconds.
+
+        PWIDTH is Tektronix's positive pulse width, defined as the time
+        between the rising and falling edge at the 50 % level - which for a
+        single clean peak IS the FWHM.  It costs one short query instead of
+        a 2500-point transfer, and it is an independent check on our own
+        arithmetic: if the scope and this code disagree, one of them is
+        wrong and it is worth knowing which.
+
+        Raises TdsProtocolError when the scope reports the measurement as
+        unavailable (it returns ~9.9E37 when the signal is clipped or the
+        edges are off screen).
+        """
+        self._cmd(f"MEASUREMENT:IMMED:SOURCE {channel}")
+        self._cmd(f"MEASUREMENT:IMMED:TYPE {meas_type}")
+        time.sleep(0.15)
+        text = strip_scpi_header(self._query("MEASUREMENT:IMMED:VALUE?"))
+        try:
+            val = float(text)
+        except ValueError as exc:
+            raise TdsProtocolError(
+                f"{meas_type} value not numeric: {text!r}"
+            ) from exc
+        if abs(val) > 1e30:
+            raise TdsProtocolError(
+                f"scope reports {meas_type} unavailable (clipped, or the "
+                f"edges are off screen)"
+            )
+        return val
 
     def single_acquisition(self) -> None:
         """Arm a single-sequence acquisition (ACQUIRE:STOPAFTER SEQUENCE)."""

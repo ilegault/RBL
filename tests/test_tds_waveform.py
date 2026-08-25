@@ -371,3 +371,37 @@ class TestTds2012Driver:
         drv.run_continuous()
         assert b"ACQUIRE:STOPAFTER RUNSTOP\n" in t._sent
         assert b"ACQUIRE:STATE RUN\n" in t._sent
+
+
+# ---------------------------------------------------------------------------
+# The idle keepalive must not shout
+# ---------------------------------------------------------------------------
+
+class TestIdentifyIsQuiet:
+    """`identify()` is called by the idle keepalive on a timer.  At INFO it
+    printed a line every few seconds forever and buried everything that
+    mattered.  The connect path already reports the identity once, at INFO,
+    where it is news."""
+
+    class _FakeTransport:
+        def __init__(self, reply=b"ID TEK/TDS 2012,CF:91.1CT FV:v1.16\n"):
+            self._reply = reply
+        def write(self, data): pass
+        def query_line(self, data, terminator=b"\n"): return self._reply
+        def read_until(self, *a, **k): return b""
+        def read_exact(self, n): return b"\x00" * n
+        def reset_buffers(self): pass
+
+    def test_identify_does_not_log_at_info(self, caplog):
+        import logging
+        from rbl.hardware.tds2012_driver import Tds2012
+        with caplog.at_level(logging.INFO, logger="rbl.hardware.tds2012_driver"):
+            Tds2012(self._FakeTransport()).identify()
+        assert [r for r in caplog.records
+                if r.name == "rbl.hardware.tds2012_driver"] == []
+
+    def test_the_keepalive_interval_is_not_walked_back(self):
+        import pytest
+        pytest.importorskip("PySide6")
+        from rbl.hardware import scope_worker
+        assert scope_worker._KEEPALIVE_S >= 15.0

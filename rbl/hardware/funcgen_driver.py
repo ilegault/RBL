@@ -276,48 +276,91 @@ class DG1022Z:
     def get_state(self, channel: int) -> dict:
         """Query and parse the current state of one channel.
 
-        Returns a dict with keys: shape, freq, amp, offset, phase, output, load.
-        On any VISA error returns {"error": <message>}.
+        Returns: shape, shape_raw, freq, amp, offset, phase, output, load,
+        load_ohms.  On any VISA error returns {"error": <message>}.
+
+        PARSING, AND WHY IT IS FUSSY
+        ----------------------------
+        `:APPLy?` comes back in two different layouts depending on firmware
+        and shape:
+
+            "SIN 1000.000000,1.000000,0.000000,0.000000"     head + space
+            "RAMP,5.170000E+02,2.000000E+00,0.0E+00,0.0E+00" all commas
+
+        and the whole thing may arrive wrapped in double quotes with a
+        trailing newline.  Getting this wrong does not raise — it silently
+        yields shape = the entire response string and freq/amp/offset/phase =
+        0.0, which is exactly what the sidecars from the Ni runs recorded: the
+        generator settings were right on the bench and zero in the log, so
+        every drive parameter for that campaign has to be read back out of the
+        shape string by hand.
+
+        So: strip quotes and whitespace FIRST (a trailing "\n" is what stops
+        .strip('"') from finding the closing quote), then split on the first
+        run of whitespace OR the first comma, whichever comes first.  The four
+        numbers are always freq, amplitude (Vpp), offset (V), phase (deg).
+
+        `shape_raw` keeps the untouched response.  It costs a few bytes in the
+        log and it is the only thing that can settle "did the parser get this
+        right?" a year from now.
         """
         ch = int(channel)
         try:
-            apply_resp  = self.query(f":SOURce{ch}:APPLy?").strip('"')
+            apply_resp  = self.query(f":SOURce{ch}:APPLy?")
             output_resp = self.query(f":OUTPut{ch}?")
             load_resp   = self.query(f":OUTPut{ch}:LOAD?")
         except Exception as e:
             log.exception("get_state ch%s failed", ch)
             return {"error": str(e)}
 
-        # APPLy? returns either "SIN 1000.000000,1.000000,0.000000,0.000000"
-        # (space-separated) or "RAMP,517.0,1.637,0.0,0.0" (all comma-separated).
-        parts = apply_resp.split(None, 1)
-        if len(parts) == 1:
-            # Comma-only format: split the single token on commas
-            sub   = parts[0].split(",")
-            shape = sub[0]
-            nums  = []
-            if len(sub) > 1:
-                try:
-                    nums = [float(x) for x in sub[1:]]
-                except Exception:
-                    nums = []
+        raw = (apply_resp or "").strip().strip('"').strip()
+
+        # Head is everything up to the first whitespace or comma.
+        head, sep, tail = "", "", ""
+        for i, c in enumerate(raw):
+            if c.isspace() or c == ",":
+                head, sep, tail = raw[:i], c, raw[i + 1:]
+                break
         else:
-            shape = parts[0] if parts else "?"
-            nums  = []
-            if len(parts) > 1:
-                try:
-                    nums = [float(x) for x in parts[1].split(",")]
-                except Exception:
-                    nums = []
+            head = raw
+
+        shape = head.strip().upper() or "?"
+        nums = []
+        for tok in tail.replace(",", " ").split():
+            try:
+                nums.append(float(tok))
+            except ValueError:
+                nums.append(float("nan"))
+
+        def _n(i):
+            v = nums[i] if len(nums) > i else 0.0
+            return 0.0 if v != v else v      # NaN -> 0.0
+
+        load_txt = (load_resp or "").strip().strip('"').strip()
+        try:
+            load_ohms = float(load_txt)
+        except (TypeError, ValueError):
+            # "INF" / "INFinity" / "9.9E37" all mean high-Z, which is what the
+            # EEL5000 input actually is.  A 50 ohm reading here means the
+            # generator is halving every voltage this rig commands.
+            #
+            # High-Z is reported as 9.9E37 — the DG1022Z's own sentinel, and a
+            # FINITE number.  math.inf would be correct in Python and then
+            # become `null` in the log, which reads the same as "could not be
+            # read" — the one thing this field exists to distinguish.
+            load_ohms = 9.9e37 if load_txt.upper().startswith("INF") \
+                else float("nan")
 
         return {
-            "shape":  shape,
-            "freq":   nums[0] if len(nums) > 0 else 0.0,
-            "amp":    nums[1] if len(nums) > 1 else 0.0,
-            "offset": nums[2] if len(nums) > 2 else 0.0,
-            "phase":  nums[3] if len(nums) > 3 else 0.0,
-            "output": output_resp.upper() in ("ON", "1"),
-            "load":   load_resp,
+            "shape":     shape,
+            "shape_raw": raw,
+            "freq":      _n(0),
+            "amp":       _n(1),
+            "offset":    _n(2),
+            "phase":     _n(3),
+            "output":    (output_resp or "").strip().upper() in ("ON", "1"),
+            "load":      load_txt,
+            "load_ohms": load_ohms,
         }
 
     # ---- Utility / verbose methods -------------------------------------------

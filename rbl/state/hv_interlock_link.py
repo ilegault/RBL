@@ -17,6 +17,15 @@ the signal is declared on Beamline, methods here resolve `self` at runtime
 because `self` is always a Beamline instance. Do not instantiate this file
 on its own.
 
+GAUGE SELECTION
+---------------
+The two gauge controllers (XGS-600, VGC083) may serve multiple chambers on
+the same serial bus.  The interlock checks only the gauge(s) the operator
+has selected in the Overview tab's Beam / Vacuum panel — not every channel
+on every controller.  If no gauge is selected the interlock blocks, because
+"no designated reading" is not evidence of good vacuum.  The selection is
+persisted across sessions.
+
 WHY A TIMER, NOT ONLY A vacuum_changed HANDLER
 ------------------------------------------------
 A gauge going silent is itself the fault condition Section 3.3 asks for
@@ -32,6 +41,7 @@ import time
 from PySide6.QtCore import QTimer
 
 from rbl.config.hv_safety_config import GAUGE_STALE_TIMEOUT_S
+from rbl.config.persistence import load_config, save_config
 from rbl.hardware.funcgen_safety import channel_peak_volts
 from rbl.hardware.hv_interlock import interlock_status
 
@@ -39,26 +49,51 @@ log = logging.getLogger(__name__)
 
 _STALE_CHECK_INTERVAL_MS = 1000
 
+_INTERLOCK_GAUGES_KEY = "hv_interlock_gauges"
 
-def chamber_pressure_torr(vacuum_state) -> float:
-    """The single pressure number the interlock checks against: the WORST
-    (highest, i.e. least-vacuum) numeric reading currently available across
-    both connected gauge controllers.
 
-    Worst-case rather than an average or "the primary gauge": a discharge
-    developing anywhere the gauges can see must be able to block HV, and an
-    errored or non-numeric channel on one gauge must never silently win by
-    omission just because the other gauge still reads a healthy vacuum.
+def _load_interlock_gauges() -> set:
+    try:
+        return set(load_config().get(_INTERLOCK_GAUGES_KEY, []))
+    except Exception:
+        return set()
 
-    Returns NaN if no connected gauge currently has a numeric reading.
+
+def _save_interlock_gauges(keys: set):
+    try:
+        cfg = load_config()
+        cfg[_INTERLOCK_GAUGES_KEY] = sorted(keys)
+        save_config(cfg)
+    except Exception:
+        pass
+
+
+def chamber_pressure_torr(vacuum_state, selected_keys: set | None = None) -> float:
+    """The single pressure number the interlock checks against.
+
+    When `selected_keys` is given (a set of gauge keys like "xgs600:IG1",
+    "vgc083:IG"), only readings matching those keys are considered — the
+    operator designates which gauge(s) represent the chamber under HV.
+    When `selected_keys` is None, every numeric reading is used (legacy
+    worst-case mode).
+
+    Returns NaN if no matching gauge currently has a numeric reading.
     """
     readings = []
     if vacuum_state.xgs_connected:
-        readings += [r.pressure for r in vacuum_state.xgs_readings
-                     if r.pressure is not None]
+        for r in vacuum_state.xgs_readings:
+            key = f"xgs600:{r.channel.label}"
+            if selected_keys is not None and key not in selected_keys:
+                continue
+            if r.pressure is not None:
+                readings.append(r.pressure)
     if vacuum_state.vgc_connected:
-        readings += [r.pressure for r in vacuum_state.vgc_readings
-                     if r.pressure is not None]
+        for r in vacuum_state.vgc_readings:
+            key = f"vgc083:{r.channel}"
+            if selected_keys is not None and key not in selected_keys:
+                continue
+            if r.pressure is not None:
+                readings.append(r.pressure)
     return max(readings) if readings else float("nan")
 
 
@@ -70,15 +105,38 @@ class HvInterlockLinkMixin:
         self._hv_pressure_at = None   # time.monotonic() of the last numeric reading
         self._hv_interlock_state = "block"
         self._hv_interlock_reason = "no vacuum reading yet"
+        self._hv_interlock_gauge_keys: set = _load_interlock_gauges()
+        self._hv_last_vacuum_state = None
         self._hv_stale_timer = QTimer(self)
         self._hv_stale_timer.timeout.connect(self._recompute_hv_interlock)
         self._hv_stale_timer.start(_STALE_CHECK_INTERVAL_MS)
         self.vacuum_changed.connect(self.on_vacuum_changed_for_interlock)
 
+    # ---- Gauge selection -------------------------------------------------
+
+    @property
+    def hv_interlock_gauge_keys(self) -> set:
+        return set(self._hv_interlock_gauge_keys)
+
+    def set_interlock_gauges(self, keys: set) -> None:
+        """Designate which gauge key(s) the interlock watches.
+
+        Called from the Overview tab when the operator clicks a pressure
+        row.  An empty set means "no gauge selected" → HV blocked.
+        """
+        self._hv_interlock_gauge_keys = set(keys)
+        _save_interlock_gauges(self._hv_interlock_gauge_keys)
+        log.info("hv_interlock: gauge selection changed to %s", self._hv_interlock_gauge_keys)
+        if self._hv_last_vacuum_state is not None:
+            self.on_vacuum_changed_for_interlock(self._hv_last_vacuum_state)
+        else:
+            self._recompute_hv_interlock()
+
     # ---- Reading pressure ------------------------------------------------
 
     def on_vacuum_changed_for_interlock(self, vacuum_state) -> None:
-        pressure = chamber_pressure_torr(vacuum_state)
+        self._hv_last_vacuum_state = vacuum_state
+        pressure = chamber_pressure_torr(vacuum_state, self._hv_interlock_gauge_keys)
         if pressure == pressure:   # not NaN
             self._hv_pressure_torr = pressure
             self._hv_pressure_at = time.monotonic()
@@ -102,9 +160,17 @@ class HvInterlockLinkMixin:
 
     def _recompute_hv_interlock(self) -> None:
         live_kv = self._max_live_commanded_kv()
-        stale = self.hv_pressure_is_stale()
-        status, reason = interlock_status(self._hv_pressure_torr, live_kv,
-                                           pressure_known=not stale)
+
+        if not self._hv_interlock_gauge_keys:
+            status = "block"
+            reason = ("no interlock gauge selected — click a pressure "
+                      "reading in Overview to designate one")
+            stale = True
+        else:
+            stale = self.hv_pressure_is_stale()
+            status, reason = interlock_status(self._hv_pressure_torr, live_kv,
+                                               pressure_known=not stale)
+
         transitioned_to_block = status == "block" and self._hv_interlock_state != "block"
         self._hv_interlock_state, self._hv_interlock_reason = status, reason
         self.hv_interlock_changed.emit({

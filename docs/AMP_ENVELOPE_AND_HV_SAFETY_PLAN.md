@@ -190,7 +190,12 @@ constraint on the research, which is why Phase 3 matters.
 
 ```
 θ = V · l · q / (2 · d · E)          [radians]
-x = θ · (L + l/2)                    [displacement at target]
+x = θ · L                            [displacement at target]
+                                     (SUPERSEDED: the l/2 pivot term was
+                                      removed 24 Aug 2026 — the manual §IV
+                                      and the lab deflection sheet both use
+                                      the drift alone, and the app must
+                                      agree with them)
 ```
 
 | Symbol | Meaning | Units |
@@ -217,6 +222,22 @@ Steerer geometries from the manual (user must select which is installed):
 | ES7 (2EA039291) | 10.2 cm | 3.2 cm | — | 10 kV |
 | ES10 (2EA021440) | 12.7 cm | 3.8 cm | 10.2 cm | 10 kV |
 | Duo-axis 2EA068900 | 7.30 cm | 3.8 cm | — | 5 kV |
+
+> **SUPERSEDED (24 Aug 2026).** This table and the "steerer model
+> dropdown" in §4.4 are gone. The beamline has exactly one steerer —
+> NEC **2EA021441** — so its geometry is a constant in
+> `rbl/config/steerer_geometry.py` and the Raster Planner displays it
+> instead of asking. A picker could only ever be left on the wrong
+> answer, and the gap scales every deflection number on the tab.
+>
+> Its numbers come from the lab's own reference sheet, *Hirst RHBL
+> Deflection Information.xlsx* — **plates 12.5 cm long, 3.8 cm gap,
+> 5 kV per plate** (10 kV plate-to-plate, push-pull). Note this is
+> **not** the ES10 row above: the manual's spec tables are for the
+> catalogue units, and 2EA021441 is a customer variant (manual §I).
+> The same sheet gives the steerer-exit-to-sample drift, 97.48 in =
+> **247.60 cm**, which is now the tab's default.
+
 
 ### 1.8 Noise floor
 
@@ -476,7 +497,7 @@ def deflection_mrad(differential_kv, plate_length_cm, plate_gap_cm,
 
 def displacement_mm(differential_kv, plate_length_cm, plate_gap_cm,
                     charge_state, beam_energy_ev, drift_cm) -> float:
-    """x = theta * (L + l/2)."""
+    """x = theta * L.  (Was (L + l/2); see the note in §1.7.)"""
 
 def required_differential_kv(target_half_width_mm, fwhm_mm, turnaround_k,
                              geometry, beam) -> float:

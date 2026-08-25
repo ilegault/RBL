@@ -43,7 +43,7 @@ can show a stale value or silently overwrite what the other has typed.
 """
 import math
 
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel,
     QPushButton, QMessageBox, QCheckBox, QSizePolicy,
@@ -86,6 +86,14 @@ def _format_freq(hz: float) -> str:
 
 
 class OverviewTab(QWidget):
+    # Pressed "Connect All".  This tab owns no drivers and no ports (see the
+    # module docstring: composition only), and the connection controls for
+    # each subsystem live on their own tabs with the context that makes them
+    # safe.  So this is a REQUEST, and MainWindow - which owns every tab -
+    # is what sequences it.  A second connection path built into this tab
+    # would be a second startup sequence to keep in step with five others.
+    connect_all_requested = Signal()
+
     _REDRAW_INTERVAL_MS = 100   # 10 Hz — cheap tile/bar updates, not a plot
     _NOTE_FRAMES = 30           # ~3 s of redraws a command note stays up
 
@@ -194,6 +202,24 @@ class OverviewTab(QWidget):
             self.pills[key] = pill
             strip.addWidget(pill)
 
+        self.btn_connect_all = QPushButton("Connect All")
+        self.btn_connect_all.setToolTip(
+            "Connect the Galil, the LabJack T7, both function generators, "
+            "the scope and both vacuum gauge controllers, in that order.\n\n"
+            "Each one is the same connect its own tab performs; anything "
+            "already connected is left alone. Nothing is disconnected here.")
+        self.btn_connect_all.setStyleSheet(
+            "QPushButton { font-weight: bold; padding: 4px 12px; }")
+        self.btn_connect_all.clicked.connect(self.connect_all_requested.emit)
+        strip.addWidget(self.btn_connect_all)
+
+        self.lbl_connect_all = QLabel("")
+        self.lbl_connect_all.setWordWrap(True)
+        self.lbl_connect_all.setStyleSheet(
+            theme.status_label(theme.NEUTRAL, bold=False)
+            + f"font-size: {theme.FS_LABEL}px;")
+        strip.addWidget(self.lbl_connect_all, stretch=1)
+
         self.lbl_failure = QLabel("")
         self.lbl_failure.setWordWrap(True)
         self.lbl_failure.setStyleSheet(
@@ -201,6 +227,21 @@ class OverviewTab(QWidget):
             + f"font-size: {theme.FS_LABEL}px;")
         strip.addWidget(self.lbl_failure, stretch=1)
         return strip
+
+    # ---- Connect All feedback (driven by MainWindow) -------------------------
+
+    def set_connect_all_busy(self, busy: bool, text: str = ""):
+        """Disable the button while the sequence runs, so a second press
+        cannot start a second pass over instruments that are mid-connect."""
+        self.btn_connect_all.setEnabled(not busy)
+        self.btn_connect_all.setText("Connecting…" if busy else "Connect All")
+        if text:
+            self.set_connect_all_status(text, theme.NEUTRAL)
+
+    def set_connect_all_status(self, text: str, role: str = theme.NEUTRAL):
+        self.lbl_connect_all.setText(text)
+        self.lbl_connect_all.setStyleSheet(
+            theme.status_label(role, bold=False) + f"font-size: {theme.FS_LABEL}px;")
 
     def _build_slit_control_box(self) -> QGroupBox:
         # "&&" because Qt eats a single '&' in a title as a mnemonic marker.
@@ -450,8 +491,10 @@ class OverviewTab(QWidget):
         self._pressure_lay.addWidget(self.lbl_hv_interlock)
 
         # Compact rows: each is a clickable name+value pair at small font size.
+        # The selected set doubles as the HV interlock gauge designation —
+        # only selected gauges are checked against the pressure ladder.
         self._pressure_rows: dict[str, dict] = {}   # key -> {name_lbl, val_lbl, row_widget, key, name, text, ok}
-        self._pressure_selected: set[str] = set()
+        self._pressure_selected: set[str] = set(self.beamline.hv_interlock_gauge_keys)
 
         self._pressure_no_data = QLabel("(not connected)")
         self._pressure_no_data.setStyleSheet(
@@ -827,11 +870,16 @@ class OverviewTab(QWidget):
         self.pills["amps"].setStyleSheet(theme.pill(amps.connected))
 
     def _on_pressure_row_clicked(self, key: str):
-        """Toggle a vacuum channel in/out of the large detail readout."""
+        """Toggle a vacuum channel in/out of the large detail readout.
+
+        The selected set also governs the HV interlock: only selected
+        gauge(s) are checked against the pressure ladder.
+        """
         if key in self._pressure_selected:
             self._pressure_selected.discard(key)
         else:
             self._pressure_selected.add(key)
+        self.beamline.set_interlock_gauges(self._pressure_selected)
         self._update_pressure_selection()
 
     def _update_pressure_selection(self):
@@ -889,7 +937,9 @@ class OverviewTab(QWidget):
             # Visibly distinct from "blocked on pressure" — a stale/missing
             # reading is a different failure than a real high-pressure block,
             # and Section 3.3 requires the two not be conflated in the UI.
-            text = "HV interlock: BLOCKED — vacuum reading stale/unavailable"
+            # The reason string distinguishes "no gauge selected" from a
+            # genuinely stale reading, so forward it directly.
+            text = f"HV interlock: BLOCKED — {payload['reason']}"
             color = theme.FAULT
         elif payload["state"] == "block":
             text = f"HV interlock: BLOCKED — {payload['reason']}"
@@ -912,6 +962,7 @@ class OverviewTab(QWidget):
             self._pressure_detail_container.setVisible(False)
             return
         self._pressure_no_data.setVisible(False)
+        self._pressure_detail_container.setVisible(True)
 
         rows = []
         for r in state.xgs_readings:
