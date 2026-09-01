@@ -10,12 +10,21 @@ Extras over the compact RecordingPanel:
   - Crosshair overlay (drawn with QPainter, never burned into frames/photos)
   - Fit / 1:1 toggle
   - Double-click feed to go fullscreen; Esc to exit
+
+Phase 1 fix (2026-08-25): replaced _FeedLabel (QLabel subclass) with VideoView.
+The QLabel setPixmap() path had a size ratchet in the DragPanel scroll area
+(see video_view.py).  VideoView's minimumSizeHint() is a constant so the layout
+is always free to shrink it.  No frame data was ever affected.
+
+Phase 2 (2026-08-25): UI restructured to expose master codec and camera pixel
+format controls.  The "Preview" spin box is relabelled "Acquire" to make clear
+it controls acquisition rate, not display rate.
 """
 import os
 import sys
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QImage, QPixmap, QPainter, QPen, QColor
+from PySide6.QtGui import QImage
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QComboBox, QSpinBox, QCheckBox, QInputDialog, QScrollArea, QSizePolicy,
@@ -25,8 +34,10 @@ from rbl.config.recording_config import (
     RES_PRESETS, PREVIEW_FPS_DEFAULT, RECORD_FPS_MIN, RECORD_FPS_MAX,
     CSV_INTERVAL_MIN_S, CSV_INTERVAL_MAX_S,
     SEGMENT_SECONDS_CHOICES, QUALITY_PRESETS, QUALITY_DEFAULT,
+    MASTER_CODECS, MASTER_CODEC_DEFAULT,
 )
 from rbl.gui import theme
+from rbl.gui.widgets.video_view import VideoView
 
 try:
     import cv2
@@ -34,62 +45,10 @@ try:
 except ImportError:
     _CV2_OK = False
 
-
-# ---- Feed label with optional crosshair overlay ----------------------------
-
-class _FeedLabel(QLabel):
-    """QLabel that draws a crosshair + thirds guides via QPainter."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._crosshair = False
-        self._base_pix: QPixmap | None = None  # unscaled source frame
-
-    def set_base_pixmap(self, pix: QPixmap):
-        """Store the source frame and scale it to the current label size."""
-        self._base_pix = pix
-        self._rescale()
-
-    def _rescale(self):
-        if self._base_pix is None or self._base_pix.isNull():
-            return
-        scaled = self._base_pix.scaled(
-            self.width(), self.height(),
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-        self.setPixmap(scaled)
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self._rescale()
-
-    def set_crosshair(self, on: bool):
-        self._crosshair = on
-        self.update()
-
-    def paintEvent(self, event):
-        super().paintEvent(event)
-        if not self._crosshair or self.pixmap() is None or self.pixmap().isNull():
-            return
-        w, h = self.width(), self.height()
-        painter = QPainter(self)
-        pen = QPen(QColor(0, 255, 0, 180), 1)
-        painter.setPen(pen)
-        # Centre cross
-        painter.drawLine(w // 2, 0, w // 2, h)
-        painter.drawLine(0, h // 2, w, h // 2)
-        # Thirds guides (rule-of-thirds)
-        pen.setStyle(Qt.PenStyle.DashLine)
-        painter.setPen(pen)
-        painter.drawLine(w // 3, 0, w // 3, h)
-        painter.drawLine(2 * w // 3, 0, 2 * w // 3, h)
-        painter.drawLine(0, h // 3, w, h // 3)
-        painter.drawLine(0, 2 * h // 3, w, 2 * h // 3)
-        painter.end()
-
-    def mouseDoubleClickEvent(self, event):
-        self.parent()._toggle_fullscreen()
+_CAMERA_FORMATS = [
+    ("MJPG (compressed, fast)", "MJPG"),
+    ("YUY2 (uncompressed)",     "YUY2"),
+]
 
 
 # ---- Fullscreen window -----------------------------------------------------
@@ -102,13 +61,15 @@ class _FullscreenWindow(QWidget):
         self.setStyleSheet("background: black;")
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        self._lbl = _FeedLabel()
-        self._lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._lbl.setSizePolicy(
+        self._feed = VideoView()
+        self._feed.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self._lbl.set_crosshair(camera_tab._chk_crosshair.isChecked())
-        lay.addWidget(self._lbl)
+        self._feed.set_crosshair(camera_tab._chk_crosshair.isChecked())
+        lay.addWidget(self._feed)
         self.showFullScreen()
+
+    def set_frame(self, img: QImage):
+        self._feed.set_frame(img)
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:
@@ -117,12 +78,6 @@ class _FullscreenWindow(QWidget):
     def closeEvent(self, event):
         self._tab._fullscreen_win = None
         super().closeEvent(event)
-
-    def update_frame(self, pix: QPixmap):
-        scaled = pix.scaled(self.width(), self.height(),
-                            Qt.AspectRatioMode.KeepAspectRatio,
-                            Qt.TransformationMode.SmoothTransformation)
-        self._lbl.setPixmap(scaled)
 
 
 # ---- Camera tab ------------------------------------------------------------
@@ -135,8 +90,8 @@ class CameraTab(QWidget):
         self._recorder = recorder
         self._camera   = camera
         self._blocking = False
-        self._fullscreen_win: _FullscreenWindow | None = None
-        self._fit_mode = True   # True = scale to fit; False = 1:1 in scroll area
+        self._fullscreen_win: "_FullscreenWindow | None" = None
+        self._fit_mode = True
 
         self._build_ui()
         self._connect_signals()
@@ -185,11 +140,24 @@ class CameraTab(QWidget):
         self._combo_res.setCurrentIndex(len(RES_PRESETS) - 1)
         s1.addWidget(self._combo_res)
 
-        s1.addWidget(QLabel("Preview:"))
+        s1.addWidget(QLabel("Format:"))
+        self._combo_fmt = QComboBox()
+        for label, data in _CAMERA_FORMATS:
+            self._combo_fmt.addItem(label, data)
+        self._combo_fmt.setToolTip(
+            "Pixel format requested from the camera.\n"
+            "MJPG: compressed, available at all resolutions.\n"
+            "YUY2: uncompressed 4:2:2, typically 5 fps at 1080p.")
+        s1.addWidget(self._combo_fmt)
+
+        s1.addWidget(QLabel("Acquire:"))
         self._spin_preview = QSpinBox()
         self._spin_preview.setRange(1, 120)
         self._spin_preview.setValue(PREVIEW_FPS_DEFAULT)
         self._spin_preview.setSuffix(" fps")
+        self._spin_preview.setToolTip(
+            "Frame rate requested from the camera (acquisition rate). "
+            "Lower it to make an uncompressed pixel format available.")
         s1.addWidget(self._spin_preview)
 
         s1.addWidget(QLabel("Record:"))
@@ -197,10 +165,23 @@ class CameraTab(QWidget):
         self._spin_rec_fps.setRange(RECORD_FPS_MIN, RECORD_FPS_MAX)
         self._spin_rec_fps.setValue(self._recorder._record_fps)
         self._spin_rec_fps.setSuffix(" fps")
+        self._spin_rec_fps.setToolTip(
+            "How many of the acquired frames are written. "
+            "Cannot exceed the acquire rate.")
         self._spin_rec_fps.valueChanged.connect(self._on_rec_fps_changed)
         s1.addWidget(self._spin_rec_fps)
 
-        s1.addWidget(QLabel("Quality:"))
+        s1.addWidget(QLabel("Master:"))
+        self._combo_master = QComboBox()
+        for label in MASTER_CODECS:
+            self._combo_master.addItem(label)
+        self._combo_master.setCurrentText(MASTER_CODEC_DEFAULT)
+        self._combo_master.setToolTip(
+            "On-disk codec. MJPEG q98 is the default; FFV1 is lossless.")
+        self._combo_master.currentTextChanged.connect(self._on_master_changed)
+        s1.addWidget(self._combo_master)
+
+        s1.addWidget(QLabel("MP4 copy (CRF):"))
         self._combo_quality = QComboBox()
         for label in QUALITY_PRESETS:
             self._combo_quality.addItem(label)
@@ -229,18 +210,15 @@ class CameraTab(QWidget):
         s1.addStretch(1)
         lay.addLayout(s1)
 
-        # ---- Live feed -----------------------------------------------------
+        # ---- Live feed (VideoView in a scroll area for 1:1 mode) -----------
         self._scroll = QScrollArea()
         self._scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        self._scroll.setWidgetResizable(False)
+        self._scroll.setWidgetResizable(True)   # fit mode; changed in 1:1
 
-        self._feed = _FeedLabel(self)
-        self._feed.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._feed.setMinimumSize(320, 240)
+        self._feed = VideoView()
         self._feed.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self._feed.setStyleSheet("background: #111; color: #888;")
-        self._feed.setText("No camera")
+        self._feed.double_clicked.connect(self._toggle_fullscreen)
         self._scroll.setWidget(self._feed)
         lay.addWidget(self._scroll, stretch=1)
 
@@ -254,6 +232,10 @@ class CameraTab(QWidget):
         btns = QHBoxLayout()
         btns.setSpacing(6)
         self._btn_photo = QPushButton("Take Photo")
+        self._btn_photo.setToolTip(
+            "Saves a lossless PNG plus a beamline-state sidecar, independent "
+            "of the video settings. For a shot that matters, this is the "
+            "highest-quality path in the app.")
         self._btn_photo.clicked.connect(self._take_photo)
         btns.addWidget(self._btn_photo)
 
@@ -278,6 +260,7 @@ class CameraTab(QWidget):
         self._recorder.settings_changed.connect(self._render)
         self._recorder.photo_taken.connect(self._on_photo_taken)
         self._camera.opened.connect(self._on_camera_opened)
+        self._camera.format_ready.connect(self._on_format_ready)
         self._camera.closed.connect(self._on_camera_closed_ui)
         self._camera.preview_ready.connect(self._on_preview_frame)
 
@@ -287,23 +270,30 @@ class CameraTab(QWidget):
         if self._camera.is_open():
             self._camera.close()
         else:
-            idx = self._combo_cam.currentData()
-            w, h = self._combo_res.currentData()
-            fps  = self._spin_preview.value()
-            self._camera.open(idx, w, h, fps)
+            idx    = self._combo_cam.currentData()
+            w, h   = self._combo_res.currentData()
+            fps    = self._spin_preview.value()
+            fourcc = self._combo_fmt.currentData()
+            self._camera.open(idx, w, h, fps, fourcc=fourcc)
 
     def _on_camera_opened(self, w: int, h: int, fps: float):
         self._lbl_res.setText(f"{w}x{h} @ {fps:.0f} fps")
+        self._spin_rec_fps.setMaximum(min(RECORD_FPS_MAX, max(1, int(fps))))
         self._btn_open.setText("Close")
         self._combo_cam.setEnabled(False)
         if not self._recorder.is_recording():
             self._recorder.set_video_enabled(True)
         self._render()
 
+    def _on_format_ready(self, fourcc: str):
+        current = self._lbl_res.text()
+        if "·" not in current and current:
+            self._lbl_res.setText(f"{current} · {fourcc}")
+
     def _on_camera_closed_ui(self):
         self._lbl_res.setText("")
-        self._feed.setPixmap(QPixmap())
-        self._feed.setText("No camera")
+        self._feed.clear("No camera")
+        self._spin_rec_fps.setMaximum(RECORD_FPS_MAX)
         self._btn_open.setText("Open")
         self._combo_cam.setEnabled(True)
         self._render()
@@ -316,18 +306,9 @@ class CameraTab(QWidget):
             h, w, ch = frame.shape
             rgb = _cv2.cvtColor(frame, _cv2.COLOR_BGR2RGB)
             img = QImage(rgb.data, w, h, ch * w, QImage.Format.Format_RGB888)
-            base_pix = QPixmap.fromImage(img)
-
-            if self._fit_mode:
-                self._feed.setFixedSize(self._scroll.viewport().size())
-                self._feed.set_base_pixmap(base_pix)
-            else:
-                self._feed._base_pix = None
-                self._feed.setFixedSize(base_pix.size())
-                self._feed.setPixmap(base_pix)
-
+            self._feed.set_frame(img)
             if self._fullscreen_win is not None:
-                self._fullscreen_win.update_frame(base_pix)
+                self._fullscreen_win.set_frame(img)
         except Exception:
             pass
 
@@ -343,6 +324,11 @@ class CameraTab(QWidget):
             return
         self._recorder.set_quality(label)
 
+    def _on_master_changed(self, label: str):
+        if self._blocking:
+            return
+        self._recorder.set_master_codec(label)
+
     def _on_video_enabled_changed(self, on: bool):
         if self._blocking:
             return
@@ -351,22 +337,21 @@ class CameraTab(QWidget):
     def _on_crosshair_toggled(self, on: bool):
         self._feed.set_crosshair(on)
         if self._fullscreen_win:
-            self._fullscreen_win._lbl.set_crosshair(on)
+            self._fullscreen_win._feed.set_crosshair(on)
 
     def _on_fit_toggled(self, on: bool):
         if on:
             self._fit_mode = True
             self._btn_oneto1.setChecked(False)
+            self._feed.set_scale_mode("fit")
+            self._scroll.setWidgetResizable(True)
 
     def _on_oneto1_toggled(self, on: bool):
         if on:
             self._fit_mode = False
             self._btn_fit.setChecked(False)
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        if self._fit_mode:
-            self._feed.setFixedSize(self._scroll.viewport().size())
+            self._feed.set_scale_mode("one_to_one")
+            self._scroll.setWidgetResizable(False)
 
     def _toggle_fullscreen(self):
         if self._fullscreen_win is not None:
@@ -418,14 +403,25 @@ class CameraTab(QWidget):
         self._blocking = True
         self._spin_rec_fps.setValue(self._recorder._record_fps)
         self._combo_quality.setCurrentText(self._recorder._quality_label)
+        self._combo_master.setCurrentText(self._recorder._master_codec)
         self._chk_video.setChecked(self._recorder._video_enabled)
         self._blocking = False
 
-        for w in (self._spin_rec_fps, self._combo_quality, self._chk_video):
+        for w in (self._spin_rec_fps, self._combo_master,
+                  self._combo_quality, self._chk_video):
             w.setEnabled(not rec)
 
         if not self._camera.is_open() or not _CV2_OK:
             self._chk_video.setEnabled(False)
+
+        ffmpeg_found = st.get("ffmpeg_found", False)
+        self._combo_quality.setEnabled(not rec and ffmpeg_found)
+        if not ffmpeg_found:
+            self._combo_quality.setToolTip(
+                "ffmpeg not found — no MP4 copy is made. "
+                "The Master setting is what is recorded.")
+        else:
+            self._combo_quality.setToolTip("")
 
         if rec:
             elapsed = st["elapsed_s"]

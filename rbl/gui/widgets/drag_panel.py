@@ -32,6 +32,18 @@ Usage
                           panel beside it.
   Squeeze past content →  a panel below its content's natural size scrolls its
                           own content rather than refusing to shrink.
+
+IMPORTANT — minimumSizeHint and content widgets
+------------------------------------------------
+Every panel's content widget is placed inside a widgetResizable QScrollArea.
+That scroll area sizes its content to the viewport OR to the content's
+minimumSizeHint(), whichever is larger, and shows scrollbars for the overflow.
+Any content widget whose minimumSizeHint() grows with the data it displays will
+therefore ratchet this scroll area open — and then be clipped by it once the
+panel is dragged smaller — because the ratchet only ever turns upward.  A QLabel
+holding a pixmap is the classic example: its minimumSizeHint() reports the
+pixmap's size.  Keep content minimums constant (or at least bounded by a fixed
+small value) so the scroll area can always shrink a panel freely.
 """
 
 from PySide6.QtCore import Qt, QPoint, QRect

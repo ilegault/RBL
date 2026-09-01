@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 
 from rbl.gui import theme
 from rbl.gui.widgets.connection_bar import StatusPill
+from rbl.gui.widgets.inputs import NoScrollSpinBox
 from rbl.gui.widgets.port_picker import PortPicker, PortScanWorker
 from rbl.gui.widgets.live_plot import LivePlotPanel
 from rbl.config.vacuum_config import (
@@ -72,6 +73,34 @@ def _color_for_key(key: str, index_in_instrument: int) -> str:
 
 # Persistence key for the set of gauges the operator has hidden.
 _HIDDEN_CFG_KEY = "vacuum_hidden_gauges"
+
+# Pressure-column font size, in POINTS.  Deliberately not theme.FS_BIG: that
+# constant is documented as px for stylesheets, and this is a QFont point size.
+_PRESSURE_FONT_CFG_KEY  = "vacuum_pressure_font_pt"
+_PRESSURE_FONT_PT_DEFAULT = 19
+_PRESSURE_FONT_PT_MIN     = 10
+_PRESSURE_FONT_PT_MAX     = 72
+
+
+def _load_pressure_font_pt() -> int:
+    """Restore the pressure-column font size from the config store."""
+    try:
+        from rbl.config.persistence import load_config
+        return int(load_config().get(_PRESSURE_FONT_CFG_KEY, _PRESSURE_FONT_PT_DEFAULT))
+    except Exception as exc:
+        log.debug("vacuum_tab: could not load pressure font pt: %s", exc)
+        return _PRESSURE_FONT_PT_DEFAULT
+
+
+def _save_pressure_font_pt(pt: int):
+    """Persist the pressure-column font size.  Best effort; never raises."""
+    try:
+        from rbl.config.persistence import load_config, save_config
+        cfg = load_config()
+        cfg[_PRESSURE_FONT_CFG_KEY] = pt
+        save_config(cfg)
+    except Exception as exc:
+        log.debug("vacuum_tab: could not save pressure font pt: %s", exc)
 
 
 def _load_hidden_gauges() -> set:
@@ -223,14 +252,27 @@ class VacuumTab(QWidget):
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         self._table.setAlternatingRowColors(True)
-        self._table.verticalHeader().setDefaultSectionSize(32)
-
         # Bold, large font for the Pressure column so it stands out.
         self._pressure_font = QFont()
-        self._pressure_font.setPointSize(theme.FS_BIG)
+        self._pressure_font.setPointSize(_load_pressure_font_pt())
         self._pressure_font.setBold(True)
 
+        # Font size spinner — rows auto-adjust to keep digits from clipping.
+        font_row = QHBoxLayout()
+        font_row.addStretch()
+        font_row.addWidget(QLabel("Pressure font:"))
+        self._spin_press_font = NoScrollSpinBox()
+        self._spin_press_font.setRange(_PRESSURE_FONT_PT_MIN, _PRESSURE_FONT_PT_MAX)
+        self._spin_press_font.setValue(self._pressure_font.pointSize())
+        self._spin_press_font.setSuffix(" pt")
+        self._spin_press_font.setToolTip(
+            "Size of the pressure readings in the table below. Saved between sessions.")
+        self._spin_press_font.valueChanged.connect(self._on_pressure_font_changed)
+        font_row.addWidget(self._spin_press_font)
+        tbl_lay.addLayout(font_row)
+
         tbl_lay.addWidget(self._table)
+        self._apply_row_height()
 
         # ── Top row: controllers (compact) + gauge table (expanding) ──────────
         top_row = QHBoxLayout()
@@ -383,6 +425,19 @@ class VacuumTab(QWidget):
     # Connection bar handlers
     # -----------------------------------------------------------------------
 
+    def _on_pressure_font_changed(self, pt: int):
+        self._pressure_font.setPointSize(pt)
+        self._apply_row_height()
+        _save_pressure_font_pt(pt)
+        # _redraw() runs on a 100 ms timer and rebuilds every cell, so the new
+        # font appears within one tick.  No explicit re-render call needed.
+
+    def _apply_row_height(self):
+        """Rows must grow with the font or the digits get clipped mid-glyph."""
+        from PySide6.QtGui import QFontMetrics
+        metrics_h = QFontMetrics(self._pressure_font).height()
+        self._table.verticalHeader().setDefaultSectionSize(max(32, metrics_h + 10))
+
     def _on_auto_detect(self):
         """Scan for both controllers on a background thread, then select them."""
         if self._scan_worker is not None:
@@ -525,6 +580,10 @@ class VacuumTab(QWidget):
             if key not in self._history:
                 self._history[key] = deque(maxlen=_MAX_HISTORY)
             self._history[key].append((now, r.pressure))
+
+        # Auto-start logging on the first measurement
+        if self._logger is None:
+            self._start_logging()
 
         # Forward to active logger; reopen if gauge set changed
         if self._logger is not None:

@@ -46,6 +46,7 @@ from rbl.config.recording_config import (
     CSV_INTERVAL_DEFAULT_S, CSV_INTERVAL_MIN_S, CSV_INTERVAL_MAX_S,
     RECORD_FPS_DEFAULT, SEGMENT_SECONDS_DEFAULT, SEGMENT_MAX_BYTES,
     QUALITY_DEFAULT, QUALITY_PRESETS, DISK_WARN_BYTES, DISK_AUTOSTOP_BYTES,
+    MASTER_CODEC_DEFAULT,
 )
 from rbl.hardware.camera_source import CameraSource
 from rbl.services.csv_log_writer import CsvLogWriter, flatten
@@ -88,7 +89,12 @@ class SessionRecorder(QObject):
         self._record_fps       = RECORD_FPS_DEFAULT
         self._segment_seconds  = SEGMENT_SECONDS_DEFAULT
         self._quality_label    = QUALITY_DEFAULT
+        self._master_codec     = MASTER_CODEC_DEFAULT
         self._video_enabled    = False
+
+        # Camera fourcc tracking (set when camera opens)
+        self._camera_fourcc_actual    = ""
+        self._camera_fourcc_requested = ""
 
         # Session state
         self._recording        = False
@@ -127,9 +133,10 @@ class SessionRecorder(QObject):
         self._ffmpeg_path    = find_ffmpeg()
         self._ffmpeg_version = ffmpeg_version(self._ffmpeg_path) if self._ffmpeg_path else ""
 
-        # Camera-loss handling
+        # Camera-loss handling and fourcc tracking
         self._camera.closed.connect(self._on_camera_closed)
         self._camera.error.connect(self._on_camera_error)
+        self._camera.format_ready.connect(self._on_camera_format_ready)
 
     # ---- settings ----------------------------------------------------------
 
@@ -156,6 +163,14 @@ class SessionRecorder(QObject):
             return
         if label in QUALITY_PRESETS:
             self._quality_label = label
+            self.settings_changed.emit()
+
+    def set_master_codec(self, label: str) -> None:
+        from rbl.config.recording_config import MASTER_CODECS
+        if self._recording:
+            return
+        if label in MASTER_CODECS:
+            self._master_codec = label
             self.settings_changed.emit()
 
     def set_video_enabled(self, on: bool) -> None:
@@ -357,6 +372,8 @@ class SessionRecorder(QObject):
                 free = shutil.disk_usage(self._folder).free
             except OSError:
                 pass
+        bytes_written = (self._video_recorder.current_file_size_bytes
+                         if self._video_recorder is not None else 0)
         return {
             "recording":         self._recording,
             "session_id":        self._session_id,
@@ -368,8 +385,10 @@ class SessionRecorder(QObject):
             "segments_done":     self._segments_done,
             "transcode_pending": self._transcode_pending,
             "disk_free_bytes":   free,
+            "bytes_written":     bytes_written,
             "video_active":      self._video_recorder is not None,
             "ffmpeg_found":      self._ffmpeg_path is not None,
+            "master_codec":      self._master_codec,
         }
 
     # ---- internal: video ---------------------------------------------------
@@ -390,6 +409,7 @@ class SessionRecorder(QObject):
             record_fps=self._record_fps,
             segment_seconds=self._segment_seconds,
             segment_max_bytes=SEGMENT_MAX_BYTES,
+            master_codec=self._master_codec,
         )
         rec.segment_closed.connect(self._on_segment_closed)
         rec.error.connect(self._on_video_error)
@@ -504,6 +524,10 @@ class SessionRecorder(QObject):
         self.status.emit(f"Video error: {msg}", "warn")
         self.state_changed.emit()
 
+    def _on_camera_format_ready(self, fourcc: str) -> None:
+        self._camera_fourcc_actual    = fourcc
+        self._camera_fourcc_requested = self._camera.requested_fourcc()
+
     def _on_camera_closed(self) -> None:
         if not self._recording:
             return
@@ -585,15 +609,19 @@ class SessionRecorder(QObject):
                 "parts":      self._csv_writer.parts if self._csv_writer else [],
             },
             "video": {
-                "enabled":          self._video_recorder is not None or len(self._segment_meta) > 0,
-                "record_fps":       self._record_fps,
-                "segment_seconds":  self._segment_seconds,
-                "segment_max_bytes": SEGMENT_MAX_BYTES,
-                "master_codec":     "MJPG",
-                "keep_master":      True,
-                "frames_written":   self._frames_written,
-                "frames_dropped":   self._frames_dropped,
-                "segments":         self._segment_meta,
+                "enabled":                self._video_recorder is not None or len(self._segment_meta) > 0,
+                "record_fps":             self._record_fps,
+                "segment_seconds":        self._segment_seconds,
+                "segment_max_bytes":      SEGMENT_MAX_BYTES,
+                "master_codec":           (self._video_recorder.master_codec
+                                           if self._video_recorder is not None
+                                           else self._master_codec),
+                "keep_master":            True,
+                "frames_written":         self._frames_written,
+                "frames_dropped":         self._frames_dropped,
+                "segments":               self._segment_meta,
+                "camera_fourcc":          self._camera_fourcc_actual,
+                "camera_fourcc_requested": self._camera_fourcc_requested,
             },
             "photos": self._photo_list,
             "ffmpeg": {

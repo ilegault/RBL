@@ -45,20 +45,24 @@ class _CameraThread(QThread):
     frame_ready   = Signal(object, float)   # BGR ndarray, t_mono
     preview_ready = Signal(object)          # BGR ndarray, throttled
     opened        = Signal(int, int, float) # width, height, actual_fps
+    format_ready  = Signal(str)             # actual fourcc string, e.g. "MJPG" or "YUY2"
     closed        = Signal()
     error         = Signal(str)
 
-    def __init__(self, index: int, width: int, height: int, fps: int, parent=None):
+    def __init__(self, index: int, width: int, height: int, fps: int,
+                 fourcc: str = "MJPG", parent=None):
         super().__init__(parent)
         self._index  = index
         self._width  = width
         self._height = height
         self._fps    = fps
+        self._fourcc = fourcc   # requested fourcc
         self._stop   = False
         self._latest_frame = None
-        self._actual_w: int   = 0
-        self._actual_h: int   = 0
+        self._actual_w: int    = 0
+        self._actual_h: int    = 0
         self._actual_fps: float = 0.0
+        self._actual_fourcc: str = ""
 
     def stop(self) -> None:
         self._stop = True
@@ -79,8 +83,15 @@ class _CameraThread(QThread):
             self.error.emit(f"Camera {self._index}: could not open")
             return
 
-        # Request MJPEG — many USB cameras can only stream HD as MJPEG.
-        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        # Request the pixel format.  MJPG lets most USB cameras stream HD;
+        # YUY2 is uncompressed 4:2:2 but is only supported at lower frame
+        # rates at full resolution.  The camera decides what it can deliver,
+        # so we read back the actual fourcc and report it via format_ready —
+        # a silent fallback that the operator cannot see is the kind of thing
+        # this codebase's docstrings keep warning about.
+        if len(self._fourcc) == 4:
+            cap.set(cv2.CAP_PROP_FOURCC,
+                    cv2.VideoWriter_fourcc(*self._fourcc))
 
         req_w = self._width if self._width > 0 else 10000
         req_h = self._height if self._height > 0 else 10000
@@ -92,10 +103,16 @@ class _CameraThread(QThread):
         h   = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         fps = cap.get(cv2.CAP_PROP_FPS) or float(self._fps)
 
-        self._actual_w   = w
-        self._actual_h   = h
-        self._actual_fps = fps
+        # Read back actual fourcc — report what the camera actually gave us.
+        raw_cc = int(cap.get(cv2.CAP_PROP_FOURCC))
+        actual_cc = "".join(chr((raw_cc >> (8 * i)) & 0xFF) for i in range(4)).strip("\x00")
+
+        self._actual_w      = w
+        self._actual_h      = h
+        self._actual_fps    = fps
+        self._actual_fourcc = actual_cc
         self.opened.emit(w, h, fps)
+        self.format_ready.emit(actual_cc)
 
         failures    = 0
         prev_emit_t = 0.0
@@ -140,6 +157,7 @@ class CameraSource(QObject):
     frame_ready   = Signal(object, float)   # BGR ndarray, t_mono (perf_counter)
     preview_ready = Signal(object)          # BGR ndarray, throttled for display
     opened        = Signal(int, int, float) # width, height, actual fps
+    format_ready  = Signal(str)             # actual fourcc string, e.g. "MJPG" or "YUY2"
     closed        = Signal()
     error         = Signal(str)
 
@@ -149,18 +167,25 @@ class CameraSource(QObject):
 
     # ---- public API --------------------------------------------------------
 
-    def open(self, index: int, width: int, height: int, fps: int) -> bool:
-        """Start the camera grab loop.  Returns False immediately if cv2 is absent."""
+    def open(self, index: int, width: int, height: int, fps: int,
+             fourcc: str = "MJPG") -> bool:
+        """Start the camera grab loop.  Returns False immediately if cv2 is absent.
+
+        fourcc: requested pixel format, e.g. "MJPG" (compressed, default) or
+        "YUY2" (uncompressed 4:2:2).  The camera decides what it can deliver;
+        connect to format_ready to see what was actually negotiated.
+        """
         if not _CV2_OK:
             self.error.emit("opencv-python not installed — camera unavailable")
             return False
         if self._thread is not None:
             return True   # already open
 
-        t = _CameraThread(index, width, height, fps)
+        t = _CameraThread(index, width, height, fps, fourcc=fourcc)
         t.frame_ready.connect(self.frame_ready)
         t.preview_ready.connect(self.preview_ready)
         t.opened.connect(self.opened)
+        t.format_ready.connect(self.format_ready)
         t.error.connect(self._on_thread_error)
         t.closed.connect(self._on_thread_closed)
         t.finished.connect(t.deleteLater)
@@ -193,6 +218,16 @@ class CameraSource(QObject):
         if self._thread is None:
             return 0.0
         return self._thread.actual_fps()
+
+    def actual_fourcc(self) -> str:
+        if self._thread is None:
+            return ""
+        return self._thread._actual_fourcc
+
+    def requested_fourcc(self) -> str:
+        if self._thread is None:
+            return ""
+        return self._thread._fourcc
 
     # ---- internal ----------------------------------------------------------
 

@@ -36,6 +36,37 @@ SEGMENT_SECONDS_CHOICES  = [60, 300, 600, 1800, 3600]
 # below it so even a burst of unusually large MJPG frames can't push us over.
 SEGMENT_MAX_BYTES        = 1_610_612_736   # 1.5 GB
 
+# ---- Master (on-disk capture) codec ----------------------------------------
+#
+# THIS is the compression that actually happens in the lab.  The MP4 transcode
+# below requires ffmpeg.exe, which rbl.spec deliberately does not bundle
+# (antivirus quarantine, see its lines 63-87), so on a lab machine the CRF
+# preset is inert and the master codec is the ONLY thing standing between the
+# sensor and the archive.
+#
+# label -> (fourcc, container_ext, jpeg_quality|None, lossless: bool)
+#
+# Notes:
+#   MJPG quality must be set via CAP_OPENCV_MJPEG backend; on the default
+#   FFmpeg backend, VideoWriter.set(VIDEOWRITER_PROP_QUALITY, q) silently
+#   does nothing and the writer keeps an internal default that measures
+#   worse than every explicit setting we tested.
+#
+#   FFV1 uses .mkv, not .avi.  AVI's RIFF length field is 32-bit (2 GB
+#   ceiling); FFV1 fills 1.5 GB fast enough that SEGMENT_MAX_BYTES would
+#   trigger constantly.  Matroska has no such ceiling.
+#
+#   "PNGS" is a sentinel, not a fourcc — VideoRecorder writes a folder of
+#   per-frame PNGs instead of a single container file.
+
+MASTER_CODECS = {
+    "MJPEG q98 (default)":     ("MJPG", ".avi", 98,   False),
+    "MJPEG q100":              ("MJPG", ".avi", 100,  False),
+    "FFV1 lossless":           ("FFV1", ".mkv", None, True),
+    "PNG sequence (lossless)": ("PNGS", "",     None, True),
+}
+MASTER_CODEC_DEFAULT = "MJPEG q98 (default)"
+
 # ---- MP4 transcode quality -------------------------------------------------
 
 QUALITY_PRESETS = {                # label -> (crf, x264 preset)

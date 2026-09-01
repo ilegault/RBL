@@ -72,6 +72,7 @@ from PySide6.QtWidgets import (
     QPushButton, QLineEdit, QSizePolicy, QCheckBox,
 )
 
+from rbl.services.profile_logger import ProfileLogger
 from rbl.config.scope_config import (
     SCOPE_AVERAGE_SWEEPS, SCOPE_AXIS_LABELS, SCOPE_ENVELOPE_MS,
     SCOPE_EXPECTED_PEAKS, SCOPE_MAX_PEAKS, SCOPE_POINTS, SCOPE_POINTS_ANCHOR,
@@ -179,6 +180,9 @@ class ProfilerTab(QWidget):
         # Rolling history: [(unix_time, mean_fwhm, [(axis, fwhm), ...])]
         self._fwhm_history: list[tuple[float, float, list]] = []
 
+        # Profile data logger (CSV + waveform dump)
+        self._logger: ProfileLogger = None
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
@@ -196,6 +200,7 @@ class ProfilerTab(QWidget):
         layout.addWidget(self._build_waveform_box(), stretch=3)
         layout.addWidget(self._build_history_box(), stretch=2)
         layout.addWidget(self._build_calibration_box())
+        layout.addWidget(self._build_logging_box())
 
         # ── Subscribe to Beamline signals ─────────────────────────────────
         self.beamline.scope_changed.connect(self._on_scope_state)
@@ -620,6 +625,49 @@ class ProfilerTab(QWidget):
         lay.addWidget(self._canvas_hist)
         return box
 
+    def _build_logging_box(self) -> QGroupBox:
+        box = QGroupBox("Data Logging")
+        lay = QHBoxLayout(box)
+        self._btn_log = QPushButton("Start Logging")
+        self._btn_log.setEnabled(False)
+        self._btn_log.setToolTip(
+            "Log every acquisition's waveform and FWHM stats to CSV files "
+            "under ~/Desktop/RBL_log/data/scope/.\n\n"
+            "Same format as vacuum and calibration logs.")
+        self._btn_log.clicked.connect(self._on_log_toggle)
+        lay.addWidget(self._btn_log)
+
+        self._lbl_log_path = QLabel("(not logging)")
+        self._lbl_log_path.setStyleSheet(
+            f"color: {theme.NEUTRAL}; font-size: 10px; font-style: italic;")
+        lay.addWidget(self._lbl_log_path, stretch=1)
+        return box
+
+    def _on_log_toggle(self):
+        if self._logger is None:
+            self._start_logging()
+        else:
+            self._stop_logging()
+
+    def _start_logging(self):
+        self._logger = ProfileLogger()
+        self._btn_log.setText("Stop Logging")
+        self._lbl_log_path.setText(self._logger.csv_path)
+        self._lbl_log_path.setStyleSheet(
+            f"color: {theme.OK}; font-size: 10px; font-style: italic;")
+        log.info("profiler_tab: logging started -> %s", self._logger.csv_path)
+
+    def _stop_logging(self):
+        if self._logger is None:
+            return
+        path = self._logger.close()
+        self._logger = None
+        self._btn_log.setText("Start Logging")
+        self._lbl_log_path.setText(f"Saved: {path}")
+        self._lbl_log_path.setStyleSheet(
+            f"color: {theme.NEUTRAL}; font-size: 10px; font-style: italic;")
+        log.info("profiler_tab: logging stopped -> %s", path)
+
     def _build_calibration_box(self) -> QGroupBox:
         box = QGroupBox("FWHM Reference (Calibration)")
         lay = QHBoxLayout(box)
@@ -744,6 +792,15 @@ class ProfilerTab(QWidget):
                 (time.time(), state.fwhm_seconds, per_peak))
             if len(self._fwhm_history) > _MAX_HISTORY:
                 self._fwhm_history = self._fwhm_history[-_MAX_HISTORY:]
+
+            self._btn_log.setEnabled(True)
+            if self._logger is None:
+                self._start_logging()
+            if self._logger is not None:
+                try:
+                    self._logger.write_state(state)
+                except Exception:
+                    log.exception("profiler_tab: logger write failed")
 
     def _on_scope_error(self, msg: str):
         log.warning("profiler_tab: scope error: %s", msg)
@@ -1090,3 +1147,9 @@ class ProfilerTab(QWidget):
     def shutdown(self):
         self._redraw_timer.stop()
         self._plot_timer.stop()
+        if self._logger is not None:
+            try:
+                self._logger.close()
+            except Exception:
+                log.exception("profiler_tab: error closing logger on shutdown")
+            self._logger = None

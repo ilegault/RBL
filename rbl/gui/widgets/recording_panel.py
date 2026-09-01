@@ -10,13 +10,24 @@ All state is rendered from recorder.state() on state_changed.  No local copies
 of settings are kept; writing to a spinbox writes through recorder.set_*() and
 re-renders on settings_changed.  This is what makes both views stay in sync:
 the Overview panel and the Camera tab are two renderers of one model.
+
+Phase 1 fix (2026-08-25): replaced the QLabel live feed with VideoView.
+The old QLabel + setPixmap() caused a size ratchet: a label holding a pixmap
+reports the pixmap's size as its minimumSizeHint(), which grew on every frame
+and latched the DragPanel's scroll area open, clipping the content whenever
+the panel was dragged smaller.  VideoView's minimumSizeHint() is a constant
+(64x48), breaking the loop.  No frame data was ever affected — only the
+preview widget layout.
+
+Phase 2 (2026-08-25): UI restructured to expose the codec controls that
+actually affect what lands on disk.  See recording_config.MASTER_CODECS.
 """
 import os
 import sys
 import time
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtGui import QImage, QStandardItem
 from PySide6.QtWidgets import (
     QGroupBox, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QComboBox, QSpinBox, QCheckBox, QInputDialog, QSizePolicy,
@@ -26,14 +37,21 @@ from rbl.config.recording_config import (
     RES_PRESETS, PREVIEW_FPS_DEFAULT, RECORD_FPS_MIN, RECORD_FPS_MAX,
     CSV_INTERVAL_MIN_S, CSV_INTERVAL_MAX_S, CSV_INTERVAL_DEFAULT_S,
     SEGMENT_SECONDS_CHOICES, QUALITY_PRESETS, QUALITY_DEFAULT,
+    MASTER_CODECS, MASTER_CODEC_DEFAULT,
 )
 from rbl.gui import theme
+from rbl.gui.widgets.video_view import VideoView
 
 try:
     import cv2
     _CV2_OK = True
 except ImportError:
     _CV2_OK = False
+
+_CAMERA_FORMATS = [
+    ("MJPG (compressed, fast)", "MJPG"),
+    ("YUY2 (uncompressed)",     "YUY2"),
+]
 
 
 class RecordingPanel(QGroupBox):
@@ -43,7 +61,7 @@ class RecordingPanel(QGroupBox):
         super().__init__("Session Recorder", parent)
         self._recorder = recorder
         self._camera   = recorder._camera
-        self._blocking = False   # guard against signal loops while setting widget values
+        self._blocking = False
 
         self._build_ui()
         self._connect_signals()
@@ -75,7 +93,7 @@ class RecordingPanel(QGroupBox):
         cam_row.addWidget(self._lbl_res, stretch=1)
         lay.addLayout(cam_row)
 
-        # ---- Settings row --------------------------------------------------
+        # ---- Resolution + acquire fps + record fps -------------------------
         s1 = QHBoxLayout()
         s1.setSpacing(4)
         s1.addWidget(QLabel("Res:"))
@@ -85,11 +103,16 @@ class RecordingPanel(QGroupBox):
         self._combo_res.setCurrentIndex(len(RES_PRESETS) - 1)
         s1.addWidget(self._combo_res)
 
-        s1.addWidget(QLabel("Preview:"))
+        s1.addWidget(QLabel("Acquire:"))
         self._spin_preview = QSpinBox()
         self._spin_preview.setRange(1, 120)
         self._spin_preview.setValue(PREVIEW_FPS_DEFAULT)
         self._spin_preview.setSuffix(" fps")
+        self._spin_preview.setToolTip(
+            "Frame rate requested from the camera. This is the acquisition "
+            "rate — the Record box below only selects which of these frames "
+            "are written. Lower it to make an uncompressed pixel format "
+            "available at full resolution.")
         s1.addWidget(self._spin_preview)
 
         s1.addWidget(QLabel("Record:"))
@@ -97,18 +120,34 @@ class RecordingPanel(QGroupBox):
         self._spin_rec_fps.setRange(RECORD_FPS_MIN, RECORD_FPS_MAX)
         self._spin_rec_fps.setValue(self._recorder._record_fps)
         self._spin_rec_fps.setSuffix(" fps")
+        self._spin_rec_fps.setToolTip(
+            "How many of the acquired frames are written. "
+            "Cannot exceed the acquire rate.")
         self._spin_rec_fps.valueChanged.connect(self._on_rec_fps_changed)
         s1.addWidget(self._spin_rec_fps)
         lay.addLayout(s1)
 
-        # ---- Live feed -----------------------------------------------------
-        self._lbl_feed = QLabel("No camera")
-        self._lbl_feed.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._lbl_feed.setMinimumSize(240, 180)
-        self._lbl_feed.setStyleSheet("background: #111; color: #888;")
-        self._lbl_feed.setSizePolicy(
+        # ---- Format combo (pixel format sent to camera) --------------------
+        s_fmt = QHBoxLayout()
+        s_fmt.setSpacing(4)
+        s_fmt.addWidget(QLabel("Format:"))
+        self._combo_fmt = QComboBox()
+        for label, data in _CAMERA_FORMATS:
+            self._combo_fmt.addItem(label, data)
+        self._combo_fmt.setToolTip(
+            "Pixel format requested from the camera.\n"
+            "MJPG: compressed JPEG stream, available at all resolutions and frame rates.\n"
+            "YUY2: uncompressed 4:2:2 — eliminates in-camera lossy encoding but "
+            "requires lower frame rates at full resolution (typically 5 fps at 1080p).")
+        s_fmt.addStretch()
+        s_fmt.addWidget(self._combo_fmt)
+        lay.addLayout(s_fmt)
+
+        # ---- Live feed (VideoView — constant minimum size, no ratchet) -----
+        self._feed = VideoView()
+        self._feed.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        lay.addWidget(self._lbl_feed, stretch=1)
+        lay.addWidget(self._feed, stretch=1)
 
         # ---- CSV / segment row ---------------------------------------------
         s2 = QHBoxLayout()
@@ -131,7 +170,6 @@ class RecordingPanel(QGroupBox):
             else:
                 label = f"{secs // 3600} h"
             self._combo_seg.addItem(label, secs)
-        # Default to 10 min
         for i in range(self._combo_seg.count()):
             if self._combo_seg.itemData(i) == self._recorder._segment_seconds:
                 self._combo_seg.setCurrentIndex(i)
@@ -140,22 +178,41 @@ class RecordingPanel(QGroupBox):
         s2.addWidget(self._combo_seg)
         lay.addLayout(s2)
 
-        # ---- Quality / video-enable row ------------------------------------
+        # ---- Master codec row ----------------------------------------------
         s3 = QHBoxLayout()
         s3.setSpacing(4)
-        s3.addWidget(QLabel("Quality:"))
+        s3.addWidget(QLabel("Master:"))
+        self._combo_master = QComboBox()
+        for label in MASTER_CODECS:
+            self._combo_master.addItem(label)
+        self._combo_master.setCurrentText(MASTER_CODEC_DEFAULT)
+        self._combo_master.setToolTip(
+            "On-disk codec — the compression that actually runs in the lab.\n\n"
+            "MJPEG q98/q100: re-encodes each frame as JPEG; fast, small.\n"
+            "FFV1 lossless: bit-exact, ~3× larger. Writes .mkv.\n"
+            "PNG sequence: one PNG per frame in a folder; completely lossless,\n"
+            "  independently openable. Only available at ≤ 10 fps.\n\n"
+            "The MP4 copy (CRF) setting below is separate and requires ffmpeg.")
+        self._combo_master.currentTextChanged.connect(self._on_master_changed)
+        s3.addWidget(self._combo_master)
+        lay.addLayout(s3)
+
+        # ---- MP4 copy (CRF) row — disabled when ffmpeg absent --------------
+        s4 = QHBoxLayout()
+        s4.setSpacing(4)
+        s4.addWidget(QLabel("MP4 copy (CRF):"))
         self._combo_quality = QComboBox()
         for label in QUALITY_PRESETS:
             self._combo_quality.addItem(label)
         self._combo_quality.setCurrentText(QUALITY_DEFAULT)
         self._combo_quality.currentTextChanged.connect(self._on_quality_changed)
-        s3.addWidget(self._combo_quality)
+        s4.addWidget(self._combo_quality)
 
         self._chk_video = QCheckBox("Record video")
         self._chk_video.setChecked(self._recorder._video_enabled)
         self._chk_video.toggled.connect(self._on_video_enabled_changed)
-        s3.addWidget(self._chk_video)
-        lay.addLayout(s3)
+        s4.addWidget(self._chk_video)
+        lay.addLayout(s4)
 
         # ---- Start/Stop button ---------------------------------------------
         self._btn_session = QPushButton("● START SESSION")
@@ -180,6 +237,10 @@ class RecordingPanel(QGroupBox):
         btns = QHBoxLayout()
         btns.setSpacing(4)
         self._btn_photo = QPushButton("Take Photo")
+        self._btn_photo.setToolTip(
+            "Saves a lossless PNG plus a beamline-state sidecar, independent "
+            "of the video settings. For a shot that matters, this is the "
+            "highest-quality path in the app.")
         self._btn_photo.clicked.connect(self._take_photo)
         btns.addWidget(self._btn_photo)
 
@@ -199,6 +260,7 @@ class RecordingPanel(QGroupBox):
         self._recorder.settings_changed.connect(self._render)
         self._recorder.photo_taken.connect(self._on_photo_taken)
         self._camera.opened.connect(self._on_camera_opened)
+        self._camera.format_ready.connect(self._on_format_ready)
         self._camera.closed.connect(self._on_camera_closed_ui)
         self._camera.preview_ready.connect(self._on_preview_frame)
 
@@ -208,21 +270,31 @@ class RecordingPanel(QGroupBox):
         if self._camera.is_open():
             self._camera.close()
         else:
-            idx = self._combo_cam.currentData()
-            w, h = self._combo_res.currentData()
-            fps  = self._spin_preview.value()
-            self._camera.open(idx, w, h, fps)
+            idx    = self._combo_cam.currentData()
+            w, h   = self._combo_res.currentData()
+            fps    = self._spin_preview.value()
+            fourcc = self._combo_fmt.currentData()
+            self._camera.open(idx, w, h, fps, fourcc=fourcc)
 
     def _on_camera_opened(self, w: int, h: int, fps: float):
         self._lbl_res.setText(f"{w}x{h} @ {fps:.0f} fps")
+        # Clamp record fps to acquire fps so the spinbox cannot request more
+        # frames than the camera delivers.
+        self._spin_rec_fps.setMaximum(min(RECORD_FPS_MAX, max(1, int(fps))))
         self._btn_open.setText("Close")
         self._combo_cam.setEnabled(False)
         self._render()
 
+    def _on_format_ready(self, fourcc: str):
+        """Append the actual pixel format to the resolution label."""
+        current = self._lbl_res.text()
+        if "·" not in current and current:
+            self._lbl_res.setText(f"{current} · {fourcc}")
+
     def _on_camera_closed_ui(self):
         self._lbl_res.setText("")
-        self._lbl_feed.setPixmap(QPixmap())
-        self._lbl_feed.setText("No camera")
+        self._feed.clear("No camera")
+        self._spin_rec_fps.setMaximum(RECORD_FPS_MAX)
         self._btn_open.setText("Open")
         self._combo_cam.setEnabled(True)
         self._render()
@@ -235,11 +307,7 @@ class RecordingPanel(QGroupBox):
             h, w, ch = frame.shape
             rgb = _cv2.cvtColor(frame, _cv2.COLOR_BGR2RGB)
             img = QImage(rgb.data, w, h, ch * w, QImage.Format.Format_RGB888)
-            pix = QPixmap.fromImage(img).scaled(
-                self._lbl_feed.width(), self._lbl_feed.height(),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation)
-            self._lbl_feed.setPixmap(pix)
+            self._feed.set_frame(img)
         except Exception:
             pass
 
@@ -265,10 +333,35 @@ class RecordingPanel(QGroupBox):
             return
         self._recorder.set_quality(label)
 
+    def _on_master_changed(self, label: str):
+        if self._blocking:
+            return
+        self._recorder.set_master_codec(label)
+        self._update_png_guard()
+
     def _on_video_enabled_changed(self, on: bool):
         if self._blocking:
             return
         self._recorder.set_video_enabled(on)
+
+    def _update_png_guard(self):
+        """Disable the PNG option when record_fps > 10."""
+        model = self._combo_master.model()
+        for i in range(model.rowCount()):
+            label = model.item(i).text()
+            if "PNG" in label:
+                enabled = self._spin_rec_fps.value() <= 10
+                item = model.item(i)
+                if not enabled:
+                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
+                    item.setToolTip(
+                        "PNG sequence is not available at > 10 fps — "
+                        "imwrite at 30 fps stalls the camera thread and fills "
+                        "any disk. Lower the Record fps first.")
+                else:
+                    item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEnabled)
+                    item.setToolTip("")
+                break
 
     # ---- Session control ---------------------------------------------------
 
@@ -311,27 +404,37 @@ class RecordingPanel(QGroupBox):
         st = self._recorder.state()
         rec = st["recording"]
 
-        # Update settings widgets without triggering handlers.
         self._blocking = True
         self._spin_rec_fps.setValue(self._recorder._record_fps)
         self._spin_csv.setValue(self._recorder._csv_interval_s)
         self._combo_quality.setCurrentText(self._recorder._quality_label)
+        self._combo_master.setCurrentText(self._recorder._master_codec)
         self._chk_video.setChecked(self._recorder._video_enabled)
         self._blocking = False
 
-        # Enable/disable settings controls while recording.
         for w in (self._spin_rec_fps, self._spin_csv, self._combo_seg,
-                  self._combo_quality, self._chk_video):
+                  self._combo_master, self._combo_quality, self._chk_video):
             w.setEnabled(not rec)
 
-        # Video checkbox: also disabled if no camera or no cv2.
+        # Video checkbox: disabled if no camera or no cv2.
         if not self._camera.is_open() or not _CV2_OK:
             self._chk_video.setEnabled(False)
             tip = ("Camera must be open to record video."
                    if _CV2_OK else "opencv-python not installed.")
             self._chk_video.setToolTip(tip)
 
-        # Session button.
+        # CRF combo: disabled when ffmpeg absent — on lab machines it is inert.
+        ffmpeg_found = st.get("ffmpeg_found", False)
+        self._combo_quality.setEnabled(not rec and ffmpeg_found)
+        if not ffmpeg_found:
+            self._combo_quality.setToolTip(
+                "ffmpeg not found — no MP4 copy is made. "
+                "The Master setting above is what is recorded.")
+        else:
+            self._combo_quality.setToolTip("")
+
+        self._update_png_guard()
+
         if rec:
             self._btn_session.setText("■ STOP SESSION")
             self._btn_session.setStyleSheet(
@@ -340,7 +443,6 @@ class RecordingPanel(QGroupBox):
             self._btn_session.setText("● START SESSION")
             self._btn_session.setStyleSheet("")
 
-        # Status and stats.
         if rec:
             elapsed = st["elapsed_s"]
             h = int(elapsed) // 3600
@@ -351,13 +453,23 @@ class RecordingPanel(QGroupBox):
             self._lbl_status.setStyleSheet(
                 f"color: {theme.OK}; font-size: {theme.FS_CAPTION}px;")
 
+            frames_written = st["frames_written"]
             stats = (f"{st['csv_rows']} rows"
-                     f"  ·  {st['frames_written']} frames"
+                     f"  ·  {frames_written} frames"
                      f"  ·  {st['segments_done']} segments")
             if st["transcode_pending"]:
                 stats += f"  ·  transcode: {st['transcode_pending']} pending"
             free_gb = st["disk_free_bytes"] / 1024**3
             stats += f"\ndisk: {free_gb:.0f} GB free"
+
+            # Estimated disk rate after enough frames to be meaningful.
+            if frames_written >= 50 and elapsed > 0:
+                bytes_written = st.get("bytes_written", 0)
+                if bytes_written > 0:
+                    rate_gb_h = (bytes_written / frames_written
+                                 * self._recorder._record_fps * 3600 / 1e9)
+                    stats += f"  ·  est. {rate_gb_h:.1f} GB/h"
+
             self._lbl_stats.setText(stats)
         else:
             if st["session_id"]:
@@ -367,11 +479,7 @@ class RecordingPanel(QGroupBox):
             self._lbl_status.setStyleSheet(
                 f"color: {theme.NEUTRAL}; font-size: {theme.FS_CAPTION}px;")
             self._lbl_stats.setText(
-                "" if not st["ffmpeg_found"] else "")
-            if not st["ffmpeg_found"]:
-                self._lbl_stats.setText(
-                    "ffmpeg not found — keeping .avi only")
+                "" if ffmpeg_found else "ffmpeg not found — keeping master only")
 
-        # Action buttons.
         self._btn_photo.setEnabled(self._camera.is_open())
         self._btn_note.setEnabled(rec)

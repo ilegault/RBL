@@ -10,6 +10,16 @@ Pure calculator: no hardware, no live run. Every number here comes from
 rbl.hardware.raster_model / rbl.hardware.load_model, both pure math, so this
 tab is just inputs -> those functions -> plots.
 
+WHERE THE DEFAULTS LIVE
+-----------------------
+| What                     | Lives in                         |
+|--------------------------|----------------------------------|
+| Species table rows       | rbl/config/beam_species.py       |
+| Steerer geometry         | rbl/config/steerer_geometry.py   |
+| Calibration limits       | rbl/config/calibration_config.py |
+| FWHM, sample, freq, etc. | rbl/config/raster_defaults.py    |
+| Runtime species list     | ~/.config/rbl/funcgen.json       |
+
 WHY X AND Y ARE COMPUTED SEPARATELY
 -----------------------------------
 Samples are rectangles. A single "sample half-width" and a single required
@@ -88,6 +98,12 @@ from rbl.config.calibration_config import (
 )
 from rbl.config.hardware_config import AMP_LABELS
 from rbl.config.load_calibration_store import capacitance_pf_for
+from rbl.config.persistence import load_config, save_config
+from rbl.config.raster_defaults import (
+    FWHM_MM_DEFAULT, SAMPLE_WIDTH_X_MM, SAMPLE_HEIGHT_Y_MM,
+    OFFSET_X_MM_DEFAULT, OFFSET_Y_MM_DEFAULT, TURNAROUND_K_DEFAULT,
+    FREQ_X_HZ_DEFAULT, FREQ_Y_HZ_DEFAULT, AMP_MAX_BANDWIDTH_HZ,
+)
 from rbl.config.steerer_geometry import (
     DRIFT_TO_SAMPLE_CM, PLATE_GAP_CM, PLATE_LENGTH_CM, PLATE_RATING_KV,
     describe as steerer_description,
@@ -99,7 +115,7 @@ from rbl.hardware.raster_model import (
     required_drive, dwell_uniformity, displacement_mm,
 )
 
-AMP_MAX_BANDWIDTH_HZ = 10_000.0   # EEL5000 large-signal BW, no load (manual p.1-3)
+_SPECIES_CFG_KEY = "raster_species"
 
 # Which amplifier drives which axis.  X+ and X- are the push-pull pair on the
 # X plates and both see the X-axis frequency; likewise Y.
@@ -160,29 +176,29 @@ class RasterPlannerTab(QWidget):
                                  decimals=1, step=1.0)
         form.addRow("Drift, steerer exit -> sample [cm]:", self.sb_drift_cm)
 
-        self.sb_fwhm_mm = _spin(0.001, 100.0, 1.0, decimals=3, step=0.1)
+        self.sb_fwhm_mm = _spin(0.001, 100.0, FWHM_MM_DEFAULT, decimals=3, step=0.1)
         form.addRow("Beam FWHM [mm]:", self.sb_fwhm_mm)
 
         # Rectangular sample: the two sizes are independent.  FULL width and
         # FULL height, because that is what comes off a pair of calipers -
         # the halving is the math's business, not the operator's, and is
         # done inside raster_model.required_drive.
-        self.sb_width_x_mm = _spin(0.02, 1000.0, 10.0, decimals=2, step=0.5)
+        self.sb_width_x_mm = _spin(0.02, 1000.0, SAMPLE_WIDTH_X_MM, decimals=2, step=0.5)
         form.addRow("Sample WIDTH  X (full) [mm]:", self.sb_width_x_mm)
 
-        self.sb_height_y_mm = _spin(0.02, 1000.0, 10.0, decimals=2, step=0.5)
+        self.sb_height_y_mm = _spin(0.02, 1000.0, SAMPLE_HEIGHT_Y_MM, decimals=2, step=0.5)
         form.addRow("Sample HEIGHT Y (full) [mm]:", self.sb_height_y_mm)
 
         # Asymmetric rastering.  Zero is the default and the normal case;
         # see the module docstring for why this is an offset and not two
         # unequal amplitudes.
-        self.sb_offset_x_mm = _spin(-500.0, 500.0, 0.0, decimals=2, step=0.5)
+        self.sb_offset_x_mm = _spin(-500.0, 500.0, OFFSET_X_MM_DEFAULT, decimals=2, step=0.5)
         form.addRow("Scan centre offset X [mm]:", self.sb_offset_x_mm)
 
-        self.sb_offset_y_mm = _spin(-500.0, 500.0, 0.0, decimals=2, step=0.5)
+        self.sb_offset_y_mm = _spin(-500.0, 500.0, OFFSET_Y_MM_DEFAULT, decimals=2, step=0.5)
         form.addRow("Scan centre offset Y [mm]:", self.sb_offset_y_mm)
 
-        self.sb_turnaround_k = _spin(0.0, 10.0, 1.5, decimals=2, step=0.1)
+        self.sb_turnaround_k = _spin(0.0, 10.0, TURNAROUND_K_DEFAULT, decimals=2, step=0.1)
         form.addRow("Turnaround margin (k x FWHM):", self.sb_turnaround_k)
 
         top_row.addWidget(in_box, stretch=0)
@@ -198,10 +214,10 @@ class RasterPlannerTab(QWidget):
         amp_box = QGroupBox("Amplifier Drive (does not affect the width)")
         amp_form = QFormLayout(amp_box)
 
-        self.sb_freq_x_hz = _spin(0.1, 10_000.0, 517.0, decimals=1, step=1.0)
+        self.sb_freq_x_hz = _spin(0.1, 10_000.0, FREQ_X_HZ_DEFAULT, decimals=1, step=1.0)
         amp_form.addRow("X-axis (fast) frequency [Hz]:", self.sb_freq_x_hz)
 
-        self.sb_freq_y_hz = _spin(0.1, 10_000.0, 64.0, decimals=1, step=1.0)
+        self.sb_freq_y_hz = _spin(0.1, 10_000.0, FREQ_Y_HZ_DEFAULT, decimals=1, step=1.0)
         amp_form.addRow("Y-axis (slow) frequency [Hz]:", self.sb_freq_y_hz)
 
         freq_note = QLabel(
@@ -284,38 +300,7 @@ class RasterPlannerTab(QWidget):
         top_row.addWidget(out_box, stretch=1)
         layout.addLayout(top_row, stretch=0)
 
-        # ── Species table ─────────────────────────────────────────────────
-        sp_box = QGroupBox("Deflection for Various Species (at the commanded voltage)")
-        sp_lay = QVBoxLayout(sp_box)
-
-        self.lbl_target = QLabel("—")
-        self.lbl_target.setStyleSheet(f"font-size: {theme.FS_CAPTION}px;")
-        sp_lay.addWidget(self.lbl_target)
-
-        self.tbl_species = QTableWidget(len(DEFAULT_SPECIES), len(SPECIES_COLUMNS))
-        self.tbl_species.setHorizontalHeaderLabels(SPECIES_COLUMNS)
-        self.tbl_species.verticalHeader().setVisible(False)
-        self.tbl_species.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.tbl_species.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.tbl_species.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.Stretch)
-        self.tbl_species.setMinimumHeight(150)
-        self._populate_species()
-        self.tbl_species.itemChanged.connect(self._on_species_edited)
-        self.tbl_species.itemSelectionChanged.connect(self._recompute)
-        sp_lay.addWidget(self.tbl_species)
-
-        hint = QLabel("Select a row to design the drive for that species. "
-                      "Mass, energy and charge state are editable; deflection "
-                      "is what that species would sweep at the voltage "
-                      "commanded above.")
-        hint.setWordWrap(True)
-        hint.setStyleSheet(f"font-size: {theme.FS_CAPTION}px; color: {theme.MUTED};")
-        sp_lay.addWidget(hint)
-
-        layout.addWidget(sp_box, stretch=0)
-
-        # ── Plots ─────────────────────────────────────────────────────────
+        # ── Plots + species table (side by side) ──────────────────────────
         plot_row = QHBoxLayout()
         plot_row.setSpacing(8)
 
@@ -328,28 +313,66 @@ class RasterPlannerTab(QWidget):
         env_lay.addWidget(self._canvas_env)
         plot_row.addWidget(env_box, stretch=1)
 
-        dwell_box = QGroupBox("Dwell Uniformity")
-        dwell_lay = QVBoxLayout(dwell_box)
-        self._fig_dwell = Figure(figsize=(5, 4))
-        self._canvas_dwell = FigureCanvasQTAgg(self._fig_dwell)
-        self._canvas_dwell.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self._ax_dwell = self._fig_dwell.add_subplot(111)
-        dwell_lay.addWidget(self._canvas_dwell)
-        plot_row.addWidget(dwell_box, stretch=1)
+        # ── Species table ─────────────────────────────────────────────────
+        sp_box = QGroupBox("Deflection for Various Species (at the commanded voltage)")
+        sp_lay = QVBoxLayout(sp_box)
+
+        self.lbl_target = QLabel("—")
+        self.lbl_target.setStyleSheet(f"font-size: {theme.FS_CAPTION}px;")
+        sp_lay.addWidget(self.lbl_target)
+
+        self.tbl_species = QTableWidget(0, len(SPECIES_COLUMNS))
+        self.tbl_species.setHorizontalHeaderLabels(SPECIES_COLUMNS)
+        self.tbl_species.verticalHeader().setVisible(False)
+        self.tbl_species.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.tbl_species.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.tbl_species.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch)
+        self.tbl_species.setMinimumHeight(150)
+        self._populate_species(self._load_species())
+        self.tbl_species.itemChanged.connect(self._on_species_edited)
+        self.tbl_species.itemSelectionChanged.connect(self._recompute)
+        sp_lay.addWidget(self.tbl_species)
+
+        btn_row = QHBoxLayout()
+        self._btn_add = QPushButton("Add Row")
+        self._btn_remove = QPushButton("Remove Row")
+        self._btn_reset = QPushButton("Reset to Defaults")
+        self._btn_add.clicked.connect(self._add_species_row)
+        self._btn_remove.clicked.connect(self._remove_species_row)
+        self._btn_reset.clicked.connect(self._reset_species)
+        btn_row.addWidget(self._btn_add)
+        btn_row.addWidget(self._btn_remove)
+        btn_row.addStretch()
+        btn_row.addWidget(self._btn_reset)
+        sp_lay.addLayout(btn_row)
+
+        hint = QLabel("Select a row to design the drive for that species. "
+                      "Mass, energy and charge state are editable; deflection "
+                      "is what that species would sweep at the voltage "
+                      "commanded above.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet(f"font-size: {theme.FS_CAPTION}px; color: {theme.MUTED};")
+        sp_lay.addWidget(hint)
+
+        plot_row.addWidget(sp_box, stretch=1)
 
         layout.addLayout(plot_row, stretch=1)
 
-        self.tbl_species.selectRow(DEFAULT_SPECIES_ROW)
+        default_row = min(DEFAULT_SPECIES_ROW, self.tbl_species.rowCount() - 1)
+        if default_row >= 0:
+            self.tbl_species.selectRow(default_row)
         self._recompute()
 
     # ------------------------------------------------------------------
     # Species table
     # ------------------------------------------------------------------
 
-    def _populate_species(self):
+    def _populate_species(self, rows):
         self._updating = True
         try:
-            for row, (name, mass, energy, q) in enumerate(DEFAULT_SPECIES):
+            self.tbl_species.setRowCount(len(rows))
+            for row, (name, mass, energy, q) in enumerate(rows):
                 for col, value in enumerate((name, f"{mass:g}", f"{energy:g}", f"{q:d}")):
                     item = QTableWidgetItem(value)
                     if col > 0:
@@ -369,6 +392,7 @@ class RasterPlannerTab(QWidget):
     def _on_species_edited(self, item):
         if self._updating or item.column() >= N_EDITABLE_COLS:
             return
+        self._save_species()
         self._recompute()
 
     def _species_row(self, row: int):
@@ -393,6 +417,77 @@ class RasterPlannerTab(QWidget):
         rows = self.tbl_species.selectionModel().selectedRows()
         row = rows[0].row() if rows else DEFAULT_SPECIES_ROW
         return row, self._species_row(row)
+
+    def _load_species(self):
+        data = load_config().get(_SPECIES_CFG_KEY)
+        if isinstance(data, list) and data:
+            try:
+                rows = [(str(r["name"]), float(r["mass"]),
+                         float(r["energy"]), int(float(r["q"])))
+                        for r in data]
+                if rows:
+                    return rows
+            except (KeyError, TypeError, ValueError):
+                pass
+        return list(DEFAULT_SPECIES)
+
+    def _save_species(self):
+        rows = []
+        for row in range(self.tbl_species.rowCount()):
+            parsed = self._species_row(row)
+            if parsed is not None:
+                name, mass, energy_ev, q = parsed
+                rows.append({"name": name, "mass": mass,
+                              "energy": energy_ev / 1e6, "q": q})
+            else:
+                def _cell(c):
+                    it = self.tbl_species.item(row, c)
+                    return it.text() if it else ""
+                rows.append({"name": _cell(0), "mass": _cell(1),
+                              "energy": _cell(2), "q": _cell(3)})
+        cfg = load_config()
+        cfg[_SPECIES_CFG_KEY] = rows
+        save_config(cfg)
+
+    def _add_species_row(self):
+        self._updating = True
+        try:
+            r = self.tbl_species.rowCount()
+            self.tbl_species.insertRow(r)
+            for col, value in enumerate(("New", "1", "1.0", "1")):
+                item = QTableWidgetItem(value)
+                if col > 0:
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignRight
+                                          | Qt.AlignmentFlag.AlignVCenter)
+                self.tbl_species.setItem(r, col, item)
+            for col in range(N_EDITABLE_COLS, len(SPECIES_COLUMNS)):
+                item = QTableWidgetItem("—")
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                item.setTextAlignment(Qt.AlignmentFlag.AlignRight
+                                      | Qt.AlignmentFlag.AlignVCenter)
+                self.tbl_species.setItem(r, col, item)
+        finally:
+            self._updating = False
+        self._save_species()
+        self._recompute()
+
+    def _remove_species_row(self):
+        rows = self.tbl_species.selectionModel().selectedRows()
+        if not rows:
+            return
+        self._updating = True
+        try:
+            self.tbl_species.removeRow(rows[0].row())
+        finally:
+            self._updating = False
+        self._save_species()
+        self._recompute()
+
+    def _reset_species(self):
+        self._populate_species(list(DEFAULT_SPECIES))
+        self._save_species()
+        self.tbl_species.selectRow(DEFAULT_SPECIES_ROW)
+        self._recompute()
 
     # ------------------------------------------------------------------
     # Capacitance
@@ -545,7 +640,6 @@ class RasterPlannerTab(QWidget):
 
         self.lbl_uniformity.setText(
             f"X {_pct(du_x)} peak-to-peak     Y {_pct(du_y)} peak-to-peak")
-        self._draw_dwell(du_x, half_x_mm, du_y, half_y_mm)
 
         # --- Species table -------------------------------------------------
         offset_note = ""
@@ -740,20 +834,3 @@ class RasterPlannerTab(QWidget):
         self._fig_env.tight_layout()
         self._canvas_env.draw_idle()
 
-    def _draw_dwell(self, du_x, half_x_mm, du_y, half_y_mm):
-        ax = self._ax_dwell
-        ax.clear()
-        if du_x["profile_mm"].size:
-            ax.plot(du_x["profile_mm"], du_x["profile_dose"], label="X")
-            ax.axvspan(-half_x_mm, half_x_mm, color="tab:green", alpha=0.12,
-                       label="Sample (X)")
-        if du_y["profile_mm"].size:
-            ax.plot(du_y["profile_mm"], du_y["profile_dose"], "--", label="Y")
-            ax.axvspan(-half_y_mm, half_y_mm, color="tab:blue", alpha=0.10,
-                       label="Sample (Y)")
-        ax.set_xlabel("Position (mm)")
-        ax.set_ylabel("Relative dose")
-        ax.grid(True, alpha=0.3)
-        ax.legend(fontsize="small")
-        self._fig_dwell.tight_layout()
-        self._canvas_dwell.draw_idle()
