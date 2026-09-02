@@ -33,7 +33,7 @@ from rbl.services.beamline_snapshot import BeamlineSnapshotProvider
 from rbl.util import best_effort
 from rbl.services.session_recorder import SessionRecorder
 from rbl.state.beamline import Beamline
-from rbl import driver as ljm_driver
+from src import driver as ljm_driver
 
 
 # ─── Split-aware tab bar ──────────────────────────────────────────────────────
