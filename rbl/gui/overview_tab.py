@@ -928,7 +928,7 @@ class OverviewTab(QWidget):
     def _redraw_hv_interlock(self):
         payload = self._hv_interlock
         if payload is None:
-            self.lbl_hv_interlock.setText("HV interlock: —")
+            self.lbl_hv_interlock.setText("HV interlock: -")
             self.lbl_hv_interlock.setStyleSheet(
                 theme.status_label(theme.NEUTRAL) + f"font-size: {theme.FS_LABEL}px;")
             return
@@ -939,16 +939,16 @@ class OverviewTab(QWidget):
             # and Section 3.3 requires the two not be conflated in the UI.
             # The reason string distinguishes "no gauge selected" from a
             # genuinely stale reading, so forward it directly.
-            text = f"HV interlock: BLOCKED — {payload['reason']}"
+            text = f"HV interlock: BLOCKED - {payload['reason']}"
             color = theme.FAULT
         elif payload["state"] == "block":
-            text = f"HV interlock: BLOCKED — {payload['reason']}"
+            text = f"HV interlock: BLOCKED - {payload['reason']}"
             color = theme.FAULT
         elif payload["state"] == "warn":
-            text = f"HV interlock: WARN — {payload['reason']}"
+            text = f"HV interlock: WARN - {payload['reason']}"
             color = theme.WARN
         else:
-            text = f"HV interlock: OK — {payload['reason']}"
+            text = f"HV interlock: OK - {payload['reason']}"
             color = theme.OK
         self.lbl_hv_interlock.setText(text)
         self.lbl_hv_interlock.setStyleSheet(

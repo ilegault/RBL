@@ -163,7 +163,7 @@ class HvInterlockLinkMixin:
 
         if not self._hv_interlock_gauge_keys:
             status = "block"
-            reason = ("no interlock gauge selected — click a pressure "
+            reason = ("no interlock gauge selected - click a pressure "
                       "reading in Overview to designate one")
             stale = True
         else:
@@ -182,7 +182,7 @@ class HvInterlockLinkMixin:
         if transitioned_to_block and live_kv > 1e-9:
             log.warning(
                 "hv_interlock: blocking transition at %.3g kV commanded, "
-                "%.3g torr (stale=%s) — ramping every live channel to zero",
+                "%.3g torr (stale=%s) - ramping every live channel to zero",
                 live_kv, self._hv_pressure_torr, stale)
             self._ramp_all_channels_to_zero_on_interlock()
 

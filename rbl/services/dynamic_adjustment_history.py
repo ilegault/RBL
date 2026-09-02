@@ -11,9 +11,7 @@ JSON line per trial, appended as it completes, never rewritten.
 import json
 from pathlib import Path
 
-DYNAMIC_ADJUSTMENT_HISTORY_PATH = (
-    Path.home() / "Desktop" / "RBL_log" / "data" / "dynamic_adjustment_history.jsonl"
-)
+from rbl.config.paths import DYNAMIC_ADJUSTMENT_HISTORY_PATH
 
 
 def append_trial(record: dict, path: Path = None) -> None:

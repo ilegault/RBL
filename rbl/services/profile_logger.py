@@ -20,21 +20,51 @@ CSV COLUMNS (stats file)
     smooth_window, envelope_samples,
     xincr, points, transfer_seconds,
     scope_pwidth_seconds,
+    bpm_calibration, mm_per_second,
+    fwhm_mm, fwhm_x_mm, fwhm_y_mm,
+    <level>_<axis>_seconds / _mm  for every level BELOW half maximum,
+    tail_ratio_x, tail_ratio_y,
     peak_details_json
+
+THE WIDTH LADDER COLUMNS ARE GENERATED, NOT TYPED
+-------------------------------------------------
+`SCOPE_WIDTH_LEVELS` decides which levels are measured, so the header is
+built from it rather than hard-coded: changing the levels in config changes
+the CSV in step, and there is no way for a column called `fwtm_x_seconds` to
+end up holding a width measured at some other level.  Half maximum is
+excluded because it already has its own columns above.
+
+`tail_ratio_*` is FWTM/FWHM as MEASURED, blank when either level was not
+measurable.  A Gaussian gives 1.8226; nothing is written there from a fit,
+because a fit's ratio is that constant whatever the beam is doing.
+
+MILLIMETRES ARE AN ADDITION, NEVER A REPLACEMENT
+------------------------------------------------
+Every mm column sits BESIDE its seconds column, and the seconds column is
+always written.  A calibration is a divide by one measured number, and that
+number can later turn out to have been taken with the wrong BPM selected or
+the wrong fiducial peaks picked.  When that happens the logged seconds are
+still good and the file can simply be rescaled; had the log stored only
+millimetres, the run would be gone.  `mm_per_second` is written on every row
+for the same reason - so a file can be rescaled without anyone having to
+remember what the calibration was that afternoon.
 """
 import csv
 import json
 import logging
 import math
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+from rbl.config.paths import SCOPE_DIR
 
 log = logging.getLogger(__name__)
 
 
 def _output_dir() -> Path:
-    return Path.home() / "Desktop" / "RBL_log" / "data" / "scope"
+    return SCOPE_DIR
 
 
 def _new_run_id() -> str:
@@ -53,6 +83,32 @@ def _safe(v) -> str:
     return str(v)
 
 
+def _slug(label: str) -> str:
+    """A level's name as a CSV-safe column stem: "FW1/e²" -> "fw1_e2"."""
+    out = re.sub(r"[^0-9a-zA-Z]+", "_", label.replace("²", "2")).strip("_")
+    return out.lower()
+
+
+def _level_columns() -> list:
+    """Width-ladder columns, in config order, half maximum excluded."""
+    try:
+        from rbl.config.scope_config import SCOPE_AXIS_LABELS, SCOPE_WIDTH_LEVELS
+        from rbl.hardware.profile_fwhm import level_label
+    except Exception:            # pragma: no cover - config always imports
+        return []
+    cols = []
+    for level in SCOPE_WIDTH_LEVELS:
+        label = level_label(level)
+        if label == "FWHM":
+            continue
+        for axis in SCOPE_AXIS_LABELS[:2]:
+            stem = f"{_slug(label)}_{axis.lower()}"
+            cols += [f"{stem}_seconds", f"{stem}_mm"]
+    return cols
+
+
+LEVEL_COLUMNS = _level_columns()
+
 CSV_COLUMNS = [
     "iso_timestamp", "unix_time", "channel",
     "fwhm_seconds", "fwhm_source", "fwhm_x_seconds", "fwhm_y_seconds",
@@ -62,6 +118,10 @@ CSV_COLUMNS = [
     "smooth_window", "envelope_samples",
     "xincr", "points", "transfer_seconds",
     "scope_pwidth_seconds",
+    "bpm_calibration", "mm_per_second",
+    "fwhm_mm", "fwhm_x_mm", "fwhm_y_mm",
+    *LEVEL_COLUMNS,
+    "tail_ratio_x", "tail_ratio_y",
     "peak_details_json",
 ]
 
@@ -114,6 +174,17 @@ class ProfileLogger:
             peak_details.append({
                 "axis":         p.get("axis", ""),
                 "fwhm_seconds": p.get("fwhm_seconds"),
+                "fwhm_mm":      p.get("fwhm_mm"),
+                # The whole ladder, including WHERE each number came from -
+                # a measured width and a fit-derived stand-in are different
+                # kinds of claim, and a log that flattened them together
+                # could not be re-read honestly a month later.
+                "levels":       {lbl: {"seconds": rec.get("seconds"),
+                                       "mm":      rec.get("mm"),
+                                       "source":  rec.get("source"),
+                                       "fit_seconds": rec.get("fit_seconds")}
+                                 for lbl, rec in (p.get("levels") or {}).items()},
+                "tail_ratio":   p.get("tail_ratio"),
                 "resolved":     p.get("resolved"),
                 "note":         p.get("note", ""),
             })
@@ -139,8 +210,34 @@ class ProfileLogger:
             "points":              state.points,
             "transfer_seconds":    _safe(state.transfer_seconds),
             "scope_pwidth_seconds": _safe(state.scope_pwidth_seconds),
+            "bpm_calibration":     getattr(state, "calibration_name", ""),
+            "mm_per_second":       _safe(getattr(state, "mm_per_second",
+                                                 math.nan)),
+            "fwhm_mm":             _safe(getattr(state, "fwhm_mm", math.nan)),
+            "fwhm_x_mm":           _safe(getattr(state, "fwhm_x_mm", math.nan)),
+            "fwhm_y_mm":           _safe(getattr(state, "fwhm_y_mm", math.nan)),
+            "tail_ratio_x":        _safe(getattr(state, "tail_ratio_x",
+                                                 math.nan)),
+            "tail_ratio_y":        _safe(getattr(state, "tail_ratio_y",
+                                                 math.nan)),
             "peak_details_json":   json.dumps(peak_details, default=str),
         }
+
+        # Width-ladder columns. Only MEASURED widths are written: a
+        # fit-derived stand-in lives in peak_details_json where its source
+        # travels with it, and a flat column that silently mixed the two
+        # would be unanalysable later.
+        by_axis = {p.get("axis"): p for p in state.peaks}
+        for level_col in LEVEL_COLUMNS:
+            row[level_col] = ""
+        for axis, peak in by_axis.items():
+            for lbl, rec in (peak.get("levels") or {}).items():
+                if lbl == "FWHM" or not rec.get("resolved"):
+                    continue
+                stem = f"{_slug(lbl)}_{str(axis).lower()}"
+                if f"{stem}_seconds" in row:
+                    row[f"{stem}_seconds"] = _safe(rec.get("seconds"))
+                    row[f"{stem}_mm"]      = _safe(rec.get("mm"))
 
         self._writer.writerow(row)
         self._file.flush()

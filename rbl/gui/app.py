@@ -30,6 +30,7 @@ from rbl.gui.camera_tab import CameraTab
 from rbl.gui import theme
 from rbl.hardware.camera_source import CameraSource
 from rbl.services.beamline_snapshot import BeamlineSnapshotProvider
+from rbl.util import best_effort
 from rbl.services.session_recorder import SessionRecorder
 from rbl.state.beamline import Beamline
 from rbl import driver as ljm_driver
@@ -53,10 +54,6 @@ class SplitTabBar(QTabBar):
 
 
 # ─── Main Window ──────────────────────────────────────────────────────────────
-
-# Position of "Overview" in the outer tab bar (see the addTab calls below).
-# The app opens here.
-OVERVIEW_TAB_INDEX = 4
 
 log = logging.getLogger(__name__)
 
@@ -146,15 +143,16 @@ class MainWindow(QMainWindow):
 
         # ── Pages: Motors (0), Current (1), Amplifiers (2), FuncGens (3) ───────
         self.motor_tab   = MotorTab(self.beamline, self)
-        self.current_tab = CurrentTab(self)
-        self.amp_tab     = AmpTab(self)
+        self.current_tab = CurrentTab(self.beamline, self)
+        self.amp_tab     = AmpTab(self.beamline, self)
         self.funcgen_tab = FuncGenTab(self.beamline, self)
         self.overview_tab = OverviewTab(self.beamline, self)
         self.calibration_tab = CalibrationTab(self.beamline, self)
         self.load_char_tab   = LoadCharacterizationTab(self.beamline, self)
         self.vacuum_tab      = VacuumTab(self.beamline, self)
         self.profiler_tab    = ProfilerTab(self.beamline, self)
-        self.raster_planner_tab = RasterPlannerTab(self)
+        self.raster_planner_tab = RasterPlannerTab(
+            self.beamline, self.profiler_tab, self)
         self.dynamic_adjustment_tab = DynamicAdjustmentTab(self.beamline, self)
 
         # Session recorder — shared between Overview panel and Camera tab.
@@ -289,8 +287,9 @@ class MainWindow(QMainWindow):
         # beamline doing right now" without pressing anything, and it is
         # where Connect All lives - so it is the first thing an operator
         # wants on opening the app, not the Stepper Motors tab.
-        self._outer_stack.setCurrentIndex(OVERVIEW_TAB_INDEX)
-        self._outer_tabbar.setCurrentIndex(OVERVIEW_TAB_INDEX)
+        _overview_idx = self._tab_index("Overview")
+        self._outer_stack.setCurrentIndex(_overview_idx)
+        self._outer_tabbar.setCurrentIndex(_overview_idx)
         self._outer_tabbar.tabBarClicked.connect(self._on_outer_tab_clicked)
         self._outer_tabbar.tab_right_clicked.connect(self._on_tab_right_clicked)
 
@@ -298,6 +297,18 @@ class MainWindow(QMainWindow):
         self._refresh_driver_state()
 
     # ── Layout helpers ────────────────────────────────────────────────────────
+
+    def _tab_index(self, title: str) -> int:
+        """Return the outer tab-bar index for the tab labelled *title*.
+
+        Safer than a hand-maintained OVERVIEW_TAB_INDEX = 4 constant: inserting
+        a tab above Overview and forgetting to bump the constant would silently
+        open the app on the wrong screen.  This lookup can't drift.
+        """
+        for i in range(self._outer_tabbar.count()):
+            if self._outer_tabbar.tabText(i) == title:
+                return i
+        raise ValueError(f"tab not found: {title!r}")
 
     @staticmethod
     def _wrap_scroll(widget: QWidget) -> QScrollArea:
@@ -424,12 +435,11 @@ class MainWindow(QMainWindow):
     def _on_labjack_error(self, msg: str):
         # Beamline has already torn the connection down; just surface it.
         for tab in self._lj_tabs:
-            tab._on_error(msg)
+            tab.on_labjack_error(msg)
 
     def _on_profile_changed(self, profile_name: str):
         for tab in self._lj_tabs:
-            if hasattr(tab, "on_profile_changed"):
-                tab.on_profile_changed(profile_name)
+            tab.on_profile_changed(profile_name)
 
     # ── Prerequisite checks: detect missing drivers, offer one-click install ─
 
@@ -516,55 +526,20 @@ class MainWindow(QMainWindow):
     # ── Close ─────────────────────────────────────────────────────────────────
 
     def closeEvent(self, event):
-        try:
-            if self.session_recorder.is_recording():
-                self.session_recorder.stop()
-        except Exception:
-            pass
-        try:
-            self.camera_source.close()
-        except Exception:
-            pass
-        try:
-            self.motor_tab.abort_and_close()
-        except Exception:
-            pass
-        try:
-            self.current_tab.shutdown()
-        except Exception:
-            pass
-        try:
-            self.amp_tab.shutdown()
-        except Exception:
-            pass
-        try:
-            self.funcgen_tab.close_session()
-        except Exception:
-            pass
-        try:
-            self.calibration_tab.shutdown()
-        except Exception:
-            pass
-        try:
-            self.load_char_tab.shutdown()
-        except Exception:
-            pass
-        try:
-            self.dynamic_adjustment_tab.shutdown()
-        except Exception:
-            pass
-        try:
-            self.vacuum_tab.shutdown()
-        except Exception:
-            pass
-        try:
-            self.profiler_tab.shutdown()
-        except Exception:
-            pass
-        try:
-            self.beamline.shutdown()   # LabJack, Galil, both DG1022Z — one call
-        except Exception:
-            pass
+        # Stop the recorder before closing the camera so the final frames are flushed.
+        best_effort("session_recorder.stop",
+                    lambda: self.session_recorder.is_recording() and self.session_recorder.stop())
+        best_effort("camera_source.close",              self.camera_source.close)
+        best_effort("motor_tab.abort_and_close",        self.motor_tab.abort_and_close)
+        best_effort("current_tab.shutdown",             self.current_tab.shutdown)
+        best_effort("amp_tab.shutdown",                 self.amp_tab.shutdown)
+        best_effort("funcgen_tab.close_session",        self.funcgen_tab.close_session)
+        best_effort("calibration_tab.shutdown",         self.calibration_tab.shutdown)
+        best_effort("load_char_tab.shutdown",           self.load_char_tab.shutdown)
+        best_effort("dynamic_adjustment_tab.shutdown",  self.dynamic_adjustment_tab.shutdown)
+        best_effort("vacuum_tab.shutdown",              self.vacuum_tab.shutdown)
+        best_effort("profiler_tab.shutdown",            self.profiler_tab.shutdown)
+        best_effort("beamline.shutdown",                self.beamline.shutdown)
         super().closeEvent(event)
 
     # ── Outer tab switching ───────────────────────────────────────────────────
@@ -666,10 +641,23 @@ class MainWindow(QMainWindow):
 
 def main():
     import os
+    from logging.handlers import RotatingFileHandler
+
+    from rbl.config.paths import LOGS_DIR as _log_dir
+    _log_dir.mkdir(parents=True, exist_ok=True)
+    _file_handler = RotatingFileHandler(
+        _log_dir / "rbl.log",
+        maxBytes=5 * 1024 * 1024,   # 5 MB per file
+        backupCount=5,
+        encoding="utf-8",
+    )
+    _fmt = logging.Formatter("%(asctime)s %(levelname)-8s %(name)s: %(message)s")
+    _file_handler.setFormatter(_fmt)
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
-        handlers=[logging.StreamHandler(sys.stderr)],
+        handlers=[logging.StreamHandler(sys.stderr), _file_handler],
     )
     os.environ.setdefault("QT_AUTO_SCREEN_SCALE_FACTOR", "1")
 

@@ -115,10 +115,10 @@ class TestTabNavigation:
     def test_starts_on_the_overview(self, win):
         # The app opens on Overview: it answers "what is the beamline doing"
         # without pressing anything, and it is where Connect All lives.
-        from rbl.gui.app import OVERVIEW_TAB_INDEX
-        assert win._outer_stack.currentIndex() == OVERVIEW_TAB_INDEX
-        assert win._outer_tabbar.currentIndex() == OVERVIEW_TAB_INDEX
-        assert win._outer_tabbar.tabText(OVERVIEW_TAB_INDEX) == "Overview"
+        idx = win._tab_index("Overview")
+        assert win._outer_stack.currentIndex() == idx
+        assert win._outer_tabbar.currentIndex() == idx
+        assert win._outer_tabbar.tabText(idx) == "Overview"
 
     def test_click_motors_shows_motors(self, win):
         win._on_outer_tab_clicked(0)

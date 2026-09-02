@@ -25,10 +25,9 @@ Deviations inside CAL_UNCERTAINTY_V are noise, not findings.
 import math
 import random
 from enum import Enum
-from pathlib import Path
-
 from rbl.config.load_calibration_store import capacitance_pf_for
-from rbl.hardware.funcgen_driver import MAX_GEN_VOLTS
+from rbl.config.funcgen_limits import MAX_GEN_VOLTS
+from rbl.config.paths import CALIBRATION_DIR
 
 # --- Sweep ---------------------------------------------------------------
 
@@ -158,7 +157,7 @@ CAL_TRIP_BLANK_WINDOWS = 2
 # corrects a measurement with it, and the reactive interlock does not consult
 # it — so if this number is wrong the sweep is merely conservative or gets
 # stopped by the interlock, never silently mis-recorded.
-CAL_LOAD_CAP_PF = 1200.0
+CAL_LOAD_CAP_PF = 1500
 
 
 # Waveform shape -> the constant in  I_pk = k * f * C * V_pk  for a capacitive
@@ -302,7 +301,7 @@ CAL_SWEEP_PROFILE = "AMP_PAIR"
 # in the scan list.  Named separately from CAL_PROFILE so the reason survives.
 CAL_DRIFT_PROFILE = "WAVEFORM"
 
-CAL_OUTPUT_DIR = Path.home() / "Desktop" / "RBL_log" / "data" / "calibration"
+CAL_OUTPUT_DIR = CALIBRATION_DIR
 
 # --- Drift -----------------------------------------------------------------
 

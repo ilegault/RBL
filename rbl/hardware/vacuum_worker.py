@@ -42,7 +42,7 @@ from rbl.hardware.xgs600_driver import (
     Xgs600, XgsTimeoutError, XgsProtocolError, XgsFieldError,
 )
 from rbl.hardware.vgc083_driver import Vgc083, VgcTimeoutError, VgcProtocolError
-from rbl.state.snapshots import VacuumState
+from rbl.snapshots import VacuumState
 
 log = logging.getLogger(__name__)
 

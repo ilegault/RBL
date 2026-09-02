@@ -37,7 +37,9 @@ import json
 import time
 from pathlib import Path
 
-STORE_PATH = Path.home() / ".config" / "rbl" / "load_calibration.json"
+from rbl.config.paths import LOAD_CAL_STORE
+
+STORE_PATH = LOAD_CAL_STORE
 
 
 def load_all() -> dict:

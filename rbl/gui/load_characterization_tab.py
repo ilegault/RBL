@@ -35,24 +35,8 @@ from rbl.config.load_calibration_store import load_all
 from rbl.gui import theme
 from rbl.gui.widgets.connection_bar import LabJackPanel
 from rbl.gui.widgets.inputs import NoScrollComboBox
-from rbl.hardware.funcgen_safety import CHANNEL_ROLE
 from rbl.services.load_characterizer import LoadCharacterizer, Mode
 from rbl.services.ramp_engine import RampEngine
-
-
-def _build_funcgen_map(beamline) -> dict:
-    """amp_label -> (live DG1022Z instance, channel number).
-
-    Mirrors calibration_tab.py's helper of the same name and purpose: not a
-    new mapping, the one that already decides which channel drives which
-    plate everywhere else in the app (funcgen_safety.CHANNEL_ROLE).
-    """
-    mapping = {}
-    for key, amp_label in CHANNEL_ROLE.items():
-        gen_letter, channel = key[0], int(key[1])
-        gen = beamline.dg_a if gen_letter == "A" else beamline.dg_b
-        mapping[amp_label] = (gen, channel)
-    return mapping
 
 
 class LoadCharacterizationTab(QWidget):
@@ -190,7 +174,7 @@ class LoadCharacterizationTab(QWidget):
         mode = self._selected_mode()
         load_condition = self._selected_load_condition()
 
-        funcgen_map = _build_funcgen_map(self.beamline)
+        funcgen_map = self.beamline.build_funcgen_map()
         if funcgen_map.get(amp_label, (None, None))[0] is None:
             QMessageBox.warning(self, "Generator not connected",
                                  f"{amp_label}'s function generator is not connected.")
@@ -351,7 +335,7 @@ class LoadCharacterizationTab(QWidget):
         if self._runner is not None:
             self._runner.abort()
 
-    def _on_error(self, msg: str):
+    def on_labjack_error(self, msg: str):
         QMessageBox.warning(self, "LabJack poll error", msg)
 
     def on_profile_changed(self, profile_name: str):

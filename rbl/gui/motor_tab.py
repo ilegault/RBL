@@ -40,9 +40,7 @@ which read Cancel while running — or the EMERGENCY STOP, which additionally
 cancels every run in progress, because an abort that the next pass undoes a
 second later is not a stop.
 """
-import time
-
-from PySide6.QtCore import Signal, Qt
+from PySide6.QtCore import Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel,

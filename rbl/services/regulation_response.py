@@ -28,14 +28,13 @@ import logging
 from PySide6.QtCore import QObject
 
 from rbl.services import trip_history
-from rbl.gui.regulation_dialog import RegulationFaultDialog
 
 log = logging.getLogger(__name__)
 
 
 class RegulationResponder(QObject):
     def __init__(self, monitor, amp_drive, get_operating_conditions,
-                 dialog_factory=RegulationFaultDialog, parent_widget=None, parent=None):
+                 dialog_factory=None, parent_widget=None, parent=None):
         """
         monitor: RegulationMonitor — its fault_detected signal drives this.
         amp_drive: AmpDrive — output_off(label) is called on a confirmed fault.
@@ -66,9 +65,11 @@ class RegulationResponder(QObject):
         except Exception as e:
             log.error("regulation response: failed to stop %s: %s", label, e)
 
-        dialog = self._dialog_factory(label, state, reason, parent=self._parent)
-        dialog.exec()
-        operator_answer = dialog.selected_reason()
+        operator_answer = None
+        if self._dialog_factory is not None:
+            dialog = self._dialog_factory(label, state, reason, parent=self._parent)
+            dialog.exec()
+            operator_answer = dialog.selected_reason()
 
         record = {}
         try:

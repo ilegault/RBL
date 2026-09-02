@@ -17,12 +17,11 @@ import logging
 log = logging.getLogger(__name__)
 
 from PySide6.QtCore import QTimer, Qt, Signal
-from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout,
     QGroupBox, QLabel, QPushButton,
-    QLineEdit, QCheckBox, QMessageBox, QSizePolicy,
-    QScrollArea, QApplication,
+    QLineEdit, QCheckBox, QMessageBox,
+    QApplication,
 )
 
 from rbl.hardware.funcgen_driver import DG1022Z, discover, MAX_GEN_VOLTS, MAX_AMP_VPP

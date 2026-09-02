@@ -34,6 +34,8 @@ import atexit
 
 from PySide6.QtCore import QObject, Signal
 
+from rbl.util import best_effort
+
 from rbl.hardware import beam_reconstruction as BR
 from rbl.state.funcgen_control import FuncGenControlMixin
 from rbl.state.hv_interlock_link import HvInterlockLinkMixin
@@ -130,30 +132,11 @@ class Beamline(LabJackLinkMixin, FuncGenControlMixin, MotorControlMixin, VacuumL
         outputs here — they are meant to retain state after the app exits
         (see FuncGenTab.close_session's docstring; this mirrors it).
         """
-        try:
-            self.disconnect_labjack()
-        except Exception:
-            pass
-        try:
-            if self.galil.connected:
-                self.galil.abort()
-        except Exception:
-            pass
-        try:
-            self.galil.disconnect()
-        except Exception:
-            pass
-        try:
-            self._shutdown_vacuum()
-        except Exception:
-            pass
-        try:
-            self._shutdown_scope()
-        except Exception:
-            pass
+        best_effort("disconnect_labjack",  self.disconnect_labjack)
+        best_effort("galil.abort",          lambda: self.galil.connected and self.galil.abort())
+        best_effort("galil.disconnect",     self.galil.disconnect)
+        best_effort("shutdown_vacuum",      self._shutdown_vacuum)
+        best_effort("shutdown_scope",       self._shutdown_scope)
         for gen in (self.dg_a, self.dg_b):
             if gen is not None:
-                try:
-                    gen.close()
-                except Exception:
-                    pass
+                best_effort("funcgen.close", gen.close)

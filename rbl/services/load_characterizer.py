@@ -48,7 +48,7 @@ through the Phase 4 ramp engine rather than a step, per Section 2.3 Mode B.
 import csv
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum, auto
 
 import numpy as np
@@ -63,7 +63,7 @@ from rbl.config.hardware_config import (
 from rbl.config.load_calibration_store import save_measurement
 from rbl.hardware.ac_metrics import fundamental, phase_difference_deg
 from rbl.hardware.amp_monitor import monitor_to_kv, ma_unclamped
-from rbl.hardware.funcgen_safety import peak_status, PEAK_MAX_VOLTS, _AMP_GAIN
+from rbl.hardware.funcgen_safety import peak_status, _AMP_GAIN
 from rbl.hardware.load_model import admittance_from_fundamentals, capacitance_from_charge
 from rbl.services.amp_drive import AmpDrive
 from rbl.services.calibration_writer import now_iso

@@ -87,7 +87,7 @@ from PySide6.QtCore import QObject, QTimer, Signal
 
 from rbl.config.calibration_config import (
     CAL_COLLECT_S, CAL_MAX_KV, CAL_PASSES, CAL_SETTLE_S,
-    CAL_AC_FREQ_HZ, CAL_AC_SETTLE_S, CAL_AC_COLLECT_S, CAL_STEP_KV,
+    CAL_AC_FREQ_HZ, CAL_AC_SETTLE_S, CAL_AC_COLLECT_S,
     CAL_AC_TRIP_MA, CAL_LOAD_CAP_PF, ac_max_peak_kv, ac_peak_current_ma,
     ac_shape_k,
     CAL_TRIP_HARD_MA, CAL_TRIP_MIN_DURATION_S, CAL_TRIP_CONSEC_WINDOWS,
@@ -286,9 +286,8 @@ class CalibrationRunner(QObject):
             except Exception as e:
                 self._print_err(f"writer.update_metadata: {e}")
 
-        print(f"[CAL] start_sweep: run_id={self._run_id} "
-              f"{len(self._sequence)} setpoints, "
-              f"load={self._load_condition.value}, seed={self._seed}")
+        log.info("[CAL] start_sweep: run_id=%s %d setpoints, load=%s, seed=%s",
+                 self._run_id, len(self._sequence), self._load_condition.value, self._seed)
         self._enter_step()
 
     def start_ac_sweep(self, channels=None, freq_hz: float = None,
@@ -350,10 +349,8 @@ class CalibrationRunner(QObject):
             except Exception as e:
                 self._print_err(f"writer.update_metadata: {e}")
 
-        print(f"[CAL] start_ac_sweep: run_id={self._run_id} "
-              f"{len(self._sequence)} setpoints, "
-              f"freq={self._ac_freq_hz} Hz, "
-              f"load={self._load_condition.value}")
+        log.info("[CAL] start_ac_sweep: run_id=%s %d setpoints, freq=%s Hz, load=%s",
+                 self._run_id, len(self._sequence), self._ac_freq_hz, self._load_condition.value)
         self._enter_step()
 
     def start_drift(self, setpoint_kv: float, duration_h: float,
@@ -447,10 +444,9 @@ class CalibrationRunner(QObject):
             )
         else:
             ac_summary = "DC"
-        print(f"[CAL] start_drift: run_id={self._run_id} "
-              f"setpoint={self._drift_setpoint_kv:+.3f} kV "
-              f"duration={duration_h:.2f} h load={self._load_condition.value} "
-              f"ac={ac_summary}")
+        log.info("[CAL] start_drift: run_id=%s setpoint=%+.3f kV duration=%.2f h load=%s ac=%s",
+                 self._run_id, self._drift_setpoint_kv, duration_h,
+                 self._load_condition.value, ac_summary)
 
         try:
             for amp in AMP_LABELS:
@@ -485,7 +481,7 @@ class CalibrationRunner(QObject):
     def abort(self):
         if self._state in (_State.IDLE, _State.DONE, _State.ABORTING):
             return
-        print("[CAL] abort() requested")
+        log.info("[CAL] abort() requested")
         self._state = _State.ABORTING
         self._settle_timer.stop()
         self._finish(aborted=True)
@@ -579,17 +575,17 @@ class CalibrationRunner(QObject):
             return False
 
         if blanked:
-            print(f"[CAL] over-current ignored during step blanking: "
-                  f"{self._current_driven} {peak_ma:.1f} mA peak, "
-                  f"{over_s * 1e3:.1f} ms over {self._trip_ma:.0f} mA")
+            log.warning("[CAL] over-current ignored during step blanking: %s %.1f mA peak, "
+                        "%.1f ms over %.0f mA",
+                        self._current_driven, peak_ma, over_s * 1e3, self._trip_ma)
             return False
 
         self._trip_consec += 1
         if self._trip_consec < CAL_TRIP_CONSEC_WINDOWS:
-            print(f"[CAL] over-current window {self._trip_consec}/"
-                  f"{CAL_TRIP_CONSEC_WINDOWS}: {self._current_driven} "
-                  f"{peak_ma:.1f} mA peak, {over_s * 1e3:.1f} ms over "
-                  f"{self._trip_ma:.0f} mA")
+            log.warning("[CAL] over-current window %d/%d: %s %.1f mA peak, "
+                        "%.1f ms over %.0f mA",
+                        self._trip_consec, CAL_TRIP_CONSEC_WINDOWS,
+                        self._current_driven, peak_ma, over_s * 1e3, self._trip_ma)
             return False
 
         return self._trip(peak_ma, self._trip_ma, "sustained", over_s)
@@ -706,14 +702,14 @@ class CalibrationRunner(QObject):
         pts = ac_sweep_points(ceiling)
         top = max(pts) if pts else 0.0
         if ceiling < CAL_MAX_KV - 1e-9:
-            print(f"[CAL] AC ladder capped at {top:.1f} kV pk for "
-                  f"{self._ac_freq_hz:.0f} Hz {self._ac_shape} "
-                  f"(current limit {self._trip_ma:.0f} mA, "
-                  f"assumed C={CAL_LOAD_CAP_PF:.0f} pF -> "
-                  f"{ac_peak_current_ma(self._ac_freq_hz, top, shape=self._ac_shape):.1f} "
-                  f"mA at top rung); amplifier rating is {CAL_MAX_KV:.1f} kV. "
-                  f"This is a PREDICTION from an assumed capacitance; the "
-                  f"recorded current is measured, not derived from it.")
+            log.info("[CAL] AC ladder capped at %.1f kV pk for %.0f Hz %s "
+                     "(current limit %.0f mA, assumed C=%.0f pF -> %.1f mA at top rung); "
+                     "amplifier rating is %.1f kV. "
+                     "This is a PREDICTION from an assumed capacitance; the "
+                     "recorded current is measured, not derived from it.",
+                     top, self._ac_freq_hz, self._ac_shape, self._trip_ma,
+                     CAL_LOAD_CAP_PF, ac_peak_current_ma(self._ac_freq_hz, top, shape=self._ac_shape),
+                     CAL_MAX_KV)
         for pass_idx, amp in enumerate(self._channels):
             for point_idx, peak_kv in enumerate(pts):
                 seq.append(_StepPoint(
@@ -1250,7 +1246,7 @@ class CalibrationRunner(QObject):
             self._print_err(f"writer.update_metadata(run_note): {e}")
 
     def _finish_success(self):
-        print(f"[CAL] sweep complete: {len(self._sequence)} setpoints")
+        log.info("[CAL] sweep complete: %d setpoints", len(self._sequence))
         self._state = _State.DONE
         csv_path = self._shutdown(restore=True)
         self.finished.emit(csv_path or "")
@@ -1297,5 +1293,4 @@ class CalibrationRunner(QObject):
 
     @staticmethod
     def _print_err(msg: str):
-        print(f"[CAL] ERROR: {msg}")
-        log.error(msg)
+        log.error("[CAL] ERROR: %s", msg)

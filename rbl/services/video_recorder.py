@@ -54,7 +54,6 @@ camera thread — it is moved there via moveToThread before start() is called.
 """
 import csv
 import os
-import time
 
 from PySide6.QtCore import QObject, Signal
 

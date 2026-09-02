@@ -134,7 +134,6 @@ def figure_of_merit(overshoot_pct_val: float, settling_1pct_s: float,
     poisoning the whole score, since a trial that didn't settle within the
     trace should still be comparable on whatever it DID measure.
     """
-    import math
     parts = [abs(x) for x in (overshoot_pct_val, creep_pct_val) if x == x]
     if settling_1pct_s == settling_1pct_s:
         parts.append(settling_1pct_s * 1000.0)

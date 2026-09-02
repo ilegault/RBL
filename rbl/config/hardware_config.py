@@ -15,8 +15,6 @@ Galil calibration constants from the 2HA075520 slit controller specification ema
   - SP = 1800 steps/s (normal), 900 steps/s (homing)
   - Motor type MT = -2.5, smoothing YB = 2.0, amplifier gain AG = 3
 """
-from rbl.gui.theme import SLIT_COLORS
-
 # Galil axis letter -> human-readable name
 AXIS_NAMES = {
     "A": "X+",
@@ -254,11 +252,6 @@ AMP_MAX_KV     = 5.0    # amplifier rated +/-5 kV
 AMP_MAX_MA_DC  = 20.0   # continuous DC rating
 AMP_MAX_MA_PK  = 100.0  # 4 ms peak rating
 
-# Plot colors, matched to the log-amp tab's palette for visual consistency.
-# Single definition lives in rbl.gui.theme.SLIT_COLORS; re-exported here so
-# existing SC.AMP_COLORS callers don't need to change.
-AMP_COLORS = SLIT_COLORS
-
 # The complete channel set the shared poll worker must read every cycle:
 # 4 log amps + 8 amplifier monitors = 12 channels, ONE eReadNames round trip.
 ALL_AIN_NAMES = list(LABJACK_CHANNEL_MAP.keys()) + AMP_AIN_NAMES
@@ -300,9 +293,6 @@ if __name__ == "__main__":
         "Amplifier AINs collide with log-amp AINs!"
     assert len(ALL_AIN_NAMES) == 12
     assert len(set(ALL_AIN_NAMES)) == 12, "Duplicate AIN in ALL_AIN_NAMES"
-    for lbl in AMP_LABELS:
-        assert lbl in AMP_COLORS
-
     print("[OK] hardware_config self-test passed")
     print(f"    STEPS_PER_MM = {STEPS_PER_MM['A']}")
     print(f"    1 mm = {mm_to_counts('A', 1.0)} counts")

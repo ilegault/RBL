@@ -41,6 +41,15 @@ class ScopeLinkMixin:
         self._scope_points:   object      = None
         self._scope_points_anchor: object = None
         self._scope_poll_interval: object = None
+        # BPM fiducial calibration.  Held here as well as on the worker so a
+        # reconnect does not silently drop back to uncalibrated - a scale
+        # that quietly disappears turns every reading into raw milliseconds
+        # labelled as though nothing had changed.
+        self._scope_mm_per_second: float = float("nan")
+        self._scope_cal_name:      str   = ""
+        self._scope_cal_mode:      bool  = False
+        self._scope_cal_spacing:   object = None
+        self._scope_cal_override:  object = None
 
     # ---- Connection lifecycle ---------------------------------------------
 
@@ -80,6 +89,10 @@ class ScopeLinkMixin:
             worker.set_points(self._scope_points, self._scope_points_anchor)
         if self._scope_poll_interval is not None:
             worker.set_poll_interval(self._scope_poll_interval)
+        worker.set_mm_scale(self._scope_mm_per_second, self._scope_cal_name)
+        worker.set_calibration_mode(self._scope_cal_mode,
+                                    spacing_mm=self._scope_cal_spacing,
+                                    override=self._scope_cal_override)
         worker.set_continuous(self._scope_continuous)
         worker.waveform_ready.connect(self._on_scope_waveform)
         worker.error.connect(self._on_scope_error)
@@ -136,6 +149,40 @@ class ScopeLinkMixin:
         self._scope_continuous = bool(continuous)
         if self._scope_worker is not None:
             self._scope_worker.set_continuous(continuous)
+
+    def set_scope_mm_scale(self, mm_per_second: float = None,
+                           name: str = None):
+        """Set the mm/s scale beam widths are reported in.
+
+        Seconds are still emitted alongside every millimetre value, so this
+        changes how a measurement READS, never what was measured.
+        """
+        if mm_per_second is not None:
+            v = float(mm_per_second)
+            self._scope_mm_per_second = v if (v == v and v > 0) else float("nan")
+        if name is not None:
+            self._scope_cal_name = str(name)
+        if self._scope_worker is not None:
+            self._scope_worker.set_mm_scale(mm_per_second, name)
+
+    def set_scope_calibration_mode(self, on: bool, *, spacing_mm: float = None,
+                                   override=None):
+        """Measure the BPM's fiducial marks instead of a beam profile."""
+        self._scope_cal_mode = bool(on)
+        if spacing_mm is not None:
+            self._scope_cal_spacing = float(spacing_mm)
+        self._scope_cal_override = tuple(override) if override else None
+        if self._scope_worker is not None:
+            self._scope_worker.set_calibration_mode(
+                on, spacing_mm=spacing_mm, override=override)
+
+    @property
+    def scope_calibration_mode(self) -> bool:
+        return bool(getattr(self, "_scope_cal_mode", False))
+
+    @property
+    def scope_mm_per_second(self) -> float:
+        return float(getattr(self, "_scope_mm_per_second", float("nan")))
 
     def request_scope_shot(self):
         """Take one waveform now.  Ignored when nothing is connected."""

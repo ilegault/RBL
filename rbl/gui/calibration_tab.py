@@ -22,7 +22,7 @@ before Run), and its lj_panel embedding for the shared LabJackPanel.
 import logging
 import time
 
-from PySide6.QtCore import Qt, Signal, QTimer
+from PySide6.QtCore import Signal, QTimer
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout,
     QGroupBox, QLabel, QPushButton, QRadioButton, QButtonGroup,
@@ -32,14 +32,13 @@ from PySide6.QtWidgets import (
 
 from rbl.config import hardware_config as SC
 from rbl.config.calibration_config import (
-    CAL_MAX_KV, CAL_STEP_KV, CAL_PASSES, CAL_PROFILE, CAL_UNCERTAINTY_V,
+    CAL_MAX_KV, CAL_STEP_KV, CAL_PASSES, CAL_UNCERTAINTY_V,
     CAL_SWEEP_PROFILE, CAL_DRIFT_PROFILE,
     CAL_AC_FREQ_HZ, CAL_AC_FREQ_PRESETS, CAL_ZERO_DWELL_S,
     DRIFT_DEFAULT_KV, DRIFT_MAX_ATTENDED_H, DRIFT_MAX_UNATTENDED_H,
     LoadCondition, sweep_points, ac_sweep_points,
 )
 from rbl.config.labjack_stream_config import is_pair_channel
-from rbl.hardware.funcgen_safety import CHANNEL_ROLE
 from rbl.gui import theme
 from rbl.gui.widgets.connection_bar import LabJackPanel
 from rbl.gui.widgets.inputs import NoScrollComboBox, QuietDoubleSpinBox, unit_row
@@ -54,22 +53,6 @@ _MANUAL_LOAD_WARNING = (
     "The EEL5000 manual is explicit that load connections must be made "
     "with the unit off and unplugged."
 )
-
-
-def _build_funcgen_map(beamline) -> dict:
-    """amp_label -> (live DG1022Z instance, channel number).
-
-    Derived from the app's existing funcgen<->amp mapping
-    (rbl/hardware/funcgen_safety.py CHANNEL_ROLE) combined with Beamline's
-    own generator instances. Not a new mapping — the one that already
-    decides which channel drives which plate everywhere else in the app.
-    """
-    mapping = {}
-    for key, amp_label in CHANNEL_ROLE.items():   # "A1" -> "X+"
-        gen_letter, channel = key[0], int(key[1])
-        gen = beamline.dg_a if gen_letter == "A" else beamline.dg_b
-        mapping[amp_label] = (gen, channel)
-    return mapping
 
 
 # ─── Pre-run checklist dialog ─────────────────────────────────────────────────
@@ -154,13 +137,15 @@ class CalibrationTab(QWidget):
 
     def __init__(self, beamline, parent=None):
         super().__init__(parent)
-        self.beamline = beamline
-        self._runner: CalibrationRunner = None
-        self._writer: CalibrationWriter = None
+        self.beamline         = beamline
+        self._runner:  CalibrationRunner = None
+        self._writer:  CalibrationWriter = None
         self._current_profile = None      # tracked via on_profile_changed
-        self._prior_profile = None        # stashed at run start, restored after
-        self._prior_pair    = None        # ditto, for pair profiles
-        self._connected = False
+        self._prior_profile   = None      # stashed at run start, restored after
+        self._prior_pair      = None      # ditto, for pair profiles
+        self._connected       = False
+        self._dwell_start_t:  float = None
+        self._dwell_total_s:  float = 0.0
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -168,7 +153,6 @@ class CalibrationTab(QWidget):
 
         top_row = QHBoxLayout()
         top_row.setSpacing(8)
-
         left_col = QVBoxLayout()
         left_col.setSpacing(8)
 
@@ -176,7 +160,36 @@ class CalibrationTab(QWidget):
         self.lj_panel = LabJackPanel()
         left_col.addWidget(self.lj_panel)
 
-        # ── Run configuration ──────────────────────────────────────────────
+        left_col.addWidget(self._build_run_config_box())
+
+        unc_lbl = QLabel(
+            f"Combined amp + monitor + DAQ uncertainty budget: "
+            f"±{CAL_UNCERTAINTY_V:.0f} V. Deviations inside this band are "
+            f"noise, not findings. This tool never applies a correction — "
+            f"see docs/calibration.md."
+        )
+        unc_lbl.setWordWrap(True)
+        unc_lbl.setStyleSheet(
+            "color: #7a2000; font-size: 9pt; padding: 4px; "
+            "background: #fff6e6; border: 1px solid #e0c080; border-radius: 3px;"
+        )
+        left_col.addWidget(unc_lbl)
+
+        self._build_run_controls(left_col)
+        left_col.addStretch()
+
+        top_row.addLayout(left_col, stretch=1)
+        layout.addLayout(top_row, stretch=1)
+
+        self._on_mode_toggled()
+        self._on_step_mode_changed()   # initialise dwell row visibility
+        self._refresh_run_enabled()
+        self.lj_panel.set_enabled(True)
+
+    # ── Section builders ──────────────────────────────────────────────────────
+
+    def _build_run_config_box(self) -> QGroupBox:
+        """Run Configuration group: mode, channels, load, drift, AC controls."""
         cfg_box = QGroupBox("Run Configuration")
         cfg_form = QFormLayout(cfg_box)
 
@@ -490,23 +503,14 @@ class CalibrationTab(QWidget):
 
         self._drift_ac_chan_label = QLabel("AC channels:")
         cfg_form.addRow(self._drift_ac_chan_label, self._drift_ac_widget)
+        return cfg_box
 
-        left_col.addWidget(cfg_box)
+    def _build_run_controls(self, col: QVBoxLayout) -> None:
+        """Run / Abort buttons, progress bars, state label, and dwell timer.
 
-        # ── Uncertainty note ───────────────────────────────────────────────
-        unc_lbl = QLabel(
-            f"Combined amp + monitor + DAQ uncertainty budget: "
-            f"±{CAL_UNCERTAINTY_V:.0f} V. Deviations inside this band are "
-            f"noise, not findings. This tool never applies a correction — "
-            f"see docs/calibration.md."
-        )
-        unc_lbl.setWordWrap(True)
-        unc_lbl.setStyleSheet(
-            "color: #7a2000; font-size: 9pt; padding: 4px; "
-            "background: #fff6e6; border: 1px solid #e0c080; border-radius: 3px;"
-        )
-        left_col.addWidget(unc_lbl)
-
+        Adds widgets directly to *col* (the left column layout) so callers
+        don't need to handle a heterogeneous mix of layouts and widgets.
+        """
         # ── Run / Abort ────────────────────────────────────────────────────
         run_row = QHBoxLayout()
         self.btn_run = QPushButton("Run")
@@ -528,11 +532,11 @@ class CalibrationTab(QWidget):
         self.btn_abort.clicked.connect(self._on_abort_clicked)
         run_row.addWidget(self.btn_run)
         run_row.addWidget(self.btn_abort)
-        left_col.addLayout(run_row)
+        col.addLayout(run_row)
 
         self.progress = QProgressBar()
         self.progress.setRange(0, 1)
-        left_col.addWidget(self.progress)
+        col.addWidget(self.progress)
 
         self._dwell_bar = QProgressBar()
         self._dwell_bar.setRange(0, 1000)
@@ -540,31 +544,17 @@ class CalibrationTab(QWidget):
         self._dwell_bar.setTextVisible(True)
         self._dwell_bar.setFormat("Zero dwell — 0.0 s remaining")
         self._dwell_bar.setVisible(False)
-        left_col.addWidget(self._dwell_bar)
+        col.addWidget(self._dwell_bar)
 
         self.lbl_state = QLabel("Idle")
         self.lbl_state.setStyleSheet(f"color: {theme.NEUTRAL}; font-size: 10px;")
-        left_col.addWidget(self.lbl_state)
+        col.addWidget(self.lbl_state)
 
+        # The dwell tick drives the countdown bar; its start/total state
+        # (_dwell_start_t, _dwell_total_s) are initialised in __init__.
         self._dwell_tick = QTimer(self)
         self._dwell_tick.setInterval(50)   # 50 ms → smooth countdown
         self._dwell_tick.timeout.connect(self._update_dwell_bar)
-        self._dwell_start_t: float = None
-        self._dwell_total_s: float = 0.0
-
-        left_col.addStretch()
-        # The live scatter plot and live-fit readout that used to occupy a
-        # second column here were removed: neither was actionable during a run
-        # (the tab never applies a correction, so the fit was decoration), and
-        # both cost a matplotlib redraw on every recorded row.  The fit belongs
-        # to analysis of the CSV after the fact, not to the acquisition GUI.
-        top_row.addLayout(left_col, stretch=1)
-        layout.addLayout(top_row, stretch=1)
-
-        self._on_mode_toggled()
-        self._on_step_mode_changed()   # initialise dwell row visibility
-        self._refresh_run_enabled()
-        self.lj_panel.set_enabled(True)
 
     # ------------------------------------------------------------------
     # Channel selection helpers
@@ -692,7 +682,7 @@ class CalibrationTab(QWidget):
         # is only knowable from the channel selection.
         channels = self._get_selected_channels()
 
-        funcgen_map = _build_funcgen_map(self.beamline)
+        funcgen_map = self.beamline.build_funcgen_map()
         self._writer = CalibrationWriter(metadata={
             "load_condition": load_condition.value,
         })
@@ -935,7 +925,7 @@ class CalibrationTab(QWidget):
         if self._runner is not None:
             self._runner.abort()
 
-    def _on_error(self, msg: str):
+    def on_labjack_error(self, msg: str):
         QMessageBox.warning(self, "LabJack poll error", msg)
 
     def on_profile_changed(self, profile_name: str):

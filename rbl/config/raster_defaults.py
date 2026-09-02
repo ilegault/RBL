@@ -15,12 +15,20 @@ These are OPENING VALUES, not constraints.  Every one is editable in the tab
 and nothing downstream reads them again.
 """
 
-FWHM_MM_DEFAULT        = 1.0
-SAMPLE_WIDTH_X_MM      = 10.0
+FWHM_MM_DEFAULT        = 3.0
+SAMPLE_WIDTH_X_MM      = 5.0
 SAMPLE_HEIGHT_Y_MM     = 10.0
 OFFSET_X_MM_DEFAULT    = 0.0
 OFFSET_Y_MM_DEFAULT    = 0.0
-TURNAROUND_K_DEFAULT   = 1.5      # multiples of FWHM beyond the sample edge
+TURNAROUND_K_DEFAULT   = 1.5      # multiples of FWHM beyond the edge the
+                                  # sweep has to clear. WHICH edge depends
+                                  # on the Raster Planner's mode: the JAW
+                                  # edge (at the slit plane, against the
+                                  # FWHM there) in slit-limited mode, the
+                                  # SAMPLE edge in steerer-limited mode.
+                                  # 1.5 puts the patch edge 0.02 % below
+                                  # full dose either way -- see
+                                  # slit_raster_model.edge_droop_pct.
 FREQ_X_HZ_DEFAULT      = 517.0   # fast axis
 FREQ_Y_HZ_DEFAULT      = 64.0    # slow axis
 

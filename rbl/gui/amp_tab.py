@@ -177,8 +177,9 @@ class AmpTab(QWidget):
     # two-request version could not be made reliable.
     pair_profile_requested = Signal(str, str)
 
-    def __init__(self, parent=None):
+    def __init__(self, beamline=None, parent=None):
         super().__init__(parent)
+        self.beamline = beamline
         self._t0 = time.monotonic()   # reset on labjack_connected
 
         # The redraw timer only needs to run when BOTH hold: connected (data
@@ -260,6 +261,41 @@ class AmpTab(QWidget):
         # ── Connection panel (added to top_row below) ─────────────────────
         self.lj_panel = LabJackPanel()
 
+        ro_box   = self._build_monitors_box()
+        prof_box = self._build_profile_box()
+
+        # ── Assemble upper section: left col (connection + profile) | right (monitors) ──
+        left_col = QVBoxLayout()
+        left_col.setSpacing(8)
+        left_col.addWidget(self.lj_panel)
+        left_col.addWidget(prof_box)
+        left_col.addStretch()
+
+        # Right side: the monitors table, now the only box here.
+        monitors_row = QHBoxLayout()
+        monitors_row.setSpacing(8)
+        monitors_row.addWidget(ro_box)
+
+        upper_row = QHBoxLayout()
+        upper_row.setSpacing(8)
+        upper_row.addLayout(left_col)
+        upper_row.addLayout(monitors_row, stretch=1)
+        layout.addLayout(upper_row)
+
+        plot_box = self._build_plot_box()
+        layout.addWidget(plot_box, stretch=1)
+
+        # Lay the subplots out with room on the right for the mirrored kV axis.
+        self._update_history_layout()
+
+        if not LJM_AVAILABLE:
+            self.lj_panel.set_enabled(False)
+
+
+    # ---- Builder helpers (called once from __init__) -------------------
+
+    def _build_monitors_box(self) -> QGroupBox:
+        """Build the 'Live Amplifier Monitors' commanded-vs-measured grid."""
         # ── Per-amplifier numeric readouts ────────────────────────────────
         #
         # Organised around COMMANDED vs MEASURED, because that is the question
@@ -347,7 +383,7 @@ class AmpTab(QWidget):
 
             hdr = QLabel(f"{amp}")
             hdr.setStyleSheet(
-                f"color: {SC.AMP_COLORS[amp]}; font-weight: bold; font-size: 14px;"
+                f"color: {theme.SLIT_COLORS[amp]}; font-weight: bold; font-size: 14px;"
             )
             hdr.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             sub = QLabel(f"{v_ain}/{i_ain}")
@@ -390,6 +426,10 @@ class AmpTab(QWidget):
         # applying the monitor ratios. The AIN each amplifier uses is on the
         # column header, so the wiring context it also carried is still present.
         #
+        return ro_box
+
+    def _build_profile_box(self) -> QGroupBox:
+        """Build the 'Stream Profile' mode/target/apply selector group."""
         # ── Profile selector (placed right of lj_panel in top_row below) ────
         prof_box = QGroupBox("Stream Profile")
         prof_col = QVBoxLayout(prof_box)
@@ -447,24 +487,15 @@ class AmpTab(QWidget):
         self._populate_target_combo(self._staged_profile)
         self._on_selection_staged()
 
-        # ── Assemble upper section: left col (connection + profile) | right (monitors) ──
-        left_col = QVBoxLayout()
-        left_col.setSpacing(8)
-        left_col.addWidget(self.lj_panel)
-        left_col.addWidget(prof_box)
-        left_col.addStretch()
+        return prof_box
 
-        # Right side: the monitors table, now the only box here.
-        monitors_row = QHBoxLayout()
-        monitors_row.setSpacing(8)
-        monitors_row.addWidget(ro_box)
+    def _build_plot_box(self) -> QGroupBox:
+        """Build the 'Amplifier History' plot group.
 
-        upper_row = QHBoxLayout()
-        upper_row.setSpacing(8)
-        upper_row.addLayout(left_col)
-        upper_row.addLayout(monitors_row, stretch=1)
-        layout.addLayout(upper_row)
-
+        Sets self.plot, self.fig, self.canvas, self.ax_v, self.ax_i,
+        self.ax_v_right, self.ax_i_right, self._lines_v, self._lines_i,
+        self.lbl_mode, self.btn_jump_live, self._btn_pause.
+        """
         # ── History / waveform plot (one figure, two modes) ─────────────────
         # Shared history slider + LIVE/FROZEN state machine + zoom-step list.
         # The nav row stays local (see module docstring: amp_tab interleaves
@@ -626,7 +657,7 @@ class AmpTab(QWidget):
         self._lines_v = {}
         self._lines_i = {}
         for amp in SC.AMP_LABELS:
-            c = SC.AMP_COLORS[amp]
+            c = theme.SLIT_COLORS[amp]
             lv, = self.ax_v.plot([], [], label=amp, color=c, lw=1.5)
             li, = self.ax_i.plot([], [], label=amp, color=c, lw=1.5)
             self._lines_v[amp] = lv
@@ -648,7 +679,7 @@ class AmpTab(QWidget):
             _arow = QHBoxLayout()
             _aswatch = QLabel("━")
             _aswatch.setStyleSheet(
-                f"color: {SC.AMP_COLORS[_amp]}; font-weight: bold; font-size: 13px;"
+                f"color: {theme.SLIT_COLORS[_amp]}; font-weight: bold; font-size: 13px;"
             )
             _albl = QLabel(_amp)
             _albl.setStyleSheet("font-size: 15px;")
@@ -670,13 +701,7 @@ class AmpTab(QWidget):
         # auto-scale), so 10 Hz is comfortable.
         pv.addLayout(self.plot.slider_row)
 
-        layout.addWidget(plot_box, stretch=1)
-
-        # Lay the subplots out with room on the right for the mirrored kV axis.
-        self._update_history_layout()
-
-        if not LJM_AVAILABLE:
-            self.lj_panel.set_enabled(False)
+        return plot_box
 
     # ---- Size hints (compressibility) ----------------------------------------
     #
@@ -1030,7 +1055,7 @@ class AmpTab(QWidget):
         # on_profile_changed after the restart; both are idempotent.
         self.on_profile_changed(staged_profile)
 
-    def _on_error(self, msg: str):
+    def on_labjack_error(self, msg: str):
         QMessageBox.warning(self, "LabJack poll error", msg)
 
     # ---- Window ingestion ----------------------------------------------------

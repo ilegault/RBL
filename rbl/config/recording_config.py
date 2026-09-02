@@ -16,8 +16,8 @@ CSV_INTERVAL_MAX_S       = 300
 
 # ---- Preview and record frame rates ----------------------------------------
 
-PREVIEW_FPS_DEFAULT      = 30
-RECORD_FPS_DEFAULT       = 30
+PREVIEW_FPS_DEFAULT      = 24
+RECORD_FPS_DEFAULT       = 24
 RECORD_FPS_MIN           = 1
 RECORD_FPS_MAX           = 120
 

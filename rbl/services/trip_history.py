@@ -21,7 +21,7 @@ no migration — a reader simply ignores keys it doesn't recognise in old ones.
 import json
 from pathlib import Path
 
-TRIP_HISTORY_PATH = Path.home() / "Desktop" / "RBL_log" / "data" / "trip_history.jsonl"
+from rbl.config.paths import TRIP_HISTORY_PATH
 
 
 def append_trip(record: dict, path: Path = None) -> None:

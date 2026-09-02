@@ -34,7 +34,6 @@ from rbl.config.hardware_config import AMP_LABELS
 from rbl.gui import theme
 from rbl.gui.widgets.connection_bar import LabJackPanel
 from rbl.gui.widgets.inputs import NoScrollComboBox
-from rbl.hardware.funcgen_safety import CHANNEL_ROLE
 from rbl.services.dynamic_adjustment import DynamicAdjustmentTrial
 from rbl.services.dynamic_adjustment_history import (
     append_trial, trials_for, winner_for,
@@ -49,15 +48,6 @@ _CAVEAT_TEXT = (
     "compensated. If no position gets close to zero overshoot/creep, that "
     "itself is the evidence for a factory-adjustment request."
 )
-
-
-def _build_funcgen_map(beamline) -> dict:
-    mapping = {}
-    for key, amp_label in CHANNEL_ROLE.items():
-        gen_letter, channel = key[0], int(key[1])
-        gen = beamline.dg_a if gen_letter == "A" else beamline.dg_b
-        mapping[amp_label] = (gen, channel)
-    return mapping
 
 
 class DynamicAdjustmentTab(QWidget):
@@ -161,7 +151,7 @@ class DynamicAdjustmentTab(QWidget):
                                  "(Section 8.3) — it cannot be read back from the hardware.")
             return
         amp_label = self.cb_channel.currentText()
-        funcgen_map = _build_funcgen_map(self.beamline)
+        funcgen_map = self.beamline.build_funcgen_map()
         if funcgen_map.get(amp_label, (None, None))[0] is None:
             QMessageBox.warning(self, "Generator not connected",
                                  f"{amp_label}'s function generator is not connected.")
@@ -283,7 +273,7 @@ class DynamicAdjustmentTab(QWidget):
         self._connected = False
         self.lj_panel.set_connected(False)
 
-    def _on_error(self, msg: str):
+    def on_labjack_error(self, msg: str):
         QMessageBox.warning(self, "LabJack poll error", msg)
 
     def on_profile_changed(self, profile_name: str):

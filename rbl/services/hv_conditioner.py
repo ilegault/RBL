@@ -41,7 +41,6 @@ import numpy as np
 from PySide6.QtCore import QObject, QTimer, Signal
 
 from rbl.config.hardware_config import AMP_CHANNEL_MAP, AMP_MAX_KV
-from rbl.hardware.amp_monitor import ma_unclamped
 from rbl.services.amp_drive import AmpDrive
 from rbl.services.conditioning_history import append_session
 

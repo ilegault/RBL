@@ -29,7 +29,6 @@ thread.  offer_frame() is connected to CameraSource.frame_ready with
 DirectConnection so it executes on the camera thread without a queue round-trip.
 """
 import csv
-import json
 import math
 import os
 import shutil
@@ -40,7 +39,7 @@ from datetime import datetime, timezone, timedelta
 from PySide6.QtCore import (
     QObject, QTimer, Signal, Qt,
 )
-from PySide6.QtWidgets import QApplication, QProgressDialog
+from PySide6.QtWidgets import QProgressDialog
 
 from rbl.config.recording_config import (
     CSV_INTERVAL_DEFAULT_S, CSV_INTERVAL_MIN_S, CSV_INTERVAL_MAX_S,
@@ -56,9 +55,9 @@ from rbl.services.snapshot_json import dump_json
 
 
 def _logs_dir() -> str:
-    path = os.path.join(os.path.expanduser("~"), "Desktop", "RBL_log", "logs")
-    os.makedirs(path, exist_ok=True)
-    return path
+    from rbl.config.paths import LOGS_DIR
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    return str(LOGS_DIR)
 
 
 class SessionRecorder(QObject):

@@ -28,7 +28,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QPushButton,
-    QTableWidget, QTableWidgetItem, QSizePolicy, QLineEdit, QHeaderView,
+    QTableWidget, QTableWidgetItem, QSizePolicy, QHeaderView,
     QCheckBox, QScrollArea,
 )
 
@@ -39,7 +39,6 @@ from rbl.gui.widgets.port_picker import PortPicker, PortScanWorker
 from rbl.gui.widgets.live_plot import LivePlotPanel
 from rbl.config.vacuum_config import (
     GAUGE_DISPLAY_NAMES, UI_GOOD_VACUUM_TORR, STALE_THRESHOLD_S,
-    VGC_ACTIVE_CHANNELS,
 )
 
 log = logging.getLogger(__name__)
@@ -142,33 +141,58 @@ class VacuumTab(QWidget):
 
     def __init__(self, beamline, parent=None):
         super().__init__(parent)
-        self.beamline    = beamline
-        self._last_state = None    # most recent VacuumState
-        self._last_time  = 0.0    # wall-clock time of last received state
-
+        self.beamline         = beamline
+        self._last_state      = None    # most recent VacuumState
+        self._last_time       = 0.0    # wall-clock time of last received state
         # Per-gauge pressure history: label -> [(unix_time, pressure|None)]
-        self._history:   dict[str, list] = {}
+        self._history:        dict[str, list] = {}
         # Gauge label -> plot line object
-        self._plot_lines: dict[str, object] = {}
+        self._plot_lines:     dict[str, object] = {}
         # Gauge label -> QCheckBox in the legend panel
-        self._gauge_checks: dict[str, QCheckBox] = {}
+        self._gauge_checks:   dict[str, QCheckBox] = {}
         # Per-instrument channel count (for colour assignment within palette).
-        self._xgs_ch_count: int = 0
-        self._vgc_ch_count: int = 0
+        self._xgs_ch_count:   int = 0
+        self._vgc_ch_count:   int = 0
         # Gauge labels the operator has switched off.  A VGC083 channel that
         # is configured in VGC_ACTIVE_CHANNELS but has no gauge physically
         # attached still answers every poll — with the 1.10E+03 sentinel —
         # so it shows up as a real row.  Hiding is the operator's call, not
         # something we can infer, hence a manual toggle that persists.
-        self._hidden_gauges: set = _load_hidden_gauges()
+        self._hidden_gauges:  set = _load_hidden_gauges()
         # Logging service — set by Phase 6
-        self._logger     = None
+        self._logger          = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
 
-        # ── Connection bars ───────────────────────────────────────────────────
+        conn_box = self._build_connection_box()
+        tbl_box  = self._build_gauge_table_box()
+        plot_box = self._build_plot_box()
+        log_bar  = self._build_logging_bar()
+
+        top_row = QHBoxLayout()
+        top_row.setSpacing(8)
+        top_row.addWidget(conn_box)
+        top_row.addWidget(tbl_box, stretch=1)
+        layout.addLayout(top_row)
+        layout.addWidget(plot_box, stretch=1)
+        layout.addLayout(log_bar)
+
+        self.beamline.vacuum_changed.connect(self._on_vacuum_state)
+        self.beamline.vacuum_error.connect(self._on_vacuum_error)
+
+        self._redraw_timer = QTimer(self)
+        self._redraw_timer.setInterval(100)
+        self._redraw_timer.timeout.connect(self._redraw)
+        self._redraw_timer.start()
+
+        self.plot.start()
+
+    # ── Section builders ──────────────────────────────────────────────────────
+
+    def _build_connection_box(self) -> QGroupBox:
+        """Gauge Controllers group: auto-detect button + two instrument bars."""
         conn_box = QGroupBox("Gauge Controllers")
         conn_lay = QVBoxLayout(conn_box)
         conn_box.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
@@ -237,8 +261,10 @@ class VacuumTab(QWidget):
 
         ig_row.addStretch()
         self._vgc_bar.layout().addLayout(ig_row)
+        return conn_box
 
-        # ── Gauge table ───────────────────────────────────────────────────────
+    def _build_gauge_table_box(self) -> QGroupBox:
+        """Gauge Readings group: pressure table + font-size spinner."""
         tbl_box = QGroupBox("Gauge Readings")
         tbl_lay = QVBoxLayout(tbl_box)
 
@@ -273,15 +299,10 @@ class VacuumTab(QWidget):
 
         tbl_lay.addWidget(self._table)
         self._apply_row_height()
+        return tbl_box
 
-        # ── Top row: controllers (compact) + gauge table (expanding) ──────────
-        top_row = QHBoxLayout()
-        top_row.setSpacing(8)
-        top_row.addWidget(conn_box)
-        top_row.addWidget(tbl_box, stretch=1)
-        layout.addLayout(top_row)
-
-        # ── Rolling pressure plot (log Y, autoscaling, scrollable time) ──────
+    def _build_plot_box(self) -> QGroupBox:
+        """Pressure History group: rolling log-scale plot with legend strip."""
         plot_box = QGroupBox("Pressure History")
         plot_lay = QVBoxLayout(plot_box)
 
@@ -392,10 +413,10 @@ class VacuumTab(QWidget):
         plot_lay.addWidget(legend_bar)
         plot_lay.addWidget(self.plot.canvas, stretch=1)
         plot_lay.addLayout(self.plot.slider_row)
+        return plot_box
 
-        layout.addWidget(plot_box, stretch=1)
-
-        # ── Logging bar ───────────────────────────────────────────────────────
+    def _build_logging_bar(self) -> QHBoxLayout:
+        """Bottom bar: Start/Stop Logging button + current log path label."""
         log_bar = QHBoxLayout()
         self._btn_log = QPushButton("Start Logging")
         self._btn_log.setEnabled(False)   # enabled once a state arrives
@@ -406,20 +427,7 @@ class VacuumTab(QWidget):
         self._btn_log.clicked.connect(self._on_log_toggle)
         log_bar.addWidget(self._btn_log)
         log_bar.addWidget(self._lbl_log_path, stretch=1)
-        layout.addLayout(log_bar)
-
-        # ── Subscribe to Beamline signals ─────────────────────────────────────
-        self.beamline.vacuum_changed.connect(self._on_vacuum_state)
-        self.beamline.vacuum_error.connect(self._on_vacuum_error)
-
-        # ── Redraw timer (100 ms) ─────────────────────────────────────────────
-        self._redraw_timer = QTimer(self)
-        self._redraw_timer.setInterval(100)
-        self._redraw_timer.timeout.connect(self._redraw)
-        self._redraw_timer.start()
-
-        # Plot redraw is driven by LivePlotPanel's own timer.
-        self.plot.start()
+        return log_bar
 
     # -----------------------------------------------------------------------
     # Connection bar handlers

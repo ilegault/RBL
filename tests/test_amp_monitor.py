@@ -8,6 +8,7 @@ from rbl.hardware.amp_monitor import (
     voltage_status, current_status,
 )
 from rbl.config import hardware_config as SC
+from rbl.gui import theme
 
 
 class TestVoltageMonitor:
@@ -115,4 +116,4 @@ class TestChannelMapIntegrity:
 
     def test_every_amp_has_a_color(self):
         for amp in SC.AMP_LABELS:
-            assert amp in SC.AMP_COLORS
+            assert amp in theme.SLIT_COLORS

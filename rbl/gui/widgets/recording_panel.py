@@ -23,11 +23,9 @@ Phase 2 (2026-08-25): UI restructured to expose the codec controls that
 actually affect what lands on disk.  See recording_config.MASTER_CODECS.
 """
 import os
-import sys
-import time
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QImage, QStandardItem
+from PySide6.QtGui import QImage
 from PySide6.QtWidgets import (
     QGroupBox, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QComboBox, QSpinBox, QCheckBox, QInputDialog, QSizePolicy,
@@ -35,7 +33,7 @@ from PySide6.QtWidgets import (
 
 from rbl.config.recording_config import (
     RES_PRESETS, PREVIEW_FPS_DEFAULT, RECORD_FPS_MIN, RECORD_FPS_MAX,
-    CSV_INTERVAL_MIN_S, CSV_INTERVAL_MAX_S, CSV_INTERVAL_DEFAULT_S,
+    CSV_INTERVAL_MIN_S, CSV_INTERVAL_MAX_S,
     SEGMENT_SECONDS_CHOICES, QUALITY_PRESETS, QUALITY_DEFAULT,
     MASTER_CODECS, MASTER_CODEC_DEFAULT,
 )

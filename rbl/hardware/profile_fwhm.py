@@ -749,3 +749,255 @@ def best_fwhm(result: dict, fit: dict | None,
     if mean == mean:
         return mean, "half-max"
     return float("nan"), "none"
+
+# ===========================================================================
+# THE WIDTH LADDER — one width is not a beam
+#
+# WHY FWHM ALONE IS NOT ENOUGH ON THIS BEAM LINE
+# ----------------------------------------------
+# Half maximum describes the CORE of a profile and says nothing about where
+# the beam actually ends.  Two beams with identical FWHM can put very
+# different amounts of current outside the painted field, and on this beam
+# line that difference is not academic: `slit_raster_model` derives the
+# overscan needed for a given edge droop by inverting a NORMAL CDF from the
+# FWHM alone.  Every one of those numbers is only as true as the assumption
+# that the beam is Gaussian.
+#
+# So the ladder exists to put that assumption on trial, per shot:
+#
+#   FWHM     50 %      the core
+#   FW1/e2   13.5 %    the optics convention; exactly 4 sigma for a Gaussian
+#   FWTM     10 %      the tails
+#
+# For a true Gaussian the widths are locked to each other:
+#
+#       FW(f) / FWHM  =  sqrt( ln(1/f) / ln 2 )
+#
+#   f = 0.135335 (1/e^2)  ->  1.69864     (i.e. 4 sigma)
+#   f = 0.10     (tenth)  ->  1.82261
+#
+# A measured FWTM/FWHM ABOVE 1.8226 means heavier tails than Gaussian -
+# halo - and the planner's droop figures are optimistic.  BELOW it means a
+# flat-topped or truncated profile, usually a beam scraping an aperture
+# upstream.  The ratio is the diagnostic; the individual widths are the
+# evidence for it.
+#
+# EVERY LEVEL IS MEASURED INDEPENDENTLY, EVERY SHOT
+# -------------------------------------------------
+# Nothing here is carried between shots and nothing is inferred from the
+# FWHM.  Each level runs its own crossing search from the apex, against its
+# own level voltage, with its own noise check and its own resolved/unresolved
+# verdict.  That is deliberate: with quadrupole focusing the profile can be a
+# different shape session to session and even shot to shot, so a width
+# derived from a remembered shape would be describing a beam that is no
+# longer there.  The ONLY constant is sqrt(ln(1/f)/ln 2), which is a property
+# of the Gaussian function, not of any beam.
+#
+# TWO WAYS A LEVEL CAN FAIL, AND THEY MEAN DIFFERENT THINGS
+# ---------------------------------------------------------
+#   * BELOW THE NOISE FLOOR.  A level under a few sigma of the edge noise is
+#     not a width, it is a reading of the noise.  Refused outright.
+#   * SKIRTS OVERLAP.  The crossing search is fenced by the valley between
+#     this peak and its neighbour.  At 10 % the two profiles' skirts may
+#     never fall that low before meeting, so there is no crossing to find
+#     inside the fence.  That is real information - it means the peaks are
+#     close relative to their width - and it is reported as unresolved, with
+#     the sum-of-Gaussians fit's number offered BESIDE it and labelled as
+#     fit-derived.  It is never quietly truncated at the fence, which would
+#     read as a narrow beam.
+# ===========================================================================
+
+# The levels measured, as fractions of each peak's own height.
+LEVEL_FWHM   = 0.50
+LEVEL_1_OVER_E2 = 0.13533528323661270   # exp(-2); FW here is exactly 4 sigma
+LEVEL_FWTM   = 0.10
+
+DEFAULT_LEVELS = (LEVEL_FWHM, LEVEL_1_OVER_E2, LEVEL_FWTM)
+
+# A level below this many sigma of the edge noise is not measurable.
+LEVEL_NOISE_GUARD = 3.0
+
+
+def level_label(level: float) -> str:
+    """The name an operator would use for this level."""
+    if abs(level - LEVEL_FWHM) < 1e-9:
+        return "FWHM"
+    if abs(level - LEVEL_1_OVER_E2) < 1e-6:
+        return "FW1/e²"
+    if abs(level - LEVEL_FWTM) < 1e-9:
+        return "FWTM"
+    return f"FW{level * 100:g}%"
+
+
+def gaussian_width_ratio(level: float) -> float:
+    """FW at *level*, divided by FWHM, for a true Gaussian.
+
+    sqrt(ln(1/f) / ln 2).  This is the yardstick the measured widths are
+    compared against - a property of the Gaussian function, not of any beam,
+    which is why it is the one thing here that does not come from the trace.
+    """
+    if not (0.0 < level < 1.0):
+        raise FwhmError(f"level must be between 0 and 1, got {level!r}")
+    return math.sqrt(math.log(1.0 / level) / math.log(2.0))
+
+
+def gaussian_width_from_sigma(sigma: float, level: float) -> float:
+    """FW at *level* for a Gaussian of this sigma: 2·sigma·sqrt(2·ln(1/f))."""
+    if not (0.0 < level < 1.0) or sigma <= 0:
+        return float("nan")
+    return 2.0 * abs(sigma) * math.sqrt(2.0 * math.log(1.0 / level))
+
+
+def measure_width_levels(result: dict, xincr: float, *,
+                         levels=DEFAULT_LEVELS,
+                         fit: dict = None,
+                         noise_guard: float = LEVEL_NOISE_GUARD) -> list:
+    """Widths at several levels, measured independently on THIS trace.
+
+    Parameters
+    ----------
+    result      : an `analyse_profile` result - supplies the corrected trace,
+                  the peaks, their per-peak fences and the noise sigma
+    xincr       : seconds per sample
+    levels      : fractions of each peak's own height to measure at
+    fit         : a `fit_gaussians` result, or None.  Used ONLY to offer a
+                  fit-derived number beside a level that could not be
+                  measured, always labelled as such - never to replace a
+                  measurement that succeeded
+    noise_guard : how many noise sigmas a level must clear to be measurable
+
+    Returns
+    -------
+    list, one entry per peak, left to right:
+        axis, index, peak_volts,
+        levels : {label: {level, volts, left_index, right_index,
+                          width_samples, width_seconds, resolved, source,
+                          fit_width_seconds, note}}
+        tail_ratio        FWTM / FWHM, from MEASURED widths only.  NaN
+                          when either level was not measurable - there is
+                          deliberately no fit fallback, because a Gaussian
+                          fit's own ratio is the constant 1.8226 and would
+                          read as "perfectly Gaussian" when it means "not
+                          measured"
+        tail_ratio_source "measured" or "none"
+        tail_note         why the ratio is absent, when it is
+        tail_excess       measured ratio / 1.8226 - 1, i.e. how much heavier
+                          (+) or lighter (-) the tails are than Gaussian
+    """
+    v        = result["corrected"]
+    noise    = result.get("noise", 0.0) or 0.0
+    peaks    = result["peaks"]
+    fit_peaks = (fit or {}).get("peaks", [])
+
+    out = []
+    for k, p in enumerate(peaks):
+        i        = p["index"]
+        lo, hi   = p.get("fence", (0, len(v) - 1))
+        peak_v   = p["volts"]
+        sigma    = (fit_peaks[k]["sigma_samples"] if k < len(fit_peaks)
+                    else float("nan"))
+
+        entry = {
+            "axis":       p.get("axis", f"#{k + 1}"),
+            "index":      i,
+            "peak_volts": peak_v,
+            "levels":     {},
+        }
+
+        for level in levels:
+            label     = level_label(level)
+            level_v   = level * peak_v
+            fit_width = (gaussian_width_from_sigma(sigma, level) * xincr
+                         if sigma == sigma and sigma > 0 else float("nan"))
+
+            rec = {
+                "level":             level,
+                "volts":             level_v,
+                "left_index":        None,
+                "right_index":       None,
+                "width_samples":     float("nan"),
+                "width_seconds":     float("nan"),
+                "resolved":          False,
+                "source":            "none",
+                "fit_width_seconds": fit_width,
+                "note":              "",
+            }
+
+            # A level buried in the noise is a reading of the noise, not a
+            # width.  Refused before any search, so the note says WHY rather
+            # than reporting a crossing found in a noise excursion.
+            if level_v < noise_guard * noise:
+                rec["note"] = (
+                    f"the {label} level ({level_v:.4g} V) is under "
+                    f"{noise_guard:g}× the edge noise sigma ({noise:.4g} V) — "
+                    f"any crossing found there would be noise")
+                rec["source"] = "fit" if fit_width == fit_width else "none"
+                entry["levels"][label] = rec
+                continue
+
+            left  = _fenced_crossing(v, i, level_v, lo, hi, -1)
+            right = _fenced_crossing(v, i, level_v, lo, hi, +1)
+            if left is None or right is None:
+                side = "left" if left is None else "right"
+                rec["note"] = (
+                    f"never falls to {level * 100:g} % of its own height on "
+                    f"the {side} before the neighbouring peak — the two "
+                    f"profiles' skirts overlap at this level")
+                rec["source"] = "fit" if fit_width == fit_width else "none"
+                entry["levels"][label] = rec
+                continue
+
+            width = right - left
+            if width <= 0:
+                rec["note"] = "degenerate width"
+                rec["source"] = "fit" if fit_width == fit_width else "none"
+                entry["levels"][label] = rec
+                continue
+
+            rec.update({
+                "left_index":    left,
+                "right_index":   right,
+                "width_samples": width,
+                "width_seconds": width * xincr,
+                "resolved":      True,
+                "source":        "measured",
+            })
+            entry["levels"][label] = rec
+
+        # ---- the diagnostic -------------------------------------------
+        # MEASURED OVER MEASURED, OR NOTHING.
+        #
+        # There is no fit fallback here, and that is the whole point.  The
+        # sum-of-Gaussians fit would happily supply both widths - and their
+        # ratio would come out at 1.8226 EVERY TIME, because a Gaussian fit
+        # is Gaussian by construction.  Displayed next to the word "tails"
+        # that reads as "your beam is perfectly Gaussian", when what actually
+        # happened is that nobody measured.  A number that cannot come out
+        # any other way carries no information, so it is not produced.
+        #
+        # The fit's widths are still offered PER LEVEL above, where they are
+        # labelled fit-derived and answer a different question: "how wide
+        # would a Gaussian of this core be down there?"  That is a useful
+        # thing to see.  It is not evidence about the real tails.
+        half  = entry["levels"].get(level_label(LEVEL_FWHM), {})
+        tenth = entry["levels"].get(level_label(LEVEL_FWTM), {})
+        if half.get("resolved") and tenth.get("resolved"):
+            ratio  = tenth["width_seconds"] / half["width_seconds"]
+            source = "measured"
+            note   = ""
+        else:
+            ratio  = float("nan")
+            source = "none"
+            unmeasured = ("FWTM" if not tenth.get("resolved") else "FWHM")
+            note = (f"the tails cannot be judged this shot — {unmeasured} was "
+                    f"not measurable, and a Gaussian fit cannot answer the "
+                    f"question, since its own ratio is 1.8226 by construction")
+        entry["tail_ratio"]        = ratio
+        entry["tail_ratio_source"] = source
+        entry["tail_note"]         = note
+        entry["tail_excess"] = (ratio / gaussian_width_ratio(LEVEL_FWTM) - 1.0
+                                if ratio == ratio else float("nan"))
+        out.append(entry)
+
+    return out
+

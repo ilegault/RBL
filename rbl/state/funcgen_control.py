@@ -23,8 +23,8 @@ command from a screen cannot take down the Qt event loop.
 """
 import time
 
-from rbl.hardware.funcgen_safety import channel_peak_volts, PEAK_MAX_VOLTS
-from rbl.services.ramp_engine import RampEngine
+from rbl.hardware.funcgen_safety import channel_peak_volts, PEAK_MAX_VOLTS, CHANNEL_ROLE
+from rbl.hardware.ramp_engine import RampEngine
 from rbl.state.setpoints import FuncGenSetpoints
 from rbl.state.snapshots import ChannelSnapshot, ChannelParams, FuncGenState
 
@@ -113,6 +113,20 @@ class FuncGenControlMixin:
 
     def _gen_for(self, gen_letter: str):
         return self.dg_a if gen_letter == "A" else self.dg_b
+
+    def build_funcgen_map(self) -> dict:
+        """amp_label -> (live DG1022Z instance, channel number).
+
+        Derived from the app's existing funcgen<->amp mapping
+        (rbl/hardware/funcgen_safety.py CHANNEL_ROLE) combined with Beamline's
+        own generator instances. Not a new mapping — the one that already
+        decides which channel drives which plate everywhere else in the app.
+        """
+        mapping = {}
+        for key, amp_label in CHANNEL_ROLE.items():   # "A1" -> "X+"
+            gen_letter, channel = key[0], int(key[1])
+            mapping[amp_label] = (self._gen_for(gen_letter), channel)
+        return mapping
 
     def set_channel(self, key: str, params: ChannelParams, ramped: bool = False) -> bool:
         """Push one channel's parameters to its generator.

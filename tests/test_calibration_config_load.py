@@ -55,4 +55,4 @@ class TestLoadPfResolution:
     def test_measurement_never_alters_calibration_config_constant(self, isolated_store):
         isolated_store.save_measurement("X+", c_pf=1.0, g_us=0.0,
                                          load_condition="ON_PLATES", method="m")
-        assert cc.CAL_LOAD_CAP_PF == 1200.0   # the documented fallback is untouched
+        assert cc.CAL_LOAD_CAP_PF == 1500   # the documented fallback is untouched

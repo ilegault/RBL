@@ -11,7 +11,7 @@ session, appended as it completes, never rewritten.
 import json
 from pathlib import Path
 
-CONDITIONING_HISTORY_PATH = Path.home() / "Desktop" / "RBL_log" / "data" / "conditioning_history.jsonl"
+from rbl.config.paths import CONDITIONING_HISTORY_PATH
 
 
 def append_session(record: dict, path: Path = None) -> None:

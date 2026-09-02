@@ -47,7 +47,8 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def _output_dir() -> Path:
-    return Path.home() / "Desktop" / "RBL_log" / "data" / "vacuum"
+    from rbl.config.paths import VACUUM_DIR
+    return VACUUM_DIR
 
 
 def _new_run_id() -> str:

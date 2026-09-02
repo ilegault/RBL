@@ -46,8 +46,9 @@ class CurrentTab(QWidget):
     # voltage (see on_logamp_state), so a sub-second window has nothing to show.
     MIN_WINDOW_SECONDS = 1.0
 
-    def __init__(self, parent=None):
+    def __init__(self, beamline=None, parent=None):
         super().__init__(parent)
+        self.beamline = beamline
         # This tab does not own a LabJack handle or stream worker. MainWindow
         # owns the single shared instance; snapshots arrive via on_logamp_state().
         self._t0 = time.monotonic()   # reset on labjack_connected
@@ -306,9 +307,12 @@ class CurrentTab(QWidget):
         if self.plot.is_live:
             self.plot.force_to_live()
 
-    def _on_error(self, msg: str):
+    def on_labjack_error(self, msg: str):
         # MainWindow owns teardown; we only surface the message.
         QMessageBox.warning(self, "LabJack poll error", msg)
+
+    def on_profile_changed(self, profile_name: str) -> None:
+        pass   # This tab renders log-amp currents regardless of profile.
 
     # ---- Buffer span (LivePlotPanel data callbacks) ---------------------------
 

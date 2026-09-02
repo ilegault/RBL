@@ -54,7 +54,6 @@ class AmpDrive:
             try:
                 out[label] = gen.get_state(channel)
             except Exception as e:
-                print(f"{self._pfx} WARN snapshot {label} ch{channel}: {e}")
                 log.warning("snapshot %s ch%s: %s", label, channel, e)
                 out[label] = None
         return out
@@ -68,16 +67,13 @@ class AmpDrive:
         clamped = max(-self._max_kv, min(self._max_kv, kv))
         gen_v   = clamped * 1000.0 / _AMP_GAIN
         gen, channel = self._map[label]
-        print(f"{self._pfx} {label} ch{channel}: DC {gen_v:+.4f} V "
-              f"({clamped:+.4f} kV)")
+        log.info("%s %s ch%s: DC %+.4f V (%+.4f kV)", self._pfx, label, channel, gen_v, clamped)
         try:
             warn = gen.set_waveform(channel, "DC", 0.0, 0.0, gen_v, 0.0)
             if warn:
-                print(f"{self._pfx} WARN {label} ch{channel}: {warn}")
                 log.warning("%s ch%s: %s", label, channel, warn)
             gen.output_on(channel)
         except Exception as e:
-            print(f"{self._pfx} ERROR {label} ch{channel}: {e}")
             log.error("%s ch%s: %s", label, channel, e)
             raise
 
@@ -101,22 +97,18 @@ class AmpDrive:
         clamped = max(0.0, min(self._max_kv, peak_kv))
         gen_vpp = clamped * 2.0 * 1000.0 / _AMP_GAIN
         if gen_vpp > MAX_AMP_VPP:
-            print(f"{self._pfx} WARN {label}: gen_vpp {gen_vpp:.4f} > "
-                  f"MAX_AMP_VPP {MAX_AMP_VPP} — clamping")
             log.warning("%s: gen_vpp %.4f > MAX_AMP_VPP %.4f — clamping",
                         label, gen_vpp, MAX_AMP_VPP)
             gen_vpp = MAX_AMP_VPP
         gen, channel = self._map[label]
-        print(f"{self._pfx} {label} ch{channel}: {abbrev} {freq_hz:.1f} Hz "
-              f"{gen_vpp:.4f} Vpp ({clamped:.4f} kV peak) phase={phase_deg:.1f}°")
+        log.info("%s %s ch%s: %s %.1f Hz %.4f Vpp (%.4f kV peak) phase=%.1f°",
+                 self._pfx, label, channel, abbrev, freq_hz, gen_vpp, clamped, phase_deg)
         try:
             warn = gen.set_waveform(channel, shape, freq_hz, gen_vpp, 0.0, phase_deg)
             if warn:
-                print(f"{self._pfx} WARN {label} ch{channel}: {warn}")
                 log.warning("%s ch%s: %s", label, channel, warn)
             gen.output_on(channel)
         except Exception as e:
-            print(f"{self._pfx} ERROR {label} ch{channel}: {e}")
             log.error("%s ch%s: %s", label, channel, e)
             raise
 
@@ -169,7 +161,6 @@ class AmpDrive:
             try:
                 gen.set_waveform(channel, "DC", 0.0, 0.0, 0.0, 0.0)
             except Exception as e:
-                print(f"{self._pfx} ERROR zero {label} ch{channel}: {e}")
                 log.error("zero %s ch%s: %s", label, channel, e)
                 raise
 
@@ -179,7 +170,6 @@ class AmpDrive:
         try:
             gen.output_off(channel)
         except Exception as e:
-            print(f"{self._pfx} ERROR output_off {label} ch{channel}: {e}")
             log.error("output_off %s ch%s: %s", label, channel, e)
             raise
 
@@ -189,7 +179,6 @@ class AmpDrive:
             try:
                 gen.output_off(channel)
             except Exception as e:
-                print(f"{self._pfx} ERROR output_off {label} ch{channel}: {e}")
                 log.error("output_off %s ch%s: %s", label, channel, e)
                 raise
 
@@ -203,12 +192,10 @@ class AmpDrive:
             try:
                 gen.set_waveform(channel, "DC", 0.0, 0.0, 0.0, 0.0)
             except Exception as e:
-                print(f"{self._pfx} ERROR zero {label} ch{channel}: {e}")
                 log.error("zero %s ch%s: %s", label, channel, e)
             try:
                 gen.output_off(channel)
             except Exception as e:
-                print(f"{self._pfx} ERROR output_off {label} ch{channel}: {e}")
                 log.error("output_off %s ch%s: %s", label, channel, e)
 
     def restore_all(self, snapshot: dict) -> None:
@@ -226,7 +213,6 @@ class AmpDrive:
                                  snap["amp"], snap["offset"], snap["phase"])
                 gen.set_output_load(channel, snap.get("load", "INFinity"))
             except Exception as e:
-                print(f"{self._pfx} ERROR restore {label} ch{channel}: {e}")
                 log.error("restore %s ch%s: %s", label, channel, e)
 
     def register_atexit(self) -> None:
@@ -244,8 +230,6 @@ class AmpDrive:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    from rbl.config.hardware_config import AMP_LABELS, AMP_CHANNEL_MAP
-
     class _FakeGen:
         def __init__(self):
             self.calls = []

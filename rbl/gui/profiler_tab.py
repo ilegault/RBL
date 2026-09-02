@@ -17,6 +17,58 @@ tooth - it reads a few hundred microseconds where the beam is milliseconds
 wide, and the Gaussian fit collapses to r2 ~ 0.3.  Setting "Raster period"
 to the ripple period switches the analysis onto the envelope.
 
+MILLIMETRES
+-----------
+The scope measures TIME.  A width in milliseconds only becomes a width in
+millimetres once something of a known real-space size has been seen at the
+same sweep speed - and that is what the BPM's fiducial marks are for.  With
+the BPM controller's output selector on fiducial marks, "Calibrate" measures
+the gap between the two calibration peaks, divides the head's known 6 cm by
+it, and stores the resulting mm/s against the BPM by name.
+
+From then on every width on this tab, on the waveform plot, in the history
+chart and in the CSV log carries its millimetre value BESIDE its
+milliseconds - never instead of it.  The calibration is a rate (the speed
+the BPM sweeps its wire across the aperture), so it survives any later
+change of timebase, volts/div or record length.  It does NOT survive
+changing which BPM the controller is showing, which is why calibrations are
+stored per BPM and the active one is named on screen.
+
+THE WIDTH LADDER — ONE WIDTH IS NOT A BEAM
+------------------------------------------
+Half maximum describes the CORE and says nothing about where the beam ends.
+That matters here specifically: the raster planner derives the overscan
+needed for a given edge droop by inverting a normal CDF from the FWHM alone,
+so every droop figure it prints rests on the beam being Gaussian.
+
+So each peak is measured at three levels, every shot, independently:
+
+    FWHM     50 %      the core
+    FW1/e²   13.5 %    the optics convention; exactly 4σ for a Gaussian
+    FWTM     10 %      the tails
+
+For a true Gaussian these are locked together — FW(f)/FWHM = √(ln(1/f)/ln2),
+so FWTM/FWHM = 1.8226 and FW1/e²/FWHM = 1.6986. The MEASURED ratio is
+therefore the Gaussian assumption on trial: above 1.8226 is heavier tails
+than Gaussian (halo, and the planner is optimistic); below it is a
+flat-topped or scraped profile.
+
+Nothing is carried between shots and no level is inferred from another. With
+quadrupole focusing the profile is not the same shape twice, so a width
+derived from a remembered shape would be describing a beam that has gone.
+
+A level can fail in two ways and they mean different things: it can sit
+BELOW THE NOISE FLOOR (refused - a crossing found there is a crossing of the
+noise), or the two peaks' SKIRTS CAN OVERLAP so the trace never falls that
+low before the neighbour. The second is real information about the beam. In
+both cases the fit's number is offered beside it and LABELLED fit-derived;
+neither is ever quietly truncated at the fence, which would read as a narrow
+beam.
+
+The tail RATIO has no fit fallback at all, deliberately: a sum-of-Gaussians
+fit's own ratio is 1.8226 by construction, so a fit-derived value there
+would read as "perfectly Gaussian" when it means "nobody measured".
+
 TWO NUMBERS, AND WHICH ONE WINS
 -------------------------------
   half-maximum : interpolated crossings.  Honest, but it only looks at four
@@ -66,25 +118,31 @@ matplotlib.use("QtAgg")
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel,
-    QPushButton, QLineEdit, QSizePolicy, QCheckBox,
+    QPushButton, QSizePolicy, QCheckBox,
 )
 
 from rbl.services.profile_logger import ProfileLogger
 from rbl.config.scope_config import (
+    SCOPE_TAIL_TOLERANCE, SCOPE_WIDTH_LEVELS,
     SCOPE_AVERAGE_SWEEPS, SCOPE_AXIS_LABELS, SCOPE_ENVELOPE_MS,
     SCOPE_EXPECTED_PEAKS, SCOPE_MAX_PEAKS, SCOPE_POINTS, SCOPE_POINTS_ANCHOR,
     SCOPE_POINTS_CHOICES, SCOPE_POLL_CHOICES, SCOPE_POLL_INTERVAL_S,
     SCOPE_CONTINUOUS_DEFAULT, SCOPE_RECORD_POINTS, SCOPE_SMOOTH_WINDOW,
 )
+from rbl.hardware.profile_fwhm import (
+    LEVEL_FWTM, gaussian_width_ratio, level_label,
+)
+from rbl.hardware.bpm_calibration import seconds_to_mm
 from rbl.gui import theme
 from rbl.gui.widgets.connection_bar import StatusPill
 from rbl.gui.widgets.port_picker import PortPicker
 from rbl.gui.widgets.inputs import (
     NoScrollComboBox, NoScrollSpinBox, QuietDoubleSpinBox, unit_row,
 )
+from rbl.gui.widgets.bpm_calibration_panel import BpmCalibrationPanel
 
 log = logging.getLogger(__name__)
 
@@ -183,6 +241,13 @@ class ProfilerTab(QWidget):
         # Profile data logger (CSV + waveform dump)
         self._logger: ProfileLogger = None
 
+        # ---- BPM calibration -------------------------------------------
+        # BPM calibration state is managed by self.bpm_cal_panel (below).
+        # The host keeps _saved_analysis (analysis spinbox values stashed
+        # when entering cal mode) and _mm_per_second (updated via signal).
+        self._saved_analysis  = None
+        self._mm_per_second   = math.nan
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
@@ -195,16 +260,26 @@ class ProfilerTab(QWidget):
 
         layout.addWidget(self._build_connection_box())
         layout.addWidget(self._build_readout_box())
+        layout.addWidget(self._build_widths_box())
         layout.addWidget(self._build_controls_box())
         layout.addWidget(self._build_load_box())
         layout.addWidget(self._build_waveform_box(), stretch=3)
         layout.addWidget(self._build_history_box(), stretch=2)
+        self.bpm_cal_panel = BpmCalibrationPanel(beamline=self.beamline)
+        layout.addWidget(self.bpm_cal_panel)
         layout.addWidget(self._build_calibration_box())
         layout.addWidget(self._build_logging_box())
 
         # ── Subscribe to Beamline signals ─────────────────────────────────
         self.beamline.scope_changed.connect(self._on_scope_state)
         self.beamline.scope_error.connect(self._on_scope_error)
+
+        # ── BPM calibration panel signals ─────────────────────────────────
+        self.bpm_cal_panel.scale_changed.connect(self._on_bpm_scale_changed)
+        self.bpm_cal_panel.entering_cal_mode.connect(self._on_bpm_entering_cal_mode)
+        self.bpm_cal_panel.exiting_cal_mode.connect(self._on_bpm_exiting_cal_mode)
+        self.bpm_cal_panel.take_shot_requested.connect(self._on_take_shot)
+        self.bpm_cal_panel.cal_state_ready.connect(self._redraw_fiducials)
 
         # ── Redraw timers ─────────────────────────────────────────────────
         self._redraw_timer = QTimer(self)
@@ -403,6 +478,155 @@ class ProfilerTab(QWidget):
 
         grid.setColumnStretch(11, 1)
         return box
+
+    def _build_widths_box(self) -> QGroupBox:
+        """The width ladder: one row per level, one column per axis.
+
+        A table rather than three more headline numbers, because the point
+        of the ladder is the COMPARISON down a column - a width at 10 % that
+        is more than 1.8226 times the width at 50 % is the whole finding,
+        and that is only visible with the levels stacked.
+
+        Each cell also carries where its number came from. A measured width
+        and a fit-derived one are different kinds of claim, and the tab never
+        shows one in a way that could be read as the other.
+        """
+        box = QGroupBox("Width Ladder")
+        grid = QGridLayout(box)
+        grid.setHorizontalSpacing(16)
+        grid.setVerticalSpacing(3)
+
+        axes = list(SCOPE_AXIS_LABELS[:2])
+        head = QLabel("Level")
+        head.setStyleSheet(f"color: {theme.NEUTRAL}; "
+                           f"font-size: {theme.FS_CAPTION}px;")
+        grid.addWidget(head, 0, 0)
+        for col, axis in enumerate(axes):
+            lbl = QLabel(axis)
+            lbl.setStyleSheet(f"font-weight: bold;")
+            grid.addWidget(lbl, 0, col + 1)
+        vs_g = QLabel("vs Gaussian")
+        vs_g.setStyleSheet(f"color: {theme.NEUTRAL}; "
+                           f"font-size: {theme.FS_CAPTION}px;")
+        vs_g.setToolTip(
+            "What this level's width would be, for a Gaussian with the "
+            "measured FWHM. FW(f)/FWHM = √(ln(1/f)/ln 2) — a property of the "
+            "Gaussian function, not of any beam, which is why it is the one "
+            "number here that does not come from the trace.")
+        grid.addWidget(vs_g, 0, len(axes) + 1)
+
+        self._lbl_level = {}          # (label, axis) -> QLabel
+        self._lbl_level_ratio = {}    # label -> QLabel
+        for row, level in enumerate(SCOPE_WIDTH_LEVELS, start=1):
+            label = level_label(level)
+            name = QLabel(f"{label}  ({level * 100:g} %)")
+            name.setStyleSheet(f"color: {theme.NEUTRAL};")
+            if abs(level - 0.13533528323661270) < 1e-6:
+                name.setToolTip(
+                    "The optics convention for beam diameter. For a Gaussian "
+                    "this width is exactly 4σ.")
+            elif abs(level - 0.10) < 1e-9:
+                name.setToolTip(
+                    "Full width at tenth maximum — where the tails are. Its "
+                    "ratio to FWHM is what tests whether the beam is really "
+                    "Gaussian.")
+            grid.addWidget(name, row, 0)
+            for col, axis in enumerate(axes):
+                cell = QLabel("—")
+                grid.addWidget(cell, row, col + 1)
+                self._lbl_level[(label, axis)] = cell
+            expect = QLabel(f"×{gaussian_width_ratio(level):.4f}")
+            expect.setStyleSheet(f"color: {theme.NEUTRAL}; "
+                                 f"font-size: {theme.FS_CAPTION}px;")
+            grid.addWidget(expect, row, len(axes) + 1)
+            self._lbl_level_ratio[label] = expect
+
+        # The verdict line. This is what the table is FOR.
+        self._lbl_tails = QLabel("—")
+        self._lbl_tails.setWordWrap(True)
+        self._lbl_tails.setToolTip(
+            "Measured FWTM ÷ measured FWHM, against the 1.8226 a true "
+            "Gaussian gives.\n\n"
+            "Heavier tails mean the raster planner's edge-droop and overscan "
+            "figures — which invert a normal CDF from the FWHM — are "
+            "optimistic. Lighter means a flat-topped or scraped profile.\n\n"
+            "There is no fit fallback here on purpose: a Gaussian fit's own "
+            "ratio is 1.8226 whatever the beam is doing.")
+        grid.addWidget(self._lbl_tails, len(SCOPE_WIDTH_LEVELS) + 1, 0,
+                       1, len(axes) + 2)
+
+        grid.setColumnStretch(len(axes) + 2, 1)
+        return box
+
+    def _fmt_level_cell(self, rec: dict) -> tuple:
+        """(text, colour) for one level of one axis.
+
+        Three outcomes, never blurred together: a measured width, a
+        fit-derived stand-in that says so, and nothing at all with the reason
+        in the tooltip.
+        """
+        if rec is None:
+            return "—", theme.NEUTRAL
+        secs = rec.get("seconds", math.nan)
+        mm   = seconds_to_mm(secs, self._mm_per_second)
+        if rec.get("resolved") and secs == secs:
+            if mm == mm:
+                return f"{mm:.3g} mm  ({fmt_seconds_str(secs)})", theme.OK
+            return fmt_seconds_str(secs), theme.OK
+        if rec.get("source") == "fit":
+            fit_s = rec.get("fit_seconds", math.nan)
+            fit_mm = seconds_to_mm(fit_s, self._mm_per_second)
+            shown = (f"{fit_mm:.3g} mm" if fit_mm == fit_mm
+                     else fmt_seconds_str(fit_s))
+            return f"{shown}  (fit)", theme.WARN
+        return "—", theme.WARN
+
+    def _redraw_widths(self, state):
+        """Fill the ladder from one snapshot."""
+        by_axis = {p.get("axis"): p for p in state.peaks}
+        for (label, axis), cell in self._lbl_level.items():
+            peak = by_axis.get(axis) or {}
+            rec  = (peak.get("levels") or {}).get(label)
+            text, colour = self._fmt_level_cell(rec)
+            cell.setText(text)
+            cell.setStyleSheet(f"color: {colour};")
+            cell.setToolTip((rec or {}).get("note", ""))
+
+        # ---- the verdict --------------------------------------------------
+        expected = gaussian_width_ratio(LEVEL_FWTM)
+        parts, worst, colour = [], 0.0, theme.OK
+        for axis, ratio, excess in (
+                (SCOPE_AXIS_LABELS[0], state.tail_ratio_x, state.tail_excess_x),
+                (SCOPE_AXIS_LABELS[1] if len(SCOPE_AXIS_LABELS) > 1 else "Y",
+                 state.tail_ratio_y, state.tail_excess_y)):
+            if ratio != ratio:
+                continue
+            parts.append(f"{axis} {ratio:.3f} ({excess * 100:+.1f} %)")
+            if abs(excess) > abs(worst):
+                worst = excess
+
+        if not parts:
+            self._lbl_tails.setText(
+                state.tail_note or "Tails: not measured this shot.")
+            self._lbl_tails.setStyleSheet(
+                f"color: {theme.NEUTRAL}; font-size: {theme.FS_CAPTION}px;")
+            return
+
+        verdict = "consistent with a Gaussian"
+        if worst > SCOPE_TAIL_TOLERANCE:
+            colour  = theme.WARN
+            verdict = ("HEAVIER tails than Gaussian — the raster planner's "
+                       "edge-droop and overscan figures are optimistic")
+        elif worst < -SCOPE_TAIL_TOLERANCE:
+            colour  = theme.WARN
+            verdict = ("LIGHTER tails than Gaussian — a flat-topped or "
+                       "scraped profile; check for an aperture upstream")
+        self._lbl_tails.setText(
+            f"Tails:  FWTM/FWHM = {'   '.join(parts)}   "
+            f"vs {expected:.4f} for a Gaussian  —  {verdict}")
+        self._lbl_tails.setStyleSheet(
+            theme.status_label(colour, bold=False)
+            + f"font-size: {theme.FS_CAPTION}px;")
 
     def _build_controls_box(self) -> QGroupBox:
         box = QGroupBox("Analysis")
@@ -668,6 +892,40 @@ class ProfilerTab(QWidget):
             f"color: {theme.NEUTRAL}; font-size: 10px; font-style: italic;")
         log.info("profiler_tab: logging stopped -> %s", path)
 
+    # -----------------------------------------------------------------------
+    # BPM scope calibration: milliseconds -> millimetres
+    # -----------------------------------------------------------------------
+
+    # ---- BPM calibration panel slots ------------------------------------
+
+    def _on_bpm_scale_changed(self, mm_per_second: float, _name: str) -> None:
+        """Scale updated by the BPM calibration panel — refresh all displays."""
+        self._mm_per_second = mm_per_second
+        self._readout_dirty = True
+        self._plot_dirty    = True
+
+    def _on_bpm_entering_cal_mode(self) -> None:
+        """BPM panel is entering fiducial mode — disable analysis controls."""
+        self._saved_analysis = {
+            "peaks":       self._sp_peaks.value(),
+            "smooth":      self._sp_smooth.value(),
+            "envelope_ms": self._sp_envelope.value(),
+        }
+        for w in (self._sp_peaks, self._sp_smooth, self._sp_envelope):
+            w.setEnabled(False)
+
+    def _on_bpm_exiting_cal_mode(self) -> None:
+        """BPM panel is exiting fiducial mode — restore analysis controls."""
+        for w in (self._sp_peaks, self._sp_smooth, self._sp_envelope):
+            w.setEnabled(True)
+        if self._saved_analysis:
+            self._sp_peaks.setValue(self._saved_analysis["peaks"])
+            self._sp_smooth.setValue(self._saved_analysis["smooth"])
+            self._sp_envelope.setValue(self._saved_analysis["envelope_ms"])
+            self._saved_analysis = None
+        self._on_analysis_changed()
+        self._plot_dirty = True
+
     def _build_calibration_box(self) -> QGroupBox:
         box = QGroupBox("FWHM Reference (Calibration)")
         lay = QHBoxLayout(box)
@@ -743,6 +1001,14 @@ class ProfilerTab(QWidget):
                                        self._cb_anchor.currentData())
         self.beamline.set_scope_poll_interval(self._cb_poll.currentData())
         self.beamline.set_scope_continuous(bool(self._cb_mode.currentData()))
+        # The mm scale is pushed with everything else, so a reconnect comes
+        # back calibrated. A scale that quietly vanishes on reconnect is
+        # worse than none: the readings keep their format and change their
+        # meaning.
+        self.beamline.set_scope_mm_scale(self._mm_per_second, self._cal_active)
+        self.beamline.set_scope_calibration_mode(
+            self._cal_mode, spacing_mm=self._sp_spacing.value(),
+            override=self._current_override())
 
     def _on_analysis_changed(self, *_):
         self.beamline.set_scope_analysis(
@@ -778,6 +1044,15 @@ class ProfilerTab(QWidget):
 
         if self._shot_pending and not state.idle:
             self._shot_finished()
+
+        # A FIDUCIAL trace is not a beam measurement. It must not enter the
+        # FWHM history, must not be written to the profile log, and must not
+        # arm "Save FWHM Reference" - those all describe a beam, and there
+        # is no beam on this trace. Everything it does mean is handled by
+        # _on_calibration_state.
+        if getattr(state, "cal_mode", False):
+            self.bpm_cal_panel.on_scope_state(state)
+            return
 
         if state.connected and not math.isnan(state.fwhm_seconds):
             self._btn_save_ref.setEnabled(True)
@@ -847,12 +1122,44 @@ class ProfilerTab(QWidget):
                     f"color: {theme.NEUTRAL}; font-style: italic;")
             return
 
+        # In calibration mode the trace on screen is fiducial marks, so
+        # every beam number here belongs to the last BEAM shot, not to what
+        # is plotted. They are left exactly as they were rather than blanked
+        # or, worse, recomputed from marks - and the status line says which
+        # kind of trace is showing.
+        if getattr(state, "cal_mode", False):
+            self._lbl_status.setText(
+                "calibration mode — fiducial marks, not a beam "
+                "(the widths above are from the last beam shot)")
+            self._lbl_status.setStyleSheet(
+                f"color: {theme.WARN}; font-style: italic;")
+            return
+
         # ---- one width per axis ------------------------------------------
+        # When a calibration is in force the HEADLINE is millimetres and the
+        # milliseconds ride along beside it. Millimetres are what the beam
+        # actually is; milliseconds are how this instrument happened to
+        # measure it. But the ms is never dropped - it is the raw
+        # measurement, and it is what a later recalibration would rescale.
+        # The scale used is the one in force NOW, not the one that was in
+        # force when the shot was taken. That is deliberate and it matches
+        # the history chart: mm/s is a property of the BPM's sweep, not of
+        # the moment a shot happened, so recalibrating is a better reading
+        # of every measurement rather than a new era. The snapshot keeps its
+        # own `fwhm_mm` for the log, which is where the value as-recorded
+        # belongs.
+        mmps = self._mm_per_second
         by_axis = {p.get("axis"): p for p in state.peaks}
         for axis, lbl in self._lbl_axis_value.items():
             peak = by_axis.get(axis)
             if peak is not None and peak.get("resolved"):
-                num, unit = fmt_seconds(peak["fwhm_seconds"])
+                secs = peak["fwhm_seconds"]
+                width_mm = seconds_to_mm(secs, mmps)
+                if width_mm == width_mm:
+                    num  = f"{width_mm:.3g}"
+                    unit = f"mm  ({fmt_seconds_str(secs)})"
+                else:
+                    num, unit = fmt_seconds(secs)
                 colour = theme.OK
             elif peak is not None:
                 num, unit, colour = "unresolved", "", theme.WARN
@@ -863,6 +1170,8 @@ class ProfilerTab(QWidget):
             lbl.setStyleSheet(
                 f"font-size: {size}px; font-weight: bold; color: {colour};")
             self._lbl_axis_name[axis].setText(unit)
+
+        self._redraw_widths(state)
 
         ratio = state.xy_ratio
         self._lbl_ratio.setText("—" if math.isnan(ratio) else f"{ratio:.2f}")
@@ -970,6 +1279,8 @@ class ProfilerTab(QWidget):
         state = self._last_measured
         if state is None or not state.corrected_downsampled:
             return False
+        if getattr(state, "cal_mode", False):
+            return self._redraw_fiducials(state)
 
         ax = self._ax_wave
         ax.cla()
@@ -1033,11 +1344,116 @@ class ProfilerTab(QWidget):
             ax.annotate("", xy=(lx, half), xytext=(rx, half),
                         arrowprops=dict(arrowstyle="<->", lw=1.3,
                                         color=colour))
-            ax.text((lx + rx) / 2, half + 0.06 * peak_v,
-                    f"{p.get('axis', '')}  {fmt_seconds_str(p['fwhm_seconds'])}",
+            label = f"{p.get('axis', '')}  {fmt_seconds_str(p['fwhm_seconds'])}"
+            width_mm = seconds_to_mm(p["fwhm_seconds"], self._mm_per_second)
+            if width_mm == width_mm:
+                label = (f"{p.get('axis', '')}  {width_mm:.3g} mm\n"
+                         f"{fmt_seconds_str(p['fwhm_seconds'])}")
+            ax.text((lx + rx) / 2, half + 0.06 * peak_v, label,
                     ha="center", va="bottom", fontsize=8, color=colour)
 
+            # The rest of the ladder, drawn thin and unannotated. The half
+            # maximum keeps the arrow and the number because it is the
+            # headline; the lower levels are here so the SHAPE between them
+            # is visible - a beam whose 10 % span is much wider than 1.82×
+            # its 50 % span looks wrong on the trace before any ratio is
+            # read. Only MEASURED spans are drawn: a fit-derived width has
+            # no crossings on this trace to draw between, and inventing them
+            # would put a line where no data supports one.
+            for lvl_label, rec in (p.get("levels") or {}).items():
+                if lvl_label == "FWHM" or not rec.get("resolved"):
+                    continue
+                l2, r2 = rec.get("left_seconds"), rec.get("right_seconds")
+                if l2 is None or r2 is None or math.isnan(l2) or math.isnan(r2):
+                    continue
+                yv = rec.get("volts", math.nan)
+                if math.isnan(yv):
+                    continue
+                ax.plot([l2 * 1e3, r2 * 1e3], [yv, yv], linewidth=0.9,
+                        linestyle=":", color=colour, alpha=0.75, zorder=4)
+                ax.text(l2 * 1e3, yv, f"{lvl_label} ", ha="right",
+                        va="center", fontsize=7, color=colour, alpha=0.9)
+
         ax.set_ylim(min(corrected) - 0.08 * peak_v, peak_v * 1.30)
+        ax.legend(loc="upper right", fontsize=8)
+        self._fig_wave.tight_layout()
+        self._canvas_wave.draw_idle()
+        return True
+
+    def _redraw_fiducials(self, state) -> bool:
+        """Draw a fiducial trace with the peak choice made visible.
+
+        This plot IS the confirmation step. The auto-pick drops the tallest
+        peak as the trigger, which is right on every trace anyone has shown
+        it - but "right on every trace so far" is not a thing to hide a
+        divide behind. So the trigger is drawn greyed and labelled as
+        ignored, the two marks that were used are drawn in colour, and the
+        span between them is annotated with both the time measured and the
+        real-space distance assumed. If the app picked wrong, it is wrong on
+        screen before it is wrong in a saved calibration.
+        """
+        ax = self._ax_wave
+        ax.cla()
+        ax.set_ylabel("Voltage (V)")
+        ax.set_xlabel("Time (ms)")
+        ax.grid(True, alpha=0.3)
+
+        corrected = state.corrected_downsampled
+        n  = len(corrected)
+        dt = state.xincr_downsampled
+        t0 = state.xzero
+        if math.isnan(dt) or math.isnan(t0):
+            xs = list(range(n))
+            ax.set_xlabel("Sample index")
+        else:
+            xs = [(t0 + i * dt) * 1e3 for i in range(n)]
+
+        ax.plot(xs, corrected, linewidth=1.0, color="#2980b9",
+                label="fiducial marks", zorder=2)
+
+        peak_v = max(corrected) if corrected else 1.0
+        # Peak positions come back in seconds from the trigger, the same
+        # frame the trace is plotted in - no sample-index arithmetic here,
+        # and so no way for the downsampling factor to move a marker.
+        # cal_peaks carry apex times measured from the START OF THE RECORD.
+        # xzero shifts them into the same frame the trace is plotted in; it
+        # cancels out of the separation, which is why the calibration itself
+        # never needs it.
+        shift = 0.0 if math.isnan(t0) else t0
+        for k, p in enumerate(state.cal_peaks):
+            apex = p.get("apex_seconds", math.nan)
+            if math.isnan(apex):
+                continue
+            t_ms = (apex + shift) * 1e3
+            if p.get("role") == "fiducial":
+                ax.axvline(t_ms, linewidth=1.2, color="#2980b9", alpha=0.9)
+                ax.text(t_ms, peak_v * 1.10, f"peak {k + 1}", ha="center",
+                        va="bottom", fontsize=8, color="#2980b9")
+            elif p.get("role") == "trigger":
+                ax.axvline(t_ms, linewidth=1.0, linestyle="--",
+                           color="#9aa0a6")
+                ax.text(t_ms, peak_v * 1.10,
+                        f"peak {k + 1}\ntrigger — ignored", ha="center",
+                        va="bottom", fontsize=8, color="#9aa0a6")
+            else:
+                ax.axvline(t_ms, linewidth=0.8, linestyle=":",
+                           color="#9aa0a6")
+
+        fid = list(state.cal_fiducial_seconds or [])
+        if len(fid) == 2:
+            lx, rx = (fid[0] + shift) * 1e3, (fid[1] + shift) * 1e3
+            y = peak_v * 0.55
+            ax.annotate("", xy=(lx, y), xytext=(rx, y),
+                        arrowprops=dict(arrowstyle="<->", lw=1.4,
+                                        color="#c0392b"))
+            sep_ms = state.cal_separation_seconds * 1e3
+            mm_per_ms = state.cal_mm_per_second * 1e-3
+            ax.text((lx + rx) / 2, y + 0.04 * peak_v,
+                    f"{state.cal_spacing_mm:g} mm  =  {sep_ms:.4g} ms\n"
+                    f"{mm_per_ms:.4g} mm/ms",
+                    ha="center", va="bottom", fontsize=9, color="#c0392b")
+
+        ax.set_ylim(min(corrected) - 0.08 * peak_v, peak_v * 1.45)
         ax.legend(loc="upper right", fontsize=8)
         self._fig_wave.tight_layout()
         self._canvas_wave.draw_idle()
@@ -1052,7 +1468,15 @@ class ProfilerTab(QWidget):
 
         ax = self._ax_hist
         ax.cla()
-        ax.set_ylabel("FWHM (ms)")
+        # The history holds SECONDS and is converted here, at draw time, so
+        # recalibrating rescales the whole chart instead of leaving a step
+        # in it. That is right: the scale is a property of the BPM's sweep,
+        # not of the moment each point was taken, so a better measurement of
+        # it is a better reading of every point.
+        mmps  = self._mm_per_second
+        to_mm = mmps == mmps
+        scale = mmps if to_mm else 1e3
+        ax.set_ylabel("FWHM (mm)" if to_mm else "FWHM (ms)")
         ax.set_xlabel("Time (s ago)")
         ax.grid(True, alpha=0.3)
 
@@ -1068,7 +1492,7 @@ class ProfilerTab(QWidget):
             for t, _f, per in self._fwhm_history:
                 for name, width in per:
                     if name == axis and width == width and width > 0:
-                        pts.append((now - t, width * 1e3))
+                        pts.append((now - t, width * scale))
             if pts:
                 ax.plot([x for x, _ in pts], [y for _, y in pts],
                         linewidth=1.1,

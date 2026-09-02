@@ -92,6 +92,198 @@ DRIFT_TO_SAMPLE_CM = DRIFT_TO_SAMPLE_IN * 2.54     # 247.60 cm
 DRIFT_TUBE_CM = 50.0 * 2.54                        # 127.0 cm
 
 
+
+MM_PER_IN = 25.4
+
+# ---------------------------------------------------------------------------
+# WHERE EACH PLATE PAIR SITS ALONG THE BEAM
+# ---------------------------------------------------------------------------
+# The two pairs are in SERIES inside one housing, so they do not deflect from
+# the same place. The beam turns in Y at the Y plates, carries on, turns in X
+# at the X plates, and only then leaves the tube. Every downstream plane is
+# therefore a DIFFERENT drift for X than it is for Y, and the difference is
+# the plate stack itself -- about 17 cm on this unit.
+#
+# This matters far more than it used to. When the raster is sized at the
+# sample the difference is worth under 1 % on X and ~8 % on Y. But the whole
+# point of slit-limited rastering is the RATIO of the drift to the slits
+# against the drift to the sample, and that ratio differs between the axes by
+# nearly 10 %: a square jaw opening does not paint a square.
+#
+# LAYOUT, upstream -> downstream, inside the 13.4375 in insertion length:
+#
+#   [ end ][ Y plates 12.5 cm ][ gap 4.6 cm ][ X plates 12.5 cm ][ end ]
+#   |<--------------------- 341.31 mm --------------------------------->|
+#
+# Y IS UPSTREAM -- observed on the tube, 25 Aug 2026. The manual's ES10 row
+# states neither the order nor the X-Y separation, so this is not derivable
+# from paper. It is written down here so it never has to be re-observed.
+#
+# THE X-Y SEPARATION IS BORROWED, AND THAT IS FLAGGED. The manual gives
+# "Separation between X & Y Plates" for the ES5 (1.81 in) and the Duo Axis
+# (0.625 in) but NOT for the ES10 class this unit belongs to. The ES5 is the
+# right analogue: same 12.7 cm-class plates, same 3.8 cm gap, same 5 kV/plate
+# rating, and its 13.5 in insertion length is within 1/16 in of the 13.4375 in
+# the lab sheet carries for XYST. So 1.81 in is used and
+# PLATE_XY_SEPARATION_VERIFIED records that nobody has measured it.
+#
+# The end spaces are not assumed -- they fall out of the arithmetic:
+# insertion length minus the plate stack, split evenly between the two ends.
+# ---------------------------------------------------------------------------
+
+# XYST column of the lab sheet's beamline-length row.
+STEERER_INSERTION_IN = 13.4375
+STEERER_INSERTION_MM = STEERER_INSERTION_IN * MM_PER_IN     # 341.31 mm
+
+PLATE_XY_SEPARATION_IN = 1.81                                # ES5 row
+PLATE_XY_SEPARATION_CM = PLATE_XY_SEPARATION_IN * 2.54       # 4.5974 cm
+PLATE_XY_SEPARATION_VERIFIED = False    # borrowed from ES5; never measured
+
+# Which pair the beam meets first. Observed, not derived.
+Y_PLATES_UPSTREAM = True
+
+PLATE_LENGTH_MM = PLATE_LENGTH_CM * 10.0
+_PLATE_STACK_MM = 2.0 * PLATE_LENGTH_MM + PLATE_XY_SEPARATION_CM * 10.0
+STEERER_END_SPACE_MM = (STEERER_INSERTION_MM - _PLATE_STACK_MM) / 2.0
+
+# Distance from each pair's EXIT edge to the steerer's DOWNSTREAM FLANGE.
+# That flange is z = 0 for everything below, because it is where the lab
+# sheet's drift starts: its C9 sums the components AFTER XYST.
+_UPSTREAM_PAIR_EXIT_TO_FLANGE_MM = (
+    STEERER_END_SPACE_MM + PLATE_LENGTH_MM + PLATE_XY_SEPARATION_CM * 10.0)
+_DOWNSTREAM_PAIR_EXIT_TO_FLANGE_MM = STEERER_END_SPACE_MM
+
+PLATE_EXIT_TO_FLANGE_MM = {
+    "Y": _UPSTREAM_PAIR_EXIT_TO_FLANGE_MM if Y_PLATES_UPSTREAM
+         else _DOWNSTREAM_PAIR_EXIT_TO_FLANGE_MM,
+    "X": _DOWNSTREAM_PAIR_EXIT_TO_FLANGE_MM if Y_PLATES_UPSTREAM
+         else _UPSTREAM_PAIR_EXIT_TO_FLANGE_MM,
+}
+
+# ---------------------------------------------------------------------------
+# THE BEAMLINE AFTER THE STEERER, IN ORDER
+# ---------------------------------------------------------------------------
+# Taken from the "TOTAL BEAMLINE LENGTH [in]" row of the lab deflection sheet
+# (columns F..N, i.e. everything after XYST), with ONE correction: BPM80 and
+# XYSL have been SWAPPED in hardware and the sheet still carries the old
+# order. The BPM is now first.
+#
+# The swap does not change the total -- 97.48 in either way -- so the drift to
+# the sample, and therefore every deflection number this beamline has ever
+# published, is untouched. What it changes is where the SLITS are, and with
+# slit-limited rastering that position sets the magnification onto the
+# sample. It is now the most load-bearing distance on the beamline.
+# ---------------------------------------------------------------------------
+BEAMLINE_AFTER_STEERER_IN = (
+    ("DT",                50.00),
+    ("BPM80",              7.22),    # <- was AFTER XYSL on the sheet
+    ("XYSL",               7.12),
+    ("FC50",               7.25),
+    ("Reducing nipple",    2.50),
+    ("GV",                 2.89),
+    ("Bellows",            5.00),
+    ("Adapter",            2.50),
+    ("Chamber to sample", 13.00),
+)
+
+SLIT_COMPONENT = "XYSL"
+BPM_COMPONENT  = "BPM80"
+
+# ---------------------------------------------------------------------------
+# THE SLITS
+# ---------------------------------------------------------------------------
+# NEC BDS18 double slit: one housing, FOUR motorised slit drives on four
+# C2.75 ports (partlist 2EA041280, drawing 5-0-4128), driven by the Galil
+# DMC-4103 as axes A,B,C,D -> X+, X-, Y+, Y-. The X pair and the Y pair are
+# at two different stations along the beam inside that one 7.12 in body, and
+# X IS FIRST.
+#
+# The partlist gives no internal dimension, so where inside the body each
+# station sits is a GUESS -- the housing quartered -- and it is exposed in the
+# Raster Planner as an editable input rather than buried here, because the
+# honest thing to do with an unmeasured number is put it where it can be
+# corrected. SLIT_PLANE_FRACTIONS_VERIFIED says so out loud.
+#
+# HOW MUCH THE GUESS COSTS. The magnification onto the sample is
+# z_sample / z_slit, so an error dz in the slit plane moves it by
+# M * dz / z_slit -- about 0.11 % per mm on X. Quartering the 181 mm housing
+# instead of halving it is a 45 mm error, i.e. ~5 % on the painted width, or
+# 0.25 mm on a 5 mm target. Worth one measurement; not worth blocking on.
+# ---------------------------------------------------------------------------
+SLIT_MODEL = "NEC BDS18 double slit (2EA041280, dwg 5-0-4128)"
+X_SLITS_UPSTREAM = True
+SLIT_X_PLANE_FRACTION = 0.25    # of the way into the XYSL body
+SLIT_Y_PLANE_FRACTION = 0.75
+SLIT_PLANE_FRACTIONS_VERIFIED = False
+
+# The drift tube bore is the first aperture the beam has to clear -- it is why
+# the lab sheet quotes "Deflection through DT" on its own. It is also the only
+# aperture UPSTREAM of the slits, so it is the one place the full unclipped
+# sweep has to fit. Defaulted to the steerer's own 1 in entrance aperture
+# until the DT is measured.
+DT_BORE_RADIUS_MM = ENTRANCE_APERTURE_CM * 10.0 / 2.0     # 12.7 mm
+DT_BORE_RADIUS_VERIFIED = False
+
+
+def beamline_planes_mm(components_in=None,
+                       slit_x_fraction: float = None,
+                       slit_y_fraction: float = None) -> list:
+    """Every measurement plane after the steerer, as (name, z_mm, kind) triples,
+    in beam order.
+
+    z is measured from the steerer's DOWNSTREAM FLANGE, because that is where
+    the lab sheet's drift starts: its C9 sums the components AFTER XYST.
+
+    Each component contributes a plane at its EXIT face -- the far side is
+    where a swept beam is widest inside it, so it is the face that has to
+    clear. The slit body contributes its exit face like anything else AND two
+    extra planes inside it, one per slit pair, because the X pair and the Y
+    pair are not in the same place and the whole question here is what the
+    raster is doing at each of them.
+
+    `kind` is "component" or "slit".
+
+    Cumulative addition over this module's own table. No physics -- the
+    deflection math stays in raster_model / slit_raster_model, neither of
+    which imports this file.
+    """
+    components_in = components_in if components_in is not None else BEAMLINE_AFTER_STEERER_IN
+    fx = SLIT_X_PLANE_FRACTION if slit_x_fraction is None else slit_x_fraction
+    fy = SLIT_Y_PLANE_FRACTION if slit_y_fraction is None else slit_y_fraction
+
+    planes = []
+    z = 0.0
+    for name, length_in in components_in:
+        length_mm = length_in * MM_PER_IN
+        if name == SLIT_COMPONENT:
+            pairs = [("X slits", z + fx * length_mm), ("Y slits", z + fy * length_mm)]
+            for slit_name, slit_z in sorted(pairs, key=lambda p: p[1]):
+                planes.append((slit_name, slit_z, "slit"))
+        z += length_mm
+        planes.append((name, z, "component"))
+    planes.sort(key=lambda p: p[1])
+    return planes
+
+
+def slit_plane_z_mm(axis: str, slit_x_fraction: float = None,
+                    slit_y_fraction: float = None) -> float:
+    """z of one axis's slit pair, from the steerer's downstream flange."""
+    want = "X slits" if axis.upper().startswith("X") else "Y slits"
+    for name, z, kind in beamline_planes_mm(None, slit_x_fraction, slit_y_fraction):
+        if name == want:
+            return z
+    raise KeyError(want)
+
+
+def drift_mm_for(axis: str, plane_z_mm: float) -> float:
+    """Drift for `axis` from ITS OWN plate exit to a plane at `plane_z_mm`.
+
+    The one function that stops X and Y being given the same drift. See the
+    plate-position section above for why they cannot share one.
+    """
+    return PLATE_EXIT_TO_FLANGE_MM[axis.upper()[0]] + plane_z_mm
+
+
 def describe() -> str:
     """One line for the GUI, so the operator can see what was assumed."""
     return (f"NEC {STEERER_MODEL}  —  plates {PLATE_LENGTH_CM} cm long, "
@@ -105,3 +297,27 @@ if __name__ == "__main__":
     print("[OK]", describe())
     print(f"[OK] drift to sample {DRIFT_TO_SAMPLE_CM:.2f} cm "
           f"({DRIFT_TO_SAMPLE_IN} in), drift tube {DRIFT_TUBE_CM:.1f} cm")
+
+    # Reordering components cannot change the total; if it ever does, someone
+    # added or removed one while thinking they were swapping two.
+    total_in = sum(length for _n, length in BEAMLINE_AFTER_STEERER_IN)
+    assert abs(total_in - DRIFT_TO_SAMPLE_IN) < 1e-9, total_in
+    names = [n for n, _ in BEAMLINE_AFTER_STEERER_IN]
+    assert names.index(BPM_COMPONENT) < names.index(SLIT_COMPONENT), "BPM/slit swap lost"
+    print(f"[OK] beamline after the steerer totals {total_in} in, BPM before slits")
+
+    print(f"[OK] {'Y' if Y_PLATES_UPSTREAM else 'X'} plates upstream; "
+          f"plate exit -> flange: X {PLATE_EXIT_TO_FLANGE_MM['X']:.2f} mm, "
+          f"Y {PLATE_EXIT_TO_FLANGE_MM['Y']:.2f} mm")
+
+    z_sample = DRIFT_TO_SAMPLE_CM * 10.0
+    print("\n     plane                    z [mm]   X drift    Y drift")
+    for name, z, kind in beamline_planes_mm():
+        mark = "*" if kind == "slit" else " "
+        print(f"   {mark} {name:22s} {z:8.1f}  {drift_mm_for('X', z):9.1f}  "
+              f"{drift_mm_for('Y', z):9.1f}")
+
+    for ax in ("X", "Y"):
+        zs = slit_plane_z_mm(ax)
+        m = drift_mm_for(ax, z_sample) / drift_mm_for(ax, zs)
+        print(f"[OK] {ax} slit plane z {zs:7.1f} mm  ->  magnification onto sample {m:.4f}")

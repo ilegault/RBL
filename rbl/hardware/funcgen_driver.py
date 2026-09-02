@@ -20,20 +20,10 @@ try:
 except ImportError:
     PYVISA_AVAILABLE = False
 
-# ES5 plate rating = 5 kV/plate; EEL5000 gain = 1000x, range +/-5 kV.
-# The amplifier input tolerates up to +/-5 V (= +/-5 kV/plate). That +/-5 V rail
-# is the hard ceiling for the DC OFFSET and for the instantaneous voltage the
-# amplifier sees.
-MAX_GEN_VOLTS = 5.0
-
-# Amplitude is entered peak-to-peak (RIGOL's native unit). A centred sine swings
-# +/-amplitude/2 about the offset, so a 10 Vpp wave at 0 offset reaches the full
-# +/-5 V (= +/-5 kV) rail. Hence amplitude alone is allowed up to 2 x the rail.
-# This per-field cap does NOT by itself bound the instantaneous voltage: an
-# offset plus half the peak-to-peak amplitude can still exceed 5 V. That combined
-# "true peak" limit (|offset| + amplitude/2 <= 5 V, warn above 4 V) is enforced
-# in the GUI at apply time (funcgen_tab.py). Adjust these here only.
-MAX_AMP_VPP = 2.0 * MAX_GEN_VOLTS   # 10 Vpp -> +/-5 V peak at 0 offset
+# These constants are defined in rbl.config.funcgen_limits and re-exported here
+# so existing callers of `from rbl.hardware.funcgen_driver import MAX_GEN_VOLTS`
+# continue to work without change.
+from rbl.config.funcgen_limits import MAX_GEN_VOLTS, MAX_AMP_VPP
 
 # Verified by tools/probe_clock_scpi.py against DG1022Z firmware
 # 03.01.12. The plain :ROSCillator:SOURce and :SYSTem:CLKSource forms
