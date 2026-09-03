@@ -30,15 +30,15 @@ from scripts.check_layers import find_violations
 # Tracked violations that are not yet fixed; keyed on file path using
 # forward slashes (normalised in find_violations).
 _KNOWN_VIOLATIONS = {
-    'rbl/hardware/scope_worker.py',
-    'rbl/hardware/vacuum_worker.py',
-    'rbl/state/funcgen_control.py',
+    'src/rbl/hardware/scope_worker.py',
+    'src/rbl/hardware/vacuum_worker.py',
+    'src/rbl/state/funcgen_control.py',
 }
 
 
 def test_no_new_layer_violations():
     """Fail if any upward import is added that isn't in the known list."""
-    all_violations = find_violations(_REPO_ROOT / 'rbl')
+    all_violations = find_violations(_REPO_ROOT / 'src' / 'rbl')
     new = [
         msg for key, msg in all_violations
         if not any(key.endswith(k.replace('/', pathlib.sep))

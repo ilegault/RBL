@@ -1,3 +1,15 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rbl"
+version = "0.1.0"
+requires-python = ">=3.10"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"
@@ -15,8 +27,8 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 # __main__ bench-tool scripts use bare print() and starred imports deliberately.
-"rbl/hardware/vgc083_driver.py" = ["E402"]
-"rbl/hardware/xgs600_driver.py" = ["E402"]
+"src/rbl/hardware/vgc083_driver.py" = ["E402"]
+"src/rbl/hardware/xgs600_driver.py" = ["E402"]
 # Test files import fixtures via * which ruff flags.
 "tests/*" = ["F401", "F811"]
 
@@ -25,6 +37,6 @@ python_version = "3.10"
 strict = true
 # Only check the pure layers: config/ and hardware/.
 # Annotating the full GUI layer is a separate effort.
-files = ["rbl/config", "rbl/hardware"]
+files = ["src/rbl/config", "src/rbl/hardware"]
 # Third-party stubs are missing for these packages; ignore import errors.
 ignore_missing_imports = true

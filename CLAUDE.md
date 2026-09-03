@@ -18,16 +18,19 @@ not in a wiki, and those docstrings are the actual spec.
 |---|---|
 | Language / runtime | Python 3.10+ (dev venv is Windows, `.venv\Scripts\`; `__pycache__` shows cp310 and cp314) |
 | GUI | PySide6 (Qt 6), Fusion style, custom light palette |
-| Entry point | `python -m rbl.main` → `rbl/gui/app.py:main()` |
-| Package | `rbl/` — ~39 000 lines across 105 modules |
+| Entry point | `python -m rbl.main` → `src/rbl/gui/app.py:main()` |
+| Package | `src/rbl/` — ~39 000 lines across 105 modules (src layout) |
 | Tests | `pytest` — ~1 414 test functions in `tests/` |
 | Build | `pyinstaller rbl.spec --clean`, or `build.bat` (builds + copies `dist/` to a USB drive) |
 | Target OS | Windows 10/11 on the control PC. Nothing else is supported. |
 | Repo | `master`; remote `origin`. No CI. |
 
 ```
-# run the app
+# first-time setup (installs rbl package in editable mode into the venv)
 .venv\Scripts\activate
+pip install -e .
+
+# run the app
 python -m rbl.main
 
 # run the tests (Qt runs offscreen automatically, see tests/conftest.py)

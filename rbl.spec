@@ -17,8 +17,9 @@ block_cipher = None
 # Key paths
 # ---------------------------------------------------------------------------
 ROOT     = os.path.abspath(SPECPATH)          # C:\...\RBL
-RBL_PKG  = os.path.join(ROOT, "rbl")          # C:\...\RBL\rbl
-RBL_GUI  = os.path.join(RBL_PKG, "gui")       # C:\...\RBL\rbl\gui
+SRC_DIR  = os.path.join(ROOT, "src")          # C:\...\RBL\src
+RBL_PKG  = os.path.join(SRC_DIR, "rbl")       # C:\...\RBL\src\rbl
+RBL_GUI  = os.path.join(RBL_PKG, "gui")       # C:\...\RBL\src\rbl\gui
 
 # ---------------------------------------------------------------------------
 # Data files only — PyInstaller's built-in hooks handle binaries/submodules
@@ -153,10 +154,10 @@ a = Analysis(
     [os.path.join(RBL_PKG, "main.py")],
 
     # pathex tells PyInstaller where to look for imports:
-    #   ROOT      → finds the "rbl" package  (from rbl.gui.app import ...)
+    #   SRC_DIR   → finds the "rbl" package  (from rbl.gui.app import ...)
     #   RBL_PKG   → finds top-level modules inside rbl/ (when main.py path-inserts itself)
     #   RBL_GUI   → finds viz, motor_tab, current_tab  (app.py path-inserts rbl/gui/)
-    pathex=[ROOT, RBL_PKG, RBL_GUI],
+    pathex=[ROOT, SRC_DIR, RBL_PKG, RBL_GUI],
 
     binaries=all_binaries,
     datas=all_datas,

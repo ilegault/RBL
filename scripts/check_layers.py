@@ -21,20 +21,20 @@ ORDER = {'config': 0, 'hardware': 1, 'state': 2, 'services': 3, 'gui': 4}
 KNOWN_VIOLATIONS = {
     # 1.4-a: snapshots.py is imported by hardware workers; will be fixed
     # by moving snapshots to rbl/types/ or rbl/snapshots.py.
-    'rbl/hardware/scope_worker.py',
-    'rbl/hardware/vacuum_worker.py',
+    'src/rbl/hardware/scope_worker.py',
+    'src/rbl/hardware/vacuum_worker.py',
     # 1.4-b: state imports services (RampEngine); will be fixed by moving
     # RampEngine to rbl/hardware/.
-    'rbl/state/funcgen_control.py',
+    'src/rbl/state/funcgen_control.py',
 }
 
 
-def find_violations(root: pathlib.Path = pathlib.Path('rbl')) -> list[str]:
+def find_violations(root: pathlib.Path = pathlib.Path('src/rbl')) -> list[str]:
     bad = []
     for p in root.rglob('*.py'):
-        parts = p.parts
-        # Layer is the immediate subdirectory of rbl/
-        L = parts[1] if len(parts) > 2 else 'root'
+        rel = p.relative_to(root).parts
+        # Layer is the immediate subdirectory of rbl/ regardless of root depth
+        L = rel[0] if len(rel) > 1 else 'root'
         if L not in ORDER:
             continue
         try:
