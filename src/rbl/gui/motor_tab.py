@@ -43,20 +43,29 @@ second later is not a stop.
 from PySide6.QtCore import Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel,
-    QPushButton, QFormLayout,
-    QMessageBox, QLineEdit,
+    QFormLayout,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
 )
 
-from rbl.hardware.galil_driver import GalilController, GalilError
-from rbl.hardware.galil_workers import (
-    AutoHomeAllWorker, GalilPollWorker, HomingWorker, MultiAxisHomeWorker,
-)
 from rbl.config import hardware_config as SC
 from rbl.gui import theme
 from rbl.gui.widgets.command_console import HistoryLineEdit, LogPane
 from rbl.gui.widgets.inputs import NoScrollComboBox, QuietDoubleSpinBox
-
+from rbl.hardware.galil_driver import GalilController, GalilError
+from rbl.hardware.galil_workers import (
+    AutoHomeAllWorker,
+    GalilPollWorker,
+    HomingWorker,
+    MultiAxisHomeWorker,
+)
 
 # ─── Per-axis control groupbox ────────────────────────────────────────────────
 
@@ -325,10 +334,16 @@ class AxisControls(QGroupBox):
         self._full_widget.setVisible(not simple)
 
         if simple:
-            label_font  = QFont(); label_font.setPointSize(13)
-            status_font = QFont(); status_font.setPointSize(13); status_font.setBold(True)
-            btn_font    = QFont(); btn_font.setPointSize(13);    btn_font.setBold(True)
-            spn_font    = QFont(); spn_font.setPointSize(13)
+            label_font  = QFont()
+            label_font.setPointSize(13)
+            status_font = QFont()
+            status_font.setPointSize(13)
+            status_font.setBold(True)
+            btn_font    = QFont()
+            btn_font.setPointSize(13)
+            btn_font.setBold(True)
+            spn_font    = QFont()
+            spn_font.setPointSize(13)
             btn_h       = 52
             spn_h       = 44
         else:
@@ -999,7 +1014,7 @@ class MotorTab(QWidget):
                 model = self.galil.model_info()
                 # TH returns multi-line; collapse to one horizontal line for the label
                 model_oneline = "  ·  ".join(
-                    l.strip() for l in model.splitlines() if l.strip()
+                    ln.strip() for ln in model.splitlines() if ln.strip()
                 )
                 self.lbl_model.setText(model_oneline)
                 self._log_line(f"> TH\n< {model}")

@@ -23,13 +23,14 @@ import numpy as np
 import pytest
 
 from rbl.config import hardware_config as SC
+from rbl.hardware.amp_trace import AmpTraceBuilder
 from rbl.hardware.waveform_period import (
-    estimate_period_samples, cycle_span_samples, cycle_slice,
+    cycle_slice,
+    cycle_span_samples,
+    estimate_period_samples,
 )
 from rbl.hardware.waveform_ring import AlignedWaveHistory
-from rbl.hardware.amp_trace import AmpTraceBuilder
 from rbl.state.beamline import Beamline
-
 
 RATE_HZ = 8000.0            # FULL profile, per channel
 WINDOW = 800                # one GUI window at 10 Hz

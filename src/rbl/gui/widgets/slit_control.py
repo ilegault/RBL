@@ -19,9 +19,14 @@ lets its owner decide whether that reaches hardware — every path to the
 Galil goes through Beamline (see rbl/state/beamline.py), never through a
 widget holding a driver.
 """
-from PySide6.QtCore import Signal, Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
 )
 
 from rbl.config import hardware_config as SC

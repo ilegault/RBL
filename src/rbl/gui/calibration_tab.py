@@ -22,21 +22,43 @@ before Run), and its lj_panel embedding for the shared LabJackPanel.
 import logging
 import time
 
-from PySide6.QtCore import Signal, QTimer
+from PySide6.QtCore import QTimer, Signal
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout,
-    QGroupBox, QLabel, QPushButton, QRadioButton, QButtonGroup,
-    QLineEdit, QProgressBar, QMessageBox, QDialog, QDialogButtonBox,
+    QButtonGroup,
     QCheckBox,
+    QDialog,
+    QDialogButtonBox,
+    QFormLayout,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QRadioButton,
+    QVBoxLayout,
+    QWidget,
 )
 
 from rbl.config import hardware_config as SC
 from rbl.config.calibration_config import (
-    CAL_MAX_KV, CAL_STEP_KV, CAL_PASSES, CAL_UNCERTAINTY_V,
-    CAL_SWEEP_PROFILE, CAL_DRIFT_PROFILE,
-    CAL_AC_FREQ_HZ, CAL_AC_FREQ_PRESETS, CAL_ZERO_DWELL_S,
-    DRIFT_DEFAULT_KV, DRIFT_MAX_ATTENDED_H, DRIFT_MAX_UNATTENDED_H,
-    LoadCondition, sweep_points, ac_sweep_points,
+    CAL_AC_FREQ_HZ,
+    CAL_AC_FREQ_PRESETS,
+    CAL_DRIFT_PROFILE,
+    CAL_MAX_KV,
+    CAL_PASSES,
+    CAL_STEP_KV,
+    CAL_SWEEP_PROFILE,
+    CAL_UNCERTAINTY_V,
+    CAL_ZERO_DWELL_S,
+    DRIFT_DEFAULT_KV,
+    DRIFT_MAX_ATTENDED_H,
+    DRIFT_MAX_UNATTENDED_H,
+    LoadCondition,
+    ac_sweep_points,
+    sweep_points,
 )
 from rbl.config.labjack_stream_config import is_pair_channel
 from rbl.gui import theme
@@ -268,7 +290,6 @@ class CalibrationTab(QWidget):
         cfg_form.addRow("DC Sweep:", self.lbl_sweep_info)
 
         n_ac_pts = len(ac_sweep_points())
-        n_ac_total = n_ac_pts * len(SC.AMP_LABELS)
         self.lbl_ac_info = QLabel(
             f"{n_ac_pts} points (0 → {CAL_MAX_KV:.1f} kV peak → 0, "
             f"{CAL_STEP_KV:.2f} kV step) × {len(SC.AMP_LABELS)} channels"

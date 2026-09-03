@@ -53,8 +53,9 @@ def _patch_cv2(monkeypatch, writers: list):
     call_idx = [0]
 
     class _VW:
-        def __init__(self, path, fourcc, fps, size):
+        def __init__(self, path, *rest):
             self._path = path
+            self._fps, self._size = rest[-2], rest[-1]
             self._w = _FakeWriter()
             writers.append(self._w)
 
@@ -67,6 +68,9 @@ def _patch_cv2(monkeypatch, writers: list):
         def release(self):
             self._w.release()
 
+        def set(self, prop, value):
+            pass
+
     class _FourCC:
         def __call__(self, *args):
             return 0
@@ -74,6 +78,8 @@ def _patch_cv2(monkeypatch, writers: list):
     class _FakeCv2:
         VideoWriter = _VW
         VideoWriter_fourcc = _FourCC()
+        CAP_OPENCV_MJPEG = 1900
+        VIDEOWRITER_PROP_QUALITY = 1
 
     monkeypatch.setattr(mod, "_CV2_OK", True)
     monkeypatch.setattr(mod, "cv2", _FakeCv2(), raising=False)

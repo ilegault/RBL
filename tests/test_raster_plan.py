@@ -7,13 +7,13 @@ produced by the original widget implementation before the refactor, so a
 regression would be immediately visible.
 """
 import math
+
 import pytest
 
 from rbl.config.calibration_config import CAL_MAX_KV
 from rbl.config.raster_defaults import AMP_MAX_BANDWIDTH_HZ
-from rbl.config.steerer_geometry import PLATE_LENGTH_CM, PLATE_GAP_CM
-from rbl.hardware.raster_plan import steerer_limited_solve, envelope_status
-
+from rbl.config.steerer_geometry import PLATE_GAP_CM, PLATE_LENGTH_CM
+from rbl.hardware.raster_plan import envelope_status, steerer_limited_solve
 
 # ---------------------------------------------------------------------------
 # Fixtures

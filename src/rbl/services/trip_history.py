@@ -35,7 +35,7 @@ def append_trip(record: dict, path: Path = None) -> None:
     path = path or TRIP_HISTORY_PATH
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "a") as f:
+        with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, default=str) + "\n")
     except Exception:
         pass
@@ -51,7 +51,7 @@ def load_trip_history(path: Path = None) -> list:
     path = path or TRIP_HISTORY_PATH
     records = []
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -82,7 +82,7 @@ if __name__ == "__main__":
         assert records[1]["state"] == "current_limited"
         print("[OK] append_trip/load_trip_history round-trip, order preserved")
 
-        with open(p, "a") as f:
+        with open(p, "a", encoding="utf-8") as f:
             f.write("not json\n")
         records2 = load_trip_history(p)
         assert len(records2) == 2

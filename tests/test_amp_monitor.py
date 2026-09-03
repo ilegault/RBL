@@ -3,12 +3,16 @@ import math
 
 import pytest
 
-from rbl.hardware.amp_monitor import (
-    monitor_to_kv, monitor_to_ma, format_kv, format_ma,
-    voltage_status, current_status,
-)
 from rbl.config import hardware_config as SC
 from rbl.gui import theme
+from rbl.hardware.amp_monitor import (
+    current_status,
+    format_kv,
+    format_ma,
+    monitor_to_kv,
+    monitor_to_ma,
+    voltage_status,
+)
 
 
 class TestVoltageMonitor:

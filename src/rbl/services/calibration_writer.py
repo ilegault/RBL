@@ -113,7 +113,7 @@ class CalibrationWriter:
         self.metadata.setdefault("run_id", self.run_id)
         self.metadata.setdefault("start_timestamp_iso", now_iso())
 
-        self._file = open(self.csv_path, "w", newline="")
+        self._file = open(self.csv_path, "w", newline="", encoding="utf-8")
         self._csv  = csv.DictWriter(self._file, fieldnames=CSV_COLUMNS)
         self._csv.writeheader()
         self._file.flush()
@@ -142,7 +142,7 @@ class CalibrationWriter:
         self._closed = True
 
         try:
-            with open(self.meta_path, "w") as f:
+            with open(self.meta_path, "w", encoding="utf-8") as f:
                 json.dump(self.metadata, f, indent=2, default=str)
         except Exception:
             log.exception("close: failed writing sidecar %s", self.meta_path)

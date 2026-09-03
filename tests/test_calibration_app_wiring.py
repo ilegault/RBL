@@ -20,7 +20,7 @@ from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 import rbl.gui.calibration_tab as calibration_tab_module
-from rbl.config.calibration_config import CAL_PROFILE, LoadCondition
+from rbl.config.calibration_config import CAL_PROFILE, CAL_SWEEP_PROFILE, LoadCondition
 
 
 @pytest.fixture(scope="module")
@@ -69,13 +69,16 @@ class FakeWriter:
 
 class FakeRunner(QObject):
     """Stands in for CalibrationRunner: same public signal/slot surface,
-    but start_sweep()/start_drift() do nothing until the test drives them —
-    letting a test observe the profile-forced state before finishing."""
+    but start_* methods do nothing until the test drives them — letting a
+    test observe the profile-forced state before finishing."""
 
     progress = Signal(int, int, str)
     row_recorded = Signal(dict)
     finished = Signal(str)
     error = Signal(str)
+    pair_change_requested = Signal(str)
+    overcurrent = Signal(str, float, float)
+    dwell_started = Signal(float)
 
     def __init__(self, funcgen_map, load_condition, parent=None, writer=None,
                  run_id=None):
@@ -84,17 +87,26 @@ class FakeRunner(QObject):
         self.load_condition = load_condition
         self.writer = writer
         self.operator_note = ""
+        self._zero_dwell_s = 0.0
+        self._dwell_output_off = False
+        self._use_pair_profile = True
         self.started = None
         self.aborted = False
 
-    def start_sweep(self):
+    def start_sweep(self, channels=None, return_to_zero=False):
         self.started = "sweep"
 
-    def start_drift(self, setpoint_kv, duration_h):
+    def start_ac_sweep(self, channels=None, freq_hz=None, return_to_zero=False):
+        self.started = "ac_sweep"
+
+    def start_drift(self, setpoint_kv, duration_h, ac_channels=None):
         self.started = ("drift", setpoint_kv, duration_h)
 
     def abort(self):
         self.aborted = True
+
+    def on_window(self, payload):
+        pass
 
 
 @pytest.fixture
@@ -141,12 +153,13 @@ class TestProfileForcingAndRestore:
 
     def test_starting_a_run_forces_cal_profile(self, win):
         self._start_a_run(win)
-        assert win.beamline.active_profile == CAL_PROFILE
-        print("[OK] starting a run forces CAL_PROFILE")
+        # Default mode is DC sweep → uses CAL_SWEEP_PROFILE ("AMP_PAIR")
+        assert win.beamline.active_profile == CAL_SWEEP_PROFILE
+        print("[OK] starting a run forces CAL_SWEEP_PROFILE")
 
     def test_ending_a_run_restores_the_prior_profile(self, win):
         self._start_a_run(win)
-        assert win.beamline.active_profile == CAL_PROFILE
+        assert win.beamline.active_profile == CAL_SWEEP_PROFILE
 
         win.calibration_tab._on_finished("fake.csv")
         assert win.beamline.active_profile == "FULL"

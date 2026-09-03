@@ -245,7 +245,7 @@ def reconstruct(currents: dict, edges_mm: dict, sigma_mm: float,
     est = BeamEstimate()
 
     est.bad_slits = [j for j in ("X+", "X-", "Y+", "Y-")
-                    if not _usable(currents.get(j))]
+                    if not _usable(currents.get(j))]  # type: ignore[arg-type]
     if est.bad_slits:
         est.reason = "no usable signal on " + ", ".join(est.bad_slits)
         return est
@@ -282,7 +282,7 @@ def overscan_flags(currents: dict) -> dict:
     noise floor is one it is not.  That is a direct qualitative read on
     overscan without needing to know the sweep amplitude.
     """
-    return {slit: _usable(currents.get(slit))
+    return {slit: _usable(currents.get(slit))  # type: ignore[arg-type]
             for slit in ("X+", "X-", "Y+", "Y-")}
 
 

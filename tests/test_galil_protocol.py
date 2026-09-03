@@ -13,9 +13,8 @@ from collections import deque
 
 import pytest
 
-from rbl.hardware.galil_driver import GalilController, GalilError
 from rbl.config import hardware_config as SC
-
+from rbl.hardware.galil_driver import GalilController, GalilError
 
 # ── Fake socket ──────────────────────────────────────────────────────────────
 

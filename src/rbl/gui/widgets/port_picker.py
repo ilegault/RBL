@@ -53,7 +53,10 @@ class PortScanWorker(QThread):
         found = {}
         try:
             from rbl.hardware.serial_transport import (
-                candidates_for, discover, load_saved_ports, save_ports,
+                candidates_for,
+                discover,
+                load_saved_ports,
+                save_ports,
             )
             found = discover(candidates=candidates_for(self._keys),
                              saved=load_saved_ports())

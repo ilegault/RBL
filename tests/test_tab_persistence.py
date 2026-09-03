@@ -2,15 +2,15 @@
 Tests that verify background polling threads remain active regardless of which
 tab is visible. These tests mock all hardware and avoid requiring a display.
 """
-import time
 import threading
-import pytest
+import time
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+from rbl.hardware.current_monitor import RollingBuffer
 from rbl.hardware.galil_driver import GalilController
 from rbl.hardware.labjack_driver import LabJackT7
-from rbl.hardware.current_monitor import RollingBuffer
-
 
 # ── GalilPollWorker isolation test (no Qt needed) ───────────────────────────
 

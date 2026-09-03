@@ -17,9 +17,9 @@ This widget breaks the loop: sizeHint and minimumSizeHint are constants, the
 frame is scaled at PAINT time into whatever rectangle the layout hands over,
 and the widget therefore exerts no pressure on the layout at all.
 """
-from PySide6.QtCore import Qt, QSize, QRect, QPoint, Signal
-from PySide6.QtGui import QImage, QPainter, QPen, QColor
-from PySide6.QtWidgets import QWidget, QSizePolicy
+from PySide6.QtCore import QPoint, QRect, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QImage, QPainter, QPen
+from PySide6.QtWidgets import QSizePolicy, QWidget
 
 
 class VideoView(QWidget):
@@ -160,6 +160,7 @@ class VideoView(QWidget):
 if __name__ == "__main__":
     import gc
     import sys
+
     from PySide6.QtWidgets import QApplication
 
     app = QApplication(sys.argv)

@@ -43,7 +43,6 @@ import sys
 
 from PySide6.QtCore import QThread, Signal
 
-
 # ---- ffmpeg discovery ------------------------------------------------------
 
 def find_ffmpeg() -> "str | None":

@@ -4,7 +4,10 @@ whether a channel's combined peak voltage is safe to apply. No Qt required:
 this is exactly the point of having moved it out of funcgen_tab.py.
 """
 from rbl.hardware.funcgen_safety import (
-    channel_peak_volts, PEAK_MAX_VOLTS, PEAK_WARN_VOLTS, CHANNEL_ROLE,
+    CHANNEL_ROLE,
+    PEAK_MAX_VOLTS,
+    PEAK_WARN_VOLTS,
+    channel_peak_volts,
 )
 
 

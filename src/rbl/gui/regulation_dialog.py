@@ -15,7 +15,12 @@ software detection into a labelled data point in the trip history
 (rbl/services/trip_history.py).
 """
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QLabel, QRadioButton, QButtonGroup, QDialogButtonBox,
+    QButtonGroup,
+    QDialog,
+    QDialogButtonBox,
+    QLabel,
+    QRadioButton,
+    QVBoxLayout,
 )
 
 # The four front-panel fault LEDs (EEL5000.20.100 manual, front panel

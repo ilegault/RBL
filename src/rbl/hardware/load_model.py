@@ -132,7 +132,7 @@ def capacitance_from_charge(current_ma, dt_s: float, baseline_ma: float,
         return float("nan")
     q_coulombs = np.trapezoid(x * 1e-3, dx=dt_s)
     delta_v_v = abs(delta_v_kv) * 1000.0
-    return abs(q_coulombs / delta_v_v) * 1e12
+    return abs(q_coulombs / delta_v_v) * 1e12  # type: ignore[operator]
 
 
 def envelope_walls(load_pf: float, trip_ma: float, shape: str,

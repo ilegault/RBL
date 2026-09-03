@@ -9,12 +9,15 @@ Every test that exercises the sentinel asserts this explicitly.
 """
 import pytest
 
-from rbl.hardware.vgc083_driver import (
-    Vgc083, VgcReading, VgcProtocolError, VgcTimeoutError,
-    _parse_reading, _SENTINEL,
-)
 from rbl.hardware.serial_transport import SerialTimeout
-
+from rbl.hardware.vgc083_driver import (
+    _SENTINEL,
+    Vgc083,
+    VgcProtocolError,
+    VgcReading,
+    VgcTimeoutError,
+    _parse_reading,
+)
 
 # ---------------------------------------------------------------------------
 # FakeTransport

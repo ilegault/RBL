@@ -17,7 +17,6 @@ import pytest
 
 from rbl.services.csv_log_writer import CsvLogWriter, flatten
 
-
 # ---------------------------------------------------------------------------
 # flatten() — pure helper
 # ---------------------------------------------------------------------------

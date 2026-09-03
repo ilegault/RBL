@@ -45,8 +45,8 @@ class TestValueTile:
         assert tile.lbl_value.text() == "—"
 
     def test_stale_changes_style(self, qapp):
-        from rbl.gui.widgets.mini import ValueTile
         from rbl.gui import theme
+        from rbl.gui.widgets.mini import ValueTile
         tile = ValueTile("X+", "mm")
         tile.set(1.0, stale=True)
         assert theme.MUTED in tile.lbl_value.styleSheet()
@@ -97,15 +97,15 @@ class TestMiniBar:
         assert bar.lbl_value.text() == "1.235 mm"
 
     def test_stale_mutes_the_bar_colour(self, qapp):
-        from rbl.gui.widgets.mini import MiniBar
         from rbl.gui import theme
+        from rbl.gui.widgets.mini import MiniBar
         bar = MiniBar("Amp A1", 0.0, 10.0)
         bar.set(5.0, stale=True)
         assert bar.track._color == theme.MUTED
 
     def test_role_overrides_the_bar_colour(self, qapp):
-        from rbl.gui.widgets.mini import MiniBar
         from rbl.gui import theme
+        from rbl.gui.widgets.mini import MiniBar
         bar = MiniBar("Amp A1", 0.0, 10.0)
         bar.set(5.0, role=theme.WARN)
         assert bar.track._color == theme.WARN

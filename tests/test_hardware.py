@@ -1,17 +1,21 @@
 """Tests for rbl.hardware — mocked drivers, no physical hardware required."""
-import pytest
 import socket
 import threading
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, PropertyMock, patch
 
+import pytest
+
+from rbl.config.hardware_config import (
+    AXIS_LETTERS,
+    AXIS_NAMES,
+    DEFAULT_ACCEL_COUNTS_PER_SEC2,
+    DEFAULT_SPEED_COUNTS_PER_SEC,
+    LABJACK_CHANNEL_MAP,
+    counts_to_mm,
+    mm_to_counts,
+)
 from rbl.hardware.galil_driver import GalilController, GalilError
 from rbl.hardware.labjack_driver import LabJackT7
-from rbl.config.hardware_config import (
-    AXIS_LETTERS, AXIS_NAMES, LABJACK_CHANNEL_MAP,
-    counts_to_mm, mm_to_counts,
-    DEFAULT_SPEED_COUNTS_PER_SEC, DEFAULT_ACCEL_COUNTS_PER_SEC2,
-)
-
 
 # ── GalilController (no hardware — socket mocked) ────────────────────────────
 

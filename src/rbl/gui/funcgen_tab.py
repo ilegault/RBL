@@ -14,27 +14,39 @@ Safety rules enforced here:
 """
 import logging
 
-log = logging.getLogger(__name__)
-
-from PySide6.QtCore import QTimer, Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout,
-    QGroupBox, QLabel, QPushButton,
-    QLineEdit, QCheckBox, QMessageBox,
     QApplication,
+    QCheckBox,
+    QFormLayout,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
 )
 
-from rbl.hardware.funcgen_driver import DG1022Z, discover, MAX_GEN_VOLTS, MAX_AMP_VPP
-from rbl.hardware.funcgen_safety import (
-    channel_peak_volts, PEAK_MAX_VOLTS, PEAK_WARN_VOLTS, _AMP_GAIN, CHANNEL_ROLE,
-)
-from rbl.config.persistence import load_config as _load_config, save_config as _save_config
-from rbl.state.setpoints import START_PHASE_DEFAULTS, AXIS_CHANNELS
-from rbl.state.snapshots import ChannelParams
+from rbl.config.persistence import load_config as _load_config
+from rbl.config.persistence import save_config as _save_config
 from rbl.gui import theme
 from rbl.gui.widgets.command_console import LogPane
 from rbl.gui.widgets.inputs import NoScrollComboBox, QuietDoubleSpinBox, unit_row
+from rbl.hardware.funcgen_driver import DG1022Z, MAX_AMP_VPP, MAX_GEN_VOLTS, discover
+from rbl.hardware.funcgen_safety import (
+    _AMP_GAIN,
+    CHANNEL_ROLE,
+    PEAK_MAX_VOLTS,
+    PEAK_WARN_VOLTS,
+    channel_peak_volts,
+)
+from rbl.state.setpoints import AXIS_CHANNELS, START_PHASE_DEFAULTS
+from rbl.state.snapshots import ChannelParams
 
+log = logging.getLogger(__name__)
 
 # ─── Per-channel panel ────────────────────────────────────────────────────────
 

@@ -58,6 +58,7 @@ consumers can show a "paused" state rather than displaying stale numbers.
 """
 
 import time
+
 import numpy as np
 from PySide6.QtCore import QThread, Signal
 
@@ -69,10 +70,20 @@ except Exception:
     _LJM_AVAILABLE = False
 
 from rbl.config.labjack_stream_config import (
-    STREAM_PROFILES, STREAM_RANGE_VOLTS, STREAM_SETTLE_DISCARD_S,
-    AMP_CHANNELS, LOGAMP_CHANNELS, DEFAULT_PROFILE, window_samples,
-    resolution_index, is_single_channel, channel_choices,
-    is_pair_channel, pair_choices, pair_scan_list, DEFAULT_AMP_PAIR,
+    AMP_CHANNELS,
+    DEFAULT_AMP_PAIR,
+    DEFAULT_PROFILE,
+    LOGAMP_CHANNELS,
+    STREAM_PROFILES,
+    STREAM_RANGE_VOLTS,
+    STREAM_SETTLE_DISCARD_S,
+    channel_choices,
+    is_pair_channel,
+    is_single_channel,
+    pair_choices,
+    pair_scan_list,
+    resolution_index,
+    window_samples,
 )
 
 

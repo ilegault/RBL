@@ -21,9 +21,9 @@ Pure math. No hardware, no Qt.
 import math
 
 from rbl.config import hardware_config as SC
+
 # Reuse the existing thread-safe rolling buffer. Do not reimplement it.
 from rbl.hardware.current_monitor import RollingBuffer  # noqa: F401
-
 
 # --- Conversion --------------------------------------------------------------
 

@@ -81,48 +81,83 @@ WHERE THE DEFAULTS LIVE
 """
 import math
 
-import numpy as np
 import matplotlib
-matplotlib.use("QtAgg")
-from matplotlib.figure import Figure
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+import numpy as np
 
+matplotlib.use("QtAgg")
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+from matplotlib.figure import Figure
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox, QLabel,
-    QPushButton, QSizePolicy, QTableWidget, QTableWidgetItem, QHeaderView,
-    QAbstractItemView, QComboBox, QCheckBox, QTabWidget, QMessageBox,
+    QAbstractItemView,
+    QCheckBox,
+    QComboBox,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QMessageBox,
+    QPushButton,
+    QSizePolicy,
+    QTableWidget,
+    QTableWidgetItem,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
 )
 
 from rbl.config.beam_species import DEFAULT_SPECIES, DEFAULT_SPECIES_ROW
 from rbl.config.calibration_config import (
-    CAL_LOAD_CAP_PF, CAL_AC_TRIP_MA, CAL_MAX_KV, ac_peak_current_ma,
+    CAL_AC_TRIP_MA,
+    CAL_LOAD_CAP_PF,
+    CAL_MAX_KV,
+    ac_peak_current_ma,
 )
 from rbl.config.hardware_config import AMP_LABELS
 from rbl.config.load_calibration_store import capacitance_pf_for
 from rbl.config.persistence import load_config, save_config
 from rbl.config.raster_defaults import (
-    FWHM_MM_DEFAULT, SAMPLE_WIDTH_X_MM, SAMPLE_HEIGHT_Y_MM,
-    OFFSET_X_MM_DEFAULT, OFFSET_Y_MM_DEFAULT, TURNAROUND_K_DEFAULT,
-    FREQ_X_HZ_DEFAULT, FREQ_Y_HZ_DEFAULT, AMP_MAX_BANDWIDTH_HZ,
+    AMP_MAX_BANDWIDTH_HZ,
+    FREQ_X_HZ_DEFAULT,
+    FREQ_Y_HZ_DEFAULT,
+    FWHM_MM_DEFAULT,
+    OFFSET_X_MM_DEFAULT,
+    OFFSET_Y_MM_DEFAULT,
+    SAMPLE_HEIGHT_Y_MM,
+    SAMPLE_WIDTH_X_MM,
+    TURNAROUND_K_DEFAULT,
 )
 from rbl.config.scope_config import SCOPE_TAIL_TOLERANCE as TAIL_TOLERANCE
 from rbl.config.steerer_geometry import (
-    DRIFT_TO_SAMPLE_CM, PLATE_GAP_CM, PLATE_LENGTH_CM, PLATE_RATING_KV,
-    DT_BORE_RADIUS_MM, PLATE_XY_SEPARATION_VERIFIED,
-    SLIT_MODEL, SLIT_PLANE_FRACTIONS_VERIFIED,
-    SLIT_X_PLANE_FRACTION, SLIT_Y_PLANE_FRACTION,
-    beamline_planes_mm, describe as steerer_description, drift_mm_for,
+    DRIFT_TO_SAMPLE_CM,
+    DT_BORE_RADIUS_MM,
+    PLATE_GAP_CM,
+    PLATE_LENGTH_CM,
+    PLATE_RATING_KV,
+    PLATE_XY_SEPARATION_VERIFIED,
+    SLIT_MODEL,
+    SLIT_PLANE_FRACTIONS_VERIFIED,
+    SLIT_X_PLANE_FRACTION,
+    SLIT_Y_PLANE_FRACTION,
+    beamline_planes_mm,
+    drift_mm_for,
     slit_plane_z_mm,
+)
+from rbl.config.steerer_geometry import (
+    describe as steerer_description,
 )
 from rbl.gui import theme
 from rbl.gui.widgets.inputs import QuietDoubleSpinBox
+from rbl.hardware import slit_raster_model as srm
 from rbl.hardware.load_model import envelope_walls
 from rbl.hardware.raster_model import (
-    required_drive, dwell_uniformity, displacement_mm,
+    displacement_mm,
+    dwell_uniformity,
+    required_drive,
 )
-from rbl.hardware import slit_raster_model as srm
-from rbl.hardware.raster_plan import steerer_limited_solve, envelope_status as _envelope_status
+from rbl.hardware.raster_plan import envelope_status as _envelope_status
+from rbl.hardware.raster_plan import steerer_limited_solve
 
 _SPECIES_CFG_KEY = "raster_species"
 
@@ -1253,8 +1288,10 @@ class RasterPlannerTab(QWidget):
                     amplitude_kv=amp_kv, offset_kv=off_kv,
                     mm_per_kv_at_slit=mpk,
                     blade_plus_mm=blade_plus, blade_minus_mm=blade_minus)
-                cmd_hi.append(e["sweep_max_mm"]); cmd_lo.append(e["sweep_min_mm"])
-                pass_hi.append(e["passed_max_mm"]); pass_lo.append(e["passed_min_mm"])
+                cmd_hi.append(e["sweep_max_mm"])
+                cmd_lo.append(e["sweep_min_mm"])
+                pass_hi.append(e["passed_max_mm"])
+                pass_lo.append(e["passed_min_mm"])
             cmd_hi, cmd_lo = np.array(cmd_hi), np.array(cmd_lo)
             pass_hi, pass_lo = np.array(pass_hi), np.array(pass_lo)
 

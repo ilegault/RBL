@@ -2,8 +2,9 @@
 Unit tests for rbl.config.hv_safety_config — no Qt, no hardware.
 """
 from rbl.config.hv_safety_config import (
-    HV_PRESSURE_LIMITS, HV_PRESSURE_ABSOLUTE_LOCKOUT_TORR,
     GAUGE_STALE_TIMEOUT_S,
+    HV_PRESSURE_ABSOLUTE_LOCKOUT_TORR,
+    HV_PRESSURE_LIMITS,
 )
 
 

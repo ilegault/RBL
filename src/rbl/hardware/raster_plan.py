@@ -33,10 +33,9 @@ import numpy as np
 
 from rbl.config.calibration_config import CAL_AC_TRIP_MA, CAL_MAX_KV
 from rbl.config.raster_defaults import AMP_MAX_BANDWIDTH_HZ
-from rbl.hardware.load_model import envelope_walls
-from rbl.hardware.raster_model import required_drive, dwell_uniformity
 from rbl.hardware import slit_raster_model as srm
-
+from rbl.hardware.load_model import envelope_walls
+from rbl.hardware.raster_model import dwell_uniformity, required_drive
 
 # ---------------------------------------------------------------------------
 # Steerer-limited solve
@@ -201,7 +200,7 @@ def envelope_status(
         if worst is None or ratio > worst[0]:
             worst = (ratio, label, kv, f, env_kv, walls)
 
-    ratio, label, kv, f, env_kv, walls = worst
+    ratio, label, kv, f, env_kv, walls = worst  # type: ignore[misc]
 
     exceeded_bandwidth = not math.isfinite(env_kv)
     in_envelope = (not exceeded_bandwidth) and (kv <= env_kv)
@@ -232,7 +231,7 @@ def envelope_status(
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    from rbl.config.steerer_geometry import PLATE_LENGTH_CM, PLATE_GAP_CM
+    from rbl.config.steerer_geometry import PLATE_GAP_CM, PLATE_LENGTH_CM
 
     # --- steerer_limited_solve ---
     sol = steerer_limited_solve(

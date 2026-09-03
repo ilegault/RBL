@@ -114,35 +114,57 @@ import time
 from datetime import datetime, timezone
 
 import matplotlib
-matplotlib.use("QtAgg")
-from matplotlib.figure import Figure
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 
+matplotlib.use("QtAgg")
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+from matplotlib.figure import Figure
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel,
-    QPushButton, QSizePolicy, QCheckBox,
+    QCheckBox,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
 )
 
-from rbl.services.profile_logger import ProfileLogger
 from rbl.config.scope_config import (
-    SCOPE_TAIL_TOLERANCE, SCOPE_WIDTH_LEVELS,
-    SCOPE_AVERAGE_SWEEPS, SCOPE_AXIS_LABELS, SCOPE_ENVELOPE_MS,
-    SCOPE_EXPECTED_PEAKS, SCOPE_MAX_PEAKS, SCOPE_POINTS, SCOPE_POINTS_ANCHOR,
-    SCOPE_POINTS_CHOICES, SCOPE_POLL_CHOICES, SCOPE_POLL_INTERVAL_S,
-    SCOPE_CONTINUOUS_DEFAULT, SCOPE_RECORD_POINTS, SCOPE_SMOOTH_WINDOW,
+    SCOPE_AVERAGE_SWEEPS,
+    SCOPE_AXIS_LABELS,
+    SCOPE_CONTINUOUS_DEFAULT,
+    SCOPE_ENVELOPE_MS,
+    SCOPE_EXPECTED_PEAKS,
+    SCOPE_MAX_PEAKS,
+    SCOPE_POINTS,
+    SCOPE_POINTS_ANCHOR,
+    SCOPE_POINTS_CHOICES,
+    SCOPE_POLL_CHOICES,
+    SCOPE_POLL_INTERVAL_S,
+    SCOPE_RECORD_POINTS,
+    SCOPE_SMOOTH_WINDOW,
+    SCOPE_TAIL_TOLERANCE,
+    SCOPE_WIDTH_LEVELS,
 )
-from rbl.hardware.profile_fwhm import (
-    LEVEL_FWTM, gaussian_width_ratio, level_label,
-)
-from rbl.hardware.bpm_calibration import seconds_to_mm
 from rbl.gui import theme
-from rbl.gui.widgets.connection_bar import StatusPill
-from rbl.gui.widgets.port_picker import PortPicker
-from rbl.gui.widgets.inputs import (
-    NoScrollComboBox, NoScrollSpinBox, QuietDoubleSpinBox, unit_row,
-)
 from rbl.gui.widgets.bpm_calibration_panel import BpmCalibrationPanel
+from rbl.gui.widgets.connection_bar import StatusPill
+from rbl.gui.widgets.inputs import (
+    NoScrollComboBox,
+    NoScrollSpinBox,
+    QuietDoubleSpinBox,
+    unit_row,
+)
+from rbl.gui.widgets.port_picker import PortPicker
+from rbl.hardware.bpm_calibration import seconds_to_mm
+from rbl.hardware.profile_fwhm import (
+    LEVEL_FWTM,
+    gaussian_width_ratio,
+    level_label,
+)
+from rbl.services.profile_logger import ProfileLogger
 
 log = logging.getLogger(__name__)
 
@@ -503,7 +525,7 @@ class ProfilerTab(QWidget):
         grid.addWidget(head, 0, 0)
         for col, axis in enumerate(axes):
             lbl = QLabel(axis)
-            lbl.setStyleSheet(f"font-weight: bold;")
+            lbl.setStyleSheet("font-weight: bold;")
             grid.addWidget(lbl, 0, col + 1)
         vs_g = QLabel("vs Gaussian")
         vs_g.setStyleSheet(f"color: {theme.NEUTRAL}; "

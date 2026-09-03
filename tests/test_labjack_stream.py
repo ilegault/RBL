@@ -11,12 +11,18 @@ import pytest
 
 from rbl.config import labjack_stream_config as CFG
 from rbl.config.labjack_stream_config import (
-    STREAM_PROFILES, AMP_CHANNELS, LOGAMP_CHANNELS,
-    window_samples, resolution_index, is_single_channel, channel_choices,
-    MAX_AGG_RATE_BY_RES, T7_AGGREGATE_CEILING_HZ, DEFAULT_SINGLE_CHANNEL,
+    AMP_CHANNELS,
+    DEFAULT_SINGLE_CHANNEL,
+    LOGAMP_CHANNELS,
+    MAX_AGG_RATE_BY_RES,
+    STREAM_PROFILES,
+    T7_AGGREGATE_CEILING_HZ,
+    channel_choices,
+    is_single_channel,
+    resolution_index,
+    window_samples,
 )
 from rbl.hardware.labjack_stream_worker import LabJackStreamWorker
-
 
 # ---------------------------------------------------------------------------
 # Config: profile inventory & invariants

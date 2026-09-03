@@ -21,7 +21,6 @@ from PySide6.QtWidgets import QApplication, QLabel
 
 from rbl.gui.widgets.drag_panel import DragPanel, PanelArea
 
-
 # ---------------------------------------------------------------------------
 # Module-scoped QApplication (offscreen; see conftest.py for QT_QPA_PLATFORM)
 # ---------------------------------------------------------------------------

@@ -72,7 +72,7 @@ import time
 # on a machine that is missing matplotlib or scipy.
 # ---------------------------------------------------------------------------
 try:
-    import serial                       # pyserial
+    import serial  # pyserial
     from serial.tools import list_ports
 except ImportError:                     # pragma: no cover
     serial = None

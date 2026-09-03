@@ -2,12 +2,14 @@
 Tests for CameraTab — constructs offscreen, two-view sync, crosshair.
 """
 import os
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
+
 pytest.importorskip("PySide6.QtWidgets")
-from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import QObject, Signal
+from PySide6.QtWidgets import QApplication
 
 
 @pytest.fixture(scope="module")
@@ -21,6 +23,7 @@ class _StubCamera(QObject):
     error         = Signal(str)
     frame_ready   = Signal(object, float)
     preview_ready = Signal(object)
+    format_ready  = Signal(str)
 
     def is_open(self): return False
     def actual_size(self): return (0, 0)
@@ -41,6 +44,7 @@ class _StubRecorder(QObject):
     _record_fps      = 2
     _segment_seconds = 600
     _quality_label   = "Standard (CRF 18)"
+    _master_codec    = "MJPEG q98 (default)"
     _video_enabled   = True
 
     def __init__(self, camera):

@@ -17,9 +17,10 @@ import logging
 import time
 from collections import deque
 
+import matplotlib
+
 from rbl.services.vacuum_logger import VacuumLogger
 
-import matplotlib
 matplotlib.use("QtAgg")
 # The Figure/Canvas pair now lives inside LivePlotPanel; this module only
 # needs the backend selected before that widget is constructed.
@@ -27,19 +28,30 @@ matplotlib.use("QtAgg")
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QPushButton,
-    QTableWidget, QTableWidgetItem, QSizePolicy, QHeaderView,
-    QCheckBox, QScrollArea,
+    QCheckBox,
+    QGroupBox,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
 )
 
+from rbl.config.vacuum_config import (
+    GAUGE_DISPLAY_NAMES,
+    STALE_THRESHOLD_S,
+    UI_GOOD_VACUUM_TORR,
+)
 from rbl.gui import theme
 from rbl.gui.widgets.connection_bar import StatusPill
 from rbl.gui.widgets.inputs import NoScrollSpinBox
-from rbl.gui.widgets.port_picker import PortPicker, PortScanWorker
 from rbl.gui.widgets.live_plot import LivePlotPanel
-from rbl.config.vacuum_config import (
-    GAUGE_DISPLAY_NAMES, UI_GOOD_VACUUM_TORR, STALE_THRESHOLD_S,
-)
+from rbl.gui.widgets.port_picker import PortPicker, PortScanWorker
 
 log = logging.getLogger(__name__)
 

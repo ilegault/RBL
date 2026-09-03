@@ -24,9 +24,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtWidgets import QApplication, QMessageBox
-from PySide6.QtCore import Qt, QEvent, QObject
+from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtGui import QKeyEvent
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from tests.payloads import LabJackFeed, window_payload
 
@@ -94,7 +94,7 @@ class TestOneWindowReachesBothTabs:
 
         _, kv = win.amp_tab.buffers["AIN13"].latest()
         assert abs(kv - 3.0) < 1e-9
-        assert "3.000 kV" in win.amp_tab.lbl_kv["X+"].text()
+        assert "3.000 kV" in win.amp_tab.lbl_meas["X+"].text()
 
     def test_neither_tab_sees_the_other_half(self, win, qapp):
         win.beamline.ingest_labjack_window(
@@ -435,6 +435,7 @@ class TestHomingWorker:
 
     def _mock_galil(self, home_switch=False):
         from unittest.mock import MagicMock
+
         from rbl.hardware.galil_driver import GalilController
         g = MagicMock(spec=GalilController)
         g.get_switch_states.return_value = {
@@ -486,9 +487,9 @@ class TestHomingWorker:
         assert results and results[0][0] is False
 
     def test_restores_default_speed_after_homing(self, qapp, monkeypatch):
+        import rbl.config.hardware_config as SC
         from rbl.hardware import galil_workers
         from rbl.hardware.galil_workers import HomingWorker
-        import rbl.config.hardware_config as SC
         monkeypatch.setattr(galil_workers.time, "sleep", lambda *a, **k: None)
         g = self._mock_galil(home_switch=False)
         hw = HomingWorker(g, "A")
@@ -500,8 +501,9 @@ class TestHomingWorker:
 class TestGalilPollWorkerErrorHandling:
     def test_poll_worker_emits_error_and_stops_on_exception(self, qapp):
         from unittest.mock import MagicMock
-        from rbl.hardware.galil_workers import GalilPollWorker
+
         from rbl.hardware.galil_driver import GalilController
+        from rbl.hardware.galil_workers import GalilPollWorker
 
         g = MagicMock(spec=GalilController)
         g.connected = True

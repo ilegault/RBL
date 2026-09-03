@@ -27,8 +27,8 @@ comments stay with the numbers, not the arithmetic — the same split as
 `funcgen_safety.py` importing `MAX_GEN_VOLTS` from `funcgen_driver`.
 """
 from rbl.config.hv_safety_config import (
-    HV_PRESSURE_LIMITS,
     HV_PRESSURE_ABSOLUTE_LOCKOUT_TORR,
+    HV_PRESSURE_LIMITS,
 )
 
 

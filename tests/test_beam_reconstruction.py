@@ -14,12 +14,11 @@ from rbl.hardware.beam_reconstruction import (
     NOISE_FLOOR_A,
     _gauss_tail,
     _raster_tail,
+    overscan_flags,
+    reconstruct,
     solve_axis_centre,
     solve_axis_interval,
-    reconstruct,
-    overscan_flags,
 )
-
 
 EDGES = {"X+": 1.5, "X-": -1.5, "Y+": 5.0, "Y-": -5.0}
 GOOD  = {"X+": 1e-6, "X-": 1e-6, "Y+": 1e-6, "Y-": 1e-6}

@@ -18,8 +18,11 @@ import math
 import pytest
 
 from rbl.config.steerer_geometry import (
-    DRIFT_TO_SAMPLE_CM, PLATE_GAP_CM, PLATE_LENGTH_CM,
-    drift_mm_for, slit_plane_z_mm,
+    DRIFT_TO_SAMPLE_CM,
+    PLATE_GAP_CM,
+    PLATE_LENGTH_CM,
+    drift_mm_for,
+    slit_plane_z_mm,
 )
 from rbl.hardware import slit_raster_model as srm
 

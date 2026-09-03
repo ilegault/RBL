@@ -73,7 +73,7 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
-from rbl.hardware.serial_transport import SerialTransport, SerialTimeout
+from rbl.hardware.serial_transport import SerialTimeout, SerialTransport
 
 log = logging.getLogger(__name__)
 

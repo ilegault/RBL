@@ -15,13 +15,13 @@ controls onto the simpler log-amp plot. Each tab builds its own nav row and
 wires it to this panel's `zoom_in()` / `zoom_out()` / `jump_to_live()` and
 `navigation_changed` / `zoom_changed` signals.
 """
-from PySide6.QtCore import QObject, Qt, QTimer, Signal
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QSlider, QSizePolicy
-
 import matplotlib
+from PySide6.QtCore import QObject, Qt, QTimer, Signal
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QSlider
+
 matplotlib.use("QtAgg")
-from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+from matplotlib.figure import Figure
 
 
 class LivePlotPanel(QObject):

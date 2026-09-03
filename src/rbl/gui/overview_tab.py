@@ -43,29 +43,40 @@ can show a stale value or silently overwrite what the other has typed.
 """
 import math
 
-from PySide6.QtCore import QTimer, Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel,
-    QPushButton, QMessageBox, QCheckBox, QSizePolicy,
+    QCheckBox,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QMessageBox,
+    QPushButton,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
 )
 
 from rbl.config import hardware_config as SC
 from rbl.config.vacuum_config import GAUGE_DISPLAY_NAMES, UI_GOOD_VACUUM_TORR
-from rbl.hardware.amp_monitor import pair_correlation
-from rbl.hardware.current_monitor import format_current
-from rbl.hardware.funcgen_safety import (
-    CHANNEL_ROLE, peak_status, PEAK_WARN_VOLTS, PEAK_MAX_VOLTS,
-)
 from rbl.gui import theme
 from rbl.gui.widgets.axis_drive import AxisDriveControl
 from rbl.gui.widgets.beam_indicator import BeamPositionIndicator
 from rbl.gui.widgets.drag_panel import DragPanel, PanelArea
-from rbl.gui.widgets.recording_panel import RecordingPanel
 from rbl.gui.widgets.mini import MiniBar
+from rbl.gui.widgets.recording_panel import RecordingPanel
 from rbl.gui.widgets.slit_control import SlitControl
+from rbl.hardware.amp_monitor import pair_correlation
+from rbl.hardware.current_monitor import format_current
+from rbl.hardware.funcgen_safety import (
+    CHANNEL_ROLE,
+    PEAK_MAX_VOLTS,
+    PEAK_WARN_VOLTS,
+    peak_status,
+)
 from rbl.state.beamline import Beamline
 from rbl.state.setpoints import AXIS_CHANNELS, AXIS_GENERATOR
-from rbl.state.snapshots import MotorState, LogAmpState, AmpState, FuncGenState, ScopeState
+from rbl.state.snapshots import AmpState, FuncGenState, LogAmpState, MotorState, ScopeState
 
 
 def _format_span(seconds: float) -> str:
@@ -928,7 +939,7 @@ class OverviewTab(QWidget):
     def _redraw_hv_interlock(self):
         payload = self._hv_interlock
         if payload is None:
-            self.lbl_hv_interlock.setText("HV interlock: -")
+            self.lbl_hv_interlock.setText("HV interlock: —")
             self.lbl_hv_interlock.setStyleSheet(
                 theme.status_label(theme.NEUTRAL) + f"font-size: {theme.FS_LABEL}px;")
             return

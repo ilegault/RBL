@@ -27,15 +27,30 @@ import os
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QImage
 from PySide6.QtWidgets import (
-    QGroupBox, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QComboBox, QSpinBox, QCheckBox, QInputDialog, QSizePolicy,
+    QCheckBox,
+    QComboBox,
+    QGroupBox,
+    QHBoxLayout,
+    QInputDialog,
+    QLabel,
+    QPushButton,
+    QSizePolicy,
+    QSpinBox,
+    QVBoxLayout,
 )
 
 from rbl.config.recording_config import (
-    RES_PRESETS, PREVIEW_FPS_DEFAULT, RECORD_FPS_MIN, RECORD_FPS_MAX,
-    CSV_INTERVAL_MIN_S, CSV_INTERVAL_MAX_S,
-    SEGMENT_SECONDS_CHOICES, QUALITY_PRESETS, QUALITY_DEFAULT,
-    MASTER_CODECS, MASTER_CODEC_DEFAULT,
+    CSV_INTERVAL_MAX_S,
+    CSV_INTERVAL_MIN_S,
+    MASTER_CODEC_DEFAULT,
+    MASTER_CODECS,
+    PREVIEW_FPS_DEFAULT,
+    QUALITY_DEFAULT,
+    QUALITY_PRESETS,
+    RECORD_FPS_MAX,
+    RECORD_FPS_MIN,
+    RES_PRESETS,
+    SEGMENT_SECONDS_CHOICES,
 )
 from rbl.gui import theme
 from rbl.gui.widgets.video_view import VideoView

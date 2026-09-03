@@ -21,10 +21,12 @@ from rbl.config import load_calibration_store as store
 from rbl.config.calibration_config import CAL_LOAD_CAP_PF
 from rbl.config.hardware_config import AMP_LABELS
 from rbl.config.steerer_geometry import PLATE_RATING_KV
-from rbl.hardware import slit_raster_model as srm
 from rbl.gui.raster_planner_tab import (
-    MODE_SLIT, MODE_STEERER, RasterPlannerTab,
+    MODE_SLIT,
+    MODE_STEERER,
+    RasterPlannerTab,
 )
+from rbl.hardware import slit_raster_model as srm
 
 
 @pytest.fixture(scope="module")

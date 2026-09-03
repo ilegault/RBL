@@ -10,14 +10,14 @@ continue to work without any source change.  New code should import directly
 from rbl.snapshots.
 """
 from rbl.snapshots import (  # noqa: F401 — re-export
+    AmpChannelSnapshot,
+    AmpState,
     AxisSnapshot,
-    MotorState,
-    ChannelSnapshot,
     ChannelParams,
+    ChannelSnapshot,
     FuncGenState,
     LogAmpState,
-    AmpChannelSnapshot,
-    VacuumState,
+    MotorState,
     ScopeState,
-    AmpState,
+    VacuumState,
 )

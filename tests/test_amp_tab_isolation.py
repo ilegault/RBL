@@ -10,8 +10,8 @@ tab picked over itself. That is what these tests drive (see tests/payloads.py):
 the guarantee is unchanged, but it is now structural, since neither tab is
 handed the other's channels at all.
 """
-import os
 import math
+import os
 
 import pytest
 
@@ -75,19 +75,16 @@ class TestAmpTabIgnoresLogAmps:
         _, ma = amp.buffers["AIN12"].latest()    # X+ current
         assert abs(ma - 10.0) < 1e-9
 
-    def test_negative_rail_reads_as_magnitude(self, amp, feed):
-        """The trend buffer holds RMS kV, which is a magnitude.
+    def test_negative_rail_stores_signed_dc_kv(self, amp, feed):
+        """The trend buffer stores the signed window mean, not RMS magnitude.
 
-        The stream worker reports peak and RMS as magnitudes (peak is
-        max|sample| over the window), so a plate held at -3 kV trends at
-        +3.000 kV. The sign is not lost to the app — it is in the signed
-        per-sample waveform, which is what the scope view below 1 s and the
-        Overview's pair trace both draw, and it is those that answer "which
-        way is this plate driven?". The trend line answers "how hard?".
+        raw_v = mean(waveform) (from labjack_link.py), so a plate held at -3 kV
+        stores -3.0 kV. Sign is preserved because this is the DC level at the
+        monitor BNC, and the trend plot should show polarity.
         """
         feed.send(FULL_READING)
         _, kv = amp.buffers["AIN11"].latest()    # X- voltage, held at -3 V
-        assert abs(kv - 3.0) < 1e-9
+        assert abs(kv + 3.0) < 1e-9
 
     def test_starts_live(self, amp):
         assert amp.plot.is_live is True

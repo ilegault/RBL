@@ -5,7 +5,7 @@ import math
 
 import pytest
 
-from rbl.hardware.regulation import regulation_ratio, classify
+from rbl.hardware.regulation import classify, regulation_ratio
 
 
 class TestRegulationRatio:

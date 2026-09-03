@@ -8,8 +8,8 @@ serial number: enumerate at runtime via *IDN? and let the user assign A/B.
 Connection: USB-TMC via VISA (IVI/VISA driver already installed on the host).
 Resource strings: USB0::0x1AB1::0x0642::<SERIAL>::INSTR
 """
-import re
 import logging
+import re
 import time
 
 log = logging.getLogger(__name__)
@@ -23,7 +23,7 @@ except ImportError:
 # These constants are defined in rbl.config.funcgen_limits and re-exported here
 # so existing callers of `from rbl.hardware.funcgen_driver import MAX_GEN_VOLTS`
 # continue to work without change.
-from rbl.config.funcgen_limits import MAX_GEN_VOLTS, MAX_AMP_VPP
+from rbl.config.funcgen_limits import MAX_AMP_VPP, MAX_GEN_VOLTS  # noqa: E402
 
 # Verified by tools/probe_clock_scpi.py against DG1022Z firmware
 # 03.01.12. The plain :ROSCillator:SOURce and :SYSTem:CLKSource forms
@@ -306,10 +306,10 @@ class DG1022Z:
         raw = (apply_resp or "").strip().strip('"').strip()
 
         # Head is everything up to the first whitespace or comma.
-        head, sep, tail = "", "", ""
+        head, _sep, tail = "", "", ""
         for i, c in enumerate(raw):
             if c.isspace() or c == ",":
-                head, sep, tail = raw[:i], c, raw[i + 1:]
+                head, _sep, tail = raw[:i], c, raw[i + 1:]
                 break
         else:
             head = raw

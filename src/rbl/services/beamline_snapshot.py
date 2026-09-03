@@ -19,11 +19,15 @@ import dataclasses
 
 from PySide6.QtCore import QObject
 
-from rbl.state.beamline import Beamline
 from rbl.services.snapshot_json import (
-    amp_summary, slit_summary, funcgen_summary,
-    current_summary, pressure_summary, scope_summary,
+    amp_summary,
+    current_summary,
+    funcgen_summary,
+    pressure_summary,
+    scope_summary,
+    slit_summary,
 )
+from rbl.state.beamline import Beamline
 
 
 class BeamlineSnapshotProvider(QObject):

@@ -7,13 +7,16 @@ to Xgs600 and we assert the parsing outcomes.
 """
 import pytest
 
+from rbl.hardware.serial_transport import SerialTimeout
 from rbl.hardware.xgs600_driver import (
-    Xgs600, XgsChannel, XgsReading,
-    XgsProtocolError, XgsTimeoutError, XgsFieldError,
+    Xgs600,
+    XgsChannel,
+    XgsFieldError,
+    XgsProtocolError,
+    XgsReading,
+    XgsTimeoutError,
     _parse_pressure,
 )
-from rbl.hardware.serial_transport import SerialTimeout
-
 
 # ---------------------------------------------------------------------------
 # FakeTransport
@@ -116,7 +119,7 @@ class TestParsePressure:
         """Ensure no text state ever becomes 0.0."""
         for text in ("OFF", "UNDER", "NO CABLE", "OVER", "E01"):
             p, _ = _parse_pressure(text)
-            assert p is not 0.0
+            assert p != 0.0
             assert p is None
 
 

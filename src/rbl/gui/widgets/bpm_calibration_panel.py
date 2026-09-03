@@ -55,11 +55,14 @@ from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QGroupBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 
 from rbl.config.scope_config import BPM_FIDUCIAL_SPACING_MM, BPM_NAMES_DEFAULT
-from rbl.hardware.bpm_calibration import (
-    CAL_ACTIVE_KEY, CAL_STORE_KEY, calibration_entry, load_calibrations,
-)
 from rbl.gui import theme
 from rbl.gui.widgets.inputs import NoScrollComboBox, QuietDoubleSpinBox, unit_row
+from rbl.hardware.bpm_calibration import (
+    CAL_ACTIVE_KEY,
+    CAL_STORE_KEY,
+    calibration_entry,
+    load_calibrations,
+)
 
 log = logging.getLogger(__name__)
 

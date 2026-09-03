@@ -16,8 +16,12 @@ from PySide6.QtWidgets import QApplication
 
 from rbl.config.hardware_config import AMP_CHANNEL_MAP
 from rbl.services.dynamic_adjustment import (
-    DynamicAdjustmentTrial, TRIAL_PEAK_KV, TRIAL_FREQ_HZ, TRIAL_STREAM_S,
-    _find_edges, _average_edge_window,
+    TRIAL_FREQ_HZ,
+    TRIAL_PEAK_KV,
+    TRIAL_STREAM_S,
+    DynamicAdjustmentTrial,
+    _average_edge_window,
+    _find_edges,
 )
 
 

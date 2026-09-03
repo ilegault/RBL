@@ -5,36 +5,45 @@ Run: python -m rbl.main
 
 PySide6 front-end. Analysis has been split out to the rbl-analysis repo.
 """
-import sys
 import logging
+import sys
 
-from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QHBoxLayout, QLabel, QPushButton,
-    QVBoxLayout, QTabBar, QStackedWidget, QMessageBox, QScrollArea, QSplitter,
-)
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPalette
+from PySide6.QtWidgets import (
+    QApplication,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QSplitter,
+    QStackedWidget,
+    QTabBar,
+    QVBoxLayout,
+    QWidget,
+)
 
-from rbl.gui.motor_tab import MotorTab
-from rbl.gui.logamp_tab import CurrentTab
+from rbl import driver as ljm_driver
+from rbl.gui import theme
 from rbl.gui.amp_tab import AmpTab
-from rbl.gui.funcgen_tab import FuncGenTab
-from rbl.gui.overview_tab import OverviewTab
 from rbl.gui.calibration_tab import CalibrationTab
+from rbl.gui.camera_tab import CameraTab
+from rbl.gui.dynamic_adjustment_tab import DynamicAdjustmentTab
+from rbl.gui.funcgen_tab import FuncGenTab
 from rbl.gui.load_characterization_tab import LoadCharacterizationTab
-from rbl.gui.vacuum_tab import VacuumTab
+from rbl.gui.logamp_tab import CurrentTab
+from rbl.gui.motor_tab import MotorTab
+from rbl.gui.overview_tab import OverviewTab
 from rbl.gui.profiler_tab import ProfilerTab
 from rbl.gui.raster_planner_tab import RasterPlannerTab
-from rbl.gui.dynamic_adjustment_tab import DynamicAdjustmentTab
-from rbl.gui.camera_tab import CameraTab
-from rbl.gui import theme
+from rbl.gui.vacuum_tab import VacuumTab
 from rbl.hardware.camera_source import CameraSource
 from rbl.services.beamline_snapshot import BeamlineSnapshotProvider
-from rbl.util import best_effort
 from rbl.services.session_recorder import SessionRecorder
 from rbl.state.beamline import Beamline
-from rbl import driver as ljm_driver
-
+from rbl.util import best_effort
 
 # ─── Split-aware tab bar ──────────────────────────────────────────────────────
 

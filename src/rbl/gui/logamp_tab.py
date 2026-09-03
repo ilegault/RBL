@@ -19,21 +19,27 @@ Plot navigation (from TDS-T8 live_plot mechanism):
   - Buffer holds ~1 hour of history (BUFFER_CAPACITY = 36 000 @ 10 Hz).
 """
 import time
+
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel,
-    QMessageBox, QPushButton,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QMessageBox,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
 )
 
-from rbl.hardware.labjack_driver import LJM_AVAILABLE
-from rbl.hardware.current_monitor import format_current, RollingBuffer
 from rbl.config import hardware_config as SC
-from rbl.state.snapshots import LogAmpState
-from rbl.gui.widgets.connection_bar import LabJackPanel
-from rbl.gui.widgets.beam_indicator import BeamPositionIndicator
-from rbl.gui.widgets.live_plot import LivePlotPanel
 from rbl.gui import theme
-
+from rbl.gui.widgets.beam_indicator import BeamPositionIndicator
+from rbl.gui.widgets.connection_bar import LabJackPanel
+from rbl.gui.widgets.live_plot import LivePlotPanel
+from rbl.hardware.current_monitor import RollingBuffer, format_current
+from rbl.hardware.labjack_driver import LJM_AVAILABLE
+from rbl.state.snapshots import LogAmpState
 
 # ─── The tab widget ───────────────────────────────────────────────────────────
 
@@ -294,12 +300,12 @@ class CurrentTab(QWidget):
                 continue
 
             V = state.volts[slit]
-            I = state.currents.get(slit, float("nan"))
+            i_a = state.currents.get(slit, float("nan"))
             self.lbl_v[ain].setText(f"{V:6.3f} V")
             self.lbl_v[ain].setStyleSheet("color: #555; font-family: Consolas, 'Courier New', monospace;")
-            self.lbl_i[ain].setText(format_current(I))
+            self.lbl_i[ain].setText(format_current(i_a))
             self.lbl_i[ain].setStyleSheet(theme.status_label(theme.OK))
-            self.buffers[ain].append(state.t, I)
+            self.buffers[ain].append(state.t, i_a)
 
         self.beam_indicator.set_currents(dict(state.currents))
 

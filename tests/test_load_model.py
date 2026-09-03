@@ -6,10 +6,12 @@ import math
 import numpy as np
 import pytest
 
-from rbl.config.calibration_config import ac_shape_k, AC_DEFAULT_SHAPE
+from rbl.config.calibration_config import AC_DEFAULT_SHAPE, ac_shape_k
 from rbl.hardware.load_model import (
-    admittance_from_fundamentals, capacitance_from_charge, envelope_walls,
     _SHAPE_K,
+    admittance_from_fundamentals,
+    capacitance_from_charge,
+    envelope_walls,
 )
 
 

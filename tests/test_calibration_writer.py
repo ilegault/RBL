@@ -9,10 +9,13 @@ import subprocess
 
 import pytest
 
-from rbl.services.calibration_writer import (
-    CSV_COLUMNS, CalibrationWriter, config_snapshot, git_commit_hash,
-)
 from rbl.config.calibration_config import CAL_MAX_KV, LoadCondition
+from rbl.services.calibration_writer import (
+    CSV_COLUMNS,
+    CalibrationWriter,
+    config_snapshot,
+    git_commit_hash,
+)
 
 
 def _sample_row(i=0):

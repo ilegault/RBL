@@ -5,13 +5,15 @@ import math
 
 import pytest
 
-from rbl.hardware.raster_model import (
-    deflection_mrad, displacement_mm, required_differential_kv,
-    required_drive, dwell_uniformity,
-)
-
 # The installed steerer: NEC 2EA021441 (ES10 plates).
 from rbl.config.steerer_geometry import PLATE_GAP_CM, PLATE_LENGTH_CM
+from rbl.hardware.raster_model import (
+    deflection_mrad,
+    displacement_mm,
+    dwell_uniformity,
+    required_differential_kv,
+    required_drive,
+)
 
 L_CM, D_CM = PLATE_LENGTH_CM, PLATE_GAP_CM
 Q, E_EV, DRIFT_CM = 1, 30_000.0, 100.0

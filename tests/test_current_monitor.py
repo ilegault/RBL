@@ -1,15 +1,15 @@
 """Tests for rbl.hardware.current_monitor — pure math, no hardware."""
 import math
-import pytest
+
 import numpy as np
+import pytest
 
 from rbl.hardware.current_monitor import (
-    voltage_to_current,
-    format_current,
-    beam_centering,
     RollingBuffer,
+    beam_centering,
+    format_current,
+    voltage_to_current,
 )
-
 
 # ── voltage_to_current ────────────────────────────────────────────────────────
 

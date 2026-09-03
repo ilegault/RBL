@@ -25,17 +25,22 @@ Commands nothing. It edits a shared FuncGenSetpoints entry through its owner
 (signals out) and renders whatever readback it is handed — every path to a
 generator still goes through Beamline.
 """
-from PySide6.QtCore import Signal, Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QGroupBox, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel, QPushButton,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
     QSizePolicy,
+    QVBoxLayout,
 )
 
-from rbl.hardware.funcgen_driver import MAX_AMP_VPP
-from rbl.hardware.funcgen_safety import peak_status, _AMP_GAIN, PEAK_MAX_VOLTS
 from rbl.gui import theme
 from rbl.gui.widgets.inputs import QuietDoubleSpinBox, unit_row
 from rbl.gui.widgets.mini import VMiniBar
+from rbl.hardware.funcgen_driver import MAX_AMP_VPP
+from rbl.hardware.funcgen_safety import _AMP_GAIN, PEAK_MAX_VOLTS, peak_status
 from rbl.state.setpoints import AXIS_CHANNELS, AXIS_GENERATOR
 
 # Peak amplitude ceiling, in volts at the amplifier input. The generator's

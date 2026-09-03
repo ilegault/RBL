@@ -10,7 +10,11 @@ import pytest
 from rbl.config import hardware_config as SC
 from rbl.state.beamline import Beamline
 from rbl.state.snapshots import (
-    MotorState, LogAmpState, AmpState, FuncGenState, ChannelParams,
+    AmpState,
+    ChannelParams,
+    FuncGenState,
+    LogAmpState,
+    MotorState,
 )
 
 
@@ -29,6 +33,9 @@ def beamline():
     b = Beamline()
     b._hv_pressure_torr = 1e-6
     b._hv_pressure_at = time.monotonic()
+    # _recompute_hv_interlock returns "block" when no gauge is selected.
+    # Seed a fake gauge key so the background state matches the healthy pressure.
+    b._hv_interlock_gauge_keys = {"test_gauge"}
     return b
 
 

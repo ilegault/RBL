@@ -55,15 +55,20 @@ import numpy as np
 from PySide6.QtCore import QObject, QTimer, Signal
 
 from rbl.config.calibration_config import (
-    CAL_LOAD_CAP_PF, CAL_MAX_KV, ac_max_peak_kv,
+    CAL_LOAD_CAP_PF,
+    CAL_MAX_KV,
+    ac_max_peak_kv,
 )
 from rbl.config.hardware_config import (
-    AMP_CHANNEL_MAP, AMP_MAX_KV, CURRENT_MONITOR_MA_PER_VOLT, VOLTAGE_MONITOR_KV_PER_VOLT,
+    AMP_CHANNEL_MAP,
+    AMP_MAX_KV,
+    CURRENT_MONITOR_MA_PER_VOLT,
+    VOLTAGE_MONITOR_KV_PER_VOLT,
 )
 from rbl.config.load_calibration_store import save_measurement
 from rbl.hardware.ac_metrics import fundamental, phase_difference_deg
-from rbl.hardware.amp_monitor import monitor_to_kv, ma_unclamped
-from rbl.hardware.funcgen_safety import peak_status, _AMP_GAIN
+from rbl.hardware.amp_monitor import ma_unclamped, monitor_to_kv
+from rbl.hardware.funcgen_safety import _AMP_GAIN, peak_status
 from rbl.hardware.load_model import admittance_from_fundamentals, capacitance_from_charge
 from rbl.services.amp_drive import AmpDrive
 from rbl.services.calibration_writer import now_iso
@@ -448,7 +453,7 @@ class LoadCharacterizer(QObject):
         out_dir.mkdir(parents=True, exist_ok=True)
         path = out_dir / f"load_char_{self._mode.value}_{self._amp_label}_{time.strftime('%Y%m%dT%H%M%S')}.csv"
         fieldnames = sorted({k for row in self._csv_rows for k in row})
-        with open(path, "w", newline="") as f:
+        with open(path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows(self._csv_rows)
@@ -468,6 +473,7 @@ if __name__ == "__main__":
     import os
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtWidgets import QApplication
+
     from rbl.config.calibration_config import LoadCondition
 
     app = QApplication.instance() or QApplication([])

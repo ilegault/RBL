@@ -50,7 +50,7 @@ def load_all() -> dict:
     CAL_LOAD_CAP_PF exactly as if no measurement had ever been taken.
     """
     try:
-        with open(STORE_PATH) as f:
+        with open(STORE_PATH, encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return {}
@@ -73,7 +73,7 @@ def save_measurement(amp_label: str, c_pf: float, g_us: float,
     }
     try:
         STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with open(STORE_PATH, "w") as f:
+        with open(STORE_PATH, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
     except Exception:
         pass

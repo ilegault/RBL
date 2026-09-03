@@ -16,7 +16,7 @@ pytest.importorskip("PySide6.QtWidgets")
 from PySide6.QtWidgets import QApplication
 
 from rbl.state.beamline import Beamline
-from rbl.state.setpoints import FuncGenSetpoints, AXIS_CHANNELS
+from rbl.state.setpoints import AXIS_CHANNELS, FuncGenSetpoints
 
 
 @pytest.fixture(scope="module")

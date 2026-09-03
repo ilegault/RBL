@@ -32,7 +32,6 @@ from rbl.config import hardware_config as SC
 from rbl.state.snapshots import AmpState, LogAmpState
 from tests.payloads import LabJackFeed, window_payload
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

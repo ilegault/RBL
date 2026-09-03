@@ -18,7 +18,11 @@ from PySide6.QtWidgets import QApplication
 
 from rbl.config.calibration_config import LoadCondition
 from rbl.services.load_characterizer import (
-    LoadCharacterizer, GUI_REFRESH_HZ, MODE_C_FREQ_HZ, MODE_C_PEAK_KV, _State,
+    GUI_REFRESH_HZ,
+    MODE_C_FREQ_HZ,
+    MODE_C_PEAK_KV,
+    LoadCharacterizer,
+    _State,
 )
 
 
@@ -103,6 +107,7 @@ class TestModeA:
         v = lc._mode_a_amplitude_for(1000.0)
         # I = 2*pi*f*C*V -> should land near MODE_A_TARGET_MA at CAL_LOAD_CAP_PF.
         import math
+
         from rbl.config.calibration_config import CAL_LOAD_CAP_PF
         i_ma = 2 * math.pi * 1000.0 * (CAL_LOAD_CAP_PF * 1e-12) * (v * 1000.0) * 1e3
         assert i_ma == pytest.approx(4.0, rel=0.05)

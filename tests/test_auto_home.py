@@ -24,13 +24,16 @@ import pytest
 
 pytest.importorskip("PySide6.QtWidgets")
 from unittest.mock import MagicMock
+
 from PySide6.QtWidgets import QApplication
 
 from rbl.config import hardware_config as SC
 from rbl.hardware import galil_workers
 from rbl.hardware.galil_driver import GalilController
 from rbl.hardware.galil_workers import (
-    AutoHomeAllWorker, AxisHomeRoutine, HomingWorker,
+    AutoHomeAllWorker,
+    AxisHomeRoutine,
+    HomingWorker,
 )
 
 
@@ -348,8 +351,8 @@ class TestAutoHomeAllWorker:
 
 @pytest.fixture
 def tab(qapp):
-    from rbl.state.beamline import Beamline
     from rbl.gui.motor_tab import MotorTab
+    from rbl.state.beamline import Beamline
 
     beamline = Beamline()
     beamline.galil = _galil(moving=False)
@@ -362,8 +365,8 @@ def tab(qapp):
 
 class TestMotorTabAutoHome:
     def test_both_buttons_exist_and_follow_the_connection(self, qapp):
-        from rbl.state.beamline import Beamline
         from rbl.gui.motor_tab import MotorTab
+        from rbl.state.beamline import Beamline
 
         t = MotorTab(Beamline())
         assert not t.btn_auto_home_seq.isEnabled()   # nothing to home yet

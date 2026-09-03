@@ -181,7 +181,6 @@ class HvConditioner(QObject):
         self._dwell_timer.start(max(1, int(self._dwell_s * 1000)))
 
     def _on_dwell_complete(self) -> None:
-        ain_i = AMP_CHANNEL_MAP[self._amp_label]["current"]
         wave = np.concatenate(self._collect_window) if self._collect_window else np.array([])
         mean_ma = float(np.mean(wave)) * 10.0 if wave.size else 0.0   # raw monitor V -> mA
         peak_ma = float(np.max(np.abs(wave))) * 10.0 if wave.size else 0.0
@@ -261,6 +260,7 @@ if __name__ == "__main__":
     import os
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtWidgets import QApplication
+
     from rbl.services.ramp_engine import RampEngine
 
     app = QApplication.instance() or QApplication([])

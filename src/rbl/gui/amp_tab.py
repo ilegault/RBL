@@ -53,34 +53,49 @@ restarting the stream on every stray combo event.
 import math
 import time
 
-from PySide6.QtCore import Qt, QSize, QTimer, Signal
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel,
-    QPushButton, QMessageBox, QSizePolicy,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QMessageBox,
+    QPushButton,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
 )
 
-from rbl.hardware.labjack_driver import LJM_AVAILABLE
-from rbl.hardware.current_monitor import RollingBuffer
-from rbl.hardware.ac_metrics import fundamental
-from rbl.hardware.amp_monitor import (
-    monitor_to_kv, monitor_to_ma, voltage_status, current_status,
-)
-from rbl.hardware.waveform_ring import WaveformRing, decimate_minmax
-from rbl.hardware.funcgen_safety import CHANNEL_ROLE, _AMP_GAIN
-from rbl.state.snapshots import AmpState
 from rbl.config import hardware_config as SC
 from rbl.config.calibration_config import CAL_UNCERTAINTY_V
 from rbl.config.labjack_stream_config import (
-    STREAM_PROFILES, GUI_REFRESH_HZ, window_samples, resolution_index,
-    is_single_channel, DEFAULT_SINGLE_CHANNEL,
-    is_pair_channel, pair_choices, DEFAULT_AMP_PAIR,
+    DEFAULT_AMP_PAIR,
+    DEFAULT_SINGLE_CHANNEL,
+    GUI_REFRESH_HZ,
+    STREAM_PROFILES,
+    is_pair_channel,
+    is_single_channel,
+    pair_choices,
+    resolution_index,
+    window_samples,
 )
+from rbl.gui import theme
 from rbl.gui.widgets.connection_bar import LabJackPanel
 from rbl.gui.widgets.inputs import NoScrollComboBox
 from rbl.gui.widgets.live_plot import LivePlotPanel
-from rbl.gui import theme
-
+from rbl.hardware.ac_metrics import fundamental
+from rbl.hardware.amp_monitor import (
+    current_status,
+    monitor_to_kv,
+    monitor_to_ma,
+    voltage_status,
+)
+from rbl.hardware.current_monitor import RollingBuffer
+from rbl.hardware.funcgen_safety import _AMP_GAIN, CHANNEL_ROLE
+from rbl.hardware.labjack_driver import LJM_AVAILABLE
+from rbl.hardware.waveform_ring import WaveformRing, decimate_minmax
+from rbl.state.snapshots import AmpState
 
 # Status -> stylesheet color
 _STATUS_COLOR = {

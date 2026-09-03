@@ -7,7 +7,7 @@ import sys
 
 import pytest
 
-from rbl.services.video_transcoder import find_ffmpeg, TranscodeQueue
+from rbl.services.video_transcoder import TranscodeQueue, find_ffmpeg
 
 try:
     from PySide6.QtCore import Qt as _Qt

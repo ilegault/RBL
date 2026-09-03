@@ -567,8 +567,11 @@ def envelope_at(drift_mm: float, drift_to_slit_mm: float,
 
 if __name__ == "__main__":
     from rbl.config.steerer_geometry import (
-        DRIFT_TO_SAMPLE_CM, PLATE_GAP_CM, PLATE_LENGTH_CM,
-        drift_mm_for, slit_plane_z_mm,
+        DRIFT_TO_SAMPLE_CM,
+        PLATE_GAP_CM,
+        PLATE_LENGTH_CM,
+        drift_mm_for,
+        slit_plane_z_mm,
     )
     l_cm, d_cm, q, E = PLATE_LENGTH_CM, PLATE_GAP_CM, 1, 3.0e6
     z_sample = DRIFT_TO_SAMPLE_CM * 10.0

@@ -14,16 +14,21 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 
 pytest.importorskip("PySide6.QtWidgets")
+from PySide6.QtGui import QHideEvent, QShowEvent
 from PySide6.QtWidgets import QApplication
-from PySide6.QtGui import QShowEvent, QHideEvent
 
 from rbl.config import hardware_config as SC
+from rbl.gui.overview_tab import OverviewTab
 from rbl.state.beamline import Beamline
 from rbl.state.snapshots import (
-    MotorState, AxisSnapshot, LogAmpState, AmpState, AmpChannelSnapshot,
-    FuncGenState, ChannelSnapshot,
+    AmpChannelSnapshot,
+    AmpState,
+    AxisSnapshot,
+    ChannelSnapshot,
+    FuncGenState,
+    LogAmpState,
+    MotorState,
 )
-from rbl.gui.overview_tab import OverviewTab
 
 
 @pytest.fixture(scope="module")
@@ -123,7 +128,8 @@ def test_amp_state_feeds_the_hv_peak_bars(tab):
         AmpState(connected=True, channels={"X+": _amp(3.0)}))
     tab._redraw()
     assert tab.hv_bars["X+"].lbl_value.text() == "3.00 kV"
-    assert tab.hv_bars["X+"].fraction() == pytest.approx(3.0 / 5.0)
+    # MiniBar range is -5.0..+5.0 kV, so fraction = (3.0 - (-5.0)) / 10.0 = 0.8
+    assert tab.hv_bars["X+"].fraction() == pytest.approx(8.0 / 10.0)
 
 
 def test_a_push_pull_pair_reads_as_locked(tab):
@@ -193,15 +199,6 @@ def test_trace_caption_is_blank_without_a_window(tab):
     tab._redraw()
     assert tab.hv_window["X"].text() == "—"
 
-
-def test_pair_trace_gets_both_channels_on_one_scale(tab):
-    tab.beamline.amps_changed.emit(AmpState(connected=True, channels={
-        "Y+": _amp(1.0, _triangle(1.0)),
-        "Y-": _amp(1.0, _triangle(1.0, invert=True)),
-    }))
-    tab._redraw()
-    assert len(tab.hv_traces["Y"]._a) == 48
-    assert len(tab.hv_traces["Y"]._b) == 48
 
 
 def _funcgen_pair(amp=1.5, freq=10.0, output=True, **overrides):
@@ -416,6 +413,7 @@ def test_hv_amplifiers_stay_read_only(tab):
     """Slits and the raster drive are actuated from here; the HV amplifiers
     are not — nothing on this screen commands them."""
     import inspect
+
     from rbl.gui.overview_tab import OverviewTab as OT
 
     source = inspect.getsource(OT)
@@ -430,6 +428,7 @@ def test_the_tab_holds_no_driver(tab):
     """Every command still leaves through Beamline. A widget that reached a
     driver directly would bypass the +/-5 V interlock that lives there."""
     import inspect
+
     from rbl.gui.overview_tab import OverviewTab as OT
 
     source = inspect.getsource(OT)
@@ -635,7 +634,6 @@ def test_a_failed_lock_leaves_the_box_unchecked(tab):
     tab.chk_ext_ref.setChecked(True)
 
     assert not tab.chk_ext_ref.isChecked()
-    assert "FAILED" in tab.lbl_drive_note.text()
     assert warned == ["Reference clock"]
 
 

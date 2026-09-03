@@ -86,26 +86,47 @@ import numpy as np
 from PySide6.QtCore import QObject, QTimer, Signal
 
 from rbl.config.calibration_config import (
-    CAL_COLLECT_S, CAL_MAX_KV, CAL_PASSES, CAL_SETTLE_S,
-    CAL_AC_FREQ_HZ, CAL_AC_SETTLE_S, CAL_AC_COLLECT_S,
-    CAL_AC_TRIP_MA, CAL_LOAD_CAP_PF, ac_max_peak_kv, ac_peak_current_ma,
+    CAL_AC_COLLECT_S,
+    CAL_AC_FREQ_HZ,
+    CAL_AC_SETTLE_S,
+    CAL_AC_TRIP_MA,
+    CAL_COLLECT_S,
+    CAL_LOAD_CAP_PF,
+    CAL_MAX_KV,
+    CAL_PASSES,
+    CAL_SETTLE_S,
+    CAL_TRIP_BLANK_WINDOWS,
+    CAL_TRIP_CONSEC_WINDOWS,
+    CAL_TRIP_HARD_MA,
+    CAL_TRIP_MIN_DURATION_S,
+    CAL_ZERO_DWELL_S,
+    DRIFT_LOG_INTERVAL_S,
+    DRIFT_MAX_ATTENDED_H,
+    DRIFT_MAX_UNATTENDED_H,
+    LoadCondition,
+    ac_max_peak_kv,
+    ac_peak_current_ma,
     ac_shape_k,
-    CAL_TRIP_HARD_MA, CAL_TRIP_MIN_DURATION_S, CAL_TRIP_CONSEC_WINDOWS,
-    CAL_TRIP_BLANK_WINDOWS, CAL_ZERO_DWELL_S,
-    DRIFT_LOG_INTERVAL_S, DRIFT_MAX_ATTENDED_H, DRIFT_MAX_UNATTENDED_H,
-    LoadCondition, sweep_points, ac_sweep_points,
+    ac_sweep_points,
+    sweep_points,
 )
 from rbl.config.hardware_config import AMP_AIN_NAMES, AMP_CHANNEL_MAP, AMP_LABELS
 from rbl.config.labjack_stream_config import GUI_REFRESH_HZ
 from rbl.hardware.ac_metrics import ac_metrics
 from rbl.hardware.amp_monitor import (
-    monitor_to_kv, monitor_to_ma, ma_to_monitor, ma_unclamped,
+    ma_to_monitor,
+    ma_unclamped,
+    monitor_to_kv,
+    monitor_to_ma,
 )
 from rbl.hardware.funcgen_safety import _AMP_GAIN
-from rbl.hardware.regulation import regulation_ratio, classify
+from rbl.hardware.regulation import classify, regulation_ratio
 from rbl.services.amp_drive import AmpDrive
 from rbl.services.calibration_writer import (
-    config_snapshot, git_commit_hash, new_run_id, now_iso,
+    config_snapshot,
+    git_commit_hash,
+    new_run_id,
+    now_iso,
 )
 
 log = logging.getLogger(__name__)

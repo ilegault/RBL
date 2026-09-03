@@ -57,7 +57,7 @@ import os
 
 from PySide6.QtCore import QObject, Signal
 
-from rbl.config.recording_config import MASTER_CODECS, MASTER_CODEC_DEFAULT
+from rbl.config.recording_config import MASTER_CODEC_DEFAULT, MASTER_CODECS
 
 try:
     import cv2

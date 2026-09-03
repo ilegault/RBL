@@ -4,7 +4,10 @@ Unit tests for rbl.services.dynamic_adjustment_history — no Qt, no hardware.
 import math
 
 from rbl.services.dynamic_adjustment_history import (
-    append_trial, load_trials, trials_for, winner_for,
+    append_trial,
+    load_trials,
+    trials_for,
+    winner_for,
 )
 
 

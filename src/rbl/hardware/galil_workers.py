@@ -39,9 +39,8 @@ import time
 
 from PySide6.QtCore import QThread, Signal
 
-from rbl.hardware.galil_driver import GalilController
 from rbl.config import hardware_config as SC
-
+from rbl.hardware.galil_driver import GalilController
 
 # ─── Background poll thread ───────────────────────────────────────────────────
 

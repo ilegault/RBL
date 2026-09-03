@@ -49,8 +49,13 @@ from PySide6.QtCore import QObject, Signal
 
 from rbl.config.hardware_config import AMP_CHANNEL_MAP, AMP_MAX_KV
 from rbl.hardware.edge_metrics import (
-    overshoot_pct, settling_time_s, flat_top_creep_pct, rise_time_s,
-    peak_current_ma, current_tail_duration_s, figure_of_merit,
+    current_tail_duration_s,
+    figure_of_merit,
+    flat_top_creep_pct,
+    overshoot_pct,
+    peak_current_ma,
+    rise_time_s,
+    settling_time_s,
 )
 from rbl.services.amp_drive import AmpDrive
 

@@ -9,9 +9,9 @@ directly, with no widget involved, plus the pair-correlation maths that turns
 "are these two traces mirror images?" into a number.
 """
 import math
+from unittest.mock import MagicMock
 
 import pytest
-from unittest.mock import MagicMock
 
 from rbl.hardware.amp_monitor import pair_correlation
 from rbl.hardware.amp_trace import AmpTraceBuilder

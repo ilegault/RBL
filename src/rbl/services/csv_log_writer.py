@@ -30,7 +30,6 @@ import csv
 import math
 import os
 
-
 # ---- Public helpers --------------------------------------------------------
 
 def flatten(obj, prefix: str = "", out: dict | None = None) -> dict:

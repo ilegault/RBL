@@ -3,12 +3,17 @@ Tests for the RIGOL DG1022Z driver with pyvisa fully mocked, so discovery,
 SCPI command formatting, the MAX_GEN_VOLTS safety clamp, and state-readback
 parsing are verified without any real USB-TMC instrument attached.
 """
-import pytest
 from unittest.mock import MagicMock
+
+import pytest
 
 import rbl.hardware.funcgen_driver as fgd
 from rbl.hardware.funcgen_driver import (
-    discover, DG1022Z, MAX_GEN_VOLTS, MAX_AMP_VPP, CLOCK_SCPI,
+    CLOCK_SCPI,
+    DG1022Z,
+    MAX_AMP_VPP,
+    MAX_GEN_VOLTS,
+    discover,
 )
 
 

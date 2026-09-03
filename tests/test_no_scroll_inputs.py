@@ -23,11 +23,16 @@ pytest.importorskip("PySide6.QtWidgets")
 from PySide6.QtCore import QPoint, QPointF, Qt
 from PySide6.QtGui import QWheelEvent
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QDoubleSpinBox, QAbstractSpinBox,
+    QAbstractSpinBox,
+    QApplication,
+    QComboBox,
+    QDoubleSpinBox,
 )
 
 from rbl.gui.widgets.inputs import (
-    NoScrollComboBox, NoScrollSpinBox, QuietDoubleSpinBox,
+    NoScrollComboBox,
+    NoScrollSpinBox,
+    QuietDoubleSpinBox,
 )
 
 
@@ -171,8 +176,8 @@ class TestNoScrollSpinBox:
         assert not event.isAccepted()
 
     def test_arrow_keys_still_work(self, qapp):
-        from PySide6.QtGui import QKeyEvent
         from PySide6.QtCore import QEvent
+        from PySide6.QtGui import QKeyEvent
         spn = NoScrollSpinBox()
         spn.setRange(0, 10)
         spn.setValue(4)
@@ -205,13 +210,13 @@ class TestEveryDropdownInTheApp:
         assert not bad, [s.objectName() or type(s).__name__ for s in bad]
 
     def test_stepper_motors_tab(self, qapp):
-        from rbl.state.beamline import Beamline
         from rbl.gui.motor_tab import MotorTab
+        from rbl.state.beamline import Beamline
         self._assert_all_safe(MotorTab(Beamline()))
 
     def test_function_generators_tab(self, qapp):
-        from rbl.state.beamline import Beamline
         from rbl.gui.funcgen_tab import FuncGenTab
+        from rbl.state.beamline import Beamline
         self._assert_all_safe(FuncGenTab(Beamline()))
 
     def test_hv_amplifier_tab(self, qapp):
@@ -223,15 +228,15 @@ class TestEveryDropdownInTheApp:
         # acquisition dropdowns decide how hard the link is worked — a wheel
         # notch over any of them changes a measurement with nothing to say
         # why.
-        from rbl.state.beamline import Beamline
         from rbl.gui.profiler_tab import ProfilerTab
+        from rbl.state.beamline import Beamline
         self._assert_all_safe(ProfilerTab(Beamline()))
 
     def test_vacuum_tab(self, qapp):
         # The port dropdowns choose which physical instrument each half of
         # this screen is talking to.
-        from rbl.state.beamline import Beamline
         from rbl.gui.vacuum_tab import VacuumTab
+        from rbl.state.beamline import Beamline
         self._assert_all_safe(VacuumTab(Beamline()))
 
     def test_beam_position_indicator(self, qapp):
@@ -241,10 +246,10 @@ class TestEveryDropdownInTheApp:
     def test_every_numeric_box_is_quiet(self, qapp):
         """Named per screen so a failure says WHICH box, and asserting a real
         count so the check cannot pass by finding nothing."""
-        from rbl.state.beamline import Beamline
-        from rbl.gui.motor_tab import MotorTab
         from rbl.gui.funcgen_tab import FuncGenTab
+        from rbl.gui.motor_tab import MotorTab
         from rbl.gui.overview_tab import OverviewTab
+        from rbl.state.beamline import Beamline
 
         for screen in (MotorTab(Beamline()), FuncGenTab(Beamline()),
                        OverviewTab(Beamline())):
@@ -257,8 +262,8 @@ class TestEveryDropdownInTheApp:
         """The end-to-end version of the hazard: a target scrolled 0.1 mm on
         the way past looks exactly like a number somebody typed, and the next
         Move goes there."""
-        from rbl.state.beamline import Beamline
         from rbl.gui.overview_tab import OverviewTab
+        from rbl.state.beamline import Beamline
 
         # The tab must outlive the widget under test — dropping it takes the
         # C++ side of every child with it.
@@ -277,8 +282,8 @@ class TestEveryDropdownInTheApp:
 
     def test_unit_dropdowns_keep_their_options(self, qapp):
         """Swapping the class must not have changed what the boxes offer."""
-        from rbl.state.beamline import Beamline
         from rbl.gui.motor_tab import MotorTab
+        from rbl.state.beamline import Beamline
 
         panel = MotorTab(Beamline()).axes["A"]
         assert [panel.cbo_speed_unit.itemText(i) for i in range(2)] == \

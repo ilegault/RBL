@@ -20,8 +20,8 @@ VacuumState before emitting vacuum_changed.
 import logging
 import time
 
-from rbl.hardware.vacuum_worker import VacuumWorker
 from rbl.hardware.serial_transport import discover, load_saved_ports, save_ports
+from rbl.hardware.vacuum_worker import VacuumWorker
 from rbl.state.snapshots import VacuumState
 
 log = logging.getLogger(__name__)

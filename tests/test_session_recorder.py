@@ -5,7 +5,7 @@ import csv
 import json
 import os
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -31,11 +31,12 @@ def _make_recorder(tmp_path, snapshot_fn=None, qapp_=None):
     camera.actual_size.return_value = (0, 0)
     camera._thread = None
     # Make closed / error signals connectable
-    from PySide6.QtCore import Signal, QObject
+    from PySide6.QtCore import QObject, Signal
     class _Cam(QObject):
         closed = Signal()
         error  = Signal(str)
         frame_ready = Signal(object, float)
+        format_ready = Signal(str)
         def is_open(self): return False
         def actual_size(self): return (0, 0)
         def latest_frame(self): return None

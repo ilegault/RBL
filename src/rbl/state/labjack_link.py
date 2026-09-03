@@ -30,16 +30,21 @@ import numpy as np
 
 from rbl.config import hardware_config as SC
 from rbl.config.labjack_stream_config import (
-    DEFAULT_PROFILE, STREAM_PROFILES, DEFAULT_SINGLE_CHANNEL,
-    SINGLE_CHANNEL_CHOICES, is_single_channel,
-    DEFAULT_AMP_PAIR, is_pair_channel, pair_choices,
+    DEFAULT_AMP_PAIR,
+    DEFAULT_PROFILE,
+    DEFAULT_SINGLE_CHANNEL,
+    SINGLE_CHANNEL_CHOICES,
+    STREAM_PROFILES,
+    is_pair_channel,
+    is_single_channel,
+    pair_choices,
 )
+from rbl.hardware.amp_monitor import monitor_to_kv, monitor_to_ma
 from rbl.hardware.amp_trace import AmpTraceBuilder
 from rbl.hardware.current_monitor import voltage_to_current
-from rbl.hardware.amp_monitor import monitor_to_kv, monitor_to_ma
 from rbl.hardware.labjack_driver import LabJackT7
 from rbl.hardware.labjack_stream_worker import LabJackStreamWorker
-from rbl.state.snapshots import LogAmpState, AmpChannelSnapshot, AmpState
+from rbl.state.snapshots import AmpChannelSnapshot, AmpState, LogAmpState
 
 
 class LabJackLinkMixin:

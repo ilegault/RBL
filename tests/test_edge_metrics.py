@@ -7,8 +7,13 @@ import numpy as np
 import pytest
 
 from rbl.hardware.edge_metrics import (
-    overshoot_pct, settling_time_s, flat_top_creep_pct, rise_time_s,
-    peak_current_ma, current_tail_duration_s, figure_of_merit,
+    current_tail_duration_s,
+    figure_of_merit,
+    flat_top_creep_pct,
+    overshoot_pct,
+    peak_current_ma,
+    rise_time_s,
+    settling_time_s,
 )
 
 FS = 100_000.0

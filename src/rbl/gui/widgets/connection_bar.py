@@ -9,7 +9,11 @@ T7.
 """
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QLabel, QHBoxLayout, QGroupBox, QPushButton, QLineEdit,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
 )
 
 from rbl.gui import theme

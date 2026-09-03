@@ -19,15 +19,24 @@ This panel characterizes and optimizes WITHIN the achievable range; its
 "winner" is the best position tried, not a claim of correct compensation.
 """
 import matplotlib
-matplotlib.use("QtAgg")
-from matplotlib.figure import Figure
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 
+matplotlib.use("QtAgg")
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+from matplotlib.figure import Figure
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox, QLabel,
-    QPushButton, QLineEdit, QMessageBox, QTableWidget, QTableWidgetItem,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
     QSizePolicy,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
 )
 
 from rbl.config.hardware_config import AMP_LABELS
@@ -36,7 +45,9 @@ from rbl.gui.widgets.connection_bar import LabJackPanel
 from rbl.gui.widgets.inputs import NoScrollComboBox
 from rbl.services.dynamic_adjustment import DynamicAdjustmentTrial
 from rbl.services.dynamic_adjustment_history import (
-    append_trial, trials_for, winner_for,
+    append_trial,
+    trials_for,
+    winner_for,
 )
 
 _CAVEAT_TEXT = (

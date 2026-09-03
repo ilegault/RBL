@@ -27,17 +27,17 @@ import random
 import pytest
 
 from rbl.hardware.bpm_calibration import (
+    CAL_ACTIVE_KEY,
+    CAL_STORE_KEY,
     CalibrationError,
+    active_mm_per_second,
     analyse_fiducials,
     calibration_entry,
     load_calibrations,
-    active_mm_per_second,
     mm_per_second,
     refine_apex,
     seconds_to_mm,
     select_fiducial_peaks,
-    CAL_ACTIVE_KEY,
-    CAL_STORE_KEY,
 )
 
 N     = 2500

@@ -308,7 +308,7 @@ if __name__ == "__main__":
     drive.command_square("X+", 2.0, 500.0)
     sw = next(c for c in fake_a.calls if c[0] == "set_waveform")
     assert sw[2] == "Square", f"shape should be 'Square', got {sw[2]!r}"
-    print(f"[OK] command_square uses shape 'Square'")
+    print("[OK] command_square uses shape 'Square'")
 
     # command_dc_ramped / command_ac_amplitude_ramped delegate to an attached
     # RampEngine, in generator volts, without touching the hardware directly.

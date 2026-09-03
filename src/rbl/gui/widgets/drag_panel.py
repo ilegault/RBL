@@ -46,14 +46,18 @@ pixmap's size.  Keep content minimums constant (or at least bounded by a fixed
 small value) so the scroll area can always shrink a panel freely.
 """
 
-from PySide6.QtCore import Qt, QPoint, QRect
-from PySide6.QtGui import QPainter, QColor
+from PySide6.QtCore import QPoint, QRect, Qt
+from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QLabel, QSplitter, QSizePolicy, QScrollArea,
+    QLabel,
+    QScrollArea,
+    QSizePolicy,
+    QSplitter,
+    QVBoxLayout,
+    QWidget,
 )
 
 from rbl.gui import theme
-
 
 # ---------------------------------------------------------------------------
 # Drop indicator

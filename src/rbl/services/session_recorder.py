@@ -34,24 +34,34 @@ import os
 import shutil
 import sys
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 
 from PySide6.QtCore import (
-    QObject, QTimer, Signal, Qt,
+    QObject,
+    Qt,
+    QTimer,
+    Signal,
 )
 from PySide6.QtWidgets import QProgressDialog
 
 from rbl.config.recording_config import (
-    CSV_INTERVAL_DEFAULT_S, CSV_INTERVAL_MIN_S, CSV_INTERVAL_MAX_S,
-    RECORD_FPS_DEFAULT, SEGMENT_SECONDS_DEFAULT, SEGMENT_MAX_BYTES,
-    QUALITY_DEFAULT, QUALITY_PRESETS, DISK_WARN_BYTES, DISK_AUTOSTOP_BYTES,
+    CSV_INTERVAL_DEFAULT_S,
+    CSV_INTERVAL_MAX_S,
+    CSV_INTERVAL_MIN_S,
+    DISK_AUTOSTOP_BYTES,
+    DISK_WARN_BYTES,
     MASTER_CODEC_DEFAULT,
+    QUALITY_DEFAULT,
+    QUALITY_PRESETS,
+    RECORD_FPS_DEFAULT,
+    SEGMENT_MAX_BYTES,
+    SEGMENT_SECONDS_DEFAULT,
 )
 from rbl.hardware.camera_source import CameraSource
 from rbl.services.csv_log_writer import CsvLogWriter, flatten
-from rbl.services.video_recorder import VideoRecorder
-from rbl.services.video_transcoder import TranscodeQueue, find_ffmpeg, ffmpeg_version
 from rbl.services.snapshot_json import dump_json
+from rbl.services.video_recorder import VideoRecorder
+from rbl.services.video_transcoder import TranscodeQueue, ffmpeg_version, find_ffmpeg
 
 
 def _logs_dir() -> str:

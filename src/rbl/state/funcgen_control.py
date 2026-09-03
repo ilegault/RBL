@@ -23,10 +23,10 @@ command from a screen cannot take down the Qt event loop.
 """
 import time
 
-from rbl.hardware.funcgen_safety import channel_peak_volts, PEAK_MAX_VOLTS, CHANNEL_ROLE
+from rbl.hardware.funcgen_safety import CHANNEL_ROLE, PEAK_MAX_VOLTS, channel_peak_volts
 from rbl.hardware.ramp_engine import RampEngine
 from rbl.state.setpoints import FuncGenSetpoints
-from rbl.state.snapshots import ChannelSnapshot, ChannelParams, FuncGenState
+from rbl.state.snapshots import ChannelParams, ChannelSnapshot, FuncGenState
 
 # SCPI shape token get_state() reports back for each shape set_waveform()
 # sends — used to confirm a "ramped" set_channel() request isn't secretly

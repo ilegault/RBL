@@ -8,17 +8,21 @@ be able to disagree about where the beam is.
 """
 import math
 
-from PySide6.QtCore import Qt, QPointF, QRectF
-from PySide6.QtGui import QFont, QPainter, QColor, QPen, QBrush
+from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSizePolicy,
     QFormLayout,
+    QHBoxLayout,
+    QLabel,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
 )
 
-from rbl.hardware import beam_reconstruction as BR
-from rbl.hardware.current_monitor import beam_centering
 from rbl.gui import theme
 from rbl.gui.widgets.inputs import NoScrollComboBox, QuietDoubleSpinBox
+from rbl.hardware import beam_reconstruction as BR
+from rbl.hardware.current_monitor import beam_centering
 
 # Slit colours reused from the plot / readouts for a consistent palette.
 _SLIT_COLORS = theme.SLIT_COLORS
@@ -545,7 +549,7 @@ class BeamPositionIndicator(QWidget):
         fwhm = self._fwhm_s
         if math.isnan(fwhm):
             self.lbl_fwhm.setText("FWHM  —")
-            self.lbl_fwhm.setStyleSheet(f"color: #888;")
+            self.lbl_fwhm.setStyleSheet("color: #888;")
             self.lbl_fwhm_note.setText(
                 "Scope not connected — connect the TDS 2012 oscilloscope "
                 "on the Beam Profiler tab for automatic FWHM measurement.")

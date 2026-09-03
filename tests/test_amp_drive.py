@@ -6,13 +6,13 @@ Uses a FakeGen that records every call and returns "" from set_waveform
 (meaning no warning / no clamp was applied by the driver).
 """
 import math
+
 import pytest
 
-from rbl.services.amp_drive import AmpDrive
+from rbl.config.hardware_config import AMP_MAX_KV
 from rbl.hardware.funcgen_driver import MAX_AMP_VPP
 from rbl.hardware.funcgen_safety import _AMP_GAIN
-from rbl.config.hardware_config import AMP_MAX_KV
-
+from rbl.services.amp_drive import AmpDrive
 
 # ---------------------------------------------------------------------------
 # Helpers

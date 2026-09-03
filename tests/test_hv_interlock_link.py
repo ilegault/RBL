@@ -6,7 +6,7 @@ hv_interlock.interlock_status() checks against.
 import math
 
 from rbl.hardware.vgc083_driver import VgcReading
-from rbl.hardware.xgs600_driver import XgsReading, XgsChannel
+from rbl.hardware.xgs600_driver import XgsChannel, XgsReading
 from rbl.state.hv_interlock_link import chamber_pressure_torr
 from rbl.state.snapshots import VacuumState
 

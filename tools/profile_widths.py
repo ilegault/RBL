@@ -16,7 +16,9 @@ it actually is, which is the whole point of measuring three levels.
 
 The Gaussian fit at the end is only there as a comparison; scipy is optional.
 """
-import csv, math, sys
+import csv
+import math
+import sys
 
 import numpy as np
 

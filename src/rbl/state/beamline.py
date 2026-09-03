@@ -34,15 +34,14 @@ import atexit
 
 from PySide6.QtCore import QObject, Signal
 
-from rbl.util import best_effort
-
 from rbl.hardware import beam_reconstruction as BR
 from rbl.state.funcgen_control import FuncGenControlMixin
 from rbl.state.hv_interlock_link import HvInterlockLinkMixin
 from rbl.state.labjack_link import LabJackLinkMixin
 from rbl.state.motor_control import MotorControlMixin
-from rbl.state.vacuum_link import VacuumLinkMixin
 from rbl.state.scope_link import ScopeLinkMixin
+from rbl.state.vacuum_link import VacuumLinkMixin
+from rbl.util import best_effort
 
 
 class Beamline(LabJackLinkMixin, FuncGenControlMixin, MotorControlMixin, VacuumLinkMixin,

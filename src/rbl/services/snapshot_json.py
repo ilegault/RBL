@@ -57,10 +57,12 @@ from rbl.config import hardware_config as SC
 from rbl.config.calibration_config import CAL_UNCERTAINTY_V
 from rbl.hardware.ac_metrics import fundamental
 from rbl.hardware.amp_monitor import (
-    monitor_to_kv, monitor_to_ma, voltage_status, current_status,
+    current_status,
+    monitor_to_kv,
+    monitor_to_ma,
+    voltage_status,
 )
-from rbl.hardware.funcgen_safety import CHANNEL_ROLE, _AMP_GAIN
-
+from rbl.hardware.funcgen_safety import _AMP_GAIN, CHANNEL_ROLE
 
 # ---------------------------------------------------------------------------
 # What never reaches disk

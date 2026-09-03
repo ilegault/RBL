@@ -13,15 +13,15 @@ import random
 import pytest
 
 from rbl.hardware.profile_fwhm import (
-    FwhmError,
     MAX_PEAKS,
+    FwhmError,
     analyse_profile,
     best_fwhm,
     detect_clipping,
-    upper_envelope,
     find_peaks,
     fit_gaussians,
     moving_average,
+    upper_envelope,
 )
 
 N = 2500

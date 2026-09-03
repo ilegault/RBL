@@ -23,7 +23,10 @@ import pytest
 
 pytest.importorskip("PySide6.QtWidgets")
 from PySide6.QtWidgets import (
-    QApplication, QPushButton, QVBoxLayout, QWidget,
+    QApplication,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
 )
 
 from rbl.gui.widgets.inputs import QuietDoubleSpinBox, unit_row

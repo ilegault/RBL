@@ -19,7 +19,7 @@ def append_trial(record: dict, path: Path = None) -> None:
     path = path or DYNAMIC_ADJUSTMENT_HISTORY_PATH
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "a") as f:
+        with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, default=str) + "\n")
     except Exception:
         pass
@@ -30,7 +30,7 @@ def load_trials(path: Path = None) -> list:
     path = path or DYNAMIC_ADJUSTMENT_HISTORY_PATH
     records = []
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:

@@ -8,6 +8,7 @@ import struct
 
 import pytest
 
+from rbl.hardware.serial_transport import SerialTimeout
 from rbl.hardware.tds2012_driver import (
     Tds2012,
     TdsProtocolError,
@@ -16,8 +17,6 @@ from rbl.hardware.tds2012_driver import (
     _parse_preamble,
     samples_to_volts,
 )
-from rbl.hardware.serial_transport import SerialTimeout
-
 
 # ---------------------------------------------------------------------------
 # FakeTransport
@@ -394,6 +393,7 @@ class TestIdentifyIsQuiet:
 
     def test_identify_does_not_log_at_info(self, caplog):
         import logging
+
         from rbl.hardware.tds2012_driver import Tds2012
         with caplog.at_level(logging.INFO, logger="rbl.hardware.tds2012_driver"):
             Tds2012(self._FakeTransport()).identify()

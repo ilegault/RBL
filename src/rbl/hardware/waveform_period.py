@@ -42,7 +42,6 @@ import math
 
 import numpy as np
 
-
 # An autocorrelation peak below this is drift or noise finding itself, not a
 # waveform repeating. Deliberately low: a real drive monitored through a 1000:1
 # divider correlates near 1.0, so anything in between is a signal we would
@@ -275,7 +274,7 @@ if __name__ == "__main__":
     period = 64.0
     for phase in (0.0, 0.13, 0.5, 0.77):
         wave = _sine(1024, period, phase)
-        start, stop = cycle_slice(wave, period)
+        start, stop = cycle_slice(wave, period)  # type: ignore[misc]
         assert stop - start == 128
         assert start > 0 and wave[start] >= 0.0 > wave[start - 1]
         assert abs(wave[start]) < 0.15, (phase, wave[start])
@@ -283,7 +282,7 @@ if __name__ == "__main__":
     # Both members of a pair keep the reference's grid — that is the point.
     a = _triangle(1024, 64.0)
     b = -a
-    start, stop = cycle_slice(a, estimate_period_samples(a))
+    start, stop = cycle_slice(a, estimate_period_samples(a))  # type: ignore[misc]
     assert np.allclose(a[start:stop], -b[start:stop])
 
     assert cycle_slice(_sine(64, 200.0), float("nan")) is None

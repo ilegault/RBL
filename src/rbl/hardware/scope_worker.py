@@ -50,7 +50,7 @@ import logging
 import math
 import time
 
-from PySide6.QtCore import QThread, QMutex, QMutexLocker, Signal
+from PySide6.QtCore import QMutex, QMutexLocker, QThread, Signal
 
 from rbl.config.scope_config import (
     BPM_CAL_EXPECTED_PEAKS,
@@ -61,37 +61,46 @@ from rbl.config.scope_config import (
     BPM_CAL_TRIGGER_RULE,
     BPM_FIDUCIAL_SPACING_MM,
     SCOPE_AVERAGE_SWEEPS,
-    SCOPE_CONTINUOUS_DEFAULT,
     SCOPE_AXIS_LABELS,
     SCOPE_CHANNEL_DEFAULT,
+    SCOPE_CONTINUOUS_DEFAULT,
     SCOPE_ENVELOPE_MS,
     SCOPE_EXPECTED_PEAKS,
     SCOPE_FIT_MIN_R2,
+    SCOPE_LEVEL_NOISE_GUARD,
     SCOPE_PEAK_MIN_SEP_FRAC,
     SCOPE_PEAK_THRESHOLD,
     SCOPE_POINTS,
     SCOPE_POINTS_ANCHOR,
     SCOPE_POLARITY,
     SCOPE_POLL_INTERVAL_S,
-    SCOPE_RECORD_POINTS,
     SCOPE_RECONNECT_BACKOFF_S,
-    SCOPE_LEVEL_NOISE_GUARD,
+    SCOPE_RECORD_POINTS,
     SCOPE_SMOOTH_WINDOW,
     SCOPE_WAVEFORM_DOWNSAMPLE,
     SCOPE_WIDTH_LEVELS,
     TDS_BAUD_DEFAULT,
     TDS_TIMEOUT_S,
 )
-from rbl.hardware.serial_transport import SerialTransport
-from rbl.hardware.tds2012_driver import (
-    Tds2012, TdsProtocolError, TdsTimeoutError, samples_to_volts,
+from rbl.hardware.bpm_calibration import (
+    CalibrationError,
+    analyse_fiducials,
+    seconds_to_mm,
 )
 from rbl.hardware.profile_fwhm import (
-    FwhmError, analyse_profile, best_fwhm, fit_gaussians, level_label,
+    FwhmError,
+    analyse_profile,
+    best_fwhm,
+    fit_gaussians,
+    level_label,
     measure_width_levels,
 )
-from rbl.hardware.bpm_calibration import (
-    CalibrationError, analyse_fiducials, seconds_to_mm,
+from rbl.hardware.serial_transport import SerialTransport
+from rbl.hardware.tds2012_driver import (
+    Tds2012,
+    TdsProtocolError,
+    TdsTimeoutError,
+    samples_to_volts,
 )
 from rbl.snapshots import ScopeState
 

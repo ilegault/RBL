@@ -32,7 +32,7 @@ import logging
 
 from PySide6.QtCore import QObject, Signal
 
-from rbl.hardware.regulation import regulation_ratio, classify, DEFAULT_ARM_THRESHOLD_KV
+from rbl.hardware.regulation import DEFAULT_ARM_THRESHOLD_KV, classify, regulation_ratio
 
 log = logging.getLogger(__name__)
 

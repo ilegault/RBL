@@ -23,7 +23,7 @@ class WaveformRing:
     """
 
     def __init__(self, channels, keep_seconds: float, window_duration_s: float):
-        self._chunks = {ch: collections.deque() for ch in channels}
+        self._chunks: dict = {ch: collections.deque() for ch in channels}
         self._keep_seconds = keep_seconds
         self._window_duration_s = window_duration_s
         # Per-sample time step of the live stream (seconds), taken from the

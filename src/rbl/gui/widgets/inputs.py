@@ -56,7 +56,12 @@ the keyboardTracking fix above.
 """
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QComboBox, QDoubleSpinBox, QHBoxLayout, QLabel, QSpinBox, QWidget,
+    QComboBox,
+    QDoubleSpinBox,
+    QHBoxLayout,
+    QLabel,
+    QSpinBox,
+    QWidget,
 )
 
 

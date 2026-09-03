@@ -83,16 +83,21 @@ class TestSingleChannelMode:
         feed.send_payload(_single_payload("SINGLE_FAST", target, 2.0))
 
         # Target amp voltage readout is live (2 kV) and not the muted color.
-        assert "2.000 kV" in tab.lbl_kv["X-"].text()
-        assert "#bbb" not in tab.lbl_kv["X-"].styleSheet()
+        assert "2.000 kV" in tab.lbl_meas["X-"].text()
+        assert "#bbb" not in tab.lbl_meas["X-"].styleSheet()
 
         # A different amplifier's readout is muted (paused).
-        assert "#bbb" in tab.lbl_kv["X+"].styleSheet()
+        # _refresh_monitors overwrites _apply_paused_styling's #bbb with #999
+        # for channels where v_live is False.
+        assert "#999" in tab.lbl_meas["X+"].styleSheet()
 
     def test_current_target_waveform_follows_selection(self, tab, feed):
         # Target a CURRENT monitor and confirm the single-plot waveform snapshot
         # picks it up on the current axis.
         target = SC.AMP_CHANNEL_MAP["Y-"]["current"]   # AIN6
+        # Populate the combo first (on_profile_changed re-clears it on profile
+        # switch), then select AIN6, then re-apply the same profile with it.
+        tab.on_profile_changed("SINGLE_HIRES")
         idx = tab._single_combo.findData(target)
         tab._single_combo.setCurrentIndex(idx)
         tab.on_profile_changed("SINGLE_HIRES")
@@ -123,7 +128,7 @@ class TestSingleChannelMode:
         # Regression: FULL profile leaves every monitor un-muted.
         tab.on_profile_changed("FULL")
         for amp in SC.AMP_LABELS:
-            assert "#bbb" not in tab.lbl_kv[amp].styleSheet()
+            assert "#bbb" not in tab.lbl_meas[amp].styleSheet()
 
 
 class TestApplyAndSnapshot:

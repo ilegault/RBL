@@ -32,8 +32,8 @@ import math
 
 from rbl.config import hardware_config as SC
 from rbl.config.labjack_stream_config import GUI_REFRESH_HZ
+from rbl.hardware.waveform_period import cycle_slice, estimate_period_samples
 from rbl.hardware.waveform_ring import AlignedWaveHistory
-from rbl.hardware.waveform_period import estimate_period_samples, cycle_slice
 
 
 class AmpTraceBuilder:

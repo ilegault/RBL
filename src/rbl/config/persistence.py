@@ -13,7 +13,7 @@ CONFIG_PATH = FUNCGEN_CONFIG
 
 def load_config() -> dict:
     try:
-        with open(CONFIG_PATH) as f:
+        with open(CONFIG_PATH, encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return {}
@@ -22,7 +22,7 @@ def load_config() -> dict:
 def save_config(data: dict):
     try:
         CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with open(CONFIG_PATH, "w") as f:
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
     except Exception:
         pass

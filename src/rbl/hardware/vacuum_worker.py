@@ -33,15 +33,22 @@ import time
 from PySide6.QtCore import QThread, Signal
 
 from rbl.config.vacuum_config import (
-    POLL_INTERVAL_S, VGC_ACTIVE_CHANNELS, RECONNECT_BACKOFF_S,
-    XGS_BAUD_DEFAULT, VGC_BAUD_DEFAULT, VGC_BAUD_CANDIDATES,
+    POLL_INTERVAL_S,
+    RECONNECT_BACKOFF_S,
+    VGC_ACTIVE_CHANNELS,
+    VGC_BAUD_CANDIDATES,
+    VGC_BAUD_DEFAULT,
     XGS_BAUD_CANDIDATES,
+    XGS_BAUD_DEFAULT,
 )
 from rbl.hardware.serial_transport import SerialTransport
+from rbl.hardware.vgc083_driver import Vgc083, VgcProtocolError, VgcTimeoutError
 from rbl.hardware.xgs600_driver import (
-    Xgs600, XgsTimeoutError, XgsProtocolError, XgsFieldError,
+    Xgs600,
+    XgsFieldError,
+    XgsProtocolError,
+    XgsTimeoutError,
 )
-from rbl.hardware.vgc083_driver import Vgc083, VgcTimeoutError, VgcProtocolError
 from rbl.snapshots import VacuumState
 
 log = logging.getLogger(__name__)

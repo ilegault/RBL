@@ -201,8 +201,8 @@ def gaussian_fwhm_fit(volts: list[float], xincr: float = 1.0, *,
     Raises FwhmError on failure.
     """
     try:
-        from scipy.optimize import curve_fit
         import numpy as np
+        from scipy.optimize import curve_fit
     except ImportError as exc:
         raise FwhmError(
             "gaussian_fwhm_fit requires scipy and numpy; "
@@ -665,8 +665,8 @@ def fit_gaussians(result: dict, xincr: float) -> dict | None:
     mean_fwhm_seconds.
     """
     try:
-        from scipy.optimize import curve_fit
         import numpy as np
+        from scipy.optimize import curve_fit
     except ImportError:
         log.debug("profile_fwhm: scipy/numpy missing - skipping Gaussian fit")
         return None

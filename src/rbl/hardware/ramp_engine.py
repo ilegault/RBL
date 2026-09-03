@@ -106,11 +106,11 @@ class RampEngine(QObject):
         self._ramp_duration_s = ramp_duration_s
         self._load_pf_for_label = load_pf_for_label or (lambda label: CAL_LOAD_CAP_PF)
         self._plate_gain_for_label = plate_gain_for_label or (lambda label: 1.0)
-        self._round_trip_s = {}   # label -> measured seconds
+        self._round_trip_s: dict[str, float] = {}   # label -> measured seconds
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
         # label -> {"mode": "offset"|"amplitude", "target_v", "current_v", "step_v"}
-        self._ramps = {}
+        self._ramps: dict[str, dict] = {}
 
     # ------------------------------------------------------------------
     # Public state — Phase 6's regulation detector reads this to suspend
@@ -232,8 +232,8 @@ class RampEngine(QObject):
         finished = []
         worst_step_v = 0.0
         # Canonical order first (pair members adjacent), then anything else.
-        ordered = [l for l in _CHANNEL_ORDER if l in self._ramps]
-        ordered += [l for l in self._ramps if l not in _CHANNEL_ORDER]
+        ordered = [lbl for lbl in _CHANNEL_ORDER if lbl in self._ramps]
+        ordered += [lbl for lbl in self._ramps if lbl not in _CHANNEL_ORDER]
 
         for label in ordered:
             ramp = self._ramps[label]
@@ -328,7 +328,7 @@ if __name__ == "__main__":
     fmap = {"X+": (gen, 1), "X-": (gen, 2)}
     engine = RampEngine(fmap, ramp_duration_s=0.05)
 
-    finished_labels = []
+    finished_labels: list[str] = []
     engine.ramp_finished.connect(finished_labels.append)
 
     engine.retarget("X+", 3.0, mode="offset")

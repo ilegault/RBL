@@ -14,7 +14,6 @@ import threading
 
 import numpy as np
 
-
 # --- Conversion --------------------------------------------------------------
 
 def voltage_to_current(voltage: float, v_at_1nA: float, v_at_1mA: float) -> float:

@@ -13,13 +13,22 @@ import pytest
 
 from rbl.config import hardware_config as SC
 from rbl.services.snapshot_json import (
-    BULK_KEYS, sanitize, asdict_lean, dump_json, amp_summary, slit_summary,
+    BULK_KEYS,
+    amp_summary,
+    asdict_lean,
+    dump_json,
+    sanitize,
+    slit_summary,
 )
 from rbl.state.snapshots import (
-    AmpState, AmpChannelSnapshot, ChannelSnapshot, FuncGenState,
-    MotorState, AxisSnapshot, ScopeState,
+    AmpChannelSnapshot,
+    AmpState,
+    AxisSnapshot,
+    ChannelSnapshot,
+    FuncGenState,
+    MotorState,
+    ScopeState,
 )
-
 
 # --- helpers ---------------------------------------------------------------
 

@@ -19,8 +19,9 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-import pytest
 from unittest.mock import MagicMock
+
+import pytest
 
 pytest.importorskip("PySide6.QtWidgets")
 from PySide6.QtWidgets import QApplication, QMessageBox
@@ -35,6 +36,7 @@ def qapp():
 def tab_and_mgr(qapp):
     """A FuncGenTab wired to two mocked generators sharing one call recorder."""
     import time
+
     from rbl.gui.funcgen_tab import FuncGenTab
     from rbl.state.beamline import Beamline
 

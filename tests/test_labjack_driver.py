@@ -3,11 +3,12 @@ Tests for the LabJack T7 driver with the LJM library fully mocked, so the AIN
 configuration sequence and batched reads are verified without any hardware or
 the native libLabJackM.so being installed.
 """
-import pytest
 from unittest.mock import MagicMock
 
+import pytest
+
 import rbl.hardware.labjack_driver as ljd
-from rbl.hardware.labjack_driver import LabJackT7, LabJackError
+from rbl.hardware.labjack_driver import LabJackError, LabJackT7
 
 
 @pytest.fixture
