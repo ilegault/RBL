@@ -26,11 +26,21 @@ contents are already fully implemented in the tree, so deleting it loses nothing
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The fix-or-escalate rule appears in the standing AI-session conventions and names the decision record as binding.
-- [ ] The escalation procedure names all four steps: commit to branch, ticket status `blocked`, comment appended to the ticket, draft pull request.
-- [ ] The reason the report must live in a tracked directory is stated, not merely the requirement.
-- [ ] `.claude/pending-plan.md` no longer exists.
+- [x] The fix-or-escalate rule appears in the standing AI-session conventions and names the decision record as binding.
+- [x] The escalation procedure names all four steps: commit to branch, ticket status `blocked`, comment appended to the ticket, draft pull request.
+- [x] The reason the report must live in a tracked directory is stated, not merely the requirement.
+- [x] `.claude/pending-plan.md` no longer exists.
 
 Reference: spec section "Blocked-work protocol"; ADR 0001 decision 3.
+
+## Comments
+
+`.claude/` is gitignored and was never committed to this repo, so
+`.claude/pending-plan.md` did not exist in this checkout to begin with
+(confirmed via `git ls-files` and `git log --all`) — that acceptance criterion
+was already satisfied. Added a "Fix or escalate — never mute a failing test"
+subsection to CLAUDE.md §11 (Working agreement for AI sessions) covering the
+binding rule and the four-step escalation procedure, naming ADR 0001 as
+binding.
