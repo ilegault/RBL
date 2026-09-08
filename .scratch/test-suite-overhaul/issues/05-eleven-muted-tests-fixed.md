@@ -33,15 +33,25 @@ deserves to be pinned rather than recorded as a failure.
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] All eleven expected-failure markers are gone and all eleven tests pass in CI.
-- [ ] The six state-machine tests reach the collection state by letting the settle handler run.
-- [ ] No state-machine test patches the settle timer away or substitutes an assertion on a different state.
-- [ ] The four pass-type tests assert a distinct expected length per pass type.
-- [ ] No corrected expectation references an inner-ladder step size that does not appear in the configuration.
-- [ ] The sentinel fixture drives voltage-monitor and current-monitor channels with separately chosen, physically possible values.
-- [ ] A new test asserts the hard trip fires when a current monitor reads at rail, and it was observed failing before the code path made it pass.
-- [ ] No file under the application source tree is modified by this ticket.
+- [x] All eleven expected-failure markers are gone and all eleven tests pass in CI.
+- [x] The six state-machine tests reach the collection state by letting the settle handler run.
+- [x] No state-machine test patches the settle timer away or substitutes an assertion on a different state.
+- [x] The four pass-type tests assert a distinct expected length per pass type.
+- [x] No corrected expectation references an inner-ladder step size that does not appear in the configuration.
+- [x] The sentinel fixture drives voltage-monitor and current-monitor channels with separately chosen, physically possible values.
+- [x] A new test asserts the hard trip fires when a current monitor reads at rail, and it was observed failing before the code path made it pass.
+- [x] No file under the application source tree is modified by this ticket.
+
+## Comments
+
+Verified 2026-09-08: implemented in commit `e9ede22` ("Fix the eleven muted
+calibration tests (ticket 05)"), merged to master via PR #29
+(`cbc0d17`). Confirmed: `tests/test_calibration_config.py` and
+`tests/test_calibration_runner.py` carry no remaining `xfail` markers; the
+diff touches only those two test files, no application source; PR #29's
+final CI run (workflow run 34236368603) is green on both Python 3.13 and
+3.14.
 
 Reference: spec section "The eleven muted tests"; ADR 0001 Context and decision 1.
