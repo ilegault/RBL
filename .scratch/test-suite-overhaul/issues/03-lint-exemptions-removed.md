@@ -70,4 +70,26 @@ changed file. `pytest`/PySide6 could not be installed in this sandbox
 convention that the suite is verified from CI, not locally — spot-checked
 the touched pure-`hardware/` functions (`interlock_status`, `classify`)
 by direct import instead. CI on this PR is the first real check of the
-full suite.
+full suite, and it caught two real problems the local checks above could not:
+
+- **A GC regression in `test_regulation_response.py`.** Dropping the unused
+  `responder = RegulationResponder(...)` binding (F841) was wrong: the
+  object's `__init__` connects `monitor.fault_detected` to a bound method,
+  and without a strong Python reference the instance is garbage-collected
+  before `monitor.evaluate()` fires it, so all four tests in that file failed
+  (`handle_fault` never ran). Restored the binding with a one-line
+  `# noqa: F841` stating why it's load-bearing, rather than guessing at
+  another lint-only fix.
+- **A doubled mypy error from a cosmetic reflow.** Wrapping
+  `load_characterizer.py`'s `v_kv[min(...)] - v_kv[max(...)]` across two
+  physical lines (unchanged semantics) made mypy report the same
+  pre-existing `ndarray.__getitem__` stub-overload error twice instead of
+  once on the Windows/py3.14 CI runner, pushing the soft-layer ratchet from
+  140 to 141 — found by diffing this PR's CI mypy output line-for-line
+  against master's own passing run. Reverted that one line to master's
+  exact single-line form and used a single-line `# noqa: E501` instead.
+
+Also merged `master` into this branch mid-review: it had moved (ticket 05,
+plus a workflow fix moving `Enforce type gate` into the `lint` job) while
+this ticket was in progress. Clean merge, no conflicts with this ticket's
+`pyproject.toml` changes.
