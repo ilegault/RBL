@@ -130,7 +130,7 @@ def capacitance_from_charge(current_ma, dt_s: float, baseline_ma: float,
     x = np.asarray(current_ma, dtype=float) - baseline_ma
     if x.size < 2 or delta_v_kv == 0:
         return float("nan")
-    q_coulombs = np.trapezoid(x * 1e-3, dx=dt_s)
+    q_coulombs = float(np.trapezoid(x * 1e-3, dx=dt_s))
     delta_v_v = abs(delta_v_kv) * 1000.0
     return abs(q_coulombs / delta_v_v) * 1e12
 
