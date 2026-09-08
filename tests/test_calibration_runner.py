@@ -103,21 +103,34 @@ def funcgen_map(gens):
     }
 
 
-def make_payload(value_v: float = 1.0, n: int = 40):
-    """A synthetic window_ready payload carrying all 8 amp AINs."""
+_VOLTAGE_AINS = {AMP_CHANNEL_MAP[amp]["voltage"] for amp in AMP_LABELS}
+
+
+def make_payload(voltage_v: float = 1.0, n: int = 40, current_v: float = 0.1):
+    """A synthetic window_ready payload carrying all 8 amp AINs.
+
+    voltage_v drives every voltage-monitor AIN; current_v drives every
+    current-monitor AIN. They are kept separate because the two monitors
+    have different gains (1 V == 1 kV vs 1 V == 10 mA, see
+    hardware/amp_monitor.py) — a value that is an unremarkable reading on
+    one monitor can be a railed, interlock-tripping one on the other, so a
+    single shared value fed to both indiscriminately is not a realistic
+    payload.
+    """
+    def channel(ain):
+        value = voltage_v if ain in _VOLTAGE_AINS else current_v
+        return {
+            "waveform": np.full(n, value),
+            "peak": abs(value), "pk_pk": 0.0, "rms": abs(value),
+            "mean": value, "std": 0.0,
+        }
+
     return {
         "profile": "WAVEFORM",
         "window_samples": n,
         "t": 0.0,
         "sample_period": 1e-4,
-        "channels": {
-            ain: {
-                "waveform": np.full(n, value_v),
-                "peak": abs(value_v), "pk_pk": 0.0, "rms": abs(value_v),
-                "mean": value_v, "std": 0.0,
-            }
-            for ain in AMP_AIN_NAMES
-        },
+        "channels": {ain: channel(ain) for ain in AMP_AIN_NAMES},
     }
 
 
@@ -162,13 +175,14 @@ class TestFullSweep:
         assert finished, "sweep never finished"
         print("[OK] runner completes a full sweep with zero calls to time.sleep")
 
-    @pytest.mark.xfail(reason="sequence is 1036 points (up:103 + down:103 + random:53) × 4 amps; test assumes all 3 pass types produce equal-length sequences (pts_per_pass from 'up')", strict=False)
     def test_total_setpoints_matches_config(self, qapp, funcgen_map):
         runner = CalibrationRunner(funcgen_map, LoadCondition.DISCONNECTED)
         runner.start_sweep()
         from rbl.config.calibration_config import sweep_points as _sp
-        pts_per_pass = len(_sp("up"))
-        assert len(runner._sequence) == len(AMP_LABELS) * len(CAL_PASSES) * pts_per_pass
+        # "up" and "down" each visit every rung twice (out and back); "random"
+        # visits each rung once, so it is a shorter sequence than either.
+        pts_per_amp = sum(len(_sp(pass_type)) for pass_type in CAL_PASSES)
+        assert len(runner._sequence) == len(AMP_LABELS) * pts_per_amp
 
     def test_eight_rows_per_setpoint(self, qapp, funcgen_map):
         runner = CalibrationRunner(funcgen_map, LoadCondition.DISCONNECTED)
@@ -182,7 +196,6 @@ class TestFullSweep:
         assert seen_ains == set(AMP_AIN_NAMES)
         print("[OK] exactly 8 rows emitted per setpoint")
 
-    @pytest.mark.xfail(reason="make_payload(2.0) triggers over-current abort (9990 mA > 60 mA limit) before COLLECT records any rows; 0 rows instead of 8", strict=False)
     def test_windows_during_settle_are_discarded(self, qapp, funcgen_map):
         runner = CalibrationRunner(funcgen_map, LoadCondition.DISCONNECTED)
         rows = []
@@ -190,8 +203,11 @@ class TestFullSweep:
         runner.start_sweep()
 
         # Still in SETTLE — these must not be averaged into the recording.
+        # 4.5 kV is a physically possible voltage-monitor reading (within
+        # CAL_MAX_KV), and distinct from the 2.0 kV used once COLLECT
+        # actually starts, so a leak from SETTLE would still be caught.
         for _ in range(50):
-            runner.on_window(make_payload(999.0))
+            runner.on_window(make_payload(4.5))
         assert rows == []
 
         runner._on_settle_elapsed()   # now COLLECT
@@ -202,8 +218,38 @@ class TestFullSweep:
         assert len(rows) == 8
         for r in rows:
             if r["n_samples"] > 0:
-                assert r["mean_v"] == pytest.approx(2.0)
+                expected = 2.0 if r["kind"] == "voltage" else 0.1
+                assert r["mean_v"] == pytest.approx(expected)
         print("[OK] windows arriving during SETTLE are discarded, not averaged")
+
+    def test_railed_current_monitor_hard_trip_fires(self, qapp, funcgen_map, gens):
+        """A current monitor pinned at the AIN's own rail is a physically
+        real fault (dead short, arc, or failing amplifier), not a test
+        artifact. hardware_config.py records the current monitor's own
+        design range as +/-10 V ('the current monitor reaches +/-10 V during
+        the 100 mA / 4 ms transient the amplifier is rated for'); at the
+        documented 10 mA/V gain that is a 100 mA reading, over
+        CAL_TRIP_HARD_MA (60), and the hard interlock must abort and zero
+        every channel — this is the interlock doing its job, not a failure."""
+        runner = CalibrationRunner(funcgen_map, LoadCondition.DISCONNECTED)
+        finished = []
+        errors = []
+        overcurrent = []
+        runner.finished.connect(finished.append)
+        runner.error.connect(errors.append)
+        runner.overcurrent.connect(lambda *a: overcurrent.append(a))
+        runner.start_sweep()   # SETTLE on the first point; interlock is armed here too
+
+        runner.on_window(make_payload(voltage_v=0.0, current_v=10.0))
+
+        assert overcurrent
+        assert errors
+        assert finished
+        assert runner._state == _State.IDLE
+        for label, (gen, channel) in funcgen_map.items():
+            assert gen.state[channel]["offset"] == pytest.approx(0.0)
+            assert gen.state[channel]["output"] is False
+        print("[OK] a railed current monitor trips the hard interlock and zeros all four")
 
     def test_undriven_channels_commanded_zero_every_setpoint(self, qapp, funcgen_map, gens):
         runner = CalibrationRunner(funcgen_map, LoadCondition.DISCONNECTED)
@@ -447,22 +493,22 @@ class TestDriftLoadConditionGuard:
         assert runner._state == _State.IDLE
         print("[OK] ON_PLATES + 8 h is refused")
 
-    @pytest.mark.xfail(reason="start_drift enters SETTLE; COLLECT is not reached until _on_settle_elapsed fires; assertion immediately after start_drift sees SETTLE not COLLECT", strict=False)
     def test_on_plates_1h_accepted(self, qapp, funcgen_map):
         runner = CalibrationRunner(funcgen_map, LoadCondition.ON_PLATES)
         errors = []
         runner.error.connect(errors.append)
         runner.start_drift(3.0, 1.0)
+        runner._on_settle_elapsed()   # SETTLE -> COLLECT, same as production
         assert not errors
         assert runner._state == _State.COLLECT
         print("[OK] ON_PLATES + 1 h is accepted")
 
-    @pytest.mark.xfail(reason="start_drift enters SETTLE; COLLECT is not reached until _on_settle_elapsed fires; assertion immediately after start_drift sees SETTLE not COLLECT", strict=False)
     def test_disconnected_10h_accepted(self, qapp, funcgen_map):
         runner = CalibrationRunner(funcgen_map, LoadCondition.DISCONNECTED)
         errors = []
         runner.error.connect(errors.append)
         runner.start_drift(3.0, 10.0)
+        runner._on_settle_elapsed()   # SETTLE -> COLLECT, same as production
         assert not errors
         assert runner._state == _State.COLLECT
         print("[OK] DISCONNECTED + 10 h is accepted")
@@ -483,7 +529,6 @@ class TestDriftLoadConditionGuard:
 
 
 class TestDriftCompletionAndWatchdog:
-    @pytest.mark.xfail(reason="start_drift enters SETTLE; assertion runner._state == COLLECT immediately after start_drift fails because SETTLE has not elapsed", strict=False)
     def test_auto_zeros_at_completion(self, qapp, funcgen_map, gens, monkeypatch):
         clock = FakeClock(0.0)
         monkeypatch.setattr(calibration_runner_module.time, "monotonic", clock)
@@ -494,6 +539,7 @@ class TestDriftCompletionAndWatchdog:
 
         duration_h = 1.0 / 3600.0   # 1 simulated second
         runner.start_drift(1.5, duration_h)
+        runner._on_settle_elapsed()   # SETTLE -> COLLECT, same as production
         assert runner._state == _State.COLLECT
 
         # Advance the clock past the drift's end before the log interval
@@ -508,7 +554,6 @@ class TestDriftCompletionAndWatchdog:
             assert gen.state[channel]["output"] is False
         print("[OK] drift run auto-zeros at completion")
 
-    @pytest.mark.xfail(reason="start_drift enters SETTLE; assertion runner._state == COLLECT immediately after start_drift fails because SETTLE has not elapsed", strict=False)
     def test_watchdog_triggers_on_gap_and_zeros_output(self, qapp, funcgen_map, gens):
         runner = CalibrationRunner(funcgen_map, LoadCondition.DISCONNECTED)
         finished = []
@@ -517,6 +562,7 @@ class TestDriftCompletionAndWatchdog:
         runner.error.connect(errors.append)
 
         runner.start_drift(2.0, 1.0)   # 1 h, well within the unattended cap
+        runner._on_settle_elapsed()   # SETTLE -> COLLECT, same as production
         assert runner._state == _State.COLLECT
 
         # A >5 s gap would fire the real QTimer in production; call its
@@ -531,12 +577,12 @@ class TestDriftCompletionAndWatchdog:
             assert gen.state[channel]["output"] is False
         print("[OK] a 6-second window gap triggers the watchdog and zeros the output")
 
-    @pytest.mark.xfail(reason="start_drift enters SETTLE; assertion runner._state == COLLECT immediately after start_drift fails because SETTLE has not elapsed", strict=False)
     def test_watchdog_resets_on_each_window(self, qapp, funcgen_map):
         runner = CalibrationRunner(funcgen_map, LoadCondition.DISCONNECTED)
         errors = []
         runner.error.connect(errors.append)
         runner.start_drift(1.0, 1.0)
+        runner._on_settle_elapsed()   # SETTLE -> COLLECT, same as production
 
         # Windows keep arriving (fewer than a full log interval) -- the
         # watchdog must not trip while data is still flowing.
@@ -545,12 +591,12 @@ class TestDriftCompletionAndWatchdog:
         assert not errors
         assert runner._state == _State.COLLECT
 
-    @pytest.mark.xfail(reason="start_drift enters SETTLE; on_window calls during SETTLE are discarded; 0 rows recorded instead of 8", strict=False)
     def test_drift_rows_carry_pass_type_drift(self, qapp, funcgen_map):
         runner = CalibrationRunner(funcgen_map, LoadCondition.DISCONNECTED)
         rows = []
         runner.row_recorded.connect(rows.append)
         runner.start_drift(2.5, 1.0)
+        runner._on_settle_elapsed()   # SETTLE -> COLLECT, same as production
         for _ in range(_windows_per_drift_log()):
             runner.on_window(make_payload(2.5))
 
