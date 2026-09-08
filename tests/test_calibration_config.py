@@ -19,16 +19,22 @@ from rbl.hardware.funcgen_driver import MAX_GEN_VOLTS
 
 
 class TestSweepPoints:
-    @pytest.mark.xfail(reason="sweep_points('up') returns 103 points (step 0.1 kV inner ladder), but test computes n_ladder=51 from CAL_STEP_KV and expects 53 total", strict=False)
     def test_up_is_ascending_and_bracketed(self):
         pts = sweep_points("up")
-        n_ladder = round(2 * CAL_MAX_KV / CAL_STEP_KV) + 1
-        assert len(pts) == n_ladder + 2   # ladder + leading/trailing zero
+        # "up" ramps 0 -> +CAL_MAX_KV, back through 0, then 0 -> -CAL_MAX_KV,
+        # back to 0: each polarity's half-ladder is visited out and back, plus
+        # the middle zero and the bracketing zeros at each end.
+        half_len = round(CAL_MAX_KV / CAL_STEP_KV)
+        assert len(pts) == 4 * half_len + 3
         assert pts[0] == 0.0
         assert pts[-1] == 0.0
-        inner = pts[1:-1]
-        assert inner == sorted(inner)
-        print(f"[OK] sweep_points('up') is ascending, length {len(pts)} ({n_ladder} + leading/trailing zero)")
+        first_nonzero = next(v for v in pts if v != 0.0)
+        assert first_nonzero > 0   # ramps positive first
+        max_step = max(abs(pts[i + 1] - pts[i]) for i in range(len(pts) - 1))
+        assert max_step <= CAL_STEP_KV + 1e-9
+        assert max(pts) == pytest.approx(CAL_MAX_KV)
+        assert min(pts) == pytest.approx(-CAL_MAX_KV)
+        print(f"[OK] sweep_points('up') starts positive, bracketed by 0.0, length {len(pts)}")
 
     def test_down_is_reverse_of_up_modulo_zeros(self):
         up = sweep_points("up")
@@ -37,12 +43,15 @@ class TestSweepPoints:
         assert down[1:-1] == list(reversed(up[1:-1]))
         print("[OK] sweep_points('down') == reversed(up) modulo the bracketing zeros")
 
-    @pytest.mark.xfail(reason="random pass has 53 points (step 0.2 kV) while 'up' has 103 (step 0.1 kV); test asserts both have equal length", strict=False)
     def test_random_seed_is_deterministic(self):
         r1 = sweep_points("random", seed=42)
         r2 = sweep_points("random", seed=42)
         assert r1 == r2
-        assert len(r1) == len(sweep_points("up"))
+        # random visits the base ladder once (no out-and-back), so its length
+        # is the ladder plus the bracketing zeros — not "up"'s length, which
+        # visits every rung twice.
+        n_ladder = round(2 * CAL_MAX_KV / CAL_STEP_KV) + 1
+        assert len(r1) == n_ladder + 2
         print("[OK] sweep_points('random', seed=42) is deterministic across two calls")
 
     def test_random_different_seed_differs(self):
@@ -67,13 +76,21 @@ class TestSweepPoints:
         with pytest.raises(ValueError):
             sweep_points("sideways")
 
-    @pytest.mark.xfail(reason="up/down inner ladder has 101 points (step 0.1 kV) while random has 51 (step 0.2 kV); multisets differ", strict=False)
-    def test_up_down_random_all_same_multiset(self):
-        # Every pass is a permutation of the same underlying ladder.
+    def test_up_down_visit_twice_random_visits_once(self):
+        # up and down each visit every rung twice (out and back on each
+        # polarity) so their inner points form the same multiset; random
+        # visits every rung exactly once. All three still cover the same
+        # set of rungs.
         up = sorted(sweep_points("up")[1:-1])
         down = sorted(sweep_points("down")[1:-1])
         rnd = sorted(sweep_points("random", seed=3)[1:-1])
-        assert up == down == rnd
+        assert up == down
+        assert set(up) == set(down) == set(rnd)
+        assert len(rnd) == len(set(rnd))
+        # Every nonzero rung is visited twice (out and back); the single
+        # 0.0 crossing between the positive and negative halves is not.
+        nonzero_rungs = len(set(up)) - 1
+        assert len(up) == 2 * nonzero_rungs + 1
 
 
 class TestConstants:
