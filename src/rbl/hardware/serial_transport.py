@@ -91,7 +91,7 @@ class SerialTransport:
         self._bytesize = bytesize
         self._parity   = parity
         self._stopbits = stopbits
-        self._serial   = None
+        self._serial: "serial.Serial | None" = None
         self._lock     = threading.Lock()
 
     # ---- Lifecycle --------------------------------------------------------
@@ -156,6 +156,7 @@ class SerialTransport:
     def write(self, data: bytes) -> None:
         """Send bytes. Acquires the lock."""
         with self._lock:
+            assert self._serial is not None, "write() called before open()"
             log.debug("serial TX %s: %r", self._port, data)
             self._serial.write(data)
 
@@ -176,6 +177,7 @@ class SerialTransport:
     def _read_until_locked(self, terminator: bytes,
                            max_bytes: int = 4096) -> bytes:
         """read_until without acquiring the lock — for use inside query_line."""
+        assert self._serial is not None, "read_until() called before open()"
         buf = b""
         while len(buf) < max_bytes:
             chunk = self._serial.read_until(terminator,
@@ -201,6 +203,7 @@ class SerialTransport:
         lock for the full read.
         """
         with self._lock:
+            assert self._serial is not None, "read_exact() called before open()"
             buf = b""
             while len(buf) < n:
                 chunk = self._serial.read(n - len(buf))
@@ -221,6 +224,7 @@ class SerialTransport:
         read so no other thread can interleave a command between them.
         """
         with self._lock:
+            assert self._serial is not None, "query_line() called before open()"
             log.debug("serial TX %s: %r", self._port, cmd)
             self._serial.write(cmd)
             return self._read_until_locked(terminator)
@@ -420,7 +424,7 @@ def discover(candidates: list = None, saved: dict = None) -> dict:
 
     # ---- Step 1: try saved ports first ------------------------------------
     for cand in candidates:
-        key        = cand["key"]
+        key        = str(cand["key"])
         saved_port = saved.get(key)
         if not saved_port:
             continue

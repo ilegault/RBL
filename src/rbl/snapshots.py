@@ -406,4 +406,4 @@ class AmpState:
     channels: dict[str, AmpChannelSnapshot] = field(default_factory=dict)   # "X+" -> ...
     active_profile: str = ""
     t: float = float("nan")
-    sample_period: float = None
+    sample_period: float | None = None

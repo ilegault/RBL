@@ -106,7 +106,7 @@ def check_ljm() -> tuple[bool, str]:
     version is a cheap way to confirm LJM is really alive.
     """
     try:
-        from labjack import ljm  # type: ignore
+        from labjack import ljm
     except Exception as exc:
         return False, f"LabJack LJM driver not found ({exc})"
 
@@ -135,7 +135,7 @@ def check_visa() -> tuple[bool, str]:
     Rigol DG1022Z function generators cannot be discovered or controlled.
     """
     try:
-        import pyvisa  # type: ignore
+        import pyvisa
     except Exception as exc:
         return False, f"pyvisa package not available ({exc})"
 
@@ -186,7 +186,7 @@ def check_serial() -> tuple[bool, str]:
     plugged in yet).
     """
     try:
-        import serial  # type: ignore
+        import serial
         import serial.tools.list_ports
     except Exception as exc:
         return False, f"pyserial not available ({exc})"

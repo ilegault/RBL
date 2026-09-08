@@ -2,7 +2,6 @@ name: Tests
 
 on:
   push:
-    branches: [ master ]
   pull_request:
     branches: [ master ]
 
@@ -28,11 +27,17 @@ jobs:
       - name: Lint (ruff)
         run: ruff check .
 
-      - name: Type check (mypy)
-        run: mypy
+      - name: Type check (layered gate)
+        id: typecheck
+        continue-on-error: true
+        run: python tools/type_gate.py
 
       - name: Run tests
         env:
           QT_QPA_PLATFORM: offscreen
           PYTHONUTF8: "1"
         run: pytest --tb=short -q
+
+      - name: Enforce type gate
+        if: always() && steps.typecheck.outcome != 'success'
+        run: exit 1
