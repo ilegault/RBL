@@ -6,10 +6,10 @@ import os
 import sys
 
 import pytest
+from PySide6.QtCore import Qt as _Qt
 
 from rbl.services.video_transcoder import TranscodeQueue, find_ffmpeg
 
-from PySide6.QtCore import Qt as _Qt
 _DIRECT = _Qt.ConnectionType.DirectConnection
 
 

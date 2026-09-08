@@ -7,7 +7,6 @@ import os
 import time
 
 import pytest
-
 from PySide6.QtWidgets import QApplication
 
 try:

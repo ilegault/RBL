@@ -2,7 +2,6 @@
 Tests for rbl.services.regulation_monitor.RegulationMonitor.
 """
 import pytest
-
 from PySide6.QtWidgets import QApplication
 
 from rbl.services.regulation_monitor import RegulationMonitor

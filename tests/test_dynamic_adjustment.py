@@ -10,7 +10,6 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import numpy as np
 import pytest
-
 from PySide6.QtWidgets import QApplication
 
 from rbl.config.hardware_config import AMP_CHANNEL_MAP

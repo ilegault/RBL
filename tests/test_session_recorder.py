@@ -9,7 +9,6 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from PySide6.QtWidgets import QApplication
 
 from rbl.services.session_recorder import SessionRecorder

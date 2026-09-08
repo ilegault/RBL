@@ -17,7 +17,6 @@ import time
 
 import numpy as np
 import pytest
-
 from PySide6.QtWidgets import QApplication
 
 from rbl.config.calibration_config import (
