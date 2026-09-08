@@ -406,8 +406,10 @@ class LoadCharacterizer(QObject):
                 if lo < 0 or hi >= i_ma.size:
                     continue
                 baseline = float(np.mean(i_ma[max(0, idx - 2 * n_pre):idx]))
-                delta_v_kv = float(v_kv[min(idx + n_post, v_kv.size - 1)]
-                                   - v_kv[max(idx - n_pre, 0)])
+                # Not reflowed: splitting this expression across lines changes
+                # how mypy resolves the two ndarray.__getitem__ overloads and
+                # doubles a pre-existing stub-typing error (see PR #32).
+                delta_v_kv = float(v_kv[min(idx + n_post, v_kv.size - 1)] - v_kv[max(idx - n_pre, 0)])  # noqa: E501
                 if delta_v_kv == 0:
                     continue
                 c_pf = capacitance_from_charge(i_ma[lo:hi], dt, baseline, delta_v_kv)
