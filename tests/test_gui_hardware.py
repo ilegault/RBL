@@ -11,9 +11,6 @@ Covers, in particular:
   * the command-history line edit;
   * CurrentTab live/frozen plot navigation and voltage->current readout;
   * both background poll workers (Galil + LabJack) running at the same time.
-
-The whole module is skipped automatically if a Qt platform plugin cannot be
-initialised (e.g. GUI libraries missing on a headless CI box).
 """
 import os
 import time
@@ -21,8 +18,6 @@ import time
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtGui import QKeyEvent
@@ -36,13 +31,7 @@ LOG_AMPS_AT_1UA = {"AIN0": 3.0, "AIN1": 3.0, "AIN2": 3.0, "AIN3": 3.0}
 
 @pytest.fixture(scope="session")
 def qapp():
-    app = QApplication.instance()
-    if app is None:
-        try:
-            app = QApplication([])
-        except Exception as e:                       # pragma: no cover
-            pytest.skip(f"Cannot start Qt: {e}")
-    return app
+    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture(autouse=True)

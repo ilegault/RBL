@@ -7,8 +7,6 @@ A fake dialog factory stands in for the real Qt dialog so nothing here
 blocks on user input.
 """
 import pytest
-
-pytest.importorskip("PySide6.QtWidgets")
 from PySide6.QtWidgets import QApplication
 
 from rbl.services.regulation_monitor import RegulationMonitor

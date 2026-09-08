@@ -17,8 +17,6 @@ import time
 
 import numpy as np
 import pytest
-
-pytest.importorskip("PySide6.QtWidgets")
 from PySide6.QtWidgets import QApplication
 
 from rbl.config.calibration_config import (

@@ -14,8 +14,6 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-
-pytest.importorskip("PySide6.QtWidgets")
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
@@ -25,13 +23,7 @@ from rbl.config.calibration_config import CAL_PROFILE, CAL_SWEEP_PROFILE, LoadCo
 
 @pytest.fixture(scope="module")
 def qapp():
-    app = QApplication.instance()
-    if app is None:
-        try:
-            app = QApplication([])
-        except Exception as e:                       # pragma: no cover
-            pytest.skip(f"Cannot start Qt: {e}")
-    return app
+    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture(autouse=True)

@@ -2,8 +2,6 @@
 Tests for rbl.services.regulation_monitor.RegulationMonitor.
 """
 import pytest
-
-pytest.importorskip("PySide6.QtWidgets")
 from PySide6.QtWidgets import QApplication
 
 from rbl.services.regulation_monitor import RegulationMonitor
