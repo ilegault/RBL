@@ -1,5 +1,15 @@
 # CLAUDE.md — orientation for AI sessions working on RBL
 
+## Agent skills
+
+### Issue tracker
+
+Issues live as local markdown files under `.scratch/<feature>/`. See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+Single-context layout: one `CONTEXT.md` at the repo root, ADRs in `docs/adr/`. See `docs/agents/domain.md`.
+
 RBL is the desktop control/DAQ application for the **Right Beam Line** in the
 Ion Beam Laboratory at UW–Madison NEEP. It plans, drives, monitors, and logs an
 electrostatic raster beamline: four slit motors, four HV deflection amplifiers,
@@ -275,3 +285,42 @@ the project before re-deriving a number.
   `MainWindow.__init__`.
 - Don't leave `.claude-session.bak` files in the tree; three were committed once
   already.
+
+<!-- ACTIVE-PLAN:START -->
+## Active implementation plan
+
+_Written by the planning model on 2026-09-08 03:57. Implement this. If something in it is wrong, say so before changing course._
+
+# Active work: test suite overhaul
+
+This is a **pointer**, not the work. The work is a ticket set.
+
+- Spec: `.scratch/test-suite-overhaul/spec.md`
+- Decision record: `docs/adr/0001-tests-first-and-no-muted-failures.md` — **binding, read it first**
+- Tickets: `.scratch/test-suite-overhaul/issues/01…18`
+- Tracker conventions: `docs/agents/issue-tracker.md`
+
+## Next up
+
+Both are unblocked; either can start.
+
+- **01 — CI executes the test suite and the type gate is layered.** Land this
+  first regardless. It establishes the baseline test counts that every later
+  ticket measures against, and until it exists every later ticket is guesswork.
+- **02 — Blocked-work protocol written down; stale plan deleted.** Independent,
+  no application code.
+
+## Rules for working this set
+
+- Do not start a ticket whose `Blocked by:` line names an unfinished ticket.
+  Work the frontier: any ticket whose blockers are all done.
+- **11 is a review gate.** It presents the audit verdicts and stops for the
+  developer. Nothing after it starts until they sign off. No test is deleted
+  and no application source is changed before that.
+- A failing test is fixed or escalated, never muted. `xfail` is not a tool for
+  greening a build. The escalation path — commit to branch, ticket
+  `Status: blocked`, comment on the ticket, draft PR — is in ADR 0001 decision 3
+  and in ticket 02.
+- The developer does not run the suite locally. Every ticket is verifiable from
+  CI output alone.
+<!-- ACTIVE-PLAN:END -->
