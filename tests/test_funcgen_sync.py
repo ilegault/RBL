@@ -23,7 +23,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-pytest.importorskip("PySide6.QtWidgets")
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 

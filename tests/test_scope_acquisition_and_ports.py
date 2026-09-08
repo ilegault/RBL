@@ -46,7 +46,6 @@ def _idle(**over):
 
 @pytest.fixture(scope="module")
 def qapp():
-    pytest.importorskip("PySide6.QtWidgets")
     import os
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtWidgets import QApplication
@@ -89,7 +88,6 @@ class TestAcquisitionMode:
     default down: free-running on connect is what made the tab heavy."""
 
     def _worker(self):
-        pytest.importorskip("PySide6")
         from rbl.hardware.scope_worker import ScopeWorker
         return ScopeWorker("COM_TEST")
 
@@ -174,13 +172,11 @@ class TestRecordSlice:
     every one of these tests exists to keep someone from assuming they do."""
 
     def _worker(self):
-        pytest.importorskip("PySide6")
         from rbl.hardware.scope_worker import ScopeWorker
         return ScopeWorker("COM_TEST")
 
     def test_full_record_is_the_whole_thing(self):
         from rbl.hardware.scope_worker import ScopeWorker
-        pytest.importorskip("PySide6")
         assert ScopeWorker._slice_for(2500, "centre") == (1, 2500)
 
     def test_centre_anchor_keeps_the_middle(self):

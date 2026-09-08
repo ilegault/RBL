@@ -13,7 +13,6 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import numpy as np
 import pytest
 
-pytest.importorskip("PySide6.QtWidgets")
 from PySide6.QtWidgets import QApplication
 
 from rbl.config.calibration_config import LoadCondition

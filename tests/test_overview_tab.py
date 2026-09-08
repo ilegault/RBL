@@ -13,7 +13,6 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 
-pytest.importorskip("PySide6.QtWidgets")
 from PySide6.QtGui import QHideEvent, QShowEvent
 from PySide6.QtWidgets import QApplication
 

@@ -9,11 +9,8 @@ import pytest
 
 from rbl.services.video_transcoder import TranscodeQueue, find_ffmpeg
 
-try:
-    from PySide6.QtCore import Qt as _Qt
-    _DIRECT = _Qt.ConnectionType.DirectConnection
-except ImportError:
-    _DIRECT = None
+from PySide6.QtCore import Qt as _Qt
+_DIRECT = _Qt.ConnectionType.DirectConnection
 
 
 # ---- find_ffmpeg -----------------------------------------------------------
@@ -140,6 +137,5 @@ def test_part_file_renamed_on_success(monkeypatch, tmp_path):
 
 @pytest.fixture(scope="module")
 def qapp():
-    pytest.importorskip("PySide6.QtWidgets")
     from PySide6.QtWidgets import QApplication
     return QApplication.instance() or QApplication([])

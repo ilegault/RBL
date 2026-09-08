@@ -9,7 +9,6 @@ RampEngine works in raw generator volts/Vpp (the same units
 """
 import pytest
 
-pytest.importorskip("PySide6.QtWidgets")
 from PySide6.QtWidgets import QApplication
 
 from rbl.hardware.funcgen_driver import MAX_AMP_VPP, MAX_GEN_VOLTS

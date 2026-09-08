@@ -10,7 +10,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-pytest.importorskip("PySide6.QtWidgets")
 from PySide6.QtWidgets import QApplication
 
 from rbl.services.session_recorder import SessionRecorder

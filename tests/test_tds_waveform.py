@@ -401,7 +401,5 @@ class TestIdentifyIsQuiet:
                 if r.name == "rbl.hardware.tds2012_driver"] == []
 
     def test_the_keepalive_interval_is_not_walked_back(self):
-        import pytest
-        pytest.importorskip("PySide6")
         from rbl.hardware import scope_worker
         assert scope_worker._KEEPALIVE_S >= 15.0
