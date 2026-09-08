@@ -58,7 +58,7 @@ class _CameraThread(QThread):
         self._fps    = fps
         self._fourcc = fourcc   # requested fourcc
         self._stop   = False
-        self._latest_frame = None
+        self._latest_frame: object | None = None
         self._actual_w: int    = 0
         self._actual_h: int    = 0
         self._actual_fps: float = 0.0
