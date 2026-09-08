@@ -36,6 +36,10 @@ jobs:
         continue-on-error: true
         run: python tools/type_gate.py
 
+      - name: Enforce type gate
+        if: always() && steps.typecheck.outcome != 'success'
+        run: exit 1
+
   test:
     runs-on: windows-latest
     strategy:
@@ -63,7 +67,3 @@ jobs:
           QT_QPA_PLATFORM: offscreen
           PYTHONUTF8: "1"
         run: pytest --tb=short -q -n auto --dist loadfile --durations=25
-
-      - name: Enforce type gate
-        if: always() && steps.typecheck.outcome != 'success'
-        run: exit 1
