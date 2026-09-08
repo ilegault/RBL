@@ -30,7 +30,6 @@ class TestAgainstTheManualsWorkedExample:
     pin the numbers fed into it.
     """
 
-    @pytest.mark.xfail(reason="TEMPORARY: ticket 06 xfail_strict demonstration, reverted next commit")
     def test_deflection_angle(self):
         theta_mrad = deflection_mrad(10.0, 12.5, 3.8, 1, 1_000_000.0)
         assert theta_mrad / 1000.0 == pytest.approx(0.0164, abs=5e-5)
