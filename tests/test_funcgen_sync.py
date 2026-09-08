@@ -290,7 +290,7 @@ class TestInterlockParity:
         tab._apply_channel("A", 1)
         result_widget = tab.beamline.set_channel("A1", over_limit)  # re-derive same call
 
-        assert result_direct == result_widget == False
+        assert result_direct is False and result_widget is False
         assert mgr.A.set_waveform.call_count == 0
 
 

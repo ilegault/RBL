@@ -75,7 +75,8 @@ def classify(v_ratio: float, i_measured_ma: float, i_limit_ma: float,
     flips the classification.
     """
     if abs(commanded_kv) < arm_threshold_kv:
-        return "idle", f"commanded {commanded_kv:.4g} kV is below the {arm_threshold_kv:.4g} kV arm threshold"
+        return "idle", (f"commanded {commanded_kv:.4g} kV is below the "
+                         f"{arm_threshold_kv:.4g} kV arm threshold")
 
     if v_ratio != v_ratio:  # NaN check without importing math for one use
         return "idle", "commanded voltage too close to zero for a ratio"

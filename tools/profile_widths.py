@@ -135,7 +135,8 @@ def gaussian_sigma(y, apex, dt, fwhm):
     lo = int(crossing(y, apex, -1, 0.05 * a))
     hi = int(math.ceil(crossing(y, apex, +1, 0.05 * a)))
     x = np.arange(lo, hi + 1) * dt
-    f = lambda x, A, mu, s, c: A * np.exp(-0.5 * ((x - mu) / s) ** 2) + c
+    def f(x, A, mu, s, c):
+        return A * np.exp(-0.5 * ((x - mu) / s) ** 2) + c
     try:
         p, _ = curve_fit(f, x, y[lo:hi + 1], p0=[a, apex * dt, fwhm / 2.3548, 0.0])
     except Exception:
@@ -161,7 +162,8 @@ def measure(trace, dt):
         p["FWTM/FWHM"] = ratio
         p["FW1e2/FWHM"] = p["FW1/e^2"] / p["FWHM"]
         # exp(-ln2 * |2x/FWHM|^n):  n = 2 Gaussian, > 2 flat top, < 2 heavy tails
-        p["order_n"] = math.log(math.log(10) / math.log(2)) / math.log(ratio) if ratio > 1.001 else float("nan")
+        p["order_n"] = (math.log(math.log(10) / math.log(2)) / math.log(ratio)
+                        if ratio > 1.001 else float("nan"))
         p["FWTM_error_if_gaussian"] = ratio / GAUSS_FWTM_OVER_FWHM - 1
         fit = gaussian_sigma(y, apex, dt, p["FWHM"])
         p["fit_sigma"], p["fit_r2"] = fit if fit else (float("nan"), float("nan"))
@@ -216,7 +218,8 @@ def main(path, mm_per_ms=None, mm_per_rev=None):
         print(f"   shot {k+1}: {sep:6.2f} ms apart -> {sc:6.3f} mm/ms"
               + ("   (railed shot)" if railed else ""))
     print(f"   widest / narrowest = {max(scales)/min(scales)-1:.1%}. A ruler does not change"
-          " length between shots;\n   these two apexes sit where the BEAM is, not where the marks are.")
+          " length between shots;\n   these two apexes sit where the BEAM is, "
+          "not where the marks are.")
     print(f"\nGaussian would give FWTM/FWHM = {GAUSS_FWTM_OVER_FWHM:.4f}, "
           f"FW1e2/FWHM = {GAUSS_FW1E2_OVER_FWHM:.4f}, order n = 2.")
     print("Below 1.8226: flat-topped core.  Above: heavy tails or an unresolved second component.")

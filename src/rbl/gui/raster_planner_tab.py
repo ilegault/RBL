@@ -109,7 +109,6 @@ from PySide6.QtWidgets import (
 
 from rbl.config.beam_species import DEFAULT_SPECIES, DEFAULT_SPECIES_ROW
 from rbl.config.calibration_config import (
-    CAL_AC_TRIP_MA,
     CAL_LOAD_CAP_PF,
     CAL_MAX_KV,
     ac_peak_current_ma,
@@ -150,11 +149,8 @@ from rbl.config.steerer_geometry import (
 from rbl.gui import theme
 from rbl.gui.widgets.inputs import QuietDoubleSpinBox
 from rbl.hardware import slit_raster_model as srm
-from rbl.hardware.load_model import envelope_walls
 from rbl.hardware.raster_model import (
     displacement_mm,
-    dwell_uniformity,
-    required_drive,
 )
 from rbl.hardware.raster_plan import envelope_status as _envelope_status
 from rbl.hardware.raster_plan import steerer_limited_solve
@@ -946,7 +942,8 @@ class RasterPlannerTab(QWidget):
             peak_plate = d.get("peak_plate_kv", float("nan"))
             ac_plate = d.get("ac_plate_kv", float("nan"))
             off_plate = d.get("offset_plate_kv", 0.0)
-            body = f"±{_mm(ac_plate, 4)} kV per plate · {_mm(d.get('amplitude_kv'), 4)} kV plate-to-plate"
+            body = (f"±{_mm(ac_plate, 4)} kV per plate · "
+                    f"{_mm(d.get('amplitude_kv'), 4)} kV plate-to-plate")
             if abs(off_plate) > 1e-9:
                 body += f"  (+{abs(off_plate):.4f} kV DC, worst instant {peak_plate:.4f} kV)"
             # The rating is PER PLATE with respect to the enclosure, so it is
@@ -1027,10 +1024,13 @@ class RasterPlannerTab(QWidget):
         n_fallback = sum(1 for _c, src in caps.values() if src == "fallback")
         self.lbl_c_source.setStyleSheet(
             theme.status_label(theme.OK if n_fallback == 0 else theme.WARN, bold=False))
+        def _current_ma(label):
+            axis = AXIS_OF_CHANNEL[label]
+            return ac_peak_current_ma(freq_of_axis[axis], plate_kv[axis],
+                                       load_pf=caps[label][0])
+
         self.lbl_currents.setText("   ".join(
-            f"{label} "
-            f"{ac_peak_current_ma(freq_of_axis[AXIS_OF_CHANNEL[label]], plate_kv[AXIS_OF_CHANNEL[label]], load_pf=caps[label][0]):.3f} mA"
-            for label in AMP_LABELS))
+            f"{label} {_current_ma(label):.3f} mA" for label in AMP_LABELS))
 
     # ------------------------------------------------------------------
     # Profiler / slits

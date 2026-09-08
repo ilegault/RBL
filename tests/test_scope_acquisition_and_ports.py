@@ -268,7 +268,6 @@ class TestProfilerTabDefaults:
         assert tab._readout_dirty is True          # the status line still moves
 
     def test_a_measurement_dirties_the_plot_once(self, qapp):
-        import time
         tab = self._tab(qapp)
         tab._on_scope_state(_measured())
         assert tab._plot_dirty is True
@@ -370,7 +369,6 @@ class TestShotCannotStickForever:
         assert "except Exception as exc:" in body
 
     def test_run_never_lets_an_exception_escape_the_thread(self):
-        import time
 
         from rbl.hardware.scope_worker import ScopeWorker
 

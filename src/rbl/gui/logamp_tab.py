@@ -188,7 +188,8 @@ class CurrentTab(QWidget):
             _row = QHBoxLayout()
             _swatch = QLabel("━")
             _swatch.setStyleSheet(
-                f"color: {theme.SLIT_COLORS.get(_slit, '#000')}; font-weight: bold; font-size: 13px;"
+                f"color: {theme.SLIT_COLORS.get(_slit, '#000')}; "
+                "font-weight: bold; font-size: 13px;"
             )
             _lbl = QLabel(f"{_slit}  ({_ain})")
             _lbl.setStyleSheet("font-size: 15px;")
@@ -294,7 +295,9 @@ class CurrentTab(QWidget):
         for ain, slit in SC.LABJACK_CHANNEL_MAP.items():
             if slit not in state.volts:
                 self.lbl_v[ain].setText("—  (Waveform mode)")
-                self.lbl_v[ain].setStyleSheet("color: #aaa; font-family: Consolas, 'Courier New', monospace;")
+                self.lbl_v[ain].setStyleSheet(
+                    "color: #aaa; font-family: Consolas, 'Courier New', monospace;"
+                )
                 self.lbl_i[ain].setText("—  (Waveform mode)")
                 self.lbl_i[ain].setStyleSheet("color: #aaa; font-weight: bold;")
                 continue
@@ -302,7 +305,9 @@ class CurrentTab(QWidget):
             V = state.volts[slit]
             i_a = state.currents.get(slit, float("nan"))
             self.lbl_v[ain].setText(f"{V:6.3f} V")
-            self.lbl_v[ain].setStyleSheet("color: #555; font-family: Consolas, 'Courier New', monospace;")
+            self.lbl_v[ain].setStyleSheet(
+                "color: #555; font-family: Consolas, 'Courier New', monospace;"
+            )
             self.lbl_i[ain].setText(format_current(i_a))
             self.lbl_i[ain].setStyleSheet(theme.status_label(theme.OK))
             self.buffers[ain].append(state.t, i_a)

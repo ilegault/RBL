@@ -117,7 +117,9 @@ class TestModeA:
         with pytest.raises(ValueError):
             lc.start_mode_a("Q+")
 
-    def test_finished_emits_and_persists_measurement(self, qapp, funcgen_map, monkeypatch, tmp_path):
+    def test_finished_emits_and_persists_measurement(
+        self, qapp, funcgen_map, monkeypatch, tmp_path
+    ):
         import rbl.services.load_characterizer as mod
         monkeypatch.setattr(mod, "save_measurement",
                              lambda *a, **k: saved.append((a, k)))

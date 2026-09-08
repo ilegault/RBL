@@ -13,7 +13,6 @@ import pytest
 
 from rbl.config import hardware_config as SC
 from rbl.services.snapshot_json import (
-    BULK_KEYS,
     amp_summary,
     asdict_lean,
     dump_json,
@@ -210,7 +209,8 @@ def test_amp_summary_marks_unsampled_monitors():
         peak_kv=float("nan"), pkpk_kv=float("nan"), rms_kv=float("nan"),
         rms_ma=float("nan"), raw_v=float("nan"), raw_i=float("nan"),
         v_live=False, i_live=False)
-    ch = dict(st.channels); ch["Y-"] = dead
+    ch = dict(st.channels)
+    ch["Y-"] = dead
     st = AmpState(connected=True, channels=ch, active_profile="X_PAIR",
                   t=st.t, sample_period=st.sample_period)
     s = amp_summary(st, _funcgen_state())

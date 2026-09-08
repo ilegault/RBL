@@ -176,8 +176,6 @@ class TestNoScrollSpinBox:
         assert not event.isAccepted()
 
     def test_arrow_keys_still_work(self, qapp):
-        from PySide6.QtCore import QEvent
-        from PySide6.QtGui import QKeyEvent
         spn = NoScrollSpinBox()
         spn.setRange(0, 10)
         spn.setValue(4)

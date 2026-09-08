@@ -504,7 +504,8 @@ class OverviewTab(QWidget):
         # Compact rows: each is a clickable name+value pair at small font size.
         # The selected set doubles as the HV interlock gauge designation —
         # only selected gauges are checked against the pressure ladder.
-        self._pressure_rows: dict[str, dict] = {}   # key -> {name_lbl, val_lbl, row_widget, key, name, text, ok}
+        # key -> {name_lbl, val_lbl, row_widget, key, name, text, ok}
+        self._pressure_rows: dict[str, dict] = {}
         self._pressure_selected: set[str] = set(self.beamline.hv_interlock_gauge_keys)
 
         self._pressure_no_data = QLabel("(not connected)")

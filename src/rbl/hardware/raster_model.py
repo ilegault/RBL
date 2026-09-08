@@ -241,7 +241,9 @@ def dwell_uniformity(fwhm_mm: float, scan_half_width_mm: float,
     else:
         sample_dose = profile_dose[in_sample]
         mean_dose = float(np.mean(sample_dose))
-        uniformity_pct = (float(np.ptp(sample_dose)) / mean_dose * 100.0) if mean_dose > 0 else float("nan")
+        uniformity_pct = (
+            (float(np.ptp(sample_dose)) / mean_dose * 100.0) if mean_dose > 0 else float("nan")
+        )
 
     # Edge rolloff: distance from the sample edge inward to where dose first
     # reaches 95% of the flat-top (mid-scan) dose — how much margin the

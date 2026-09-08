@@ -729,7 +729,8 @@ class CalibrationRunner(QObject):
                      "This is a PREDICTION from an assumed capacitance; the "
                      "recorded current is measured, not derived from it.",
                      top, self._ac_freq_hz, self._ac_shape, self._trip_ma,
-                     CAL_LOAD_CAP_PF, ac_peak_current_ma(self._ac_freq_hz, top, shape=self._ac_shape),
+                     CAL_LOAD_CAP_PF,
+                     ac_peak_current_ma(self._ac_freq_hz, top, shape=self._ac_shape),
                      CAL_MAX_KV)
         for pass_idx, amp in enumerate(self._channels):
             for point_idx, peak_kv in enumerate(pts):
@@ -1238,7 +1239,10 @@ class CalibrationRunner(QObject):
             "step_approach": ("return_to_zero" if self._return_to_zero
                               else "ascending"),
             "zero_dwell_s": (self._zero_dwell_s if self._return_to_zero else 0.0),
-            "zero_method": ("output_off" if self._dwell_output_off else "command_zero") if self._return_to_zero else "n/a",
+            "zero_method": (
+                ("output_off" if self._dwell_output_off else "command_zero")
+                if self._return_to_zero else "n/a"
+            ),
             "collect_s": (CAL_AC_COLLECT_S if ac else CAL_COLLECT_S),
             "settle_s": (CAL_AC_SETTLE_S if ac else CAL_SETTLE_S),
             "trip_ma": self._trip_ma,

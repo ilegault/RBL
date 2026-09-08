@@ -248,7 +248,8 @@ class DynamicAdjustmentTab(QWidget):
                 rec.get("pot_position", "—"),
                 f"{v.get('overshoot_pct', float('nan')):.3f}" if "overshoot_pct" in v else "—",
                 f"{settling_ms:.3f}" if settling_ms == settling_ms else "—",
-                f"{v.get('flat_top_creep_pct', float('nan')):.3f}" if "flat_top_creep_pct" in v else "—",
+                (f"{v.get('flat_top_creep_pct', float('nan')):.3f}"
+                 if "flat_top_creep_pct" in v else "—"),
                 f"{c.get('peak_current_ma', float('nan')):.3f}" if "peak_current_ma" in c else "—",
                 f"{rec.get('figure_of_merit', float('nan')):.3f}",
             ]
@@ -267,7 +268,8 @@ class DynamicAdjustmentTab(QWidget):
                         f"If continuing to search, try positions that {direction} the "
                         "pot from there — the sign of the creep is the steering direction.")
             else:
-                hint = f"Winner: {winner['pot_position']} — flat-top creep is small; near optimal for this range."
+                hint = (f"Winner: {winner['pot_position']} — flat-top creep is small; "
+                        "near optimal for this range.")
             self.lbl_hint.setText(hint)
         else:
             self.lbl_hint.setText("No trials recorded yet for this channel.")

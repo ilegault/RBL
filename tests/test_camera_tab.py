@@ -51,14 +51,35 @@ class _StubRecorder(QObject):
         super().__init__()
         self._camera = camera
 
-    def is_recording(self):  return self._recording
-    def set_csv_interval_s(self, v): self._csv_interval_s = v; self.settings_changed.emit()
-    def set_record_fps(self, v): self._record_fps = v; self.settings_changed.emit()
-    def set_segment_seconds(self, v): self._segment_seconds = v
-    def set_quality(self, l): self._quality_label = l; self.settings_changed.emit()
-    def set_video_enabled(self, on): self._video_enabled = on
-    def start(self): self._recording = True; self.state_changed.emit()
-    def stop(self):  self._recording = False; self.state_changed.emit()
+    def is_recording(self):
+        return self._recording
+
+    def set_csv_interval_s(self, v):
+        self._csv_interval_s = v
+        self.settings_changed.emit()
+
+    def set_record_fps(self, v):
+        self._record_fps = v
+        self.settings_changed.emit()
+
+    def set_segment_seconds(self, v):
+        self._segment_seconds = v
+
+    def set_quality(self, label):
+        self._quality_label = label
+        self.settings_changed.emit()
+
+    def set_video_enabled(self, on):
+        self._video_enabled = on
+
+    def start(self):
+        self._recording = True
+        self.state_changed.emit()
+
+    def stop(self):
+        self._recording = False
+        self.state_changed.emit()
+
     def take_photo(self): return None
     def add_note(self, t): pass
     def open_session_folder(self): pass
@@ -93,7 +114,7 @@ def test_camera_tab_constructs_without_cv2(qapp, monkeypatch):
     rec = _StubRecorder(cam)
     from rbl.gui.camera_tab import CameraTab
     try:
-        tab = CameraTab(rec, cam)
+        CameraTab(rec, cam)
     except Exception as exc:
         pytest.fail(f"CameraTab raised with cv2 absent: {exc}")
 

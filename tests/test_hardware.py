@@ -1,7 +1,5 @@
 """Tests for rbl.hardware — mocked drivers, no physical hardware required."""
-import socket
-import threading
-from unittest.mock import MagicMock, PropertyMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -73,8 +71,6 @@ class TestGalilControllerMocked:
         def fake_sendall(data):
             cmd = data.decode("ascii").strip()
             g._last_cmd = cmd
-
-        call_count = [0]
 
         def fake_recv(bufsize):
             cmd = getattr(g, "_last_cmd", "").rstrip("\r")
@@ -175,11 +171,6 @@ class TestLabJackT7Lifecycle:
     def test_disconnect_when_not_connected_is_safe(self):
         lj = LabJackT7()
         lj.disconnect()  # should not raise
-
-    def test_read_channels_raises_when_not_connected(self):
-        lj = LabJackT7()
-        with pytest.raises(Exception):
-            lj.read_channels()
 
     def test_read_channels_raises_when_not_connected(self):
         lj = LabJackT7()

@@ -14,7 +14,6 @@ from rbl.hardware.vgc083_driver import (
     _SENTINEL,
     Vgc083,
     VgcProtocolError,
-    VgcReading,
     VgcTimeoutError,
     _parse_reading,
 )

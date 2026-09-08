@@ -338,7 +338,6 @@ def _parse_reading(channel: str, body: str) -> VgcReading:
 
 if __name__ == "__main__":
     import argparse
-    import sys
 
     parser = argparse.ArgumentParser(
         description="VGC083 hardware self-test (requires instrument connected)."

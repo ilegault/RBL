@@ -20,6 +20,7 @@ Phase 2 (2026-08-25): UI restructured to expose master codec and camera pixel
 format controls.  The "Preview" spin box is relabelled "Acquire" to make clear
 it controls acquisition rate, not display rate.
 """
+import importlib.util
 import os
 
 from PySide6.QtCore import Qt, QTimer
@@ -51,11 +52,7 @@ from rbl.config.recording_config import (
 from rbl.gui import theme
 from rbl.gui.widgets.video_view import VideoView
 
-try:
-    import cv2
-    _CV2_OK = True
-except ImportError:
-    _CV2_OK = False
+_CV2_OK = importlib.util.find_spec("cv2") is not None
 
 _CAMERA_FORMATS = [
     ("MJPG (compressed, fast)", "MJPG"),

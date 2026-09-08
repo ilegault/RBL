@@ -313,7 +313,9 @@ class LoadCharacterizationTab(QWidget):
 
             self.table.setItem(row, 1, QTableWidgetItem("—" if c_pf is None else f"{c_pf:.1f}"))
             self.table.setItem(row, 2, QTableWidgetItem("—" if g_us is None else f"{g_us:.4f}"))
-            self.table.setItem(row, 3, QTableWidgetItem("—" if tan_delta is None else f"{tan_delta:.4f}"))
+            self.table.setItem(
+                row, 3, QTableWidgetItem("—" if tan_delta is None else f"{tan_delta:.4f}")
+            )
             self.table.setItem(row, 4, QTableWidgetItem(condition or "—"))
 
         # Outlier highlight: a channel whose conductance is notably higher

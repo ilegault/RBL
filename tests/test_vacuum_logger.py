@@ -208,7 +208,6 @@ class TestVacuumLogger:
             logger.write_row(s)
         csv_path = logger.close()
 
-        text = Path(csv_path).read_text(encoding="utf-8")
         # The sentinel may appear in the header comment section if we ever
         # wrote it there, but it must NEVER appear as a pressure field value.
         # We check: for every data row, pressure columns don't equal "1.10E+03"

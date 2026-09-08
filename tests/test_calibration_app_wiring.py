@@ -20,7 +20,7 @@ from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 import rbl.gui.calibration_tab as calibration_tab_module
-from rbl.config.calibration_config import CAL_PROFILE, CAL_SWEEP_PROFILE, LoadCondition
+from rbl.config.calibration_config import CAL_SWEEP_PROFILE
 
 
 @pytest.fixture(scope="module")

@@ -13,7 +13,6 @@ from rbl.hardware.xgs600_driver import (
     XgsChannel,
     XgsFieldError,
     XgsProtocolError,
-    XgsReading,
     XgsTimeoutError,
     _parse_pressure,
 )

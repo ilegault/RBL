@@ -22,6 +22,7 @@ preview widget layout.
 Phase 2 (2026-08-25): UI restructured to expose the codec controls that
 actually affect what lands on disk.  See recording_config.MASTER_CODECS.
 """
+import importlib.util
 import os
 
 from PySide6.QtCore import Qt, QTimer
@@ -55,11 +56,7 @@ from rbl.config.recording_config import (
 from rbl.gui import theme
 from rbl.gui.widgets.video_view import VideoView
 
-try:
-    import cv2
-    _CV2_OK = True
-except ImportError:
-    _CV2_OK = False
+_CV2_OK = importlib.util.find_spec("cv2") is not None
 
 _CAMERA_FORMATS = [
     ("MJPG (compressed, fast)", "MJPG"),

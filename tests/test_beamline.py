@@ -90,7 +90,8 @@ class TestLabjackIngestion:
                 channels[v_ain] = None
                 channels[i_ain] = None
             else:
-                channels[v_ain] = {"peak": data["v_peak"], "pk_pk": data["v_pkpk"], "rms": data["v_rms"]}
+                channels[v_ain] = {"peak": data["v_peak"], "pk_pk": data["v_pkpk"],
+                                    "rms": data["v_rms"]}
                 channels[i_ain] = {"rms": data["i_rms"]}
         return {"channels": channels, "t": 1.0}
 
@@ -519,6 +520,7 @@ class TestHvInterlock:
         gen = self._connected_gen(beamline)
         ok = beamline.set_channel("A1", self.SAFE_DC)
         assert ok is False
+        gen.set_waveform.assert_not_called()
 
     def test_stale_reading_blocks_even_though_pressure_value_was_once_good(self):
         import time
@@ -528,6 +530,7 @@ class TestHvInterlock:
         gen = self._connected_gen(beamline)
         ok = beamline.set_channel("A1", self.SAFE_DC)
         assert ok is False
+        gen.set_waveform.assert_not_called()
 
     def test_apply_all_channels_blocked_by_interlock_too(self):
         beamline = Beamline()
@@ -537,7 +540,7 @@ class TestHvInterlock:
         gen.set_waveform.assert_not_called()
 
     def test_transition_into_block_ramps_live_channel_to_zero(self, beamline):
-        gen = self._connected_gen(beamline, output=True, offset=2.0)
+        self._connected_gen(beamline, output=True, offset=2.0)
         beamline._recompute_hv_interlock()   # baseline: healthy, no transition
         beamline._hv_pressure_torr = 2e-3    # now above the absolute lockout
         beamline._recompute_hv_interlock()

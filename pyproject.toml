@@ -18,24 +18,15 @@ target-version = "py313"
 # E = pycodestyle errors, F = pyflakes, I = isort
 # Deliberately small starting set — see docs/IMPROVE_CODEBASE_ARCHITECTURE.md §5.2
 select = ["E", "F", "I"]
-# Ignore rules that conflict with hand-laid alignment in hardware_config.py / app.py.
-# E501 (line too long) is not enforced — ruff format is NOT enabled.
-ignore = [
-    "E501",   # line too long — existing style uses long alignment lines deliberately
-    "F401",   # imported but unused — too many false positives with conditional imports
-]
-
 [tool.ruff.lint.per-file-ignores]
-# __main__ bench-tool scripts use bare print() and starred imports deliberately.
+# __main__ bench-tool: imports come after the argparse/sys.exit guard that
+# lets the module double as an importable library.
 "src/rbl/hardware/vgc083_driver.py" = ["E402"]
+# __main__ bench-tool: same guard-before-import structure as vgc083_driver.py.
 "src/rbl/hardware/xgs600_driver.py" = ["E402"]
-# Test files: stub methods use semicolons, lambda, ambiguous names, and
-# intentional sys.path manipulation before import (test_layering.py).
-# F841 unused variables are deliberate (side-effect-only construction, simulated state).
-# E712 comparison to True/False is explicit test intent.
-"tests/*" = ["F401", "F811", "E402", "E702", "E731", "E741", "E712", "F841"]
-# Tool scripts use inline lambdas deliberately (curve_fit callback etc.).
-"tools/*" = ["E731"]
+# Inserts the repo root onto sys.path before importing scripts.check_layers,
+# since scripts/ is not an installed package.
+"tests/test_layering.py" = ["E402"]
 
 [tool.mypy]
 python_version = "3.13"
