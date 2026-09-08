@@ -44,13 +44,23 @@ python_version = "3.13"
 warn_redundant_casts = true
 warn_unused_ignores = true
 implicit_optional = true
-# Exclude files where third-party stub gaps produce spurious errors:
-#   funcgen_driver: pyvisa Resource stubs don't expose .query/.write
-#   camera_source:  cv2 stubs lack VideoWriter_fourcc and numpy Mat annotations
-#   scope_worker:   multiple return/assignment type mismatches from missing stubs
-exclude = "src/rbl/hardware/(funcgen_driver|camera_source|scope_worker|serial_transport)\\.py"
-# Only check the pure layers: config/ and hardware/.
-# Annotating the full GUI layer is a separate effort.
-files = ["src/rbl/config", "src/rbl/hardware"]
 # Third-party stubs are missing for these packages; ignore import errors.
 ignore_missing_imports = true
+# The whole application source tree is checked. No module is excluded by name
+# here — a discovery-level `exclude` only stops mypy from treating a file as a
+# *root*, it does not stop mypy from following an import into it, so an
+# excluded module's errors were being reported anyway whenever a checked
+# module imported it (see docs/adr/0001-tests-first-and-no-muted-failures.md,
+# decision 4). tools/type_gate.py applies the differing per-layer bar below
+# to this single scan's output instead.
+files = ["src/rbl"]
+
+# Per-layer type-check bar (docs/adr/0001-tests-first-and-no-muted-failures.md,
+# decision 4), read by tools/type_gate.py — the wrapper CI runs in place of a
+# bare `mypy` invocation:
+#   hard: any error under one of these module prefixes fails the build.
+#   soft (everything else under files=["src/rbl"] above): errors are printed
+#     and counted against the ratchet recorded in tools/mypy_ratchet.txt,
+#     which may only decrease.
+[tool.rbl.type_gate]
+hard = ["rbl.config", "rbl.hardware"]

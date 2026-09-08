@@ -149,7 +149,7 @@ class ScopeWorker(QThread):
         self._points = SCOPE_POINTS
         self._points_anchor = SCOPE_POINTS_ANCHOR
         self._poll_interval = SCOPE_POLL_INTERVAL_S
-        self._average = SCOPE_AVERAGE_SWEEPS
+        self._average: int | None = SCOPE_AVERAGE_SWEEPS
         self._average_dirty = True      # push averaging on first connect
         self._channel_dirty = True
         self._continuous = SCOPE_CONTINUOUS_DEFAULT
@@ -164,7 +164,7 @@ class ScopeWorker(QThread):
         self._cal_name = ""
         self._cal_mode = False
         self._cal_spacing_mm = BPM_FIDUCIAL_SPACING_MM
-        self._cal_override = None
+        self._cal_override: tuple | None = None
         # The identity string the link answered with at connect.  The idle
         # keepalive compares against it so that a SILENT ping stays silent
         # and only a CHANGED answer - a different instrument on this port -
@@ -382,7 +382,7 @@ class ScopeWorker(QThread):
             except Exception:
                 pass
 
-    def _downsample(self, volts: list) -> tuple[list, int]:
+    def _downsample(self, volts: list) -> tuple[list, float]:
         """Return at most SCOPE_WAVEFORM_DOWNSAMPLE points, plus the stride.
 
         The stride is returned because a plot drawn against xincr instead of
@@ -857,7 +857,7 @@ class ScopeWorker(QThread):
         )
 
     @staticmethod
-    def _levels_for_gui(rung: dict, xincr: float, xzero: float,
+    def _levels_for_gui(rung: dict | None, xincr: float, xzero: float,
                         mmps: float) -> dict:
         """One peak's width ladder, in the units a consumer wants.
 
