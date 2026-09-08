@@ -61,3 +61,19 @@ count changes in an environment where Qt is present, which CI's `test` job is),
 so the ticket 01 baseline collected count (1675 passed + 11 xfailed = 1686) is
 expected to hold; CI on the opened PR is the actual verification per the
 ticket's own acceptance criterion.
+
+**CI follow-up (PR #31, commit `b22d07c`).** The first CI run surfaced two
+findings, both triaged on the PR:
+
+- `ruff` flagged 24 `I001` import-order errors — removing the guard line
+  merged `import pytest` into the same isort block as the following `PySide6`
+  import in several files. This was this PR's to fix; fixed with
+  `ruff check . --fix` and pushed. `ruff check .` is clean.
+- `test (3.14)`'s final `Enforce type gate` step failed, but not because of
+  anything in this diff: `1687 passed` in that same job, and the step's own
+  condition (`steps.typecheck.outcome`) references a step that lives in the
+  separate `lint` job, which `steps` can never see across jobs — so it always
+  evaluates false and always `exit 1`s. Confirmed present on master itself
+  (commit `8de0533`, the push that split `lint`/`test` into two jobs — see PR
+  #31 comment for the run link and a proposed patch). Not fixed here since
+  it's a base-branch CI-workflow defect unrelated to ticket 04's scope.
