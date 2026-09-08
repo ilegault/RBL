@@ -312,7 +312,8 @@ class FuncGenControlMixin:
                 try:
                     gen.align_phase(1)
                 except Exception as e:
-                    self.command_failed.emit("funcgen", f"Gen {gen_letter}: align phase failed: {e}")
+                    self.command_failed.emit(
+                        "funcgen", f"Gen {gen_letter}: align phase failed: {e}")
 
         return True
 

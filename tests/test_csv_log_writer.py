@@ -10,10 +10,7 @@ These tests document and guard that guarantee.
 All tests use a tmp_path fixture so nothing touches the real filesystem.
 """
 import csv
-import math
 import os
-
-import pytest
 
 from rbl.services.csv_log_writer import CsvLogWriter, flatten
 

@@ -17,7 +17,6 @@ from rbl.hardware.profile_fwhm import (
     FwhmError,
     analyse_profile,
     best_fwhm,
-    detect_clipping,
     find_peaks,
     fit_gaussians,
     moving_average,

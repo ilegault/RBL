@@ -941,7 +941,10 @@ def draw(ax, volts, pre, result, fit, args, mmps):
     xincr = float(pre.get("XINCR", 1.0))
     xzero = float(pre.get("XZERO", 0.0))
     n = len(volts)
-    to_ms = lambda i: (xzero + i * xincr) * 1e3
+
+    def to_ms(i):
+        return (xzero + i * xincr) * 1e3
+
     xs = [to_ms(i) for i in range(n)]
     corrected = result["corrected"]
 

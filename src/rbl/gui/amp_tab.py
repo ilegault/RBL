@@ -364,8 +364,10 @@ class AmpTab(QWidget):
                                            "comparable with the commanded peak.\n"
                                            "DC: window mean, signed."), self.R_MEAS, 0)
         ro.addWidget(_make_hdr("Δ", "Measured minus commanded. Green inside the\n"
-                                    f"±{CAL_UNCERTAINTY_V:.0f} V uncertainty budget."), self.R_DELTA, 0)
-        ro.addWidget(_make_hdr("Output pk-pk", "Full measured excursion, max - min."), self.R_PKPK, 0)
+                                    f"±{CAL_UNCERTAINTY_V:.0f} V uncertainty budget."),
+                     self.R_DELTA, 0)
+        ro.addWidget(_make_hdr("Output pk-pk", "Full measured excursion, max - min."),
+                     self.R_PKPK, 0)
         ro.addWidget(_make_hdr("Current", "AC: amplitude at the drive frequency (noise-rejected).\n"
                                           "DC: window mean current."), self.R_CUR, 0)
         ro.addWidget(_make_hdr("Current RMS", "True RMS about zero — the heating-relevant figure."),

@@ -1,7 +1,6 @@
 """
 Unit tests for rbl.services.dynamic_adjustment_history — no Qt, no hardware.
 """
-import math
 
 from rbl.services.dynamic_adjustment_history import (
     append_trial,
@@ -63,12 +62,14 @@ class TestWinnerFor:
 
     def test_nan_scores_are_excluded(self, tmp_path):
         p = tmp_path / "dynamic_adjustment_history.jsonl"
-        append_trial({"amp_label": "X+", "pot_position": "1", "figure_of_merit": float("nan")}, path=p)
+        append_trial(
+            {"amp_label": "X+", "pot_position": "1", "figure_of_merit": float("nan")}, path=p)
         append_trial({"amp_label": "X+", "pot_position": "2", "figure_of_merit": 3.0}, path=p)
         winner = winner_for("X+", path=p)
         assert winner["pot_position"] == "2"
 
     def test_all_nan_scores_returns_none(self, tmp_path):
         p = tmp_path / "dynamic_adjustment_history.jsonl"
-        append_trial({"amp_label": "X+", "pot_position": "1", "figure_of_merit": float("nan")}, path=p)
+        append_trial(
+            {"amp_label": "X+", "pot_position": "1", "figure_of_merit": float("nan")}, path=p)
         assert winner_for("X+", path=p) is None

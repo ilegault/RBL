@@ -240,8 +240,10 @@ class LoadCharacterizer(QObject):
             self._finish(aborted=False)
             return
         step = self._current_step()
-        self.progress.emit(self._step_index, len(self._steps),
-                            f"{self._mode.value} {self._amp_label} step {self._step_index + 1}/{len(self._steps)}")
+        self.progress.emit(
+            self._step_index, len(self._steps),
+            f"{self._mode.value} {self._amp_label} "
+            f"step {self._step_index + 1}/{len(self._steps)}")
         self._command_step(step)
         ain_v = AMP_CHANNEL_MAP[self._amp_label]["voltage"]
         ain_i = AMP_CHANNEL_MAP[self._amp_label]["current"]
@@ -254,7 +256,8 @@ class LoadCharacterizer(QObject):
         if self._mode in (Mode.A, Mode.C):
             status, peak = peak_status("Sine", step.peak_kv * 2.0 * 1000.0 / _AMP_GAIN, 0.0)
             if status == "block":
-                raise RuntimeError(f"amplitude {step.peak_kv} kV at {step.freq_hz} Hz blocked by peak interlock")
+                raise RuntimeError(
+                    f"amplitude {step.peak_kv} kV at {step.freq_hz} Hz blocked by peak interlock")
             self._drive.command_sine(self._amp_label, step.peak_kv, step.freq_hz)
         else:
             if self._ramp_engine is not None:
@@ -286,8 +289,9 @@ class LoadCharacterizer(QObject):
         self._csv_rows.append(point)
 
         if self._mode == Mode.B and point.get("leak_ua", 0.0) > self._leak_threshold_ua:
-            log.warning("load_characterizer: leakage %.2f uA exceeds threshold %.2f uA — aborting ladder",
-                        point["leak_ua"], self._leak_threshold_ua)
+            log.warning(
+                "load_characterizer: leakage %.2f uA exceeds threshold %.2f uA — aborting ladder",
+                point["leak_ua"], self._leak_threshold_ua)
             self._finish(aborted=True)
             return
 
@@ -314,11 +318,15 @@ class LoadCharacterizer(QObject):
         ain_v = AMP_CHANNEL_MAP[self._amp_label]["voltage"]
         ain_i = AMP_CHANNEL_MAP[self._amp_label]["current"]
         fs = 1.0 / self._last_sample_period if self._last_sample_period else 0.0
-        v_wave = np.concatenate(self._collect_windows[ain_v]) if self._collect_windows[ain_v] else np.array([])
-        i_wave = np.concatenate(self._collect_windows[ain_i]) if self._collect_windows[ain_i] else np.array([])
+        v_wave = (np.concatenate(self._collect_windows[ain_v])
+                  if self._collect_windows[ain_v] else np.array([]))
+        i_wave = (np.concatenate(self._collect_windows[ain_i])
+                  if self._collect_windows[ain_i] else np.array([]))
 
-        v_amp, v_phase = fundamental(v_wave, fs, step.freq_hz) if v_wave.size else (float("nan"), float("nan"))
-        i_amp, i_phase = fundamental(i_wave, fs, step.freq_hz) if i_wave.size else (float("nan"), float("nan"))
+        v_amp, v_phase = (fundamental(v_wave, fs, step.freq_hz)
+                           if v_wave.size else (float("nan"), float("nan")))
+        i_amp, i_phase = (fundamental(i_wave, fs, step.freq_hz)
+                           if i_wave.size else (float("nan"), float("nan")))
         v_fund_kv = monitor_to_kv(v_amp)
         i_fund_ma = ma_unclamped(i_amp) if i_amp == i_amp else float("nan")
         phase_deg = phase_difference_deg(i_phase, v_phase)
@@ -343,7 +351,8 @@ class LoadCharacterizer(QObject):
 
     def _finish_mode_b_point(self, step: _Step) -> dict:
         ain_i = AMP_CHANNEL_MAP[self._amp_label]["current"]
-        i_wave = np.concatenate(self._collect_windows[ain_i]) if self._collect_windows[ain_i] else np.array([])
+        i_wave = (np.concatenate(self._collect_windows[ain_i])
+                  if self._collect_windows[ain_i] else np.array([]))
         if i_wave.size == 0:
             mean_ma, sem_ma = float("nan"), float("nan")
         else:
@@ -370,8 +379,10 @@ class LoadCharacterizer(QObject):
     def _finish_mode_c_point(self, step: _Step) -> dict:
         ain_v = AMP_CHANNEL_MAP[self._amp_label]["voltage"]
         ain_i = AMP_CHANNEL_MAP[self._amp_label]["current"]
-        v_wave = np.concatenate(self._collect_windows[ain_v]) if self._collect_windows[ain_v] else np.array([])
-        i_wave = np.concatenate(self._collect_windows[ain_i]) if self._collect_windows[ain_i] else np.array([])
+        v_wave = (np.concatenate(self._collect_windows[ain_v])
+                  if self._collect_windows[ain_v] else np.array([]))
+        i_wave = (np.concatenate(self._collect_windows[ain_i])
+                  if self._collect_windows[ain_i] else np.array([]))
         dt = self._last_sample_period or 0.0
 
         c_values = []
@@ -395,7 +406,10 @@ class LoadCharacterizer(QObject):
                 if lo < 0 or hi >= i_ma.size:
                     continue
                 baseline = float(np.mean(i_ma[max(0, idx - 2 * n_pre):idx]))
-                delta_v_kv = float(v_kv[min(idx + n_post, v_kv.size - 1)] - v_kv[max(idx - n_pre, 0)])
+                # Not reflowed: splitting this expression across lines changes
+                # how mypy resolves the two ndarray.__getitem__ overloads and
+                # doubles a pre-existing stub-typing error (see PR #32).
+                delta_v_kv = float(v_kv[min(idx + n_post, v_kv.size - 1)] - v_kv[max(idx - n_pre, 0)])  # noqa: E501
                 if delta_v_kv == 0:
                     continue
                 c_pf = capacitance_from_charge(i_ma[lo:hi], dt, baseline, delta_v_kv)
@@ -451,7 +465,8 @@ class LoadCharacterizer(QObject):
         from pathlib import Path
         out_dir = Path(self._output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
-        path = out_dir / f"load_char_{self._mode.value}_{self._amp_label}_{time.strftime('%Y%m%dT%H%M%S')}.csv"
+        stamp = time.strftime("%Y%m%dT%H%M%S")
+        path = out_dir / f"load_char_{self._mode.value}_{self._amp_label}_{stamp}.csv"
         fieldnames = sorted({k for row in self._csv_rows for k in row})
         with open(path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -516,7 +531,7 @@ if __name__ == "__main__":
     v_pk_v = step.peak_kv * 1000.0   # plate volts
     # Payloads carry RAW MONITOR VOLTS (the unconverted ADC reading), not
     # physical units — 1 V monitor = 1 kV plate (voltage) or 10 mA (current).
-    v_raw_wave = (v_pk_v / 1000.0) * np.sin(2 * np.pi * step.freq_hz * t)          # = kV numerically
+    v_raw_wave = (v_pk_v / 1000.0) * np.sin(2 * np.pi * step.freq_hz * t)   # = kV numerically
     i_ma_physical = (2 * np.pi * step.freq_hz * (1200e-12) * v_pk_v
                       * np.cos(2 * np.pi * step.freq_hz * t) * 1e3)
     i_raw_wave = i_ma_physical / 10.0                                              # monitor volts
@@ -583,7 +598,8 @@ if __name__ == "__main__":
     step_c = lc_c._current_step()
     n_c = int(fs_c * step_c.collect_s)
     period_samples = int(fs_c / MODE_C_FREQ_HZ)
-    v_square_kv = MODE_C_PEAK_KV * np.sign(np.sin(2 * np.pi * MODE_C_FREQ_HZ * np.arange(n_c) / fs_c))
+    v_square_kv = MODE_C_PEAK_KV * np.sign(
+        np.sin(2 * np.pi * MODE_C_FREQ_HZ * np.arange(n_c) / fs_c))
     # Exponential current spikes at each edge, integrating to C * deltaV.
     c_true_pf = 1200.0
     delta_v_v = 2 * MODE_C_PEAK_KV * 1000.0

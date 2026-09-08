@@ -3,17 +3,13 @@ Tests for VideoRecorder — decimation, drift, segmentation, frames.csv.
 Uses a monkeypatched cv2.VideoWriter so no real codec is needed.
 """
 import csv
+import importlib.util
 import os
-import time
 
 import pytest
 from PySide6.QtWidgets import QApplication
 
-try:
-    import numpy as np
-    _NP_OK = True
-except ImportError:
-    _NP_OK = False
+_NP_OK = importlib.util.find_spec("numpy") is not None
 
 
 @pytest.fixture(scope="module")
@@ -47,8 +43,6 @@ class _FakeWriter:
 def _patch_cv2(monkeypatch, writers: list):
     """Patch cv2.VideoWriter so each construction appends to writers list."""
     import rbl.services.video_recorder as mod
-
-    call_idx = [0]
 
     class _VW:
         def __init__(self, path, *rest):

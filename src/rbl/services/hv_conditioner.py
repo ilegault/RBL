@@ -215,9 +215,10 @@ class HvConditioner(QObject):
         self._clean_dwells_at_level += 1
         self._curve.append((elapsed_s, self._level_kv))
         self.level_reached.emit(self._level_kv, elapsed_s)
-        self.progress.emit(self._level_kv, self._target_kv,
-                            f"{self._amp_label}: {self._level_kv:.3f}/{self._target_kv:.3f} kV, "
-                            f"{self._clean_dwells_at_level}/{self._clean_dwells_to_advance} clean dwells")
+        self.progress.emit(
+            self._level_kv, self._target_kv,
+            f"{self._amp_label}: {self._level_kv:.3f}/{self._target_kv:.3f} kV, "
+            f"{self._clean_dwells_at_level}/{self._clean_dwells_to_advance} clean dwells")
 
         if self._level_kv >= self._target_kv - 1e-9:
             self._finish(reason="target reached")

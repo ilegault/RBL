@@ -4,9 +4,7 @@ tab is visible. These tests mock all hardware and avoid requiring a display.
 """
 import threading
 import time
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import MagicMock
 
 from rbl.hardware.current_monitor import RollingBuffer
 from rbl.hardware.galil_driver import GalilController
@@ -65,7 +63,6 @@ class TestGalilPollPersistence:
         thread.start()
         # Simulate "switching tab" — nothing observes the thread
         time.sleep(0.05)
-        tab_visible = False  # noqa: unused — simulates tab hidden
         time.sleep(0.10)     # thread still running
         count_mid = thread.poll_count
         time.sleep(0.05)
@@ -173,7 +170,7 @@ class TestLabJackPollPersistence:
         lj, buffers, thread = self._make_setup()
         thread.start()
         time.sleep(0.05)
-        tab_hidden = True  # noqa — simulate tab switch
+        # Simulate "tab switch" — nothing observes the thread
         time.sleep(0.10)
         count_hidden = thread.read_count
         time.sleep(0.05)

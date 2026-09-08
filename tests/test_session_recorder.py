@@ -2,11 +2,10 @@
 Tests for SessionRecorder — CSV-only mode (no camera, no ffmpeg required).
 """
 import csv
-import json
 import os
 import time
-from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch
+from datetime import timedelta
+from unittest.mock import MagicMock
 
 import pytest
 from PySide6.QtWidgets import QApplication
@@ -22,7 +21,8 @@ def qapp():
 def _make_recorder(tmp_path, snapshot_fn=None, qapp_=None):
     """Build a SessionRecorder with a closed (mock) camera."""
     if snapshot_fn is None:
-        snapshot_fn = lambda: {}
+        def snapshot_fn():
+            return {}
 
     camera = MagicMock()
     camera.is_open.return_value = False
@@ -101,7 +101,6 @@ def test_wall_utc_derived_not_sampled(tmp_path, qapp):
     rec.start()
     # Grab internals right after start
     t0_wall = rec._t0_wall
-    t0_mono = rec._t0_mono
     time.sleep(0.05)
     rec.stop()
 

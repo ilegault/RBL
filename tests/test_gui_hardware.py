@@ -506,7 +506,8 @@ class TestGalilPollWorkerErrorHandling:
         while time.time() < deadline and gw.isRunning():
             qapp.processEvents()
             time.sleep(0.01)
-        gw.stop(); gw.wait(2000)
+        gw.stop()
+        gw.wait(2000)
         qapp.processEvents()
         assert col.errors, "poll worker should have reported the error"
         assert not gw.isRunning()

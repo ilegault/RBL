@@ -5,7 +5,6 @@ Unit tests for rbl.services.amp_drive.AmpDrive.
 Uses a FakeGen that records every call and returns "" from set_waveform
 (meaning no warning / no clamp was applied by the driver).
 """
-import math
 
 import pytest
 

@@ -71,10 +71,14 @@ if __name__ == "__main__":
         assert winner_for("X+", path=p) is None
         print("[OK] missing file reads back empty, no winner")
 
-        append_trial({"amp_label": "X+", "pot_position": "1 o'clock", "figure_of_merit": 5.0}, path=p)
-        append_trial({"amp_label": "X+", "pot_position": "2 o'clock", "figure_of_merit": 2.0}, path=p)
-        append_trial({"amp_label": "X+", "pot_position": "3 o'clock", "figure_of_merit": 8.0}, path=p)
-        append_trial({"amp_label": "Y-", "pot_position": "1 o'clock", "figure_of_merit": 1.0}, path=p)
+        append_trial(
+            {"amp_label": "X+", "pot_position": "1 o'clock", "figure_of_merit": 5.0}, path=p)
+        append_trial(
+            {"amp_label": "X+", "pot_position": "2 o'clock", "figure_of_merit": 2.0}, path=p)
+        append_trial(
+            {"amp_label": "X+", "pot_position": "3 o'clock", "figure_of_merit": 8.0}, path=p)
+        append_trial(
+            {"amp_label": "Y-", "pot_position": "1 o'clock", "figure_of_merit": 1.0}, path=p)
 
         x_trials = trials_for("X+", path=p)
         assert len(x_trials) == 3

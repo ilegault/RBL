@@ -18,8 +18,6 @@ added.
 import pathlib
 import sys
 
-import pytest
-
 # Add repo root to path so scripts/ is importable.
 _REPO_ROOT = pathlib.Path(__file__).parent.parent
 if str(_REPO_ROOT) not in sys.path:

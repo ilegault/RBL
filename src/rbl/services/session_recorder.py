@@ -618,7 +618,8 @@ class SessionRecorder(QObject):
                 "parts":      self._csv_writer.parts if self._csv_writer else [],
             },
             "video": {
-                "enabled":                self._video_recorder is not None or len(self._segment_meta) > 0,
+                "enabled":                (self._video_recorder is not None
+                                            or len(self._segment_meta) > 0),
                 "record_fps":             self._record_fps,
                 "segment_seconds":        self._segment_seconds,
                 "segment_max_bytes":      SEGMENT_MAX_BYTES,

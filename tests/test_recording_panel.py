@@ -53,10 +53,16 @@ class _StubRecorder(QObject):
     def set_csv_interval_s(self, v): pass
     def set_record_fps(self, v): pass
     def set_segment_seconds(self, v): pass
-    def set_quality(self, l): pass
+    def set_quality(self, label): pass
     def set_video_enabled(self, on): pass
-    def start(self): self._recording = True; self.state_changed.emit()
-    def stop(self):  self._recording = False; self.state_changed.emit()
+
+    def start(self):
+        self._recording = True
+        self.state_changed.emit()
+
+    def stop(self):
+        self._recording = False
+        self.state_changed.emit()
     def take_photo(self): return None
     def add_note(self, t): pass
     def open_session_folder(self): pass

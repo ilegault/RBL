@@ -62,7 +62,8 @@ def interlock_status(pressure_torr: float, commanded_kv: float,
     absolute lockout is always "block", never merely "warn".
     """
     if not pressure_known:
-        return "block", "vacuum reading is stale or unavailable — HV blocked until pressure is confirmed"
+        return "block", ("vacuum reading is stale or unavailable — "
+                          "HV blocked until pressure is confirmed")
 
     if pressure_torr >= HV_PRESSURE_ABSOLUTE_LOCKOUT_TORR:
         return "block", (
@@ -72,7 +73,8 @@ def interlock_status(pressure_torr: float, commanded_kv: float,
 
     ceiling = max_permitted_kv(pressure_torr)
     if commanded_kv <= ceiling + 1e-9:
-        return "ok", f"{commanded_kv:.3g} kV permitted at {pressure_torr:.2e} torr (ceiling {ceiling:.3g} kV)"
+        return "ok", (f"{commanded_kv:.3g} kV permitted at {pressure_torr:.2e} torr "
+                       f"(ceiling {ceiling:.3g} kV)")
 
     return "warn", (
         f"commanded {commanded_kv:.3g} kV exceeds the {ceiling:.3g} kV ceiling "

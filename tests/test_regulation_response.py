@@ -52,8 +52,10 @@ class TestRegulationResponder:
     def test_stops_the_channel_on_fault(self, qapp):
         monitor = RegulationMonitor(debounce_windows=1)
         amp_drive = FakeAmpDrive()
-        responder = RegulationResponder(monitor, amp_drive, get_operating_conditions=lambda l: {},
-                                         dialog_factory=FakeDialog)
+        # Held so it isn't GC'd before evaluate() fires its signal connection.
+        responder = RegulationResponder(  # noqa: F841
+            monitor, amp_drive, get_operating_conditions=lambda label: {},
+            dialog_factory=FakeDialog)
         monitor.evaluate("X+", 0.01, 3.0, 0.1, 20.0)
         assert amp_drive.off_calls == ["X+"]
 
@@ -73,8 +75,9 @@ class TestRegulationResponder:
         monitor = RegulationMonitor(debounce_windows=1)
         amp_drive = FakeAmpDrive()
         conditions = {"commanded_kv": 3.0, "frequency_hz": 0.0, "chamber_pressure_torr": 1e-5}
-        responder = RegulationResponder(
-            monitor, amp_drive, get_operating_conditions=lambda l: conditions,
+        # Held so it isn't GC'd before evaluate() fires its signal connection.
+        responder = RegulationResponder(  # noqa: F841
+            monitor, amp_drive, get_operating_conditions=lambda label: conditions,
             dialog_factory=lambda *a, **k: FakeDialog(*a, answer="THERMAL LIMIT", **k))
         monitor.evaluate("X+", 0.01, 3.0, 0.1, 20.0)
 
@@ -87,7 +90,9 @@ class TestRegulationResponder:
         assert rec["commanded_kv"] == 3.0
         assert rec["chamber_pressure_torr"] == 1e-5
 
-    def test_output_off_failure_does_not_prevent_dialog_and_logging(self, qapp, tmp_path, monkeypatch):
+    def test_output_off_failure_does_not_prevent_dialog_and_logging(
+        self, qapp, tmp_path, monkeypatch
+    ):
         import rbl.services.regulation_response as rr_module
         logged = []
         monkeypatch.setattr(rr_module.trip_history, "append_trip",
@@ -95,8 +100,10 @@ class TestRegulationResponder:
 
         monitor = RegulationMonitor(debounce_windows=1)
         amp_drive = FaultyAmpDrive()
-        responder = RegulationResponder(monitor, amp_drive, get_operating_conditions=lambda l: {},
-                                         dialog_factory=FakeDialog)
+        # Held so it isn't GC'd before evaluate() fires its signal connection.
+        responder = RegulationResponder(  # noqa: F841
+            monitor, amp_drive, get_operating_conditions=lambda label: {},
+            dialog_factory=FakeDialog)
         monitor.evaluate("X+", 0.01, 3.0, 0.1, 20.0)   # must not raise
         assert logged and logged[0]["label"] == "X+"
 
@@ -111,7 +118,9 @@ class TestRegulationResponder:
 
         monitor = RegulationMonitor(debounce_windows=1)
         amp_drive = FakeAmpDrive()
-        responder = RegulationResponder(monitor, amp_drive, get_operating_conditions=boom,
-                                         dialog_factory=FakeDialog)
+        # Held so it isn't GC'd before evaluate() fires its signal connection.
+        responder = RegulationResponder(  # noqa: F841
+            monitor, amp_drive, get_operating_conditions=boom,
+            dialog_factory=FakeDialog)
         monitor.evaluate("X+", 0.01, 3.0, 0.1, 20.0)   # must not raise
         assert logged and logged[0]["label"] == "X+"

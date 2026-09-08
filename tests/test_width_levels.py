@@ -275,5 +275,5 @@ def test_two_traces_measured_in_a_row_do_not_influence_each_other():
 
 def test_the_default_levels_are_the_three_on_the_tab():
     assert DEFAULT_LEVELS == (LEVEL_FWHM, LEVEL_1_OVER_E2, LEVEL_FWTM)
-    labels = [level_label(l) for l in DEFAULT_LEVELS]
+    labels = [level_label(level) for level in DEFAULT_LEVELS]
     assert labels == ["FWHM", "FW1/e²", "FWTM"]

@@ -359,7 +359,6 @@ def _parse_reading(ch: XgsChannel, raw: str) -> XgsReading:
 
 if __name__ == "__main__":
     import argparse
-    import sys
 
     parser = argparse.ArgumentParser(
         description="XGS-600 hardware self-test (requires instrument connected)."

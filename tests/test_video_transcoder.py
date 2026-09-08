@@ -3,7 +3,6 @@ Tests for video_transcoder — ffmpeg-absent path, command construction,
 failure handling.
 """
 import os
-import sys
 
 import pytest
 from PySide6.QtCore import Qt as _Qt

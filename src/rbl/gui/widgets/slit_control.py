@@ -120,13 +120,16 @@ class SlitControl(QWidget):
                 f"color: {theme.NEUTRAL}; font-size: {theme.FS_CAPTION}px;")
         elif moving:
             self.lbl_state.setText("moving")
-            self.lbl_state.setStyleSheet(theme.status_label(theme.WARN) + f"font-size: {theme.FS_CAPTION}px;")
+            self.lbl_state.setStyleSheet(
+                theme.status_label(theme.WARN) + f"font-size: {theme.FS_CAPTION}px;")
         elif not enabled:
             self.lbl_state.setText("motor disabled")
-            self.lbl_state.setStyleSheet(theme.status_label(theme.MUTED) + f"font-size: {theme.FS_CAPTION}px;")
+            self.lbl_state.setStyleSheet(
+                theme.status_label(theme.MUTED) + f"font-size: {theme.FS_CAPTION}px;")
         else:
             self.lbl_state.setText("idle")
-            self.lbl_state.setStyleSheet(theme.status_label(theme.OK) + f"font-size: {theme.FS_CAPTION}px;")
+            self.lbl_state.setStyleSheet(
+                theme.status_label(theme.OK) + f"font-size: {theme.FS_CAPTION}px;")
 
     def set_target_mm(self, mm: float):
         """Show a target commanded from anywhere — here, or the Stepper Motors
