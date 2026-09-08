@@ -286,6 +286,35 @@ the project before re-deriving a number.
 - Don't leave `.claude-session.bak` files in the tree; three were committed once
   already.
 
+### Fix or escalate — never mute a failing test
+
+Binding rule, from `docs/adr/0001-tests-first-and-no-muted-failures.md` (read it
+before touching a failing test): **a failing test is fixed or escalated, never
+muted.** That means never marking it `xfail`, never deleting or weakening the
+assertion, never loosening a tolerance, and never narrowing its inputs until it
+happens to pass. Those are all the same move — making the test stop reporting the
+problem instead of fixing the problem — and ADR 0001 exists because that move was
+tried once and produced eleven false "expected failures," three of which cited a
+calibration ladder step that does not exist in the codebase.
+
+**When you cannot fix a failing test, stop and escalate. Do not guess at a domain
+decision and do not work around it.** The escalation procedure has four steps:
+
+1. **Commit your finished work to the branch.** Whatever is done and correct so
+   far is preserved, not lost.
+2. **Set the ticket's own `Status:` line to `blocked`.**
+3. **Append a comment under the ticket's `## Comments` heading**: what you
+   attempted, what failed, and what needs a human decision. (See
+   `docs/agents/issue-tracker.md` for the comment convention.)
+4. **Open the pull request as a draft.** Master is not touched.
+
+The ticket file travels with the branch, so the draft PR plus its failing CI run
+*is* the report — a planning session can read the ticket directly off the branch
+with no separate handoff. This is also why the report must be written into the
+ticket file itself, in `.scratch/`, and not anywhere under `.claude/`: that
+directory is gitignored in this repo, so anything written there never gets
+pushed and no reviewer — human or AI — will ever see it.
+
 <!-- ACTIVE-PLAN:START -->
 ## Active implementation plan
 
