@@ -510,6 +510,7 @@ class TestHvInterlock:
 
     def test_stale_reading_blocks_even_though_pressure_value_was_once_good(self, monkeypatch):
         import time
+
         import rbl.state.hv_interlock_link as hil
         from rbl.hardware.vgc083_driver import VgcReading
         from rbl.snapshots import VacuumState

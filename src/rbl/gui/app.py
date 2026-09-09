@@ -7,7 +7,6 @@ PySide6 front-end. Analysis has been split out to the rbl-analysis repo.
 """
 import logging
 import sys
-
 from dataclasses import dataclass
 from typing import Any, Callable
 

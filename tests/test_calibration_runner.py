@@ -22,8 +22,6 @@ from rbl.config.calibration_config import (
     CAL_MAX_KV,
     CAL_PASSES,
     DRIFT_LOG_INTERVAL_S,
-    DRIFT_MAX_ATTENDED_H,
-    DRIFT_MAX_UNATTENDED_H,
     LoadCondition,
 )
 from rbl.config.hardware_config import AMP_AIN_NAMES, AMP_CHANNEL_MAP, AMP_LABELS

@@ -139,20 +139,23 @@ def evaluate_tests_first(
     if escape_reasons:
         reasons_str = "; ".join(escape_reasons)
         msg = (
-            f"OK (EXEMPT): Application source changes ({len(src_files)} file(s)) have no test changes, "
-            f"but valid exemption was found:\n  - {reasons_str}"
+            f"OK (EXEMPT): Application source changes ({len(src_files)} file(s)) have no "
+            f"test changes, but valid exemption was found:\n  - {reasons_str}"
         )
         return True, msg
 
     file_list = "\n  - ".join(src_files)
     msg = (
-        "FAIL: Application source files modified under 'src/' without corresponding test changes under 'tests/':\n"
+        "FAIL: Application source files modified under 'src/' without corresponding "
+        "test changes under 'tests/':\n"
         f"  - {file_list}\n\n"
         "Tests-first rule violation (see docs/adr/0001-tests-first-and-no-muted-failures.md):\n"
         "1. Write tests under 'tests/' covering the application changes.\n"
-        "2. If this change is genuinely exempt from test updates, provide an explicit escape reason:\n"
+        "2. If this change is genuinely exempt from test updates, provide an explicit "
+        "escape reason:\n"
         "   - PR Label: 'tests-exempt' or 'skip-test-gate'\n"
-        "   - Commit message or PR body: [no-test-needed: <reason>], [tests-exempt: <reason>], or [skip-test-gate]\n"
+        "   - Commit message or PR body: [no-test-needed: <reason>], [tests-exempt: <reason>], "
+        "or [skip-test-gate]\n"
     )
     return False, msg
 
@@ -340,7 +343,9 @@ def main(argv: list[str] | None = None) -> int:
     else:
         changed_files = get_git_changed_files(base=base_ref, head=args.head, cwd=args.repo_root)
         if not all_texts:
-            all_texts.extend(get_git_commit_messages(base=base_ref, head=args.head, cwd=args.repo_root))
+            all_texts.extend(
+                get_git_commit_messages(base=base_ref, head=args.head, cwd=args.repo_root)
+            )
 
     escape_reasons = find_escape_reasons(
         texts=all_texts,

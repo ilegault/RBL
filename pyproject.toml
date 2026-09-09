@@ -27,6 +27,7 @@ select = ["E", "F", "I"]
 # Inserts the repo root onto sys.path before importing scripts.check_layers,
 # since scripts/ is not an installed package.
 "tests/test_layering.py" = ["E402"]
+"tests/test_check_tests_first.py" = ["E402"]
 
 [tool.mypy]
 python_version = "3.13"

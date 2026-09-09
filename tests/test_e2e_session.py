@@ -69,29 +69,34 @@ def test_end_to_end_session_through_main_window(qapp):
         pos_b = SC.mm_to_counts("B", 1.5)
         pos_c = SC.mm_to_counts("C", 3.0)
         pos_d = SC.mm_to_counts("D", 2.0)
+        no_switches = {
+            "forward_switch": False,
+            "reverse_switch": False,
+            "home_switch": False,
+        }
         poll_snapshot = {
             "A": {
                 "pos": pos_a,
                 "moving": False,
-                "switches": {"forward_switch": False, "reverse_switch": False, "home_switch": False},
+                "switches": no_switches,
                 "enabled": True,
             },
             "B": {
                 "pos": pos_b,
                 "moving": False,
-                "switches": {"forward_switch": False, "reverse_switch": False, "home_switch": False},
+                "switches": no_switches,
                 "enabled": True,
             },
             "C": {
                 "pos": pos_c,
                 "moving": False,
-                "switches": {"forward_switch": False, "reverse_switch": False, "home_switch": False},
+                "switches": no_switches,
                 "enabled": True,
             },
             "D": {
                 "pos": pos_d,
                 "moving": False,
-                "switches": {"forward_switch": False, "reverse_switch": False, "home_switch": False},
+                "switches": no_switches,
                 "enabled": True,
             },
         }
@@ -132,7 +137,9 @@ def test_end_to_end_session_through_main_window(qapp):
             timestamp=now,
             xgs_readings=[
                 XgsReading(
-                    channel=XgsChannel(index=0, slot=0, board="CNV", label="Chamber", sensor_code="CNV1"),
+                    channel=XgsChannel(
+                        index=0, slot=0, board="CNV", label="Chamber", sensor_code="CNV1"
+                    ),
                     pressure=1.2e-6,
                     raw="1.2E-06",
                     state="OK",

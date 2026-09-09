@@ -66,7 +66,7 @@ class TestSingleChannelMode:
     def test_target_selector_enables_in_single_mode(self, tab):
         from rbl.gui.widgets.inputs import NoScrollComboBox
         combos = tab.findChildren(NoScrollComboBox)
-        profile_combo, target_combo = combos[1], combos[2]
+        target_combo = combos[2]
 
         tab.on_profile_changed("SINGLE_FAST")
         assert target_combo.isEnabled()
@@ -76,6 +76,7 @@ class TestSingleChannelMode:
 
     def test_streamed_channel_updates_and_others_paused(self, tab, feed):
         from PySide6.QtWidgets import QPushButton
+
         from rbl.gui.widgets.inputs import NoScrollComboBox
         combos = tab.findChildren(NoScrollComboBox)
         profile_combo, target_combo = combos[1], combos[2]
@@ -98,6 +99,7 @@ class TestSingleChannelMode:
 
     def test_current_target_waveform_follows_selection(self, tab, feed):
         from PySide6.QtWidgets import QPushButton
+
         from rbl.gui.widgets.inputs import NoScrollComboBox
         combos = tab.findChildren(NoScrollComboBox)
         profile_combo, target_combo = combos[1], combos[2]
@@ -134,6 +136,7 @@ class TestSingleChannelMode:
 class TestApplyAndSnapshot:
     def test_combo_change_stages_without_emitting(self, tab):
         from PySide6.QtWidgets import QPushButton
+
         from rbl.gui.widgets.inputs import NoScrollComboBox
         # Changing the profile combo must NOT touch the hardware; it only stages.
         emitted = []
@@ -154,6 +157,7 @@ class TestApplyAndSnapshot:
 
     def test_apply_emits_and_clears_pending(self, tab):
         from PySide6.QtWidgets import QPushButton
+
         from rbl.gui.widgets.inputs import NoScrollComboBox
         emitted = []
         tab.profile_change_requested.connect(emitted.append)

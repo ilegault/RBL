@@ -85,7 +85,9 @@ def panel(qapp):
 def test_start_session_enabled_with_no_camera(panel):
     """START SESSION must be enabled even when the camera is closed."""
     p, rec, cam = panel
-    session_btn = [b for b in p.findChildren(QPushButton) if "Session" in b.text() or "START" in b.text()][0]
+    session_btn = [
+        b for b in p.findChildren(QPushButton) if "Session" in b.text() or "START" in b.text()
+    ][0]
     assert session_btn.isEnabled()
 
 
@@ -100,7 +102,10 @@ def test_settings_disable_while_recording(panel):
     p, rec, cam = panel
     rec_fps_spin = [s for s in p.findChildren(QSpinBox) if "acquired frames" in s.toolTip()][0]
     csv_spin = [s for s in p.findChildren(QSpinBox) if s.suffix().strip() == "s"][0]
-    seg_combo = [c for c in p.findChildren(QComboBox) if any("min" in c.itemText(i) for i in range(c.count()))][0]
+    seg_combo = [
+        c for c in p.findChildren(QComboBox)
+        if any("min" in c.itemText(i) for i in range(c.count()))
+    ][0]
 
     rec.start()
     assert not rec_fps_spin.isEnabled()

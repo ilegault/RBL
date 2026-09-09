@@ -109,8 +109,12 @@ def test_camera_tab_constructs_without_error(setup):
 def test_record_fps_change_syncs_between_views(setup):
     """Changing record FPS in one view → other view updates via settings_changed."""
     tab, panel, rec, cam = setup
-    tab_fps_spin = [s for s in tab.findChildren(QSpinBox) if "acquired frames" in s.toolTip()][0]
-    panel_fps_spin = [s for s in panel.findChildren(QSpinBox) if "acquired frames" in s.toolTip()][0]
+    tab_fps_spin = [
+        s for s in tab.findChildren(QSpinBox) if "acquired frames" in s.toolTip()
+    ][0]
+    panel_fps_spin = [
+        s for s in panel.findChildren(QSpinBox) if "acquired frames" in s.toolTip()
+    ][0]
 
     tab_fps_spin.setValue(5)
     assert panel_fps_spin.value() == 5

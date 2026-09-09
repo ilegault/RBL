@@ -86,7 +86,10 @@ def test_src_changes_without_test_fails():
     ]
     passed, msg = evaluate_tests_first(files)
     assert passed is False
-    assert "FAIL: Application source files modified under 'src/' without corresponding test changes under 'tests/'" in msg
+    assert (
+        "FAIL: Application source files modified under 'src/' without corresponding test changes "
+        "under 'tests/'"
+    ) in msg
     assert "src/rbl/hardware/raster_model.py" in msg
 
 

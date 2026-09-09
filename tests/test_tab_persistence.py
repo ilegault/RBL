@@ -4,12 +4,8 @@ tab is visible. These tests mock all hardware and avoid requiring a display.
 """
 import threading
 import time
-from unittest.mock import MagicMock
 
 from rbl.hardware.current_monitor import RollingBuffer
-from rbl.hardware.galil_driver import GalilController
-from rbl.hardware.labjack_driver import LabJackT7
-
 
 # ── RollingBuffer accumulation independence ───────────────────────────────────
 

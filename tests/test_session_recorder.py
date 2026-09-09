@@ -95,6 +95,7 @@ def test_t_rel_s_is_non_decreasing(tmp_path, qapp):
 def test_wall_utc_derived_not_sampled(tmp_path, qapp):
     """wall_utc must equal t0_wall + t_rel_s, not a fresh datetime.now() call."""
     from datetime import datetime
+
     import rbl.services.session_recorder as sr_mod
     sr_mod._logs_dir = lambda: str(tmp_path)
 

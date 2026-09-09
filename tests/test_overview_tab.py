@@ -12,7 +12,6 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtGui import QHideEvent, QShowEvent
 from PySide6.QtWidgets import QApplication
 
 from rbl.config import hardware_config as SC
@@ -611,7 +610,11 @@ def test_a_failed_lock_leaves_the_box_unchecked(tab, monkeypatch):
     tab.beamline.read_timebase = lambda: {"A": "INT", "B": "INT"}
     warned = []
     from PySide6.QtWidgets import QMessageBox
-    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warned.append(a[1] if len(a) > 1 else "Reference clock"))
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        lambda *a, **k: warned.append(a[1] if len(a) > 1 else "Reference clock"),
+    )
     _connect_gens(tab)
 
     tab.chk_ext_ref.setChecked(True)

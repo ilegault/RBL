@@ -18,7 +18,6 @@ import numpy as np
 from rbl.config import hardware_config as SC
 from rbl.state.beamline import Beamline
 
-
 # A single window covering every channel, as the shared stream worker emits it.
 # Channel map (rbl/config/hardware_config.py): log amps AIN0-3, spare AIN4-5,
 # then amp monitors as (current, voltage) pairs Y-(6,7) Y+(8,9) X-(10,11) X+(12,13).

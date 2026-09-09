@@ -24,7 +24,6 @@ from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QApplication,
     QComboBox,
-    QDoubleSpinBox,
 )
 
 from rbl.gui.widgets.inputs import (

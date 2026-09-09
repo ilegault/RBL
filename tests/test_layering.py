@@ -24,7 +24,6 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from scripts.check_layers import (
-    CONVERSION_HELPERS,
     DEFAULT_RATCHET_FILE,
     check_private_access_ratchet,
     find_gui_conversion_violations,

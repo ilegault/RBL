@@ -70,7 +70,9 @@ def find_violations(root: pathlib.Path = pathlib.Path('src/rbl')) -> list[tuple[
     return bad
 
 
-def find_gui_conversion_violations(root: pathlib.Path = pathlib.Path('src/rbl')) -> list[tuple[str, str]]:
+def find_gui_conversion_violations(
+    root: pathlib.Path = pathlib.Path('src/rbl'),
+) -> list[tuple[str, str]]:
     """Scan GUI modules and return any imports or calls to forbidden unit conversion helpers."""
     bad = []
     for p in root.rglob('*.py'):
@@ -87,11 +89,17 @@ def find_gui_conversion_violations(root: pathlib.Path = pathlib.Path('src/rbl'))
             if isinstance(n, ast.ImportFrom):
                 for alias in n.names:
                     if alias.name in CONVERSION_HELPERS:
-                        bad.append((key, f"{p}:{n.lineno}  GUI layer imports conversion helper '{alias.name}'"))
+                        bad.append((
+                            key,
+                            f"{p}:{n.lineno}  GUI layer imports conversion helper '{alias.name}'",
+                        ))
             elif isinstance(n, ast.Import):
                 for alias in n.names:
                     if alias.name in CONVERSION_HELPERS:
-                        bad.append((key, f"{p}:{n.lineno}  GUI layer imports conversion helper '{alias.name}'"))
+                        bad.append((
+                            key,
+                            f"{p}:{n.lineno}  GUI layer imports conversion helper '{alias.name}'",
+                        ))
             elif isinstance(n, ast.Call):
                 func_name = None
                 if isinstance(n.func, ast.Name):
@@ -99,7 +107,10 @@ def find_gui_conversion_violations(root: pathlib.Path = pathlib.Path('src/rbl'))
                 elif isinstance(n.func, ast.Attribute):
                     func_name = n.func.attr
                 if func_name in CONVERSION_HELPERS:
-                    bad.append((key, f"{p}:{n.lineno}  GUI layer calls conversion helper '{func_name}'"))
+                    bad.append((
+                        key,
+                        f"{p}:{n.lineno}  GUI layer calls conversion helper '{func_name}'",
+                    ))
     return bad
 
 

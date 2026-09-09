@@ -328,38 +328,45 @@ The escape reason is recorded in the PR history and visible during code review; 
 <!-- ACTIVE-PLAN:START -->
 ## Active implementation plan
 
-_Written by the planning model on 2026-09-08 03:57. Implement this. If something in it is wrong, say so before changing course._
+_Written by the planning model on 2026-09-09 06:49. Implement this. If something in it is wrong, say so before changing course._
 
-# Active work: test suite overhaul
+# Active work: Faraday cup reader
 
 This is a **pointer**, not the work. The work is a ticket set.
 
-- Spec: `.scratch/test-suite-overhaul/spec.md`
-- Decision record: `docs/adr/0001-tests-first-and-no-muted-failures.md` — **binding, read it first**
-- Tickets: `.scratch/test-suite-overhaul/issues/01…18`
+- Spec: `.scratch/faraday-cup-reader/spec.md`
+- Decision record: `docs/adr/0002-cup-acquisition-triggered-by-current.md` — **read it before ticket 07**
+- Binding: `docs/adr/0001-tests-first-and-no-muted-failures.md` — still in force
+- Glossary: `CONTEXT.md`, "Beam interception and collection" — slit current vs cup current
+- Tickets: `.scratch/faraday-cup-reader/issues/01…09`
 - Tracker conventions: `docs/agents/issue-tracker.md`
+
+Previous effort `.scratch/test-suite-overhaul/` is complete — all 18 tickets done.
 
 ## Next up
 
-Both are unblocked; either can start.
+Three are unblocked and can run in parallel.
 
-- **01 — CI executes the test suite and the type gate is layered.** Land this
-  first regardless. It establishes the baseline test counts that every later
-  ticket measures against, and until it exists every later ticket is guesswork.
-- **02 — Blocked-work protocol written down; stale plan deleted.** Independent,
-  no application code.
+- **01 — Keysight VISA on the control PC, existing instruments confirmed.**
+  **Developer bench task, not agent-grabbable.** Needs physical access. It gates
+  tickets 04 through 09, so start it first even though no code comes out of it.
+- **02 — Retire the bundled-installer path.** No blockers, no hardware.
+- **03 — Slit Currents rename and tab reorder.** No blockers, no hardware.
 
 ## Rules for working this set
 
 - Do not start a ticket whose `Blocked by:` line names an unfinished ticket.
   Work the frontier: any ticket whose blockers are all done.
-- **11 is a review gate.** It presents the audit verdicts and stops for the
-  developer. Nothing after it starts until they sign off. No test is deleted
-  and no application source is changed before that.
-- A failing test is fixed or escalated, never muted. `xfail` is not a tool for
-  greening a build. The escalation path — commit to branch, ticket
-  `Status: blocked`, comment on the ticket, draft PR — is in ADR 0001 decision 3
-  and in ticket 02.
-- The developer does not run the suite locally. Every ticket is verifiable from
-  CI output alone.
+- **01 is a developer task.** An agent must not claim it. If tickets 04+ are
+  blocked waiting on it, work 02 and 03 instead.
+- A failing test is fixed or escalated, never muted. The escalation path —
+  commit to branch, ticket `Status: blocked`, comment on the ticket, draft PR —
+  is ADR 0001 decision 3.
+- Two requirements in this set are structural and will be quietly violated if
+  read as preferences: SCPI response parsing is a **pure function outside the
+  polling thread** (ticket 04), and the acquisition state machine **takes
+  timestamps as inputs and never calls the clock** (ticket 07). Both exist so
+  the feature is testable at one high seam; burying either collapses the seam.
+- The 6482's configure command is never sent. It turns the voltage source
+  outputs on, and those outputs would drive the cup collector.
 <!-- ACTIVE-PLAN:END -->

@@ -5,9 +5,6 @@ import pytest
 
 from rbl.config.hardware_config import (
     AXIS_LETTERS,
-    AXIS_NAMES,
-    DEFAULT_ACCEL_COUNTS_PER_SEC2,
-    DEFAULT_SPEED_COUNTS_PER_SEC,
     LABJACK_CHANNEL_MAP,
     counts_to_mm,
     mm_to_counts,

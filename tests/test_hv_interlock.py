@@ -4,7 +4,6 @@ Unit tests for rbl.hardware.hv_interlock — no Qt, no hardware.
 import pytest
 
 from rbl.hardware.hv_interlock import (
-    HV_PRESSURE_ABSOLUTE_LOCKOUT_TORR,
     interlock_status,
     max_permitted_kv,
 )

@@ -19,7 +19,6 @@ The rules:
 import math
 import os
 
-import numpy as np
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
