@@ -141,10 +141,22 @@ Check, concretely:
 
 ## 6. Land it, or escalate
 
-**Landing:** one ticket per branch, one PR per ticket, never commit to `master`. Set
-the ticket's `Status:` line to `done` — that exact word; the frontier is read
-mechanically and three spellings of "finished" break it. Tick the acceptance criteria
-in the ticket file.
+### Landing the ticket (when all gates pass)
+
+Follow this sequence once the local gate (ruff, check_tests_first, type_gate, pytest) passes and adversarial review is complete:
+
+1. **Update ticket file**: Set `Status: done` (exact casing) and tick all acceptance criteria checkboxes `[x]` in `.scratch/<effort>/issues/NN-*.md`.
+2. **Commit all changes**: Commit application code, tests, docstrings, and the updated ticket file to the ticket branch. Never commit directly to `master`.
+3. **Push the branch**: Push the branch to remote with `git push -u origin <branch-name>`.
+4. **Create the Pull Request**:
+   - If GitHub CLI (`gh`) is installed and authenticated:
+     ```powershell
+     gh pr create --base master --head <branch-name> --title "<ticket title>" --body "<structured summary with criteria & verification>"
+     ```
+   - If `gh` is not available:
+     Provide the direct GitHub PR creation URL (`https://github.com/<owner>/<repo>/pull/new/<branch-name>`) and output a structured PR block (Title, Summary of changes, Acceptance criteria checklist, and Gate results) ready for submission.
+
+### Failure handling and escalation (never mute a test)
 
 **A failing test is fixed or escalated, never muted.** No `xfail`. No deleted or
 weakened assertions, no loosened tolerances, no inputs narrowed until it passes.
@@ -160,7 +172,7 @@ explaining, so an explanation was invented. Do not invent.
 2. Set the ticket's `Status:` to `blocked`.
 3. Append under the ticket's `## Comments` heading: what you attempted, what failed,
    and what needs a human decision.
-4. Open the pull request as a **draft**. Master is untouched.
+4. Push the branch (`git push -u origin <branch-name>`) and open the pull request as a **draft** (`gh pr create --draft ...` or via GitHub web). Master is untouched.
 
 The report goes in the ticket file under `.scratch/`, never under `.claude/` — that
 directory is gitignored, so anything written there is never pushed and no reviewer,
