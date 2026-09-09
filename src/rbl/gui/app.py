@@ -165,6 +165,19 @@ log = logging.getLogger(__name__)
 class MainWindow(QMainWindow):
     TAB_DECLARATIONS = TAB_DECLARATIONS
 
+    overview_tab: OverviewTab
+    current_tab: CurrentTab
+    motor_tab: MotorTab
+    funcgen_tab: FuncGenTab
+    amp_tab: AmpTab
+    camera_tab: CameraTab
+    calibration_tab: CalibrationTab
+    load_char_tab: LoadCharacterizationTab
+    vacuum_tab: VacuumTab
+    profiler_tab: ProfilerTab
+    raster_planner_tab: RasterPlannerTab
+    dynamic_adjustment_tab: DynamicAdjustmentTab
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Right Beam Line DAQ")
@@ -368,7 +381,7 @@ class MainWindow(QMainWindow):
     # ── Tab views & layout helpers ────────────────────────────────────────────
 
     @property
-    def stream_consuming_tabs(self) -> tuple[QWidget, ...]:
+    def stream_consuming_tabs(self) -> tuple[Any, ...]:
         """Tabs that consume LabJack stream data, derived from TAB_DECLARATIONS."""
         return tuple(
             getattr(self, decl.attr_name)
@@ -377,7 +390,7 @@ class MainWindow(QMainWindow):
         )
 
     @property
-    def _lj_tabs(self) -> tuple[QWidget, ...]:
+    def _lj_tabs(self) -> tuple[Any, ...]:
         """Alias for stream_consuming_tabs preserving existing internal callers."""
         return self.stream_consuming_tabs
 
