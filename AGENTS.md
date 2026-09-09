@@ -243,10 +243,10 @@ new instrument connects mid-run rather than silently dropping its columns.
 4. **Stale `__pycache__`** contains modules that no longer exist
    (`amp_test_runner`, `labjack_poller`). Don't be misled by a grep hit in a
    `.pyc`; always restrict to `--include='*.py'`.
-5. **PyInstaller `vendor/`.** Driver installers ship *beside* `RBL.exe`, not
-   inside the archive — bundling them got the app flagged as a dropper. Read the
-   long comment in `rbl.spec` before changing it, and see
-   `docs/ANTIVIRUS_FALSE_POSITIVE.md`.
+5. **PyInstaller `vendor/`.** Bundled driver installers have been retired
+   completely — bundling them inside or shipping them beside the app got the app
+   flagged as a dropper. System drivers are installed once on the control PC.
+   See `docs/ANTIVIRUS_FALSE_POSITIVE.md`.
 6. **Print vs logging.** 246 `print()` calls and 29 modules using `logging`
    coexist. The exe builds with `console=True`, so prints are visible but nothing
    lands in a log file. Prefer `logging.getLogger(__name__)` in new code.

@@ -27,33 +27,12 @@ RBL_GUI  = os.path.join(RBL_PKG, "gui")       # C:\...\RBL\src\rbl\gui
 # We just need to ensure data files (fonts, styles, .pyi stubs) are copied.
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
-# vendor\ installers — SHIPPED BESIDE THE APP, NOT INSIDE IT.
+# vendor\ installers — RETIRED (DELIBERATELY NOT BUNDLED OR SHIPPED BESIDE APP)
 #
-# These used to be added as datas, which buries them in dist\RBL\_internal\
-# vendor\ — i.e. INSIDE the PyInstaller archive.  That is the same shape that
-# got this app quarantined once already with ffmpeg (see the note below), and
-# it is worse here, because vendor\ now holds:
-#
-#   LabJackBasic_*.exe   18 MB third-party driver installer
-#   ni-visa_*_online.exe  9 MB ONLINE installer - a stub that downloads and
-#                         runs more code from the internet at first launch
-#
-# What a scanner sees statically is then: an unsigned executable that carries
-# other executables inside it, one of which is a network downloader, plus code
-# (driver.py: ShellExecuteW "runas") that launches them ELEVATED.  Read
-# without context that is the textbook description of a dropper, and no amount
-# of it being true and well-intentioned changes what the heuristic matches.
-#
-# Nothing is lost by moving them out.  driver._candidate_dirs() looks in
-# exe_dir\vendor\ BEFORE sys._MEIPASS\vendor\, so installers sitting next to
-# RBL.exe are found first and one-click driver install behaves identically.
-# build.bat copies vendor\ into dist\RBL\ after PyInstaller finishes, and the
-# USB deploy picks it up with the rest of the folder.
-#
-# This is a real reduction in what the app IS - it no longer contains other
-# programs - not a way of hiding what it does.  If IT still objects, the right
-# answer is to drop vendor\ entirely and have them install the LabJack and
-# NI-VISA drivers once, system-wide; the app already degrades gracefully.
+# Bundling third-party driver installers or shipping them alongside the executable
+# triggered dropper heuristics on lab antivirus scanners. The bundled-installer
+# path was completely retired; drivers are installed system-wide on the control
+# PC. See docs/ANTIVIRUS_FALSE_POSITIVE.md for the incident analysis and context.
 # ---------------------------------------------------------------------------
 all_datas = (
     collect_data_files("matplotlib")   # fonts, style sheets, matplotlibrc

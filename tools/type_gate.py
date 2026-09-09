@@ -42,9 +42,13 @@ def _is_hard(path: str, hard_prefixes: list[str]) -> bool:
     normalized = path.replace("\\", "/")
     return any(normalized.startswith(prefix + "/") for prefix in hard_prefixes)
 
-
 def main() -> int:
-    result = subprocess.run([sys.executable, "-m", "mypy"], cwd=_REPO_ROOT, capture_output=True, text=True)
+    result = subprocess.run(
+        [sys.executable, "-m", "mypy"],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
     print(result.stdout, end="")
     print(result.stderr, end="", file=sys.stderr)
 

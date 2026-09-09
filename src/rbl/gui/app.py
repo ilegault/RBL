@@ -18,7 +18,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMessageBox,
-    QPushButton,
     QScrollArea,
     QSplitter,
     QStackedWidget,
@@ -537,14 +536,14 @@ class MainWindow(QMainWindow):
         for tab in self._lj_tabs:
             tab.on_profile_changed(profile_name)
 
-    # ── Prerequisite checks: detect missing drivers, offer one-click install ─
+    # ── Prerequisite checks: detect missing drivers ───────────────────────────
 
     def _refresh_driver_state(self) -> None:
         """Check every system-level prerequisite and populate the warning bar.
 
-        Each missing dependency gets its own row with a message and, when a
-        bundled installer is available, an Install button.  The bar hides
-        itself entirely when everything is present.
+        Each missing dependency gets its own row with a message and guidance
+        identifying the required software. The bar hides itself entirely when
+        everything is present.
         """
         # Clear previous rows
         while self._prereq_layout.count():
@@ -559,7 +558,7 @@ class MainWindow(QMainWindow):
 
         _DOWNLOAD_HINTS = {
             "ljm":    "install the LJM software from labjack.com",
-            "visa":   "install NI-VISA Runtime from ni.com/visa",
+            "visa":   "install Keysight IO Libraries Suite",
             "serial": "install the driver for your USB-serial adapter",
         }
 
@@ -572,52 +571,14 @@ class MainWindow(QMainWindow):
             lbl = QLabel()
             lbl.setStyleSheet("color: #664d03; font-weight: bold;")
 
-            installer = failure["installer"]
             key = failure["key"]
-
-            if installer:
-                lbl.setText(failure["message"]
-                            + f"  —  click 'Install {failure['name']}'")
-                btn = QPushButton(f"Install {failure['name']}")
-                btn.setToolTip(f"Launch the bundled {failure['name']} installer "
-                               "(requires admin).")
-                # Capture installer path and name in the lambda closure
-                btn.clicked.connect(
-                    lambda _checked=False, p=installer, n=failure["name"]:
-                        self._install_prerequisite(p, n)
-                )
-                row_lay.addWidget(lbl, stretch=1)
-                row_lay.addWidget(btn)
-            else:
-                hint = _DOWNLOAD_HINTS.get(key, "install the required driver")
-                lbl.setText(failure["message"] + f"  —  {hint}.")
-                row_lay.addWidget(lbl, stretch=1)
+            hint = _DOWNLOAD_HINTS.get(key, "install the required driver")
+            lbl.setText(failure["message"] + f"  —  {hint}.")
+            row_lay.addWidget(lbl, stretch=1)
 
             self._prereq_layout.addWidget(row)
 
         self._prereq_bar.show()
-
-    def _install_prerequisite(self, path: str, name: str) -> None:
-        """Launch a bundled installer with a UAC prompt, then update the bar."""
-        if QMessageBox.question(
-                self, f"Install {name}",
-                f"This will launch the {name} installer.\n\n"
-                "Windows will ask for administrator permission.  When it "
-                "finishes, close and reopen RBL so it can find the "
-                f"driver.\n\nContinue?") != QMessageBox.StandardButton.Yes:
-            return
-
-        if ljm_driver.launch_installer(path):
-            QMessageBox.information(
-                self, f"Install {name}",
-                f"{name} installer launched — finish it, then restart RBL.")
-            # Re-check; the install is async so the driver may still appear
-            # missing until the user restarts, but re-checking is harmless.
-            self._refresh_driver_state()
-        else:
-            QMessageBox.warning(
-                self, f"Install {name}",
-                "Could not launch the installer:\n" + path)
 
     # ── Close ─────────────────────────────────────────────────────────────────
 
