@@ -48,31 +48,30 @@ That import is the hinge this whole setup turns on.
 holds today *including* the `ACTIVE-PLAN` block. `CLAUDE.md` shrinks to a single
 import line.
 
-### Steps
+### Steps — done on 2026-09-09
 
-1. **Rename, preserving history.**
+1. **`CLAUDE.md` renamed to `AGENTS.md`.** Done with a plain `mv`; git detects the
+   rename by content similarity at commit time. Not staged — commit it yourself.
+2. **New `CLAUDE.md` created**, containing exactly one line: `@AGENTS.md`.
+   Nothing else belongs in it. Any second line is a line Antigravity cannot see.
+3. **`set_plan.py` retargeted** to write the `ACTIVE-PLAN` block into `AGENTS.md`.
+   Its `--git` staging now covers `AGENTS.md`, `CLAUDE.md` and `.claude/plans/`,
+   so the stub gets committed on the first remote-mode run. Its docstring records
+   why, so nobody points it back at `CLAUDE.md` later. Verified: a run writes to
+   `AGENTS.md` and leaves the markers and surrounding content intact.
+4. **Implementation protocol added** to `AGENTS.md` §11, immediately above the
+   `ACTIVE-PLAN` block. Nine numbered steps: read the ticket and its ADRs, work the
+   frontier, the two-word status vocabulary, one ticket per branch, run the suite,
+   never mute a failing test, the four-step escalation, why the report goes in
+   `.scratch/` and not `.claude/`, and update the docstring's reasoning.
 
-       git mv CLAUDE.md AGENTS.md
+### Still to do — yours
 
-2. **Create a new `CLAUDE.md`** containing only:
-
-       @AGENTS.md
-
-   Nothing else. Any content added here is content Antigravity cannot see, which is
-   the failure mode this setup exists to prevent.
-
-3. **Retarget `set_plan.py`.** It writes between the `ACTIVE-PLAN:START` and
-   `ACTIVE-PLAN:END` markers in a file it currently hardcodes as `CLAUDE.md`. Change
-   that filename to `AGENTS.md`. The markers, the archive to `.claude/plans/`, and
-   the `--git` behaviour are all unchanged.
-
-4. **Update the Cowork project instructions.** They tell the planner to read
-   `<REPO>/CLAUDE.md` first. Change that to `<REPO>/AGENTS.md`, and change the
-   sentence about the `ACTIVE-PLAN` block being machine-managed to name the same
-   file.
-
-5. **Add an implementation-protocol section to `AGENTS.md`.** This is the part that
-   matters most and the part easiest to skip. See below.
+- **Update the Cowork project instructions.** They tell the planner to read
+  `<REPO>/CLAUDE.md` first and describe the `ACTIVE-PLAN` block as living there.
+  Both references should now say `AGENTS.md`. This file lives in the Cowork UI, not
+  the repo, so it cannot be changed from a session.
+- **Commit the rename.** Nothing here was staged.
 
 ### Why not a symlink
 
