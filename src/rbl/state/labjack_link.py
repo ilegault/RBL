@@ -63,7 +63,7 @@ class LabJackLinkMixin:
         super().__init__ chain alongside QObject.
         """
         # ONE physical T7 -> ONE LabJackT7 instance -> ONE stream worker
-        # reading all channels at high rate. Both the Beam Current tab
+        # reading all channels at high rate. Both the Slit Currents tab
         # (AIN0-3, log amps) and the HV Amplifier tab (AIN6-13, EEL5000
         # monitors) render from the snapshots this produces. Never let a tab
         # open its own handle.

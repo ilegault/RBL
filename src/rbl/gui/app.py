@@ -1,6 +1,6 @@
 """
 Right Beam Line DAQ App — Native Desktop GUI
-Hardware-only: Stepper Motors, Beam Current, Function Generators.
+Hardware-only: Stepper Motors, Slit Currents, Function Generators.
 Run: python -m rbl.main
 
 PySide6 front-end. Analysis has been split out to the rbl-analysis repo.
@@ -82,22 +82,46 @@ def _make_overview_tab(win: "MainWindow") -> OverviewTab:
 
 TAB_DECLARATIONS: tuple[TabDeclaration, ...] = (
     TabDeclaration(
+        title="Overview",
+        attr_name="overview_tab",
+        factory=_make_overview_tab,
+        consumes_stream=False,
+    ),
+    TabDeclaration(
+        title="Vacuum",
+        attr_name="vacuum_tab",
+        factory=lambda win: VacuumTab(win.beamline, win),
+        consumes_stream=False,
+    ),
+    TabDeclaration(
         title="Stepper Motors",
         attr_name="motor_tab",
         factory=lambda win: MotorTab(win.beamline, win),
         consumes_stream=False,
     ),
     TabDeclaration(
-        title="Beam Current",
+        title="Slit Currents",
         attr_name="current_tab",
         factory=lambda win: CurrentTab(win.beamline, win),
         consumes_stream=True,
     ),
     TabDeclaration(
-        title="HV Amplifiers",
-        attr_name="amp_tab",
-        factory=lambda win: AmpTab(win.beamline, win),
-        consumes_stream=True,
+        title="Beam Profiler",
+        attr_name="profiler_tab",
+        factory=lambda win: ProfilerTab(win.beamline, win),
+        consumes_stream=False,
+    ),
+    TabDeclaration(
+        title="Camera",
+        attr_name="camera_tab",
+        factory=lambda win: CameraTab(win.session_recorder, win.camera_source, win),
+        consumes_stream=False,
+    ),
+    TabDeclaration(
+        title="Raster Planner",
+        attr_name="raster_planner_tab",
+        factory=lambda win: RasterPlannerTab(win.beamline, win.profiler_tab, win),
+        consumes_stream=False,
     ),
     TabDeclaration(
         title="Function Generators",
@@ -106,16 +130,16 @@ TAB_DECLARATIONS: tuple[TabDeclaration, ...] = (
         consumes_stream=False,
     ),
     TabDeclaration(
-        title="Overview",
-        attr_name="overview_tab",
-        factory=_make_overview_tab,
-        consumes_stream=False,
+        title="HV Amplifiers",
+        attr_name="amp_tab",
+        factory=lambda win: AmpTab(win.beamline, win),
+        consumes_stream=True,
     ),
     TabDeclaration(
-        title="Camera",
-        attr_name="camera_tab",
-        factory=lambda win: CameraTab(win.session_recorder, win.camera_source, win),
-        consumes_stream=False,
+        title="Dynamic Adjustment",
+        attr_name="dynamic_adjustment_tab",
+        factory=lambda win: DynamicAdjustmentTab(win.beamline, win),
+        consumes_stream=True,
     ),
     TabDeclaration(
         title="HV Calibration",
@@ -127,30 +151,6 @@ TAB_DECLARATIONS: tuple[TabDeclaration, ...] = (
         title="Load Characterization",
         attr_name="load_char_tab",
         factory=lambda win: LoadCharacterizationTab(win.beamline, win),
-        consumes_stream=True,
-    ),
-    TabDeclaration(
-        title="Vacuum",
-        attr_name="vacuum_tab",
-        factory=lambda win: VacuumTab(win.beamline, win),
-        consumes_stream=False,
-    ),
-    TabDeclaration(
-        title="Beam Profiler",
-        attr_name="profiler_tab",
-        factory=lambda win: ProfilerTab(win.beamline, win),
-        consumes_stream=False,
-    ),
-    TabDeclaration(
-        title="Raster Planner",
-        attr_name="raster_planner_tab",
-        factory=lambda win: RasterPlannerTab(win.beamline, win.profiler_tab, win),
-        consumes_stream=False,
-    ),
-    TabDeclaration(
-        title="Dynamic Adjustment",
-        attr_name="dynamic_adjustment_tab",
-        factory=lambda win: DynamicAdjustmentTab(win.beamline, win),
         consumes_stream=True,
     ),
 )
@@ -165,17 +165,17 @@ class MainWindow(QMainWindow):
     TAB_DECLARATIONS = TAB_DECLARATIONS
 
     overview_tab: OverviewTab
-    current_tab: CurrentTab
+    vacuum_tab: VacuumTab
     motor_tab: MotorTab
+    current_tab: CurrentTab
+    profiler_tab: ProfilerTab
+    camera_tab: CameraTab
+    raster_planner_tab: RasterPlannerTab
     funcgen_tab: FuncGenTab
     amp_tab: AmpTab
-    camera_tab: CameraTab
+    dynamic_adjustment_tab: DynamicAdjustmentTab
     calibration_tab: CalibrationTab
     load_char_tab: LoadCharacterizationTab
-    vacuum_tab: VacuumTab
-    profiler_tab: ProfilerTab
-    raster_planner_tab: RasterPlannerTab
-    dynamic_adjustment_tab: DynamicAdjustmentTab
 
     def __init__(self):
         super().__init__()
@@ -393,7 +393,7 @@ class MainWindow(QMainWindow):
         """Alias for stream_consuming_tabs preserving existing internal callers."""
         return self.stream_consuming_tabs
 
-    def _tab_index(self, title: str) -> int:
+    def tab_index(self, title: str) -> int:
         """Return the outer tab-bar index for the tab labelled *title*.
 
         Safer than a hand-maintained OVERVIEW_TAB_INDEX = 4 constant: inserting
@@ -404,6 +404,10 @@ class MainWindow(QMainWindow):
             if self._outer_tabbar.tabText(i) == title:
                 return i
         raise ValueError(f"tab not found: {title!r}")
+
+    def _tab_index(self, title: str) -> int:
+        """Alias for tab_index preserving existing callers."""
+        return self.tab_index(title)
 
     @staticmethod
     def _wrap_scroll(widget: QWidget) -> QScrollArea:
@@ -675,7 +679,7 @@ class MainWindow(QMainWindow):
         else:
             self._outer_stack.setCurrentIndex(left_index)
 
-    def _stack_index(self, tab_index: int) -> int:
+    def stack_index(self, tab_index: int) -> int:
         """Map a tab-bar index to the current _outer_stack index.
 
         While in split mode the scroll area for self._split_index has been
@@ -685,6 +689,10 @@ class MainWindow(QMainWindow):
         if self._split_index < 0 or tab_index < self._split_index:
             return tab_index
         return tab_index - 1
+
+    def _stack_index(self, tab_index: int) -> int:
+        """Alias for stack_index preserving existing callers."""
+        return self.stack_index(tab_index)
 
     def _mark_split_tab(self, index: int):
         """Colour the right-pane tab blue; reset all others to default."""

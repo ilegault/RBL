@@ -3,7 +3,7 @@ beam_indicator.py
 The beam-position indicator: an aperture picture plus slit-current readouts.
 
 Moved out of logamp_tab.py so the Overview tab can embed the same widget the
-Beam Current tab uses, fed the same ``BeamEstimate`` — the two views must never
+Slit Currents tab uses, fed the same ``BeamEstimate`` — the two views must never
 be able to disagree about where the beam is.
 """
 import math

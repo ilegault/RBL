@@ -1,6 +1,6 @@
 """
 logamp_tab.py
-PySide6 widget for the "Beam Current" outer tab.
+PySide6 widget for the "Slit Currents" outer tab.
 
 Renders the four NEC log amps at ~10 Hz: each slit current numerically, on a
 live rolling plot, and as a beam-centering indicator.
@@ -44,7 +44,7 @@ from rbl.state.snapshots import LogAmpState
 # ─── The tab widget ───────────────────────────────────────────────────────────
 
 class CurrentTab(QWidget):
-    """The 'Beam Current' outer tab."""
+    """The 'Slit Currents' outer tab."""
 
     BUFFER_CAPACITY = 36_000   # ~1 hour at 10 Hz
     WINDOW_SECONDS  = 120      # default 2-minute viewport
