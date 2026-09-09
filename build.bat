@@ -135,23 +135,6 @@ if !ERRORLEVEL! NEQ 0 (
     exit /b 1
 )
 
-:: --- Copy vendor installers BESIDE the app, not inside it ---
-:: rbl.spec deliberately no longer bundles these as PyInstaller datas: an
-:: unsigned .exe carrying other .exe files (one of them an online downloader
-:: stub) is a dropper heuristic, and it got this app quarantined before.
-:: driver._candidate_dirs() checks exe_dir\vendor\ first, so putting them
-:: here keeps one-click driver install working exactly as it did.
-if exist "vendor\*.exe" (
-    echo.
-    echo Copying vendor installers to dist\RBL\vendor\ ...
-    if not exist "dist\RBL\vendor" mkdir "dist\RBL\vendor"
-    copy /Y "vendor\*.exe" "dist\RBL\vendor\" >nul
-    if !ERRORLEVEL! NEQ 0 (
-        echo WARNING: vendor installers were not copied - the driver-install
-        echo          button will say the installer is missing. Not fatal.
-    )
-)
-
 :: --- Re-verify drive is still accessible after the build ---
 if not exist "!USB_DRIVE!\" (
     echo.

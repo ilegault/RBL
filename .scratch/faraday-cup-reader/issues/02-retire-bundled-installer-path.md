@@ -11,21 +11,21 @@ message naming the library they actually need to install — Keysight IO Librari
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** done
 
 Scope is deliberately narrow. Remove the dead bundled-installer feature as one coherent
 unit; leave the capability checks alone. They work and they are still used.
 
-- [ ] The installer-lookup helpers, candidate-directory search, and installer launcher
+- [x] The installer-lookup helpers, candidate-directory search, and installer launcher
       are removed from the driver preflight module
-- [ ] The installer field is removed from the preflight summary, and every consumer of
+- [x] The installer field is removed from the preflight summary, and every consumer of
       that summary is updated
-- [ ] The three capability checks (LabJack, VISA, USB-serial) remain and still report
+- [x] The three capability checks (LabJack, VISA, USB-serial) remain and still report
       correctly
-- [ ] The VISA capability check's guidance text names Keysight IO Libraries Suite
-- [ ] The build script no longer copies installers into the distribution directory, and
+- [x] The VISA capability check's guidance text names Keysight IO Libraries Suite
+- [x] The build script no longer copies installers into the distribution directory, and
       no longer warns when they are absent
-- [ ] The build specification's commentary about shipping installers beside the
+- [x] The build specification's commentary about shipping installers beside the
       executable is replaced with a short note pointing at the antivirus incident document
-- [ ] A build still produces a working application
-- [ ] No other behaviour in the preflight module changes
+- [x] A build still produces a working application
+- [x] No other behaviour in the preflight module changes
