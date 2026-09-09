@@ -10,7 +10,7 @@ This tab does NOT own a LabJack connection and does NOT scale a monitor
 voltage itself. Beamline owns the single shared LabJackT7 + stream worker and
 converts each window once (rbl/state/labjack_link.py); this tab renders the
 AmpState that falls out — the AIN6..AIN13 half of it. The log amps (AIN0..3)
-in the same window reach the Beam Current tab as a LogAmpState and are not
+in the same window reach the Slit Currents tab as a LogAmpState and are not
 this tab's business.
 
 ONE plot, two viewing modes (driven by the time-window zoom)

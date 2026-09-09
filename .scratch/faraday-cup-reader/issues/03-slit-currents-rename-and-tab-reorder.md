@@ -17,17 +17,17 @@ ticket.
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The slit current tab is titled "Slit Currents" everywhere it is named, including
+- [x] The slit current tab is titled "Slit Currents" everywhere it is named, including
       docstrings that refer to it
-- [ ] Tabs appear in the order above
-- [ ] The application still opens on Overview
-- [ ] Split view still works: right-clicking a tab still moves it and stack indices
+- [x] Tabs appear in the order above
+- [x] The application still opens on Overview
+- [x] Split view still works: right-clicking a tab still moves it and stack indices
       still resolve correctly
-- [ ] Tabs that consume the LabJack stream still receive it — the set derives from the
+- [x] Tabs that consume the LabJack stream still receive it — the set derives from the
       declarations and must not need separate maintenance
-- [ ] The two existing tests that assume the slit tab is second are converted to look
+- [x] The two existing tests that assume the slit tab is second are converted to look
       the tab up **by title**, not renumbered to a new index
-- [ ] No test in the suite identifies a tab by hardcoded index
-- [ ] Full suite green
+- [x] No test in the suite identifies a tab by hardcoded index
+- [x] Full suite green

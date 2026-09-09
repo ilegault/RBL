@@ -71,7 +71,7 @@ Four upward imports currently exist and are documented as defects in
    driver. `Beamline` (`rbl/state/beamline.py`) owns the LabJack T7, the Galil,
    both DG1022Z, both vacuum controllers, and the scope. Tabs reach hardware
    through `Beamline` methods or signals. This is why connecting the T7 from the
-   Beam Current tab also connects it for the HV Amplifiers tab — there is one
+   Slit Currents tab also connects it for the HV Amplifiers tab — there is one
    physical T7.
 2. **One conversion.** Raw volts become amps / kV / mA in exactly one place
    (`rbl/state/labjack_link.py`), and are published as frozen dataclasses from
@@ -101,9 +101,9 @@ MainWindow (rbl/gui/app.py)
 ├─ CameraSource ─────────────┤→ SessionRecorder (one per process)
 │                            ┘
 └─ 12 tabs, each wrapped in a QScrollArea inside a QStackedWidget
-     Stepper Motors · Beam Current · HV Amplifiers · Function Generators ·
-     Overview · Camera · HV Calibration · Load Characterization · Vacuum ·
-     Beam Profiler · Raster Planner · Dynamic Adjustment
+     Overview · Vacuum · Stepper Motors · Slit Currents · Beam Profiler ·
+     Camera · Raster Planner · Function Generators · HV Amplifiers ·
+     Dynamic Adjustment · HV Calibration · Load Characterization
 ```
 
 `MainWindow.__init__` is the wiring diagram. Every cross-tab connection is made

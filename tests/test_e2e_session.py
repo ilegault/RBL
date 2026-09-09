@@ -7,7 +7,7 @@ operational session (motor polls, LabJack stream windows, FuncGen readbacks,
 vacuum readings, scope waveforms) through the real Beamline and worker
 pipelines, and asserts on what an operator would see on screen across key tabs:
   * Overview
-  * Beam Current
+  * Slit Currents
   * HV Amplifiers
   * Stepper Motors
   * Vacuum
@@ -240,7 +240,7 @@ def test_end_to_end_session_through_main_window(qapp):
         # HV Interlock status
         assert "OK" in win.overview_tab.lbl_hv_interlock.text()
 
-        # B. Beam Current Tab
+        # B. Slit Currents Tab
         assert "3.00" in win.current_tab.lbl_v["AIN0"].text()
         assert "µA" in win.current_tab.lbl_i["AIN0"].text()
 

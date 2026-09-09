@@ -92,30 +92,33 @@ class TestOneWindowReachesBothTabs:
 
 
 class TestTabNavigation:
-    """Verify the four-tab stack switches correctly.
-
-    Tab indices:
-        0 = Stepper Motors
-        1 = Beam Current
-        2 = HV Amplifiers
-        3 = Function Generators
-    """
+    """Verify the outer tab stack switches correctly."""
 
     def test_starts_on_the_overview(self, win):
         # The app opens on Overview: it answers "what is the beamline doing"
         # without pressing anything, and it is where Connect All lives.
-        idx = win._tab_index("Overview")
+        idx = win.tab_index("Overview")
         assert win._outer_stack.currentIndex() == idx
         assert win._outer_tabbar.currentIndex() == idx
         assert win._outer_tabbar.tabText(idx) == "Overview"
 
-
-
-
-
-
-
-
+    def test_tab_order_and_titles(self, win):
+        expected_order = [
+            "Overview",
+            "Vacuum",
+            "Stepper Motors",
+            "Slit Currents",
+            "Beam Profiler",
+            "Camera",
+            "Raster Planner",
+            "Function Generators",
+            "HV Amplifiers",
+            "Dynamic Adjustment",
+            "HV Calibration",
+            "Load Characterization",
+        ]
+        actual_titles = [win._outer_tabbar.tabText(i) for i in range(win._outer_tabbar.count())]
+        assert actual_titles == expected_order
 
     def test_tabs_derive_from_single_declaration(self, win):
         from rbl.gui.app import TAB_DECLARATIONS
@@ -139,59 +142,65 @@ class TestTabNavigation:
 
     def test_split_view_reordering_and_restoration(self, win, qapp):
         # Initial: Overview active
-        overview_idx = win._tab_index("Overview")
+        overview_idx = win.tab_index("Overview")
         assert win._outer_stack.currentIndex() == overview_idx
 
-        # Right click Stepper Motors (index 0) to put into right split pane
-        win._on_tab_right_clicked(0)
+        # Right click Stepper Motors to put into right split pane
+        motor_idx = win.tab_index("Stepper Motors")
+        win._on_tab_right_clicked(motor_idx)
         qapp.processEvents()
-        assert win._split_index == 0
+        assert win._split_index == motor_idx
         assert win._split_stack.isVisible()
         assert win._split_stack.currentWidget().widget() is win.motor_tab
 
         # In split mode, the outer stack has one fewer widget and indices shift
         assert win._outer_stack.count() == len(win.TAB_DECLARATIONS) - 1
 
-        # Left click another tab (e.g. Beam Current at tabbar index 1)
-        # Should map to stack index 0 because 0 was removed
-        win._on_outer_tab_clicked(1)
+        # Left click another tab (e.g. Slit Currents)
+        slit_idx = win.tab_index("Slit Currents")
+        win._on_outer_tab_clicked(slit_idx)
         qapp.processEvents()
-        assert win._outer_stack.currentIndex() == 0
+        assert win._outer_stack.currentIndex() == win.stack_index(slit_idx)
         assert win._outer_stack.currentWidget().widget() is win.current_tab
 
-        # Right-click same tab (index 0) to exit split view
-        win._on_tab_right_clicked(0)
+        # Right-click same tab to exit split view
+        win._on_tab_right_clicked(motor_idx)
         qapp.processEvents()
         assert win._split_index == -1
         assert not win._split_stack.isVisible()
         assert win._outer_stack.count() == len(win.TAB_DECLARATIONS)
-        # Tab at position 0 in outer stack is motor_tab again
-        assert win._outer_stack.widget(0).widget() is win.motor_tab
-
+        # Tab at position motor_idx in outer stack is motor_tab again
+        assert win._outer_stack.widget(motor_idx).widget() is win.motor_tab
 
 
 class TestTabStatePersistence:
     """Tab widgets must retain their internal state after navigating away and back."""
 
     def test_motor_spinbox_preserved_after_leaving(self, win, qapp):
-        win._on_outer_tab_clicked(0)
+        motor_idx = win.tab_index("Stepper Motors")
+        slit_idx = win.tab_index("Slit Currents")
+        win._on_outer_tab_clicked(motor_idx)
         panel = win.motor_tab.axes["A"]
         panel.spn_speed.setValue(500.0)
-        win._on_outer_tab_clicked(1)        # leave
+        win._on_outer_tab_clicked(slit_idx)        # leave
         qapp.processEvents()
-        win._on_outer_tab_clicked(0)        # come back
+        win._on_outer_tab_clicked(motor_idx)        # come back
         assert panel.spn_speed.value() == 500.0
 
     def test_current_tab_live_mode_preserved_after_leaving(self, win, qapp):
-        win._on_outer_tab_clicked(1)
+        motor_idx = win.tab_index("Stepper Motors")
+        slit_idx = win.tab_index("Slit Currents")
+        win._on_outer_tab_clicked(slit_idx)
         ct = win.current_tab
         assert ct.plot.is_live is True
-        win._on_outer_tab_clicked(0)
-        win._on_outer_tab_clicked(1)
+        win._on_outer_tab_clicked(motor_idx)
+        win._on_outer_tab_clicked(slit_idx)
         assert ct.plot.is_live is True
 
     def test_frozen_current_tab_stays_frozen_after_navigation(self, win, qapp):
         ct = win.current_tab
+        motor_idx = win.tab_index("Stepper Motors")
+        slit_idx = win.tab_index("Slit Currents")
         # Through the window's OWN Beamline, so this goes over the same
         # logamps_changed connection MainWindow makes at construction.
         for i in range(5):
@@ -199,8 +208,8 @@ class TestTabStatePersistence:
                 window_payload(LOG_AMPS_AT_1UA, t=float(i)))
         ct.plot._on_slider_changed(4000)    # enter frozen mode
         assert ct.plot.is_live is False
-        win._on_outer_tab_clicked(0)        # leave current tab
-        win._on_outer_tab_clicked(1)        # come back
+        win._on_outer_tab_clicked(motor_idx)        # leave current tab
+        win._on_outer_tab_clicked(slit_idx)        # come back
         assert ct.plot.is_live is False      # still frozen
 
 
@@ -212,37 +221,42 @@ class TestRedrawGating:
 
     def test_current_tab_redraw_only_while_visible(self, win, qapp):
         ct = win.current_tab
-        win._on_outer_tab_clicked(0)         # start on Motors: current_tab hidden
+        motor_idx = win.tab_index("Stepper Motors")
+        slit_idx = win.tab_index("Slit Currents")
+        win._on_outer_tab_clicked(motor_idx)         # start on Motors: current_tab hidden
         qapp.processEvents()
         ct.on_labjack_connected("TESTSERIAL")
         assert not ct.plot.redraw_timer.isActive()   # connected but hidden
 
-        win._on_outer_tab_clicked(1)         # switch to Beam Current
+        win._on_outer_tab_clicked(slit_idx)         # switch to Slit Currents
         qapp.processEvents()
         assert ct.plot.redraw_timer.isActive()       # now connected AND visible
 
-        win._on_outer_tab_clicked(0)         # leave again
+        win._on_outer_tab_clicked(motor_idx)         # leave again
         qapp.processEvents()
         assert not ct.plot.redraw_timer.isActive()
 
     def test_amp_tab_redraw_only_while_visible(self, win, qapp):
         amp = win.amp_tab
-        win._on_outer_tab_clicked(0)
+        motor_idx = win.tab_index("Stepper Motors")
+        amp_idx = win.tab_index("HV Amplifiers")
+        win._on_outer_tab_clicked(motor_idx)
         qapp.processEvents()
         amp.on_labjack_connected("TESTSERIAL")
         assert not amp.plot.redraw_timer.isActive()
 
-        win._on_outer_tab_clicked(2)         # switch to HV Amplifiers
+        win._on_outer_tab_clicked(amp_idx)         # switch to HV Amplifiers
         qapp.processEvents()
         assert amp.plot.redraw_timer.isActive()
 
-        win._on_outer_tab_clicked(0)
+        win._on_outer_tab_clicked(motor_idx)
         qapp.processEvents()
         assert not amp.plot.redraw_timer.isActive()
 
     def test_disconnect_stops_redraw_even_while_visible(self, win, qapp):
         ct = win.current_tab
-        win._on_outer_tab_clicked(1)
+        slit_idx = win.tab_index("Slit Currents")
+        win._on_outer_tab_clicked(slit_idx)
         qapp.processEvents()
         ct.on_labjack_connected("TESTSERIAL")
         assert ct.plot.redraw_timer.isActive()
@@ -255,10 +269,12 @@ class TestRedrawGating:
         # touch them. FuncGenTab's poll timer runs independent of visibility.
         fg = win.funcgen_tab
         fg._poll_timer.start()
-        win._on_outer_tab_clicked(0)
+        motor_idx = win.tab_index("Stepper Motors")
+        funcgen_idx = win.tab_index("Function Generators")
+        win._on_outer_tab_clicked(motor_idx)
         qapp.processEvents()
         assert fg._poll_timer.isActive()
-        win._on_outer_tab_clicked(3)
+        win._on_outer_tab_clicked(funcgen_idx)
         qapp.processEvents()
         assert fg._poll_timer.isActive()
 

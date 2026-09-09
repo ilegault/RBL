@@ -2,7 +2,7 @@
 connection_bar.py
 Shared connection-status pill and the LabJack T7 connection panel.
 
-The Beam Current tab and the HV Amplifiers tab each embed a LabJackPanel.
+The Slit Currents tab and the HV Amplifiers tab each embed a LabJackPanel.
 They all drive the SAME LabJackT7 instance owned by MainWindow, so connecting
 from either tab connects for both. That is intentional: there is one physical
 T7.
