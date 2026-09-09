@@ -15,6 +15,23 @@ report; do not wander into the next ticket.
 
 ## 1. Orient before touching anything
 
+### Repository and branch housekeeping
+Before selecting or starting work on a new ticket:
+1. **Sync `master`**: Switch to `master` and pull the latest changes:
+   ```powershell
+   git checkout master
+   git pull origin master
+   ```
+2. **Clean up merged branches**: Once GitHub CI passes and a ticket branch is merged into `master`, prune remote tracking references and delete the old local branch:
+   ```powershell
+   git fetch --prune
+   # Identify and safely delete local branches merged into master:
+   git branch --merged master | Where-Object { $_ -notmatch '^\*|\bmaster\b' } | ForEach-Object { git branch -d $_.Trim() }
+   ```
+3. **Check the frontier** from the freshly updated `master`.
+
+### Orientation steps
+
 Read, in this order:
 
 1. **`AGENTS.md`** — the whole file. Layering, threading contract, conventions,
