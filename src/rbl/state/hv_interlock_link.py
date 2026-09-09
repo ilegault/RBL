@@ -201,11 +201,16 @@ class HvInterlockLinkMixin:
                     state = gen.get_state(channel)
                 except Exception:
                     continue
-                if "error" in state or not state.get("output"):
+                if not isinstance(state, dict) or "error" in state or not state.get("output"):
                     continue
-                peak = channel_peak_volts(state.get("shape", "DC"),
-                                           state.get("amp", 0.0), state.get("offset", 0.0))
-                best = max(best, peak)
+                try:
+                    shape = str(state.get("shape", "DC"))
+                    amp = float(state.get("amp", 0.0))
+                    offset = float(state.get("offset", 0.0))
+                    peak = float(channel_peak_volts(shape, amp, offset))
+                    best = max(best, peak)
+                except (TypeError, ValueError):
+                    continue
         return best
 
     def _ramp_all_channels_to_zero_on_interlock(self) -> None:

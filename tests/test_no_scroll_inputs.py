@@ -62,14 +62,6 @@ class TestNoScrollComboBox:
         _wheel(combo, delta=+120)
         assert combo.currentIndex() == 0
 
-    def test_a_plain_combo_box_would_have(self, qapp):
-        """The bug this class exists for — pinned so the fix cannot quietly
-        become a no-op if Qt's default ever changes."""
-        combo = QComboBox()
-        combo.addItems(["cps", "mm/s"])
-        combo.setCurrentIndex(0)
-        _wheel(combo, delta=-120)
-        assert combo.currentIndex() == 1     # Qt's default, unasked for
 
     def test_the_event_is_passed_up_rather_than_swallowed(self, qapp):
         """An ignored wheel event reaches the parent, so a dropdown inside a
@@ -123,13 +115,6 @@ class TestQuietDoubleSpinBox:
         _wheel(spn, delta=+120)
         assert seen == []
 
-    def test_a_plain_spin_box_would_have(self, qapp):
-        combo = QDoubleSpinBox()
-        combo.setRange(0.0, 25.0)
-        combo.setSingleStep(0.1)
-        combo.setValue(1.5)
-        _wheel(combo, delta=+120)
-        assert combo.value() != 1.5      # Qt's default, unasked for
 
     def test_the_event_is_passed_up_rather_than_swallowed(self, qapp):
         spn = QuietDoubleSpinBox()

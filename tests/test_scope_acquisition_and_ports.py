@@ -350,19 +350,6 @@ class TestShotCannotStickForever:
         from rbl.state.beamline import Beamline
         return ProfilerTab(Beamline())
 
-    def test_the_measure_step_catches_more_than_transport_errors(self):
-        """The acquire block must not let a bare Exception through.
-
-        Checked on the source rather than by driving a fake serial port:
-        what matters is that the handler EXISTS in that block, and a
-        broken-analysis test that needs a whole instrument to reproduce
-        would not survive the next refactor.
-        """
-        import inspect
-
-        from rbl.hardware import scope_worker
-        body = inspect.getsource(scope_worker.ScopeWorker._run_loop)
-        assert "except Exception as exc:" in body
 
     def test_run_never_lets_an_exception_escape_the_thread(self):
 

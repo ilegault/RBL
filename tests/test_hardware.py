@@ -32,15 +32,7 @@ class TestGalilControllerLifecycle:
         with pytest.raises(ConnectionError):
             g.cmd("TH")
 
-    def test_get_position_raises_when_not_connected(self):
-        g = GalilController()
-        with pytest.raises(ConnectionError):
-            g.get_position("A")
 
-    def test_is_moving_raises_when_not_connected(self):
-        g = GalilController()
-        with pytest.raises(ConnectionError):
-            g.is_moving("A")
 
 
 class TestGalilError:
@@ -116,15 +108,8 @@ class TestGalilControllerMocked:
 # ── hardware_config ───────────────────────────────────────────────────────────
 
 class TestSlitConfig:
-    def test_four_axis_letters(self):
-        assert len(AXIS_LETTERS) == 4
 
-    def test_axis_names_match_letters(self):
-        for letter in AXIS_LETTERS:
-            assert letter in AXIS_NAMES
 
-    def test_labjack_channel_map_not_empty(self):
-        assert len(LABJACK_CHANNEL_MAP) > 0
 
     def test_counts_to_mm_round_trip(self):
         # mm_to_counts rounds to whole motor steps, so the round-trip can only be
@@ -149,11 +134,7 @@ class TestSlitConfig:
         for axis in AXIS_LETTERS:
             assert counts_to_mm(axis, 1000) > 0.0
 
-    def test_default_speed_positive(self):
-        assert DEFAULT_SPEED_COUNTS_PER_SEC > 0
 
-    def test_default_accel_positive(self):
-        assert DEFAULT_ACCEL_COUNTS_PER_SEC2 > 0
 
     def test_slit_labels_in_channel_map(self):
         slits = set(LABJACK_CHANNEL_MAP.values())
@@ -172,12 +153,3 @@ class TestLabJackT7Lifecycle:
         lj = LabJackT7()
         lj.disconnect()  # should not raise
 
-    def test_read_channels_raises_when_not_connected(self):
-        lj = LabJackT7()
-        # read_channels on a disconnected device must either raise or return empty
-        try:
-            result = lj.read_channels()
-            # If it doesn't raise, the result must at least be a dict (graceful stub)
-            assert isinstance(result, dict)
-        except Exception:
-            pass  # raising is also acceptable

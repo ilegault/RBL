@@ -176,6 +176,17 @@ class TestAmpWaveformConversion:
         self._send_amp(feed, received, "X+", wave)
         ch = received[0].channels["X+"]
         assert ch.raw_v == pytest.approx(3.0)
+        assert ch.dc_kv == pytest.approx(3.0)
+
+    def test_dc_ma_is_pre_converted_mean_of_current_waveform(self):
+        """dc_ma = monitor_to_ma(raw_i) scaled once in snapshot layer."""
+        feed = _logamp_feed()
+        received = _capture(feed, "amps_changed")
+        wave = np.array([0.5, 1.0, 1.5])   # mean = 1.0 V -> 10 mA
+        self._send_amp(feed, received, "X+", np.array([1.0]), wave_i=wave)
+        ch = received[0].channels["X+"]
+        assert ch.raw_i == pytest.approx(1.0)
+        assert ch.dc_ma == pytest.approx(10.0)
 
     def test_peak_kv_from_sine_waveform(self):
         """peak_kv recovers the analytic peak of a known sine (amplitude 2.0 kV)."""

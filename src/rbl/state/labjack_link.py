@@ -136,8 +136,8 @@ class LabJackLinkMixin:
             v_ch = channels.get(v_ain)
             i_ch = channels.get(i_ain)
 
-            peak_kv = pkpk_kv = rms_kv = raw_v = float("nan")
-            rms_ma = raw_i = float("nan")
+            peak_kv = pkpk_kv = rms_kv = raw_v = dc_kv = float("nan")
+            rms_ma = raw_i = dc_ma = float("nan")
             window_kv = window_ma = None
             wave_kv, span_s, freq_hz = traces.get(
                 amp, ((), float("nan"), float("nan")))
@@ -154,6 +154,7 @@ class LabJackLinkMixin:
                     window_kv = np.asarray(wave) * SC.VOLTAGE_MONITOR_KV_PER_VOLT
                 else:
                     raw_v = v_ch["rms"]
+                dc_kv = monitor_to_kv(raw_v)
             if i_ch is not None:
                 rms_ma = monitor_to_ma(i_ch["rms"])
                 wave = i_ch.get("waveform")
@@ -162,6 +163,7 @@ class LabJackLinkMixin:
                     window_ma = np.asarray(wave) * SC.CURRENT_MONITOR_MA_PER_VOLT
                 else:
                     raw_i = i_ch["rms"]
+                dc_ma = monitor_to_ma(raw_i)
 
             amp_channels[amp] = AmpChannelSnapshot(
                 peak_kv=peak_kv, pkpk_kv=pkpk_kv, rms_kv=rms_kv,
@@ -169,6 +171,7 @@ class LabJackLinkMixin:
                 wave_span_s=span_s, wave_freq_hz=freq_hz,
                 v_live=v_ch is not None, i_live=i_ch is not None,
                 window_kv=window_kv, window_ma=window_ma,
+                dc_kv=dc_kv, dc_ma=dc_ma,
             )
         self.amps_changed.emit(AmpState(
             connected=True, channels=amp_channels, active_profile=active_profile,

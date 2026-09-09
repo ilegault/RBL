@@ -86,6 +86,15 @@ class TestAmpTabIgnoresLogAmps:
         _, kv = amp.buffers["AIN11"].latest()    # X- voltage, held at -3 V
         assert abs(kv + 3.0) < 1e-9
 
+    def test_rendered_measured_voltage_and_current_dc(self, amp, feed):
+        """Assert operator-visible labels render the pre-converted snapshot values."""
+        feed.send(FULL_READING)
+        assert amp.lbl_meas["X+"].text() == "+3.000 kV"
+        assert amp.lbl_meas["X-"].text() == "-3.000 kV"
+        assert amp.lbl_cur["X+"].text() == "+10.000 mA mean"
+        assert amp.lbl_cur["X-"].text() == "+10.000 mA mean"
+        assert amp.lbl_pp["X+"].text() == "0.000 kV pk-pk"
+
     def test_starts_live(self, amp):
         assert amp.plot.is_live is True
         assert amp.plot.slider.value() == 10_000
@@ -93,19 +102,19 @@ class TestAmpTabIgnoresLogAmps:
     def test_slider_enters_frozen(self, amp, feed):
         for i in range(5):
             feed.send(FULL_READING, t=float(i))
-        amp.plot._on_slider_changed(4000)
+        amp.plot.slider.setValue(4000)
         assert amp.plot.is_live is False
         assert amp.plot.frozen_right_edge is not None
 
     def test_jump_to_live(self, amp, feed):
         for i in range(5):
             feed.send(FULL_READING, t=float(i))
-        amp.plot._on_slider_changed(4000)
-        amp.plot.jump_to_live()
+        amp.plot.slider.setValue(4000)
+        amp.btn_jump_live.click()
         assert amp.plot.is_live is True
 
     def test_redraw_empty_is_safe(self, amp):
-        amp._redraw_plot()   # must not raise
+        amp.plot.canvas.draw()   # must not raise
 
 
 class TestCurrentTabIgnoresAmps:

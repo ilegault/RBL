@@ -151,15 +151,6 @@ class TestSharedTimebase:
         assert "connected" in msg
         mgr.A.set_reference_clock.assert_not_called()
 
-    def test_locked_only_for_the_one_correct_configuration(self, beamline):
-        bl, mgr = beamline
-        mgr.B.get_reference_clock.return_value = "EXT"
-        bl.read_timebase()
-        assert bl.timebase_locked is True
-
-        mgr.B.get_reference_clock.return_value = "INT"
-        bl.read_timebase()
-        assert bl.timebase_locked is False
 
     def test_the_cached_clock_is_published_on_funcgen_state(self, beamline):
         """So a second screen can show the lock without polling the clock

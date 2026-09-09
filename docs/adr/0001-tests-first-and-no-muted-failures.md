@@ -49,6 +49,16 @@ write the code. The observed failure is what proves the test can detect the
 absence of the behaviour. The implementing agent runs pytest in its own session
 for each cycle; the Qt-free portion of the suite runs in about ten seconds.
 
+CI enforces this rule (`scripts/check_tests_first.py`): any pull request or commit
+touching application code under `src/` must also touch `tests/`. Non-application
+changes (`docs/`, `scripts/`, `tests/`, `.github/`) pass automatically.
+
+When a change to `src/` genuinely does not require test modifications (e.g. comment
+clarifications or exploratory work), an explicit escape mechanism must be declared:
+a commit/PR annotation `[no-test-needed: <reason>]`, `[tests-exempt: <reason>]`,
+`[skip-test-gate]`, or a `tests-exempt` PR label. The exemption is visible in review,
+never silent.
+
 **2. No failure may be muted.** `xfail_strict = true` is set, so a muted test
 that starts passing becomes a failure. `xfail` is not a tool for making a build
 green. Neither is deleting an assertion, loosening a tolerance, or narrowing a

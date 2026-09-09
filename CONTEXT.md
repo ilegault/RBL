@@ -87,7 +87,43 @@ catch a sustained overload without firing on a transient.
 
 ---
 
+## Beam interception and collection
+
+**Slit current** — the current a single slit jaw intercepts. There are four, one
+per jaw.
+
+**Cup current** — the current collected by the Faraday cup, which sits
+downstream of the slits. It is the part of the beam that passed through the
+aperture rather than landing on a jaw. One number, measured in a different place
+by a different instrument. It is not a fifth slit current.
+
+**Transmitted current** — a synonym for cup current, preferred where the point
+being made is the physics (what got through) rather than which instrument read
+it.
+
+**Insertion** — one period during which the Faraday cup is in the beam path. The
+cup is moved by hand and reports no position, so the application infers an
+insertion from the current it sees rather than being told about it.
+
+**Acquisition run** — the samples recorded across one insertion. One insertion
+produces one run.
+
+**Idle ping** — a reading taken at low rate while no run is active. Its only job
+is to notice an insertion beginning. It is evidence that the application was
+watching; it is not measurement data.
+
+**Arm threshold** and **release threshold** — the cup currents at which a run
+starts and ends. The release threshold is deliberately the lower of the two, so
+a current sitting near the boundary cannot start and stop runs repeatedly.
+
+---
+
 ## Known collisions
+
+**"Beam current" means two things.** The four slit currents and the one cup
+current are both current from the beam, read in different places, and they do
+not agree with each other — nor should they. Prefer *slit current* and *cup
+current*. Do not write *beam current* unqualified.
 
 **"Drift" means two unrelated things.** In optics it is the flight distance
 between the steerer and the sample. In calibration it is a long-running pass

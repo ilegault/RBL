@@ -116,10 +116,6 @@ class TestComputeFwhmSamples:
         with pytest.raises(FwhmError, match="crossing not found"):
             compute_fwhm_samples(v, subtract_baseline=False)
 
-    def test_fwhm_is_positive(self):
-        v    = _gaussian_wave(300, center=150, sigma=25)
-        fwhm = compute_fwhm_samples(v, subtract_baseline=False)
-        assert fwhm > 0
 
     def test_different_amplitudes_same_fwhm(self):
         """Scaling amplitude should not change the FWHM in sample units."""

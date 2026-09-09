@@ -134,7 +134,7 @@ class TestRetargetMidRamp:
         engine.retarget("X+", 1.0, mode="offset")
         engine._tick()
         engine.retarget("X+", 4.0, mode="offset")
-        assert engine._ramps["X+"]["target_v"] == 4.0
+        assert engine.is_ramping("X+")
         run_to_completion(engine, "X+")
         assert gen._offset[1] == pytest.approx(4.0, abs=1e-6)
 
@@ -159,7 +159,8 @@ class TestAbort:
         engine.retarget("X-", 3.0, mode="offset")
         engine.abort()
         assert not engine.ramping_labels()
-        assert not engine._timer.isActive()
+        assert not engine.is_ramping("X+")
+        assert not engine.is_ramping("X-")
 
 
 class TestFailurePropagation:

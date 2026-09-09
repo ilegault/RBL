@@ -42,15 +42,27 @@ paying for.
 
 **Blocked by:** 06
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Every test function in the batch carries exactly one verdict.
-- [ ] Every verdict carries a reason naming which criterion it met.
-- [ ] Verdicts are written as a reviewable file under `.scratch/test-suite-overhaul/`.
-- [ ] The batch's file list is recorded in that file.
-- [ ] Every `rewrite` verdict names the sanctioned path the rewrite would use.
-- [ ] A separate "would have caught nothing" list is included.
-- [ ] No test file is modified.
+- [x] Every test function in the batch carries exactly one verdict.
+- [x] Every verdict carries a reason naming which criterion it met.
+- [x] Verdicts are written as a reviewable file under `.scratch/test-suite-overhaul/`.
+- [x] The batch's file list is recorded in that file.
+- [x] Every `rewrite` verdict names the sanctioned path the rewrite would use.
+- [x] A separate "would have caught nothing" list is included.
+- [x] No test file is modified.
+
+## Comments
+
+- **Completed Audit:** Full audit written to [audit-09-qt-modules-batch-1.md](../audit-09-qt-modules-batch-1.md).
+- **Summary Statistics:**
+  - Total Tests Audited: 296 across 17 Qt-dependent test files
+  - **Keep:** 150 (50.7%) — Observable behavior, DSP math, safety interlocks, input handling.
+  - **Rewrite:** 95 (32.1%) — Real behavior reaching private state or using fragile `mock.call` order assertions; sanctioned paths specified using `FakeAsyncHardwareManager`, QtBot, and Qt signal spies.
+  - **Delete:** 51 (17.2%) — 30 private drag-panel white-box tests, 8 Qt stacked-widget navigation tautologies, 12 private flag / mock forwarding tautologies, and 1 process-polluting `sys.modules` monkeypatching test.
+- **Dedicated "Would Have Caught Nothing" List:** 51 tests itemized and categorized in the audit document.
+- **Zero test files or application code files modified.**
 
 Reference: spec section "The audit" and "Prior art in this repository"; ADR 0001
 decisions 5 and 6.
+

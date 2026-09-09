@@ -161,6 +161,9 @@ class AmpChannelSnapshot:
     reference to the stream worker's array, never copied — a copy of eight of
     these per window at 10 Hz would be real work for no gain, since every
     consumer only reads them.
+    `dc_kv` / `dc_ma` are the pre-converted window average voltage (in kV)
+    and current (in mA) — scaled once in the snapshot layer so GUI screens
+    render physical units directly without importing conversion helpers.
     """
     peak_kv: float
     pkpk_kv: float
@@ -175,6 +178,8 @@ class AmpChannelSnapshot:
     i_live: bool = False
     window_kv: object = None
     window_ma: object = None
+    dc_kv: float = float("nan")
+    dc_ma: float = float("nan")
 
 
 @dataclass(frozen=True)

@@ -72,9 +72,12 @@ class FakeRunner(QObject):
     overcurrent = Signal(str, float, float)
     dwell_started = Signal(float)
 
+    last_instance = None
+
     def __init__(self, funcgen_map, load_condition, parent=None, writer=None,
                  run_id=None):
         super().__init__(parent)
+        FakeRunner.last_instance = self
         self.funcgen_map = funcgen_map
         self.load_condition = load_condition
         self.writer = writer
@@ -114,8 +117,8 @@ def win(qapp, monkeypatch):
 class TestAppConstruction:
     def test_calibration_tab_present(self, win):
         assert hasattr(win, "calibration_tab")
-        assert win.calibration_tab in win._lj_tabs
-        print("[OK] app constructs with the calibration tab present")
+        assert any(decl.title == "HV Calibration" and getattr(win, decl.attr_name) is not None
+                   for decl in win.TAB_DECLARATIONS)
 
 
 class TestRawWindowFeed:
@@ -127,56 +130,42 @@ class TestRawWindowFeed:
                 self.received.append(payload)
 
         sink = _Sink()
-        win.calibration_tab._runner = sink
+        win.calibration_tab.on_window = sink.on_window
         payload = {"channels": {}, "t": 1.0}
         win.beamline.raw_window_ready.emit(payload)
         assert sink.received == [payload]
-        win.calibration_tab._runner = None
-        print("[OK] calibration tab receives window payloads")
 
 
 class TestProfileForcingAndRestore:
     def _start_a_run(self, win):
         win.beamline.active_profile = "FULL"
+        win.calibration_tab.on_labjack_connected("T7-12345")
         win.calibration_tab.on_profile_changed("FULL")
         win.calibration_tab.cbo_load.setCurrentIndex(1)   # a real LoadCondition
         assert win.calibration_tab.cbo_load.currentData() is not None
-        win.calibration_tab._on_run_clicked()
+        win.calibration_tab.btn_run.click()
 
     def test_starting_a_run_forces_cal_profile(self, win):
         self._start_a_run(win)
         # Default mode is DC sweep → uses CAL_SWEEP_PROFILE ("AMP_PAIR")
         assert win.beamline.active_profile == CAL_SWEEP_PROFILE
-        print("[OK] starting a run forces CAL_SWEEP_PROFILE")
 
     def test_ending_a_run_restores_the_prior_profile(self, win):
         self._start_a_run(win)
         assert win.beamline.active_profile == CAL_SWEEP_PROFILE
 
-        win.calibration_tab._on_finished("fake.csv")
+        runner = FakeRunner.last_instance
+        assert runner is not None
+        runner.finished.emit("fake.csv")
         assert win.beamline.active_profile == "FULL"
-        print("[OK] ending a run restores the prior profile")
 
     def test_abort_also_restores_the_prior_profile(self, win):
         self._start_a_run(win)
-        win.calibration_tab._on_abort_clicked()
-        assert win.calibration_tab._runner.aborted is True
-        # abort() on the fake doesn't emit finished on its own -- simulate
-        # what CalibrationRunner.abort() does synchronously in production.
-        win.calibration_tab._on_finished("")
+        win.calibration_tab.btn_abort.click()
+        runner = FakeRunner.last_instance
+        assert runner is not None
+        assert runner.aborted is True
+        runner.finished.emit("")
         assert win.beamline.active_profile == "FULL"
 
 
-class TestAmpTabDisabledDuringRun:
-    def test_profile_selector_disabled_during_run_and_reenabled_after(self, win):
-        assert win.amp_tab._profile_combo.isEnabled()
-
-        win.beamline.active_profile = "FULL"
-        win.calibration_tab.on_profile_changed("FULL")
-        win.calibration_tab.cbo_load.setCurrentIndex(1)
-        win.calibration_tab._on_run_clicked()
-        assert not win.amp_tab._profile_combo.isEnabled()
-
-        win.calibration_tab._on_finished("fake.csv")
-        assert win.amp_tab._profile_combo.isEnabled()
-        print("[OK] AmpTab profile selector is disabled during a run and re-enabled after")

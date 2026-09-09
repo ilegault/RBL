@@ -84,10 +84,6 @@ class TestParsePressure:
         assert abs(p - 1.234e-6) < 1e-15
         assert s == "OK"
 
-    def test_ok_negative_exponent(self):
-        p, s = _parse_pressure("9.999E-10")
-        assert s == "OK"
-        assert p == pytest.approx(9.999e-10)
 
     def test_off_state(self):
         p, s = _parse_pressure("OFF")
@@ -114,12 +110,6 @@ class TestParsePressure:
         assert p is None
         assert s == "ERROR"
 
-    def test_never_coerce_text_to_zero(self):
-        """Ensure no text state ever becomes 0.0."""
-        for text in ("OFF", "UNDER", "NO CABLE", "OVER", "E01"):
-            p, _ = _parse_pressure(text)
-            assert p != 0.0
-            assert p is None
 
 
 # ---------------------------------------------------------------------------

@@ -7,7 +7,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PySide6.QtCore import QObject, Signal
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QCheckBox, QSpinBox
 
 
 @pytest.fixture(scope="module")
@@ -104,35 +104,22 @@ def test_camera_tab_constructs_without_error(setup):
     assert tab is not None
 
 
-def test_camera_tab_constructs_without_cv2(qapp, monkeypatch):
-    """CameraTab must construct cleanly even if cv2 is absent."""
-    import rbl.gui.camera_tab as mod
-    monkeypatch.setattr(mod, "_CV2_OK", False)
-    cam = _StubCamera()
-    rec = _StubRecorder(cam)
-    from rbl.gui.camera_tab import CameraTab
-    try:
-        CameraTab(rec, cam)
-    except Exception as exc:
-        pytest.fail(f"CameraTab raised with cv2 absent: {exc}")
 
 
 def test_record_fps_change_syncs_between_views(setup):
     """Changing record FPS in one view → other view updates via settings_changed."""
     tab, panel, rec, cam = setup
-    # Simulate user changing rec fps in the camera tab
-    tab._spin_rec_fps.setValue(5)
-    # recorder now has _record_fps=5; panel should reflect it on settings_changed
-    assert rec._record_fps == 5
-    # Panel should now show 5 in its spinbox (rendered on settings_changed)
-    assert panel._spin_rec_fps.value() == 5
+    tab_fps_spin = [s for s in tab.findChildren(QSpinBox) if "acquired frames" in s.toolTip()][0]
+    panel_fps_spin = [s for s in panel.findChildren(QSpinBox) if "acquired frames" in s.toolTip()][0]
+
+    tab_fps_spin.setValue(5)
+    assert panel_fps_spin.value() == 5
 
 
 def test_crosshair_toggle_no_raise_with_no_frame(setup):
     """Toggling crosshair without a frame in the feed must not raise."""
     tab, panel, rec, cam = setup
-    try:
-        tab._chk_crosshair.setChecked(True)
-        tab._chk_crosshair.setChecked(False)
-    except Exception as exc:
-        pytest.fail(f"Crosshair toggle raised: {exc}")
+    crosshair_chk = [c for c in tab.findChildren(QCheckBox) if "Crosshair" in c.text()][0]
+    crosshair_chk.setChecked(True)
+    crosshair_chk.setChecked(False)
+

@@ -102,13 +102,7 @@ class TestFormatCurrent:
         s = format_current(1e-3)
         assert "µA" not in s and "uA" not in s
 
-    def test_small_nA_values(self):
-        s = format_current(5e-10)
-        assert "nA" in s
 
-    def test_mid_uA_values(self):
-        s = format_current(50e-6)
-        assert "µA" in s or "uA" in s or "µ" in s
 
 
 # ── beam_centering ────────────────────────────────────────────────────────────

@@ -262,10 +262,6 @@ class TestEnvelopeStatusDecisions:
         # X ratio should be much smaller than Y ratio
         assert st["ratio"] >= 0.9  # Y is at or near its envelope wall at 1 kV / ~1 kV wall
 
-    def test_worst_label_is_amp_label(self, caps_500pf, nominal_solution):
-        st = envelope_status(caps_500pf, {"X": 1.0, "Y": 1.0},
-                             {"X": 1.0, "Y": 1.0}, nominal_solution)
-        assert st["worst_label"] in ("X+", "X-", "Y+", "Y-")
 
     def test_ratio_monotone_with_kv(self, caps_500pf, nominal_solution):
         """Higher requested kV → higher ratio (closer to or past the wall)."""

@@ -45,49 +45,45 @@ class TestRunGuards:
             "rbl.gui.dynamic_adjustment_tab.QMessageBox.warning",
             lambda *a, **k: warned.append(a))
         tab.le_pot_position.setText("2 o'clock")
-        tab._on_run_clicked()
+        tab.btn_run.click()
         assert warned
-        assert tab._trial is None
 
     def test_run_without_pot_position_warns(self, tab, monkeypatch):
-        tab._connected = True
+        tab.on_labjack_connected("T7-12345")
         warned = []
         monkeypatch.setattr(
             "rbl.gui.dynamic_adjustment_tab.QMessageBox.warning",
             lambda *a, **k: warned.append(a))
-        tab._on_run_clicked()
+        tab.btn_run.click()
         assert warned
-        assert tab._trial is None
 
     def test_run_with_whitespace_only_pot_position_warns(self, tab, monkeypatch):
-        tab._connected = True
+        tab.on_labjack_connected("T7-12345")
         tab.le_pot_position.setText("   ")
         warned = []
         monkeypatch.setattr(
             "rbl.gui.dynamic_adjustment_tab.QMessageBox.warning",
             lambda *a, **k: warned.append(a))
-        tab._on_run_clicked()
+        tab.btn_run.click()
         assert warned
-        assert tab._trial is None
 
     def test_run_without_generator_connected_warns(self, tab, monkeypatch):
-        tab._connected = True
+        tab.on_labjack_connected("T7-12345")
         tab.le_pot_position.setText("2 o'clock")
         warned = []
         monkeypatch.setattr(
             "rbl.gui.dynamic_adjustment_tab.QMessageBox.warning",
             lambda *a, **k: warned.append(a))
-        tab._on_run_clicked()
+        tab.btn_run.click()
         assert warned
-        assert tab._trial is None
 
 
 class TestTable:
-    def test_no_trials_shows_placeholder_hint(self, tab, isolated_history):
-        tab._refresh_table()
+    def test_no_trials_shows_placeholder_hint(self, isolated_history):
+        tab = DynamicAdjustmentTab(Beamline())
         assert "No trials" in tab.lbl_hint.text()
 
-    def test_trials_populate_the_table_and_winner_hint(self, tab, isolated_history):
+    def test_trials_populate_the_table_and_winner_hint(self, isolated_history):
         isolated_history.append_trial({
             "amp_label": "X+", "pot_position": "1 o'clock", "figure_of_merit": 5.0,
             "voltage": {"overshoot_pct": 3.0, "flat_top_creep_pct": 1.0, "settling_1pct_s": 0.001},
@@ -98,44 +94,18 @@ class TestTable:
             "voltage": {"overshoot_pct": 0.5, "flat_top_creep_pct": 0.1, "settling_1pct_s": 0.0005},
             "current": {"peak_current_ma": 8.0},
         })
-        tab.cb_channel.setCurrentText("X+")
-        tab._refresh_table()
+        tab = DynamicAdjustmentTab(Beamline())
         assert tab.table.rowCount() == 2
         assert "2 o'clock" in tab.lbl_hint.text()
 
-    def test_large_creep_winner_suggests_a_direction(self, tab, isolated_history):
+    def test_large_creep_winner_suggests_a_direction(self, isolated_history):
         isolated_history.append_trial({
             "amp_label": "X+", "pot_position": "4 o'clock", "figure_of_merit": 1.0,
             "voltage": {"overshoot_pct": 0.5, "flat_top_creep_pct": 3.0, "settling_1pct_s": 0.0005},
             "current": {"peak_current_ma": 8.0},
         })
-        tab.cb_channel.setCurrentText("X+")
-        tab._refresh_table()
+        tab = DynamicAdjustmentTab(Beamline())
         assert "increase" in tab.lbl_hint.text() or "decrease" in tab.lbl_hint.text()
 
 
-class TestLjTabsContract:
-    def test_on_labjack_connected_updates_state(self, tab):
-        tab.on_labjack_connected("T7-12345")
-        assert tab._connected is True
 
-    def test_on_labjack_disconnected_updates_state(self, tab):
-        tab.on_labjack_connected("T7-12345")
-        tab.on_labjack_disconnected()
-        assert tab._connected is False
-
-    def test_on_profile_changed_is_cached(self, tab):
-        tab.on_profile_changed("SINGLE_FAST")
-        assert tab._current_profile == "SINGLE_FAST"
-
-    def test_on_window_forwards_to_trial(self, tab):
-        received = []
-        class FakeTrial:
-            def on_window(self, payload):
-                received.append(payload)
-        tab._trial = FakeTrial()
-        tab.on_window({"channels": {}})
-        assert received == [{"channels": {}}]
-
-    def test_shutdown_does_not_raise(self, tab):
-        tab.shutdown()

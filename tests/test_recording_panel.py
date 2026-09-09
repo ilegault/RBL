@@ -7,7 +7,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PySide6.QtCore import QObject, Signal
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox, QPushButton, QSpinBox
 
 
 @pytest.fixture(scope="module")
@@ -82,35 +82,39 @@ def panel(qapp):
     return p, rec, cam
 
 
-def test_panel_constructs_without_error(panel):
-    p, rec, cam = panel
-    assert p is not None
-
-
 def test_start_session_enabled_with_no_camera(panel):
     """START SESSION must be enabled even when the camera is closed."""
     p, rec, cam = panel
-    assert p._btn_session.isEnabled()
+    session_btn = [b for b in p.findChildren(QPushButton) if "Session" in b.text() or "START" in b.text()][0]
+    assert session_btn.isEnabled()
 
 
 def test_record_video_checkbox_disabled_with_camera_closed(panel):
     """'Record video' must be greyed out when camera is not open."""
     p, rec, cam = panel
-    assert not p._chk_video.isEnabled()
+    video_chk = [c for c in p.findChildren(QCheckBox) if "video" in c.text().lower()][0]
+    assert not video_chk.isEnabled()
 
 
 def test_settings_disable_while_recording(panel):
     p, rec, cam = panel
+    rec_fps_spin = [s for s in p.findChildren(QSpinBox) if "acquired frames" in s.toolTip()][0]
+    csv_spin = [s for s in p.findChildren(QSpinBox) if s.suffix().strip() == "s"][0]
+    seg_combo = [c for c in p.findChildren(QComboBox) if any("min" in c.itemText(i) for i in range(c.count()))][0]
+
     rec.start()
-    assert not p._spin_rec_fps.isEnabled()
-    assert not p._spin_csv.isEnabled()
-    assert not p._combo_seg.isEnabled()
+    assert not rec_fps_spin.isEnabled()
+    assert not csv_spin.isEnabled()
+    assert not seg_combo.isEnabled()
     rec.stop()
 
 
 def test_settings_reenable_after_stop(panel):
     p, rec, cam = panel
+    rec_fps_spin = [s for s in p.findChildren(QSpinBox) if "acquired frames" in s.toolTip()][0]
+    csv_spin = [s for s in p.findChildren(QSpinBox) if s.suffix().strip() == "s"][0]
+
     rec.start()
     rec.stop()
-    assert p._spin_rec_fps.isEnabled()
-    assert p._spin_csv.isEnabled()
+    assert rec_fps_spin.isEnabled()
+    assert csv_spin.isEnabled()

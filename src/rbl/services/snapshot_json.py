@@ -236,7 +236,7 @@ def _measured_kv(ch, is_dc: bool) -> float:
     if ch is None:
         return float("nan")
     if is_dc:
-        return monitor_to_kv(getattr(ch, "raw_v", float("nan")))
+        return getattr(ch, "dc_kv", monitor_to_kv(getattr(ch, "raw_v", float("nan"))))
     pkpk = getattr(ch, "pkpk_kv", float("nan"))
     return (pkpk / 2.0) if (isinstance(pkpk, float) and math.isfinite(pkpk)) \
         else float("nan")
@@ -256,7 +256,7 @@ def _measured_ma(ch, is_dc: bool, freq_hz: float, sample_period):
     if ch is None or not getattr(ch, "i_live", False):
         return float("nan"), ""
     if is_dc:
-        return monitor_to_ma(getattr(ch, "raw_i", float("nan"))), "mean"
+        return getattr(ch, "dc_ma", monitor_to_ma(getattr(ch, "raw_i", float("nan")))), "mean"
     wave = getattr(ch, "window_ma", None)
     if wave is not None and sample_period:
         amp_ma, _phase = fundamental(wave, 1.0 / sample_period, freq_hz)

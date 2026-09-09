@@ -8,6 +8,9 @@ PySide6 front-end. Analysis has been split out to the rbl-analysis repo.
 import logging
 import sys
 
+from dataclasses import dataclass
+from typing import Any, Callable
+
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import (
@@ -62,12 +65,107 @@ class SplitTabBar(QTabBar):
             super().mousePressEvent(event)
 
 
+# ─── Tab Declarations ─────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class TabDeclaration:
+    title: str
+    attr_name: str
+    factory: Callable[[Any], QWidget]
+    consumes_stream: bool = False
+
+
+def _make_overview_tab(win: "MainWindow") -> OverviewTab:
+    tab = OverviewTab(win.beamline, win)
+    tab.attach_recorder(win.session_recorder)
+    return tab
+
+
+TAB_DECLARATIONS: tuple[TabDeclaration, ...] = (
+    TabDeclaration(
+        title="Stepper Motors",
+        attr_name="motor_tab",
+        factory=lambda win: MotorTab(win.beamline, win),
+        consumes_stream=False,
+    ),
+    TabDeclaration(
+        title="Beam Current",
+        attr_name="current_tab",
+        factory=lambda win: CurrentTab(win.beamline, win),
+        consumes_stream=True,
+    ),
+    TabDeclaration(
+        title="HV Amplifiers",
+        attr_name="amp_tab",
+        factory=lambda win: AmpTab(win.beamline, win),
+        consumes_stream=True,
+    ),
+    TabDeclaration(
+        title="Function Generators",
+        attr_name="funcgen_tab",
+        factory=lambda win: FuncGenTab(win.beamline, win),
+        consumes_stream=False,
+    ),
+    TabDeclaration(
+        title="Overview",
+        attr_name="overview_tab",
+        factory=_make_overview_tab,
+        consumes_stream=False,
+    ),
+    TabDeclaration(
+        title="Camera",
+        attr_name="camera_tab",
+        factory=lambda win: CameraTab(win.session_recorder, win.camera_source, win),
+        consumes_stream=False,
+    ),
+    TabDeclaration(
+        title="HV Calibration",
+        attr_name="calibration_tab",
+        factory=lambda win: CalibrationTab(win.beamline, win),
+        consumes_stream=True,
+    ),
+    TabDeclaration(
+        title="Load Characterization",
+        attr_name="load_char_tab",
+        factory=lambda win: LoadCharacterizationTab(win.beamline, win),
+        consumes_stream=True,
+    ),
+    TabDeclaration(
+        title="Vacuum",
+        attr_name="vacuum_tab",
+        factory=lambda win: VacuumTab(win.beamline, win),
+        consumes_stream=False,
+    ),
+    TabDeclaration(
+        title="Beam Profiler",
+        attr_name="profiler_tab",
+        factory=lambda win: ProfilerTab(win.beamline, win),
+        consumes_stream=False,
+    ),
+    TabDeclaration(
+        title="Raster Planner",
+        attr_name="raster_planner_tab",
+        factory=lambda win: RasterPlannerTab(win.beamline, win.profiler_tab, win),
+        consumes_stream=False,
+    ),
+    TabDeclaration(
+        title="Dynamic Adjustment",
+        attr_name="dynamic_adjustment_tab",
+        factory=lambda win: DynamicAdjustmentTab(win.beamline, win),
+        consumes_stream=True,
+    ),
+)
+
+
 # ─── Main Window ──────────────────────────────────────────────────────────────
 
 log = logging.getLogger(__name__)
 
 
 class MainWindow(QMainWindow):
+    TAB_DECLARATIONS = TAB_DECLARATIONS
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Right Beam Line DAQ")
@@ -86,18 +184,6 @@ class MainWindow(QMainWindow):
         outer_layout.setSpacing(0)
 
         self._outer_tabbar = SplitTabBar()
-        self._outer_tabbar.addTab("Stepper Motors")
-        self._outer_tabbar.addTab("Beam Current")
-        self._outer_tabbar.addTab("HV Amplifiers")
-        self._outer_tabbar.addTab("Function Generators")
-        self._outer_tabbar.addTab("Overview")
-        self._outer_tabbar.addTab("Camera")
-        self._outer_tabbar.addTab("HV Calibration")
-        self._outer_tabbar.addTab("Load Characterization")
-        self._outer_tabbar.addTab("Vacuum")
-        self._outer_tabbar.addTab("Beam Profiler")
-        self._outer_tabbar.addTab("Raster Planner")
-        self._outer_tabbar.addTab("Dynamic Adjustment")
         self._outer_tabbar.setExpanding(False)
         self._outer_tabbar.setDocumentMode(True)
         self._outer_tabbar.setToolTip("Left-click: switch tab  |  Right-click: open in split view")
@@ -150,44 +236,22 @@ class MainWindow(QMainWindow):
         # No tab constructs or owns a driver instance — see rbl/state/beamline.py.
         self.beamline = Beamline(self)
 
-        # ── Pages: Motors (0), Current (1), Amplifiers (2), FuncGens (3) ───────
-        self.motor_tab   = MotorTab(self.beamline, self)
-        self.current_tab = CurrentTab(self.beamline, self)
-        self.amp_tab     = AmpTab(self.beamline, self)
-        self.funcgen_tab = FuncGenTab(self.beamline, self)
-        self.overview_tab = OverviewTab(self.beamline, self)
-        self.calibration_tab = CalibrationTab(self.beamline, self)
-        self.load_char_tab   = LoadCharacterizationTab(self.beamline, self)
-        self.vacuum_tab      = VacuumTab(self.beamline, self)
-        self.profiler_tab    = ProfilerTab(self.beamline, self)
-        self.raster_planner_tab = RasterPlannerTab(
-            self.beamline, self.profiler_tab, self)
-        self.dynamic_adjustment_tab = DynamicAdjustmentTab(self.beamline, self)
-
         # Session recorder — shared between Overview panel and Camera tab.
         self.snapshots        = BeamlineSnapshotProvider(self.beamline, self)
         self.camera_source    = CameraSource(self)
         self.session_recorder = SessionRecorder(
             self.snapshots.snapshot, self.camera_source, self)
-        self.overview_tab.attach_recorder(self.session_recorder)
-        self.camera_tab = CameraTab(self.session_recorder, self.camera_source, self)
 
+        # ── Build tabs from single ordered declaration ────────────────────────
         # Each page goes inside a scroll area: when the window is narrowed past
         # what a tab's content can reflow to, a scrollbar appears rather than
         # forcing the window to stay wide. This is what makes the app
         # horizontally compressible while keeping every control reachable.
-        self._outer_stack.addWidget(self._wrap_scroll(self.motor_tab))
-        self._outer_stack.addWidget(self._wrap_scroll(self.current_tab))
-        self._outer_stack.addWidget(self._wrap_scroll(self.amp_tab))
-        self._outer_stack.addWidget(self._wrap_scroll(self.funcgen_tab))
-        self._outer_stack.addWidget(self._wrap_scroll(self.overview_tab))
-        self._outer_stack.addWidget(self._wrap_scroll(self.camera_tab))
-        self._outer_stack.addWidget(self._wrap_scroll(self.calibration_tab))
-        self._outer_stack.addWidget(self._wrap_scroll(self.load_char_tab))
-        self._outer_stack.addWidget(self._wrap_scroll(self.vacuum_tab))
-        self._outer_stack.addWidget(self._wrap_scroll(self.profiler_tab))
-        self._outer_stack.addWidget(self._wrap_scroll(self.raster_planner_tab))
-        self._outer_stack.addWidget(self._wrap_scroll(self.dynamic_adjustment_tab))
+        for decl in self.TAB_DECLARATIONS:
+            self._outer_tabbar.addTab(decl.title)
+            widget = decl.factory(self)
+            setattr(self, decl.attr_name, widget)
+            self._outer_stack.addWidget(self._wrap_scroll(widget))
 
         # ── Shared LabJack T7 ─────────────────────────────────────────────────
         #
@@ -196,9 +260,6 @@ class MainWindow(QMainWindow):
         # (AIN0-3, the log amps) and an AmpState (AIN6-13, the EEL5000
         # monitors); each tab subscribes to the one it renders. No tab sees
         # the raw payload, so no tab can convert volts a second way.
-        self._lj_tabs = (self.current_tab, self.amp_tab, self.calibration_tab,
-                          self.load_char_tab, self.dynamic_adjustment_tab)
-
         for tab in self._lj_tabs:
             tab.lj_panel.connect_requested.connect(self._labjack_connect)
             tab.lj_panel.disconnect_requested.connect(self._labjack_disconnect)
@@ -305,7 +366,21 @@ class MainWindow(QMainWindow):
         # ── Driver preflight check ───────────────────────────────────────
         self._refresh_driver_state()
 
-    # ── Layout helpers ────────────────────────────────────────────────────────
+    # ── Tab views & layout helpers ────────────────────────────────────────────
+
+    @property
+    def stream_consuming_tabs(self) -> tuple[QWidget, ...]:
+        """Tabs that consume LabJack stream data, derived from TAB_DECLARATIONS."""
+        return tuple(
+            getattr(self, decl.attr_name)
+            for decl in self.TAB_DECLARATIONS
+            if decl.consumes_stream
+        )
+
+    @property
+    def _lj_tabs(self) -> tuple[QWidget, ...]:
+        """Alias for stream_consuming_tabs preserving existing internal callers."""
+        return self.stream_consuming_tabs
 
     def _tab_index(self, title: str) -> int:
         """Return the outer tab-bar index for the tab labelled *title*.

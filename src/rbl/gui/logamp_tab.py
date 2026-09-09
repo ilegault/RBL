@@ -61,6 +61,7 @@ class CurrentTab(QWidget):
         self.buffers = {name: RollingBuffer(self.BUFFER_CAPACITY)
                         for name in SC.LABJACK_CHANNEL_MAP.keys()}
 
+
         # The redraw timer only needs to run when BOTH hold: connected (data
         # is arriving) and visible (this tab is the one on screen). Buffers
         # keep filling in the background either way — only painting pauses.

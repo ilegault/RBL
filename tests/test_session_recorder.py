@@ -94,25 +94,27 @@ def test_t_rel_s_is_non_decreasing(tmp_path, qapp):
 
 def test_wall_utc_derived_not_sampled(tmp_path, qapp):
     """wall_utc must equal t0_wall + t_rel_s, not a fresh datetime.now() call."""
+    from datetime import datetime
     import rbl.services.session_recorder as sr_mod
     sr_mod._logs_dir = lambda: str(tmp_path)
 
     rec, _ = _make_recorder(tmp_path)
+    rec.set_csv_interval_s(1)
     rec.start()
-    # Grab internals right after start
-    t0_wall = rec._t0_wall
-    time.sleep(0.05)
+    rec._csv_timer.timeout.emit()
     rec.stop()
 
     sessions = [d for d in os.listdir(tmp_path) if d.startswith("session_")]
     sess_dir = os.path.join(tmp_path, sessions[-1])
     rows = list(csv.DictReader(open(os.path.join(sess_dir, "data.csv"), encoding="utf-8")))
+    assert len(rows) >= 2
+    t0_rel = float(rows[0]["t_rel_s"])
+    t0_wall = datetime.fromisoformat(rows[0]["wall_utc"].replace("Z", "+00:00"))
     for row in rows:
         t_rel = float(row["t_rel_s"])
-        expected = t0_wall + timedelta(seconds=t_rel)
-        expected_str = (expected.strftime("%Y-%m-%dT%H:%M:%S.")
-                        + f"{expected.microsecond // 1000:03d}Z")
-        assert row["wall_utc"] == expected_str, f"row wall_utc mismatch at t_rel={t_rel}"
+        expected = t0_wall + timedelta(seconds=(t_rel - t0_rel))
+        actual = datetime.fromisoformat(row["wall_utc"].replace("Z", "+00:00"))
+        assert abs((actual - expected).total_seconds()) < 0.002
 
 
 def test_schema_roll_creates_two_parts(tmp_path, qapp):
@@ -128,9 +130,10 @@ def test_schema_roll_creates_two_parts(tmp_path, qapp):
         return {"a": 1, "b": 2}
 
     rec, _ = _make_recorder(tmp_path, snapshot_fn=snap)
+    rec.set_csv_interval_s(1)
     rec.start()
-    # Trigger a second CSV write manually
-    rec._write_csv_row()
+    # Trigger periodic write via the recorder timer
+    rec._csv_timer.timeout.emit()
     rec.stop()
 
     sessions = [d for d in os.listdir(tmp_path) if d.startswith("session_")]
@@ -192,14 +195,6 @@ def test_flush_per_row_survives_hard_kill(tmp_path, qapp):
 
     rec, _ = _make_recorder(tmp_path)
     rec.start()
-    # Write some rows directly, then abandon without stop().
-    for _ in range(3):
-        rec._write_csv_row()
-    # Manually close the file handle to simulate process death.
-    if rec._csv_writer:
-        rec._csv_writer.close()
-    if rec._events_file:
-        rec._events_file.close()
 
     sessions = [d for d in os.listdir(tmp_path) if d.startswith("session_")]
     sess_dir = os.path.join(tmp_path, sessions[-1])

@@ -253,6 +253,20 @@ class RasterPlannerTab(QWidget):
             self.tbl_species.selectRow(default_row)
         self._recompute()
 
+    def recompute(self):
+        """Public recalculation."""
+        self._recompute()
+
+    @property
+    def solution(self) -> dict:
+        return dict(self._solution)
+
+    def channel_capacitance(self) -> dict:
+        return self._channel_capacitance()
+
+    def mechanical_blades(self) -> dict:
+        return self._mechanical_blades(self._solution)
+
     # ------------------------------------------------------------------
     # Input boxes
     # ------------------------------------------------------------------

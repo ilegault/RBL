@@ -90,7 +90,8 @@ class TestApplyAllOrdering:
         for key in ("A1", "A2", "B1", "B2"):
             tab.panels[key].btn_output.setChecked(True)
 
-        tab._apply_all()
+        tab.btn_apply_all.setEnabled(True)
+        tab.btn_apply_all.click()
 
         order = _method_order(mgr)
         methods = [m for _, m in order]
@@ -109,7 +110,8 @@ class TestApplyAllOrdering:
         for key in ("A1", "A2", "B1", "B2"):
             tab.panels[key].btn_output.setChecked(True)
 
-        tab._apply_all()
+        tab.btn_apply_all.setEnabled(True)
+        tab.btn_apply_all.click()
         order = _method_order(mgr)
         methods = [m for _, m in order]
 
@@ -128,7 +130,8 @@ class TestApplyAllOrdering:
         for key in ("A1", "A2", "B1", "B2"):
             tab.panels[key].btn_output.setChecked(True)
 
-        tab._apply_all()
+        tab.btn_apply_all.setEnabled(True)
+        tab.btn_apply_all.click()
         order = _method_order(mgr)
         methods = [m for _, m in order]
 
@@ -146,7 +149,8 @@ class TestApplyAllOrdering:
         tab.panels["A2"].btn_output.setChecked(False)
         tab.panels["B2"].btn_output.setChecked(False)
 
-        tab._apply_all()
+        tab.btn_apply_all.setEnabled(True)
+        tab.btn_apply_all.click()
         order = _method_order(mgr)
         methods = [m for _, m in order]
 
@@ -162,7 +166,8 @@ class TestApplyAllOrdering:
         for key in ("A1", "A2", "B1", "B2"):
             tab.panels[key].btn_output.setChecked(True)
 
-        tab._apply_all()
+        tab.btn_apply_all.setEnabled(True)
+        tab.btn_apply_all.click()
         order = _method_order(mgr)
         methods = [m for _, m in order]
 
@@ -246,7 +251,7 @@ class TestInterlockParity:
         monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: None))
 
         self._set_over_limit(tab.panels["A1"])
-        tab._apply_channel("A", 1)
+        tab.panels["A1"].btn_apply.click()
 
         # The widget's Apply never reached the driver.
         mgr.A.set_waveform.assert_not_called()
@@ -285,7 +290,7 @@ class TestInterlockParity:
 
         result_direct = tab.beamline.set_channel("A2", over_limit)
         self._set_over_limit(tab.panels["A1"])
-        tab._apply_channel("A", 1)
+        tab.panels["A1"].btn_apply.click()
         result_widget = tab.beamline.set_channel("A1", over_limit)  # re-derive same call
 
         assert result_direct is False and result_widget is False
@@ -297,13 +302,17 @@ class TestReferenceClockToggle:
         """Enabling sharing must set Gen A to INT and call verify_external_lock on Gen B."""
         tab, mgr = tab_and_mgr
         # Default fixture: mgr.B.verify_external_lock.return_value = (True, "EXT")
-        tab._on_ext_ref_toggled(True)
+        tab.chk_ext_ref.setEnabled(True)
+        tab.chk_ext_ref.setChecked(True)
         mgr.A.set_reference_clock.assert_called_with("INTernal")
         mgr.B.verify_external_lock.assert_called_once()
 
     def test_untoggle_returns_both_internal(self, tab_and_mgr):
         tab, mgr = tab_and_mgr
-        tab._on_ext_ref_toggled(False)
+        mgr.B.get_reference_clock.return_value = "EXT"
+        tab.chk_ext_ref.setEnabled(True)
+        tab.chk_ext_ref.setChecked(True)
+        tab.chk_ext_ref.setChecked(False)
         mgr.A.set_reference_clock.assert_called_with("INTernal")
         mgr.B.set_reference_clock.assert_called_with("INTernal")
 
@@ -316,7 +325,8 @@ class TestReferenceClockToggle:
             "rbl.gui.funcgen_tab.QMessageBox.warning",
             lambda *a, **kw: None,
         )
-        tab._on_ext_ref_toggled(True)
+        tab.chk_ext_ref.setEnabled(True)
+        tab.chk_ext_ref.setChecked(True)
         # The SCPI log should record the failure.
         log_text = tab.scpi_log.toPlainText()
         assert "INT" in log_text
@@ -329,6 +339,8 @@ class TestReferenceClockToggle:
             "rbl.gui.funcgen_tab.QMessageBox.warning",
             lambda *a, **kw: None,
         )
-        tab._on_ext_ref_toggled(True)
+        tab.chk_ext_ref.setEnabled(True)
+        tab.chk_ext_ref.setChecked(True)
         # verify_external_lock must NOT be called — refused before getting there.
         mgr.B.verify_external_lock.assert_not_called()
+

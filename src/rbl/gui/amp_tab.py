@@ -85,12 +85,7 @@ from rbl.gui.widgets.connection_bar import LabJackPanel
 from rbl.gui.widgets.inputs import NoScrollComboBox
 from rbl.gui.widgets.live_plot import LivePlotPanel
 from rbl.hardware.ac_metrics import fundamental
-from rbl.hardware.amp_monitor import (
-    current_status,
-    monitor_to_kv,
-    monitor_to_ma,
-    voltage_status,
-)
+from rbl.hardware.amp_monitor import current_status, voltage_status
 from rbl.hardware.current_monitor import RollingBuffer
 from rbl.hardware.funcgen_safety import _AMP_GAIN, CHANNEL_ROLE
 from rbl.hardware.labjack_driver import LJM_AVAILABLE
@@ -1134,9 +1129,8 @@ class AmpTab(QWidget):
                 # The trend / history line plots the SIGNED MEAN (not RMS):
                 # above the 1 s snapshot boundary this gives the true DC level
                 # including polarity, so -4 kV reads as -4 kV, not +4 kV.
-                # raw_v is the mean of the window's waveform in monitor volts,
-                # which equals kV (1000:1 monitor ratio).
-                self.buffers[v_ain].append(t, monitor_to_kv(ch.raw_v))
+                # dc_kv is the pre-converted mean of the window's waveform in kV.
+                self.buffers[v_ain].append(t, ch.dc_kv)
 
                 if ch.window_kv is not None:
                     self.wave_ring.store(v_ain, t, ch.window_kv)
@@ -1256,7 +1250,7 @@ class AmpTab(QWidget):
         if ch is None:
             return float("nan")
         if is_dc:
-            return monitor_to_kv(ch.raw_v)
+            return ch.dc_kv
         pkpk = ch.pkpk_kv
         return (pkpk / 2.0) if math.isfinite(pkpk) else float("nan")
 
@@ -1277,7 +1271,7 @@ class AmpTab(QWidget):
         if ch is None or not getattr(ch, "i_live", False):
             return float("nan"), ""
         if is_dc:
-            return monitor_to_ma(ch.raw_i), "mean"
+            return ch.dc_ma, "mean"
         wave = getattr(ch, "window_ma", None)
         sp   = getattr(self, "_sample_period", None)
         if wave is not None and sp:

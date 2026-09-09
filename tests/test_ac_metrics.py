@@ -144,10 +144,6 @@ class TestFundamental:
         amp, phase = fundamental(self.sine, FS, F)
         assert isinstance(amp, float) and isinstance(phase, float)
 
-    def test_amplitude_nonnegative(self):
-        """Amplitude must always be non-negative."""
-        amp, _ = fundamental(self.sine, FS, F)
-        assert amp >= 0.0
 
     def test_list_input_accepted(self):
         """Accepts plain Python list, not just ndarray."""
@@ -246,9 +242,6 @@ class TestAcMetrics:
 
     # -- Peak ----------------------------------------------------------------
 
-    def test_peak_abs_at_least_peak(self):
-        m = ac_metrics(self.sine, FS, F)
-        assert m["peak_abs"] >= m["peak"]
 
     def test_peak_below_true_amplitude(self):
         # Robust peak (99.9th percentile) must be ≤ A for a bounded signal

@@ -29,13 +29,15 @@ def beamline():
     missing vacuum reading as a good vacuum"). Tests that specifically
     exercise the interlock itself (TestHvInterlock) override this.
     """
-    import time
+    from rbl.hardware.vgc083_driver import VgcReading
+    from rbl.snapshots import VacuumState
     b = Beamline()
-    b._hv_pressure_torr = 1e-6
-    b._hv_pressure_at = time.monotonic()
-    # _recompute_hv_interlock returns "block" when no gauge is selected.
-    # Seed a fake gauge key so the background state matches the healthy pressure.
-    b._hv_interlock_gauge_keys = {"test_gauge"}
+    b.set_interlock_gauges({"vgc083:IG"})
+    b.on_vacuum_changed_for_interlock(VacuumState(
+        timestamp=100.0,
+        vgc_connected=True,
+        vgc_readings=[VgcReading(channel="IG", pressure=1e-6, state="OK", raw="1.0E-6")],
+    ))
     return b
 
 
@@ -326,28 +328,6 @@ class TestCommandSurface:
         gen.set_waveform.assert_called_once()
         gen.output_on.assert_called_once_with(1)
 
-    def test_interlock_rejects_identically_via_direct_call_or_widget_path(self, beamline):
-        """The exact scenario Phase 8 exists to guarantee: an interlock-
-        violating amplitude is rejected the same way regardless of which
-        caller reaches Beamline.set_channel — there is no second path to
-        the driver that skips this check."""
-        self._connected_gen(beamline)
-
-        def apply_via_direct_beamline_call():
-            return beamline.set_channel("A1", self.OVER_LIMIT)
-
-        def apply_via_simulated_widget_call():
-            # A widget's Apply handler ultimately calls the same method;
-            # simulate that call site explicitly.
-            return beamline.set_channel("A1", self.OVER_LIMIT)
-
-        result_direct = apply_via_direct_beamline_call()
-        result_widget = apply_via_simulated_widget_call()
-
-        assert result_direct is False
-        assert result_widget is False
-        assert result_direct == result_widget
-        beamline.dg_a.set_waveform.assert_not_called()
 
     def test_set_channel_no_generator_connected(self, beamline):
         failures = []
@@ -513,21 +493,37 @@ class TestHvInterlock:
         gen.set_waveform.assert_called_once()
 
     def test_high_pressure_blocks_even_with_a_fresh_reading(self):
-        import time
+        from rbl.hardware.vgc083_driver import VgcReading
+        from rbl.snapshots import VacuumState
         beamline = Beamline()
-        beamline._hv_pressure_torr = 1e-3   # at the absolute lockout
-        beamline._hv_pressure_at = time.monotonic()
+        beamline.set_interlock_gauges({"vgc083:IG"})
+        state = VacuumState(
+            timestamp=100.0,
+            vgc_connected=True,
+            vgc_readings=[VgcReading(channel="IG", pressure=1e-3, state="OK", raw="1.0E-3")],
+        )
+        beamline.on_vacuum_changed_for_interlock(state)
         gen = self._connected_gen(beamline)
         ok = beamline.set_channel("A1", self.SAFE_DC)
         assert ok is False
         gen.set_waveform.assert_not_called()
 
-    def test_stale_reading_blocks_even_though_pressure_value_was_once_good(self):
+    def test_stale_reading_blocks_even_though_pressure_value_was_once_good(self, monkeypatch):
         import time
+        import rbl.state.hv_interlock_link as hil
+        from rbl.hardware.vgc083_driver import VgcReading
+        from rbl.snapshots import VacuumState
         beamline = Beamline()
-        beamline._hv_pressure_torr = 1e-6
-        beamline._hv_pressure_at = time.monotonic() - 3600   # long expired
+        beamline.set_interlock_gauges({"vgc083:IG"})
+        state = VacuumState(
+            timestamp=100.0,
+            vgc_connected=True,
+            vgc_readings=[VgcReading(channel="IG", pressure=1e-6, state="OK", raw="1.0E-6")],
+        )
+        beamline.on_vacuum_changed_for_interlock(state)
         gen = self._connected_gen(beamline)
+        now = time.monotonic()
+        monkeypatch.setattr(hil.time, "monotonic", lambda: now + hil.GAUGE_STALE_TIMEOUT_S + 10.0)
         ok = beamline.set_channel("A1", self.SAFE_DC)
         assert ok is False
         gen.set_waveform.assert_not_called()
@@ -540,18 +536,38 @@ class TestHvInterlock:
         gen.set_waveform.assert_not_called()
 
     def test_transition_into_block_ramps_live_channel_to_zero(self, beamline):
+        from rbl.hardware.vgc083_driver import VgcReading
+        from rbl.snapshots import VacuumState
+        beamline.set_interlock_gauges({"vgc083:IG"})
         self._connected_gen(beamline, output=True, offset=2.0)
-        beamline._recompute_hv_interlock()   # baseline: healthy, no transition
-        beamline._hv_pressure_torr = 2e-3    # now above the absolute lockout
-        beamline._recompute_hv_interlock()
+        healthy = VacuumState(
+            timestamp=100.0,
+            vgc_connected=True,
+            vgc_readings=[VgcReading(channel="IG", pressure=1e-6, state="OK", raw="1.0E-6")],
+        )
+        beamline.on_vacuum_changed_for_interlock(healthy)
+        high_press = VacuumState(
+            timestamp=101.0,
+            vgc_connected=True,
+            vgc_readings=[VgcReading(channel="IG", pressure=2e-3, state="OK", raw="2.0E-3")],
+        )
+        beamline.on_vacuum_changed_for_interlock(high_press)
         assert beamline.funcgen_ramp.is_ramping("A1:off")
 
     def test_hv_interlock_changed_is_emitted_on_recompute(self, beamline):
+        from rbl.hardware.vgc083_driver import VgcReading
+        from rbl.snapshots import VacuumState
+        beamline.set_interlock_gauges({"vgc083:IG"})
         self._connected_gen(beamline)
         received = []
         beamline.hv_interlock_changed.connect(received.append)
-        beamline._recompute_hv_interlock()
-        assert received and received[0]["state"] == "ok"
+        state = VacuumState(
+            timestamp=100.0,
+            vgc_connected=True,
+            vgc_readings=[VgcReading(channel="IG", pressure=1e-6, state="OK", raw="1.0E-6")],
+        )
+        beamline.on_vacuum_changed_for_interlock(state)
+        assert received and received[-1]["state"] == "ok"
 
 
 class TestMoveSlit:

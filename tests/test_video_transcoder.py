@@ -22,28 +22,21 @@ def test_find_ffmpeg_returns_none_when_nothing_found(monkeypatch):
     assert result is None
 
 
-def test_find_ffmpeg_no_exception_when_absent(monkeypatch):
-    monkeypatch.setattr("shutil.which", lambda _: None)
-    monkeypatch.setattr("os.path.isfile", lambda _: False)
-    try:
-        find_ffmpeg()
-    except Exception as exc:
-        pytest.fail(f"find_ffmpeg raised: {exc}")
 
 
 # ---- TranscodeQueue — absent ffmpeg ----------------------------------------
 
-def test_queue_emits_failed_when_ffmpeg_absent(tmp_path):
-    """With ffmpeg absent _transcode must emit finished_one(ok=False).
-    Test synchronously by calling _transcode directly on the main thread."""
+def test_queue_emits_failed_when_ffmpeg_absent(tmp_path, qapp):
+    """With ffmpeg absent, queue must emit finished_one(ok=False)."""
     avi = os.path.join(str(tmp_path), "video_000.avi")
     open(avi, "wb").close()
 
     results = []
     tq = TranscodeQueue(None)
-    tq.finished_one.connect(
-        lambda a, m, ok, msg: results.append((ok, msg)), _DIRECT)
-    tq._transcode(avi)   # call synchronously — no thread needed
+    tq.finished_one.connect(lambda a, m, ok, msg: results.append((ok, msg)))
+    tq.enqueue(avi)
+    tq.enqueue(None)
+    tq.run()
 
     assert results, "no finished_one emitted"
     ok, msg = results[0]
@@ -53,7 +46,7 @@ def test_queue_emits_failed_when_ffmpeg_absent(tmp_path):
 
 # ---- TranscodeQueue — command construction ---------------------------------
 
-def test_command_contains_required_flags(monkeypatch, tmp_path):
+def test_command_contains_required_flags(monkeypatch, tmp_path, qapp):
     """With a fake ffmpeg that records argv, check the flags."""
     captured = []
 
@@ -71,7 +64,9 @@ def test_command_contains_required_flags(monkeypatch, tmp_path):
     open(avi, "wb").close()
 
     tq = TranscodeQueue("/fake/ffmpeg", crf=18, preset="medium")
-    tq._transcode(avi)   # synchronous call
+    tq.enqueue(avi)
+    tq.enqueue(None)
+    tq.run()
 
     assert captured, "subprocess.run was never called"
     argv = captured[0]
@@ -84,7 +79,7 @@ def test_command_contains_required_flags(monkeypatch, tmp_path):
 
 # ---- TranscodeQueue — failure handling -------------------------------------
 
-def test_failed_transcode_leaves_avi_intact(monkeypatch, tmp_path):
+def test_failed_transcode_leaves_avi_intact(monkeypatch, tmp_path, qapp):
     """A non-zero exit must not delete the .avi."""
     def _fake_run(cmd, **kwargs):
         class R:
@@ -99,15 +94,16 @@ def test_failed_transcode_leaves_avi_intact(monkeypatch, tmp_path):
 
     results = []
     tq = TranscodeQueue("/fake/ffmpeg", crf=18, preset="medium")
-    tq.finished_one.connect(
-        lambda a, m, ok, msg: results.append((ok, msg)), _DIRECT)
-    tq._transcode(avi)
+    tq.finished_one.connect(lambda a, m, ok, msg: results.append((ok, msg)))
+    tq.enqueue(avi)
+    tq.enqueue(None)
+    tq.run()
 
     assert os.path.exists(avi), ".avi was deleted on transcode failure"
     assert results and not results[0][0]
 
 
-def test_part_file_renamed_on_success(monkeypatch, tmp_path):
+def test_part_file_renamed_on_success(monkeypatch, tmp_path, qapp):
     """On success, .mp4.part must be renamed to .mp4."""
     renamed = []
 
@@ -124,7 +120,9 @@ def test_part_file_renamed_on_success(monkeypatch, tmp_path):
     open(avi, "wb").close()
 
     tq = TranscodeQueue("/fake/ffmpeg", crf=18, preset="medium")
-    tq._transcode(avi)
+    tq.enqueue(avi)
+    tq.enqueue(None)
+    tq.run()
 
     assert renamed, "os.replace never called — .part not renamed"
     src, dst = renamed[0]

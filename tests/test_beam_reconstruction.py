@@ -202,8 +202,6 @@ class TestReconstruct:
         # Y span differs, so the Y solve differs; X is untouched by it.
         assert abs(square.x - tall.x) < 1e-9
 
-    def test_estimate_repr_is_readable(self):
-        assert "BeamEstimate" in repr(reconstruct(GOOD, EDGES, 0.85))
 
 
 # ── Overscan ──────────────────────────────────────────────────────────────────

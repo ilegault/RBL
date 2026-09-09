@@ -62,7 +62,7 @@ def test_position_drives_the_bar(ctrl):
 
 def test_target_box_marks_the_bar_before_anything_moves(ctrl):
     ctrl.spn_target.setValue(SC.SLIT_DISPLAY_MAX_MM / 4.0)
-    assert ctrl.bar.track._target == pytest.approx(0.25)
+    assert ctrl.bar.target_fraction == pytest.approx(0.25)
 
 
 def test_stale_position_reports_no_galil(ctrl):
@@ -75,7 +75,7 @@ def test_moving_axis_is_called_out(ctrl):
     from rbl.gui import theme
     ctrl.set_position(1.0, moving=True)
     assert ctrl.lbl_state.text() == "moving"
-    assert ctrl.bar.track._color == theme.WARN
+    assert ctrl.bar.track.color == theme.WARN
 
 
 def test_disabled_axis_is_called_out(ctrl):

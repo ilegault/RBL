@@ -315,6 +315,16 @@ ticket file itself, in `.scratch/`, and not anywhere under `.claude/`: that
 directory is gitignored in this repo, so anything written there never gets
 pushed and no reviewer — human or AI — will ever see it.
 
+### Tests-first CI check and documented escape
+
+CI enforces that any pull request or commit modifying application code under `src/` must also modify tests under `tests/` (`scripts/check_tests_first.py`). Changes touching only documentation (`docs/`), build scripts (`scripts/`, `tools/`), CI configurations (`.github/`), or tests (`tests/`) pass automatically.
+
+When a change touching `src/` genuinely does not require test additions or modifications (e.g. comment-only clarification, pure structural cleanup fully covered by existing contract tests, or exploratory hardware bring-up), the author must declare an explicit and visible escape reason:
+- **Commit message or PR text**: Include `[no-test-needed: <reason>]`, `[tests-exempt: <reason>]`, or `[skip-test-gate]`.
+- **PR label**: Apply the `tests-exempt` or `skip-test-gate` label.
+
+The escape reason is recorded in the PR history and visible during code review; silent bypassing is not possible.
+
 <!-- ACTIVE-PLAN:START -->
 ## Active implementation plan
 

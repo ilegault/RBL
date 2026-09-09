@@ -1,0 +1,2922 @@
+{
+  "tests/test_raster_plan.py": {
+    "DELETE": [
+      {
+        "file": "tests/test_raster_plan.py",
+        "name": "TestEnvelopeStatusDecisions::test_worst_label_is_amp_label",
+        "text": [
+          "- `TestEnvelopeStatusDecisions::test_worst_label_is_amp_label` \u2014 **DELETE** \u2014 restates a guarantee the implementation already makes structurally: with the standard `caps_500pf` fixture, `envelope_status` can only ever return one of the dict's own keys (\"X+\"/\"X-\"/\"Y+\"/\"Y-\"), so the membership assertion cannot fail short of a catastrophic bug, and it exercises no selection logic (all four channels are identical). `test_ratio_reflects_worst_channel` already covers the real \"which channel wins\" behaviour with a discriminating case."
+        ]
+      }
+    ],
+    "REWRITE": []
+  },
+  "tests/test_beam_reconstruction.py": {
+    "DELETE": [
+      {
+        "file": "tests/test_beam_reconstruction.py",
+        "name": "TestReconstruct::test_estimate_repr_is_readable",
+        "text": [
+          "- `TestReconstruct::test_estimate_repr_is_readable` \u2014 **DELETE** \u2014 asserts only that `\"BeamEstimate\" in repr(...)`; `BeamEstimate.__repr__` is not read by any GUI consumer (checked `gui/widgets/beam_indicator.py`, which stores the estimate object but never calls `repr()` on it) and no math is exercised. This is a debug-formatting detail with no operator-visible or downstream-consumer effect and doesn't test hardware math \u2014 meets neither keep criterion."
+        ]
+      }
+    ],
+    "REWRITE": []
+  },
+  "tests/test_profile_fwhm.py": {
+    "DELETE": [
+      {
+        "file": "tests/test_profile_fwhm.py",
+        "name": "TestComputeFwhmSamples::test_fwhm_is_positive",
+        "text": [
+          "- `TestComputeFwhmSamples::test_fwhm_is_positive` \u2014 **DELETE** \u2014 restates a weaker version of the guarantee already established by `test_symmetric_gaussian_known_fwhm` and `test_narrower_gaussian` (both already prove the FWHM is a specific positive value on the same kind of synthetic Gaussian); this test uses no new waveform shape and its `> 0` assertion is strictly implied by either of the pinned-value tests passing."
+        ]
+      }
+    ],
+    "REWRITE": []
+  },
+  "tests/test_ac_metrics.py": {
+    "DELETE": [
+      {
+        "file": "tests/test_ac_metrics.py",
+        "name": "TestFundamental::test_amplitude_nonnegative",
+        "text": [
+          "- `TestFundamental::test_amplitude_nonnegative` \u2014 **DELETE** \u2014 the amplitude is computed as `abs(coeff)`, so this only restates the guarantee Python's `abs()` already makes (a magnitude cannot be negative); it adds no detection power beyond `test_sine/triangle/square_amplitude`, which already pin the actual values."
+        ]
+      },
+      {
+        "file": "tests/test_ac_metrics.py",
+        "name": "TestAcMetrics::test_peak_abs_at_least_peak",
+        "text": [
+          "- `TestAcMetrics::test_peak_abs_at_least_peak` \u2014 **DELETE** \u2014 `peak` is `np.percentile(absx, 99.9)` and `peak_abs` is `np.max(absx)`; any percentile \u2264100 of an array is guaranteed by numpy's definition of `percentile` to be \u2264 its max, so this restates that library guarantee rather than testing `ac_metrics`' own logic \u2014 it would hold even if `PEAK_PERCENTILE` were set incorrectly."
+        ]
+      }
+    ],
+    "REWRITE": []
+  },
+  "tests/test_current_monitor.py": {
+    "DELETE": [
+      {
+        "file": "tests/test_current_monitor.py",
+        "name": "TestFormatCurrent::test_small_nA_values",
+        "text": [
+          "- `TestFormatCurrent::test_small_nA_values` \u2014 **DELETE** \u2014 duplicates `test_nA_range`: both simply assert `\"nA\" in s` for a value deep inside the nA bucket (5e-10 vs 1e-9), nowhere near the 1e-6 boundary already pinned by `test_boundary_1uA_is_not_nA`; they would pass or fail together on any change to that branch and this case adds no new detection power."
+        ]
+      },
+      {
+        "file": "tests/test_current_monitor.py",
+        "name": "TestFormatCurrent::test_mid_uA_values",
+        "text": [
+          "- `TestFormatCurrent::test_mid_uA_values` \u2014 **DELETE** \u2014 duplicates `test_uA_range`: both simply assert `\"\u00b5A\"/\"uA\"/\"\u00b5\" in s` for a value deep inside the \u00b5A bucket (50e-6 vs 1e-6), adding nothing beyond what `test_uA_range` and the boundary tests already establish."
+        ]
+      }
+    ],
+    "REWRITE": []
+  },
+  "tests/test_hv_interlock.py": {
+    "DELETE": [
+      {
+        "file": "tests/test_hv_interlock.py",
+        "name": "TestMaxPermittedKv::test_lockout_boundary_is_inclusive",
+        "text": [
+          "- `TestMaxPermittedKv::test_lockout_boundary_is_inclusive` \u2014 **DELETE** \u2014 exact duplicate of `test_ladder`'s `(1e-3, 0.0)` parametrize case: `HV_PRESSURE_ABSOLUTE_LOCKOUT_TORR == 1e-3`, so this calls `max_permitted_kv(1e-3)` expecting `0.0`, the identical input/output/branch already asserted by the parametrized test \u2014 no hypothetical bug would be caught by one and not the other."
+        ]
+      }
+    ],
+    "REWRITE": []
+  },
+  "tests/test_galil_protocol.py": {
+    "DELETE": [
+      {
+        "file": "tests/test_galil_protocol.py",
+        "name": "TestReads::test_switches_all_open",
+        "text": [
+          "- `TestReads::test_switches_all_open` \u2014 **DELETE** \u2014 duplicates `test_a_clear_axis_reads_clear_on_every_switch` byte-for-byte (same all-\"1\" responses, same all-`False` expected dict), only the axis letter changes (A vs D); `get_switch_states` does not branch on which axis letter is used (axis is only string-interpolated into the command name), so no hypothetical defect would be caught by one and not the other."
+        ]
+      }
+    ],
+    "REWRITE": []
+  },
+  "tests/test_vgc083_parse.py": {
+    "DELETE": [
+      {
+        "file": "tests/test_vgc083_parse.py",
+        "name": "TestParseReading::test_normal_cg_reading",
+        "text": [
+          "- `TestParseReading::test_normal_cg_reading` \u2014 **DELETE** \u2014 duplicates `test_normal_ig_reading`: `_parse_reading` does not branch on `channel` at all (it is stored unchanged into the returned dataclass), and the numeric conversion is a plain `float(raw)` with no channel- or exponent-sign-specific logic, so this exercises the identical code path with no hypothetical defect distinguishable from the IG case."
+        ]
+      },
+      {
+        "file": "tests/test_vgc083_parse.py",
+        "name": "TestParseReading::test_sentinel_cg1_never_float",
+        "text": [
+          "- `TestParseReading::test_sentinel_cg1_never_float` \u2014 **DELETE** \u2014 duplicate of `test_sentinel_ig_never_float`; the sentinel check (`raw == _SENTINEL`) runs identically regardless of `channel`, so this and the IG version would pass or fail together for any change to the sentinel logic."
+        ]
+      },
+      {
+        "file": "tests/test_vgc083_parse.py",
+        "name": "TestParseReading::test_sentinel_cg2_never_float",
+        "text": [
+          "- `TestParseReading::test_sentinel_cg2_never_float` \u2014 **DELETE** \u2014 same duplication as above, against the same channel-agnostic branch."
+        ]
+      },
+      {
+        "file": "tests/test_vgc083_parse.py",
+        "name": "TestParseReading::test_sentinel_ai_never_float",
+        "text": [
+          "- `TestParseReading::test_sentinel_ai_never_float` \u2014 **DELETE** \u2014 same duplication as above."
+        ]
+      },
+      {
+        "file": "tests/test_vgc083_parse.py",
+        "name": "TestSentinelNeverFloat::test_sentinel_all_channels",
+        "text": [
+          "- `TestSentinelNeverFloat::test_sentinel_all_channels` \u2014 **DELETE** \u2014 a `pytest.mark.parametrize` over the same 4 channels already covered by `TestParseReading`'s four sentinel tests, asserting the identical `pressure is None` / `state == \"OFF_OR_OVERRANGE\"` / `raw == _SENTINEL` outcomes; doubly redundant since it repeats ground already covered twice (by design) once per channel, none of which the parser actually distinguishes."
+        ]
+      }
+    ],
+    "REWRITE": []
+  },
+  "tests/test_xgs600_parse.py": {
+    "DELETE": [
+      {
+        "file": "tests/test_xgs600_parse.py",
+        "name": "TestParsePressure::test_ok_negative_exponent",
+        "text": [
+          "- `TestParsePressure::test_ok_negative_exponent` \u2014 **DELETE** \u2014 duplicates `test_ok_scientific`: `_parse_pressure`'s numeric path is a bare `float(raw)` with no custom exponent-sign handling, so a different exponent value exercises no different code in the module (only Python's own `float()` parser, which is a framework guarantee, not this module's logic)."
+        ]
+      },
+      {
+        "file": "tests/test_xgs600_parse.py",
+        "name": "TestParsePressure::test_never_coerce_text_to_zero",
+        "text": [
+          "- `TestParsePressure::test_never_coerce_text_to_zero` \u2014 **DELETE** \u2014 re-loops the exact same 5 inputs (`\"OFF\", \"UNDER\", \"NO CABLE\", \"OVER\", \"E01\"`) already individually covered by `test_off_state`, `test_under_state`, `test_no_cable`, `test_over_state`, and `test_error_code`; the added `p != 0.0` check is trivially implied by `p is None` (`None != 0.0` is always true in Python) and adds no independent signal."
+        ]
+      }
+    ],
+    "REWRITE": []
+  },
+  "tests/test_hardware.py": {
+    "DELETE": [
+      {
+        "file": "tests/test_hardware.py",
+        "name": "TestGalilControllerLifecycle::test_get_position_raises_when_not_connected",
+        "text": [
+          "- `TestGalilControllerLifecycle::test_get_position_raises_when_not_connected` \u2014 **DELETE** \u2014 `get_position()` has no connectivity check of its own; it calls `self.cmd(...)` immediately, so this exercises the exact same guard clause as `test_cmd_raises_when_not_connected` and would fail or pass together with it. Pure duplication through a zero-logic wrapper."
+        ]
+      },
+      {
+        "file": "tests/test_hardware.py",
+        "name": "TestGalilControllerLifecycle::test_is_moving_raises_when_not_connected",
+        "text": [
+          "- `TestGalilControllerLifecycle::test_is_moving_raises_when_not_connected` \u2014 **DELETE** \u2014 same duplication: `is_moving()` also just delegates to `self.cmd(...)` with no independent check; duplicates `test_cmd_raises_when_not_connected`."
+        ]
+      },
+      {
+        "file": "tests/test_hardware.py",
+        "name": "TestSlitConfig::test_four_axis_letters",
+        "text": [
+          "- `TestSlitConfig::test_four_axis_letters` \u2014 **DELETE** \u2014 asserts `len(AXIS_LETTERS) == 4` against a hardcoded 4-entry dict (`AXIS_NAMES`); no computation, restates the module's own literal."
+        ]
+      },
+      {
+        "file": "tests/test_hardware.py",
+        "name": "TestSlitConfig::test_axis_names_match_letters",
+        "text": [
+          "- `TestSlitConfig::test_axis_names_match_letters` \u2014 **DELETE** \u2014 tautological: `AXIS_LETTERS = list(AXIS_NAMES.keys())` in the source, so \"every letter in AXIS_LETTERS is a key of AXIS_NAMES\" is guaranteed by that assignment itself, not by any logic under test."
+        ]
+      },
+      {
+        "file": "tests/test_hardware.py",
+        "name": "TestSlitConfig::test_labjack_channel_map_not_empty",
+        "text": [
+          "- `TestSlitConfig::test_labjack_channel_map_not_empty` \u2014 **DELETE** \u2014 asserts a hardcoded 4-entry dict literal is non-empty; no computation, restates the literal."
+        ]
+      },
+      {
+        "file": "tests/test_hardware.py",
+        "name": "TestSlitConfig::test_default_speed_positive",
+        "text": [
+          "- `TestSlitConfig::test_default_speed_positive` \u2014 **DELETE** \u2014 asserts a hardcoded numeric literal (`DEFAULT_SPEED_COUNTS_PER_SEC`) is `>0`; no computation, restates the constant's own definition."
+        ]
+      },
+      {
+        "file": "tests/test_hardware.py",
+        "name": "TestSlitConfig::test_default_accel_positive",
+        "text": [
+          "- `TestSlitConfig::test_default_accel_positive` \u2014 **DELETE** \u2014 same pattern as above for `DEFAULT_ACCEL_COUNTS_PER_SEC2`."
+        ]
+      },
+      {
+        "file": "tests/test_hardware.py",
+        "name": "TestLabJackT7Lifecycle::test_read_channels_raises_when_not_connected",
+        "text": [
+          "- `TestLabJackT7Lifecycle::test_read_channels_raises_when_not_connected` \u2014 **DELETE** \u2014 the `try/except Exception: pass` swallows any exception, and the non-exception branch only checks `isinstance(result, dict)` (not that it's empty, despite the comment). The actual driver always raises `LabJackError`, which this test happily accepts \u2014 but it would equally accept a return of an arbitrary non-empty dict of fabricated voltages, so it cannot distinguish correct behaviour from a real regression."
+        ]
+      }
+    ],
+    "REWRITE": []
+  },
+  "tests/test_timebase.py": {
+    "DELETE": [
+      {
+        "file": "tests/test_timebase.py",
+        "name": "TestSharedTimebase::test_locked_only_for_the_one_correct_configuration",
+        "text": [
+          "- `TestSharedTimebase::test_locked_only_for_the_one_correct_configuration` \u2014 **DELETE** \u2014 asserts on Beamline's internal `timebase_locked` property. A repo-wide grep confirms this property has **no readers anywhere in `src/`** outside its own definition \u2014 the Overview tab (`overview_tab.py:859`) renders `funcgens.timebase` (the raw dict), not this property. This test exercises internal state with no downstream consumer, and the actually-consumed pipeline is already covered by `test_the_cached_clock_is_published_on_funcgen_state` below."
+        ]
+      }
+    ],
+    "REWRITE": []
+  },
+  "tests/test_labjack_stream.py": {
+    "DELETE": [
+      {
+        "file": "tests/test_labjack_stream.py",
+        "name": "TestWorkerConstruction::test_channel_override_stored",
+        "text": [
+          "- `TestWorkerConstruction::test_channel_override_stored` \u2014 **DELETE** \u2014 writes a constructor",
+          "argument into the private `_channel_override`/`_profile_name` attributes and reads the exact",
+          "same attributes straight back; the real consumer of `_channel_override`",
+          "(`_resolve_scan_names()`, which decides which physical channel actually gets streamed) is",
+          "never called by this test, so a bug where `_resolve_scan_names` ignored the override entirely",
+          "would still pass this test. Matches \"writes the private state it then reads back\" and \"would",
+          "not have caught a real defect.\""
+        ]
+      },
+      {
+        "file": "tests/test_labjack_stream.py",
+        "name": "TestWorkerConstruction::test_channel_override_defaults_none",
+        "text": [
+          "- `TestWorkerConstruction::test_channel_override_defaults_none` \u2014 **DELETE** \u2014 same reasoning as",
+          "the previous test for the default-`None` case; `_resolve_scan_names` is grep-confirmed to have",
+          "no other test anywhere in the suite (`tests/test_labjack_stream.py` and no other file",
+          "references `_resolve_scan_names`), so the channel-override routing behaviour these two tests",
+          "gesture at is entirely untested, not merely tested indirectly."
+        ]
+      }
+    ],
+    "REWRITE": []
+  },
+  "tests/test_tab_persistence.py": {
+    "DELETE": [
+      {
+        "file": "tests/test_tab_persistence.py",
+        "name": "TestGalilPollPersistence::test_thread_runs_multiple_polls",
+        "text": [
+          "- `TestGalilPollPersistence::test_thread_runs_multiple_polls` \u2014 **DELETE** \u2014 exercises",
+          "`StubGalilPollThread`, not `GalilPollWorker`; would not catch a defect in the real class."
+        ]
+      },
+      {
+        "file": "tests/test_tab_persistence.py",
+        "name": "TestGalilPollPersistence::test_thread_continues_when_not_observed",
+        "text": [
+          "- `TestGalilPollPersistence::test_thread_continues_when_not_observed` \u2014 **DELETE** \u2014 same reason;",
+          "also relies on wall-clock `time.sleep` windows for its pass/fail margin, compounding the churn",
+          "risk with timing flakiness on a loaded CI runner."
+        ]
+      },
+      {
+        "file": "tests/test_tab_persistence.py",
+        "name": "TestGalilPollPersistence::test_thread_stops_on_request",
+        "text": [
+          "- `TestGalilPollPersistence::test_thread_stops_on_request` \u2014 **DELETE** \u2014 same reason."
+        ]
+      },
+      {
+        "file": "tests/test_tab_persistence.py",
+        "name": "TestGalilPollPersistence::test_thread_stops_on_disconnect",
+        "text": [
+          "- `TestGalilPollPersistence::test_thread_stops_on_disconnect` \u2014 **DELETE** \u2014 same reason."
+        ]
+      },
+      {
+        "file": "tests/test_tab_persistence.py",
+        "name": "TestGalilPollPersistence::test_no_errors_on_normal_operation",
+        "text": [
+          "- `TestGalilPollPersistence::test_no_errors_on_normal_operation` \u2014 **DELETE** \u2014 same reason."
+        ]
+      },
+      {
+        "file": "tests/test_tab_persistence.py",
+        "name": "TestLabJackPollPersistence::test_buffer_fills_while_running",
+        "text": [
+          "- `TestLabJackPollPersistence::test_buffer_fills_while_running` \u2014 **DELETE** \u2014 exercises",
+          "`StubLabJackPollThread`, which has no production counterpart at all."
+        ]
+      },
+      {
+        "file": "tests/test_tab_persistence.py",
+        "name": "TestLabJackPollPersistence::test_reads_accumulate_in_hidden_state",
+        "text": [
+          "- `TestLabJackPollPersistence::test_reads_accumulate_in_hidden_state` \u2014 **DELETE** \u2014 same reason;",
+          "this is the specific test the docstring claims proves data \"still accumulates... when 'tab is",
+          "not visible'\" \u2014 it proves that about the stub only."
+        ]
+      },
+      {
+        "file": "tests/test_tab_persistence.py",
+        "name": "TestLabJackPollPersistence::test_buffer_values_match_mock_readings",
+        "text": [
+          "- `TestLabJackPollPersistence::test_buffer_values_match_mock_readings` \u2014 **DELETE** \u2014 same",
+          "reason."
+        ]
+      },
+      {
+        "file": "tests/test_tab_persistence.py",
+        "name": "TestLabJackPollPersistence::test_multiple_channels_all_fill",
+        "text": [
+          "- `TestLabJackPollPersistence::test_multiple_channels_all_fill` \u2014 **DELETE** \u2014 same reason."
+        ]
+      },
+      {
+        "file": "tests/test_tab_persistence.py",
+        "name": "TestLabJackPollPersistence::test_no_errors_on_normal_operation",
+        "text": [
+          "- `TestLabJackPollPersistence::test_no_errors_on_normal_operation` \u2014 **DELETE** \u2014 same reason."
+        ]
+      }
+    ],
+    "REWRITE": []
+  },
+  "tests/test_beamline.py": {
+    "DELETE": [
+      {
+        "file": "tests/test_beamline.py",
+        "name": "test_interlock_rejects_identically_via_direct_call_or_widget_path",
+        "text": [
+          "- `test_interlock_rejects_identically_via_direct_call_or_widget_path` \u2014 **DELETE** \u2014 both",
+          "\"call sites\" the test defines (`apply_via_direct_beamline_call` and",
+          "`apply_via_simulated_widget_call`) invoke the exact same expression,",
+          "`beamline.set_channel(\"A1\", self.OVER_LIMIT)`, with nothing between them that differs \u2014 there",
+          "is no second, distinct call path being exercised despite the docstring's claim (\"an",
+          "interlock-violating amplitude is rejected the same way regardless of which caller reaches",
+          "Beamline.set_channel\"). The test can only fail if `set_channel` is non-deterministic, which it",
+          "isn't, so `result_direct == result_widget` cannot ever be false; a real second bypass path",
+          "(e.g. a widget that used to call the driver directly) would not be caught here since no widget",
+          "code is invoked at all. This restates, verbatim, what",
+          "`test_set_channel_rejects_over_limit_amplitude` already tests and would pass or fail in",
+          "lockstep with it \u2014 the near-duplicate criterion from ticket 08's own text."
+        ]
+      }
+    ],
+    "REWRITE": [
+      {
+        "file": "tests/test_beamline.py",
+        "name": "test_high_pressure_blocks_even_with_a_fresh_reading",
+        "text": [
+          "- `test_high_pressure_blocks_even_with_a_fresh_reading` \u2014 **REWRITE** \u2014 sets",
+          "`beamline._hv_pressure_torr` and `beamline._hv_pressure_at` directly. Sanctioned path: build a",
+          "real `VacuumState` with a gauge reading at/above the absolute lockout pressure and call",
+          "`beamline.on_vacuum_changed_for_interlock(state)` (the same method production wires to",
+          "`vacuum_changed`), after `beamline.set_interlock_gauges({...})` selects that gauge."
+        ]
+      },
+      {
+        "file": "tests/test_beamline.py",
+        "name": "test_stale_reading_blocks_even_though_pressure_value_was_once_good",
+        "text": [
+          "- `test_stale_reading_blocks_even_though_pressure_value_was_once_good` \u2014 **REWRITE** \u2014 sets",
+          "`beamline._hv_pressure_torr` and a manually-backdated `beamline._hv_pressure_at` directly.",
+          "Sanctioned path: call `on_vacuum_changed_for_interlock(state)` with a healthy `VacuumState` to",
+          "set a real, fresh timestamp through production code, then monkeypatch `hv_interlock_link.time.",
+          "monotonic` to advance past `GAUGE_STALE_TIMEOUT_S` before calling `set_channel` \u2014 exercising the",
+          "real staleness check (`hv_pressure_is_stale()`) instead of hand-writing its cached inputs."
+        ]
+      },
+      {
+        "file": "tests/test_beamline.py",
+        "name": "test_transition_into_block_ramps_live_channel_to_zero",
+        "text": [
+          "- `test_transition_into_block_ramps_live_channel_to_zero` \u2014 **REWRITE** \u2014 sets",
+          "`beamline._hv_pressure_torr` directly and calls the private `beamline._recompute_hv_interlock()`",
+          "twice by hand. Sanctioned path: call `on_vacuum_changed_for_interlock(healthy_state)` then",
+          "`on_vacuum_changed_for_interlock(high_pressure_state)` \u2014 production's own transition trigger,",
+          "which calls `_recompute_hv_interlock()` internally exactly once per call, the same as the real",
+          "vacuum-poll \u2192 interlock pipeline."
+        ]
+      },
+      {
+        "file": "tests/test_beamline.py",
+        "name": "test_hv_interlock_changed_is_emitted_on_recompute",
+        "text": [
+          "- `test_hv_interlock_changed_is_emitted_on_recompute` \u2014 **REWRITE** \u2014 calls the private",
+          "`beamline._recompute_hv_interlock()` directly. Sanctioned path: call",
+          "`on_vacuum_changed_for_interlock(state)`, which triggers the same recompute and the same",
+          "`hv_interlock_changed` emission through the production entry point."
+        ]
+      }
+    ]
+  },
+  "tests/test_amp_single_channel.py": {
+    "DELETE": [],
+    "REWRITE": [
+      {
+        "file": "tests/test_amp_single_channel.py",
+        "name": "test_streamed_channel_updates_and_others_paused",
+        "text": [
+          "- `test_streamed_channel_updates_and_others_paused` (line 75) \u2014 **REWRITE** \u2014 Asserts only the selected channel's buffer updates in single mode while other channels show paused status.",
+          "- *Sanctioned rewrite path:* Rewrite using Qt signal emissions and `qtbot` to assert buffer/UI status rather than inspecting internal buffer dictionaries directly."
+        ]
+      },
+      {
+        "file": "tests/test_amp_single_channel.py",
+        "name": "test_current_target_waveform_follows_selection",
+        "text": [
+          "- `test_current_target_waveform_follows_selection` (line 93) \u2014 **REWRITE** \u2014 Asserts waveform display reflects the selected channel's waveform data.",
+          "- *Sanctioned rewrite path:* Rewrite with `qtbot` to change combobox index and assert plot curve data updates."
+        ]
+      },
+      {
+        "file": "tests/test_amp_single_channel.py",
+        "name": "test_multichannel_mode_keeps_all_live",
+        "text": [
+          "- `test_multichannel_mode_keeps_all_live` (line 126) \u2014 **REWRITE** \u2014 Asserts multi-channel mode updates all four channel buffers simultaneously.",
+          "- *Sanctioned rewrite path:* Rewrite with signal emissions to assert all channel curves update."
+        ]
+      },
+      {
+        "file": "tests/test_amp_single_channel.py",
+        "name": "test_combo_change_stages_without_emitting",
+        "text": [
+          "- `test_combo_change_stages_without_emitting` (line 134) \u2014 **REWRITE** \u2014 Asserts modifying channel dropdown stages new target without immediately sending hardware commands.",
+          "- *Sanctioned rewrite path:* Rewrite to assert no hardware dispatch on combobox index change until Apply is triggered."
+        ]
+      },
+      {
+        "file": "tests/test_amp_single_channel.py",
+        "name": "test_apply_emits_and_clears_pending",
+        "text": [
+          "- `test_apply_emits_and_clears_pending` (line 145) \u2014 **REWRITE** \u2014 Asserts clicking Apply sends staged configuration to hardware and clears pending change indicator.",
+          "- *Sanctioned rewrite path:* Rewrite using `qtbot.mouseClick` on Apply button and verifying hardware dispatch via `FakeAsyncHardwareManager`."
+        ]
+      },
+      {
+        "file": "tests/test_amp_single_channel.py",
+        "name": "test_wide_window_is_trend_small_window_is_snapshot",
+        "text": [
+          "- `test_wide_window_is_trend_small_window_is_snapshot` (line 156) \u2014 **REWRITE** \u2014 Asserts window size parameter configures trend view vs instantaneous snapshot view.",
+          "- *Sanctioned rewrite path:* Rewrite with `qtbot` setting window size spinbox and verifying buffer display length."
+        ]
+      }
+    ]
+  },
+  "tests/test_amp_tab_isolation.py": {
+    "DELETE": [],
+    "REWRITE": [
+      {
+        "file": "tests/test_amp_tab_isolation.py",
+        "name": "test_slider_enters_frozen",
+        "text": [
+          "- `test_slider_enters_frozen` (line 93) \u2014 **REWRITE** \u2014 Asserts dragging history slider pauses live rendering and enters frozen history inspection mode.",
+          "- *Sanctioned rewrite path:* Rewrite with `qtbot` slider interactions instead of directly invoking private slider callbacks."
+        ]
+      },
+      {
+        "file": "tests/test_amp_tab_isolation.py",
+        "name": "test_jump_to_live",
+        "text": [
+          "- `test_jump_to_live` (line 100) \u2014 **REWRITE** \u2014 Asserts clicking \"Jump to Live\" button exits frozen history and resumes live streaming.",
+          "- *Sanctioned rewrite path:* Rewrite with `qtbot.mouseClick` on Jump to Live button."
+        ]
+      },
+      {
+        "file": "tests/test_amp_tab_isolation.py",
+        "name": "test_same_window_feeds_both_correctly",
+        "text": [
+          "- `test_same_window_feeds_both_correctly` (line 143) \u2014 **REWRITE** \u2014 Asserts a single stream data window feeds both standard and log amp tabs correctly without cross-contamination.",
+          "- *Sanctioned rewrite path:* Rewrite using Qt signal emission to dispatch window to both tab models and verify independent buffer updates."
+        ]
+      }
+    ]
+  },
+  "tests/test_auto_home.py": {
+    "DELETE": [],
+    "REWRITE": [
+      {
+        "file": "tests/test_auto_home.py",
+        "name": "test_jogs_negative_until_the_home_switch_trips",
+        "text": [
+          "- `test_jogs_negative_until_the_home_switch_trips` (line 93) \u2014 **REWRITE** \u2014 Asserts negative seek jog stops when home switch trips. Rewrite with `FakeAsyncHardwareManager`."
+        ]
+      },
+      {
+        "file": "tests/test_auto_home.py",
+        "name": "test_stops_on_the_reverse_limit_too",
+        "text": [
+          "- `test_stops_on_the_reverse_limit_too` (line 105) \u2014 **REWRITE** \u2014 Asserts reverse limit switch halts seek jog as a safety boundary. Rewrite with fake hardware."
+        ]
+      },
+      {
+        "file": "tests/test_auto_home.py",
+        "name": "test_no_jog_when_already_on_the_limit",
+        "text": [
+          "- `test_no_jog_when_already_on_the_limit` (line 114) \u2014 **REWRITE** \u2014 Asserts axis already resting on limit switch skips initial seek jog. Rewrite with fake hardware."
+        ]
+      },
+      {
+        "file": "tests/test_auto_home.py",
+        "name": "test_reports_a_jog_that_stopped_short",
+        "text": [
+          "- `test_reports_a_jog_that_stopped_short` (line 120) \u2014 **REWRITE** \u2014 Asserts error report when seek jog halts prematurely before switch is found. Rewrite with fake hardware."
+        ]
+      },
+      {
+        "file": "tests/test_auto_home.py",
+        "name": "test_times_out_rather_than_jogging_forever",
+        "text": [
+          "- `test_times_out_rather_than_jogging_forever` (line 129) \u2014 **REWRITE** \u2014 Asserts timeout abort when home switch is not detected within duration limit. Rewrite with virtual clock."
+        ]
+      },
+      {
+        "file": "tests/test_auto_home.py",
+        "name": "test_cancel_stops_the_jog",
+        "text": [
+          "- `test_cancel_stops_the_jog` (line 137) \u2014 **REWRITE** \u2014 Asserts user cancellation immediately halts active jog. Rewrite with fake hardware."
+        ]
+      },
+      {
+        "file": "tests/test_auto_home.py",
+        "name": "test_seek_then_three_passes_then_zero",
+        "text": [
+          "- `test_seek_then_three_passes_then_zero` (line 181) \u2014 **REWRITE** \u2014 Asserts full sequence of seek followed by 3 latch passes and zeroing. Rewrite with `FakeAsyncHardwareManager`."
+        ]
+      },
+      {
+        "file": "tests/test_auto_home.py",
+        "name": "test_a_failed_seek_never_reaches_hm",
+        "text": [
+          "- `test_a_failed_seek_never_reaches_hm` (line 191) \u2014 **REWRITE** \u2014 Asserts failed initial seek aborts homing before latch passes begin. Rewrite with fake hardware."
+        ]
+      },
+      {
+        "file": "tests/test_auto_home.py",
+        "name": "test_each_pass_turns_down_both_of_hm_s_stages",
+        "text": [
+          "- `test_each_pass_turns_down_both_of_hm_s_stages` (line 201) \u2014 **REWRITE** \u2014 Asserts each successive homing pass reduces both coarse and fine velocities. Rewrite with fake hardware."
+        ]
+      },
+      {
+        "file": "tests/test_auto_home.py",
+        "name": "test_it_puts_both_speeds_back",
+        "text": [
+          "- `test_it_puts_both_speeds_back` (line 214) \u2014 **REWRITE** \u2014 Asserts pre-homing velocities are restored after successful homing. Rewrite with fake hardware."
+        ]
+      },
+      {
+        "file": "tests/test_auto_home.py",
+        "name": "test_the_speeds_go_back_after_a_failure_too",
+        "text": [
+          "- `test_the_speeds_go_back_after_a_failure_too` (line 223) \u2014 **REWRITE** \u2014 Asserts velocities restored even after homing failure. Rewrite with fake hardware."
+        ]
+      },
+      {
+        "file": "tests/test_auto_home.py",
+        "name": "test_zero_is_defined_because_hm_does_not_do_it_on_a_stepper",
+        "text": [
+          "- `test_zero_is_defined_because_hm_does_not_do_it_on_a_stepper` (line 238) \u2014 **REWRITE** \u2014 Asserts explicit zero position command sent after homing on stepper motors. Rewrite with fake hardware."
+        ]
+      },
+      {
+        "file": "tests/test_auto_home.py",
+        "name": "test_homes_every_axis_in_order",
+        "text": [
+          "- `test_homes_every_axis_in_order` (line 277) \u2014 **REWRITE** \u2014 Asserts sequential execution of homing across all configured axes. Rewrite with fake hardware."
+        ]
+      },
+      {
+        "file": "tests/test_auto_home.py",
+        "name": "test_one_axis_at_a_time",
+        "text": [
+          "- `test_one_axis_at_a_time` (line 292) \u2014 **REWRITE** \u2014 Asserts sequential axis execution invariant. Rewrite with fake hardware."
+        ]
+      },
+      {
+        "file": "tests/test_auto_home.py",
+        "name": "test_a_failure_stops_the_run_and_names_what_was_skipped",
+        "text": [
+          "- `test_a_failure_stops_the_run_and_names_what_was_skipped` (line 308) \u2014 **REWRITE** \u2014 Asserts single axis failure aborts remaining axes in multi-axis sequence. Rewrite with fake hardware."
+        ]
+      },
+      {
+        "file": "tests/test_auto_home.py",
+        "name": "test_cancel_leaves_the_remaining_axes_untouched",
+        "text": [
+          "- `test_cancel_leaves_the_remaining_axes_untouched` (line 329) \u2014 **REWRITE** \u2014 Asserts cancellation stops current axis and skips remaining. Rewrite with fake hardware."
+        ]
+      },
+      {
+        "file": "tests/test_auto_home.py",
+        "name": "test_together_sends_one_command_not_four_workers",
+        "text": [
+          "- `test_together_sends_one_command_not_four_workers` (line 435) \u2014 **REWRITE** \u2014 Asserts simultaneous homing sends unified multi-axis command. Rewrite with fake hardware."
+        ]
+      },
+      {
+        "file": "tests/test_auto_home.py",
+        "name": "test_one_hm_and_one_bg_for_the_whole_set",
+        "text": [
+          "- `test_one_hm_and_one_bg_for_the_whole_set` (line 572) \u2014 **REWRITE** \u2014 Command batching verification for multi-axis homing. Rewrite with fake hardware."
+        ]
+      },
+      {
+        "file": "tests/test_auto_home.py",
+        "name": "test_zero_is_defined_for_every_axis_in_one_command",
+        "text": [
+          "- `test_zero_is_defined_for_every_axis_in_one_command` (line 581) \u2014 **REWRITE** \u2014 Asserts multi-axis zero definition in single command. Rewrite with fake hardware."
+        ]
+      },
+      {
+        "file": "tests/test_auto_home.py",
+        "name": "test_each_pass_turns_down_both_stages",
+        "text": [
+          "- `test_each_pass_turns_down_both_stages` (line 587) \u2014 **REWRITE** \u2014 Velocity step-down check on multi-axis passes. Rewrite with fake hardware."
+        ]
+      },
+      {
+        "file": "tests/test_auto_home.py",
+        "name": "test_the_seek_starts_every_axis_with_one_jog",
+        "text": [
+          "- `test_the_seek_starts_every_axis_with_one_jog` (line 594) \u2014 **REWRITE** \u2014 Multi-axis simultaneous seek jog dispatch check. Rewrite with fake hardware."
+        ]
+      }
+    ]
+  },
+  "tests/test_calibration_app_wiring.py": {
+    "DELETE": [
+      {
+        "file": "tests/test_calibration_app_wiring.py",
+        "name": "test_profile_selector_disabled_during_run_and_reenabled_after",
+        "text": [
+          "- `test_profile_selector_disabled_during_run_and_reenabled_after` (line 171) \u2014 **DELETE** \u2014 Tests internal widget enable/disable state by mocking `_profile_selector` directly instead of testing user interaction / observable state.",
+          "- *Deletion rationale:* Violates ADR 0001 \u00a75 by mocking internal UI controls to verify state reflection. The contract of profile locking is already covered by runner lifecycle tests."
+        ]
+      }
+    ],
+    "REWRITE": [
+      {
+        "file": "tests/test_calibration_app_wiring.py",
+        "name": "test_calibration_tab_present",
+        "text": [
+          "- `test_calibration_tab_present` (line 115) \u2014 **REWRITE** \u2014 Asserts `main_window.calibration_tab` is not None and present in stack.",
+          "- *Sanctioned rewrite path:* Rewrite as a component integration test verifying tab registration via `CalibrationTab` contract rather than inspecting internal MainWindow attributes."
+        ]
+      },
+      {
+        "file": "tests/test_calibration_app_wiring.py",
+        "name": "test_calibration_tab_receives_window_payloads",
+        "text": [
+          "- `test_calibration_tab_receives_window_payloads` (line 122) \u2014 **REWRITE** \u2014 Asserts that stream data events from LabJack dispatch to calibration tab.",
+          "- *Sanctioned rewrite path:* Rewrite to use Qt signal emissions and `qtbot.waitUntil` verifying observable calibration data flow rather than mock callback inspections."
+        ]
+      },
+      {
+        "file": "tests/test_calibration_app_wiring.py",
+        "name": "test_starting_a_run_forces_cal_profile",
+        "text": [
+          "- `test_starting_a_run_forces_cal_profile` (line 146) \u2014 **REWRITE** \u2014 Asserts profile switches to calibration mode when run begins.",
+          "- *Sanctioned rewrite path:* Rewrite using real profile manager interface and signal spying to verify system state change on run invocation."
+        ]
+      },
+      {
+        "file": "tests/test_calibration_app_wiring.py",
+        "name": "test_ending_a_run_restores_the_prior_profile",
+        "text": [
+          "- `test_ending_a_run_restores_the_prior_profile` (line 152) \u2014 **REWRITE** \u2014 Asserts profile is restored upon run completion.",
+          "- *Sanctioned rewrite path:* Rewrite using fake calibration runner emission of `finished` signal and verifying profile manager state."
+        ]
+      },
+      {
+        "file": "tests/test_calibration_app_wiring.py",
+        "name": "test_abort_also_restores_the_prior_profile",
+        "text": [
+          "- `test_abort_also_restores_the_prior_profile` (line 160) \u2014 **REWRITE** \u2014 Asserts profile is restored if calibration run is aborted.",
+          "- *Sanctioned rewrite path:* Rewrite using fake calibration runner abort path and verifying profile manager restoration."
+        ]
+      }
+    ]
+  },
+  "tests/test_calibration_runner.py": {
+    "DELETE": [
+      {
+        "file": "tests/test_calibration_runner.py",
+        "name": "test_guard_boundaries_match_config_constants",
+        "text": [
+          "- `test_guard_boundaries_match_config_constants` (line 522) \u2014 **DELETE** \u2014 Tautological test asserting config values match hardcoded local constants.",
+          "- *Deletion rationale:* Restating configuration constants in test assertions without behavioral validation catches no regressions."
+        ]
+      }
+    ],
+    "REWRITE": [
+      {
+        "file": "tests/test_calibration_runner.py",
+        "name": "test_rows_and_metadata_reach_a_real_writer",
+        "text": [
+          "- `test_rows_and_metadata_reach_a_real_writer` (line 413) \u2014 **REWRITE** \u2014 Asserts data persistence to disk.",
+          "- *Sanctioned rewrite path:* Rewrite to use `tmp_path` fixture and verify actual saved CSV/HDF5 contents instead of mocking writer object."
+        ]
+      },
+      {
+        "file": "tests/test_calibration_runner.py",
+        "name": "test_watchdog_triggers_on_gap_and_zeros_output",
+        "text": [
+          "- `test_watchdog_triggers_on_gap_and_zeros_output` (line 554) \u2014 **REWRITE** \u2014 Tests stream watchdog timeout triggering safe shutdown.",
+          "- *Sanctioned rewrite path:* Rewrite using a deterministic fake clock instead of `mock.patch('time.monotonic')` to prevent timing flakiness."
+        ]
+      },
+      {
+        "file": "tests/test_calibration_runner.py",
+        "name": "test_watchdog_resets_on_each_window",
+        "text": [
+          "- `test_watchdog_resets_on_each_window` (line 577) \u2014 **REWRITE** \u2014 Tests watchdog reset on incoming data stream.",
+          "- *Sanctioned rewrite path:* Rewrite using fake clock and simulated window stream."
+        ]
+      },
+      {
+        "file": "tests/test_calibration_runner.py",
+        "name": "test_drift_rows_carry_pass_type_drift",
+        "text": [
+          "- `test_drift_rows_carry_pass_type_drift` (line 591) \u2014 **REWRITE** \u2014 Tests drift monitoring pass tagging in output data.",
+          "- *Sanctioned rewrite path:* Rewrite to verify generated row records directly without deep mock interception."
+        ]
+      }
+    ]
+  },
+  "tests/test_camera_tab.py": {
+    "DELETE": [
+      {
+        "file": "tests/test_camera_tab.py",
+        "name": "test_camera_tab_constructs_without_cv2",
+        "text": [
+          "- `test_camera_tab_constructs_without_cv2` (line 107) \u2014 **DELETE** \u2014 Tests import fallback when OpenCV is missing by monkeypatching `sys.modules['cv2'] = None`.",
+          "- *Deletion rationale:* Mutating `sys.modules` in a single test pollutes the entire test runner process and causes sporadic import errors in subsequent tests."
+        ]
+      }
+    ],
+    "REWRITE": [
+      {
+        "file": "tests/test_camera_tab.py",
+        "name": "test_record_fps_change_syncs_between_views",
+        "text": [
+          "- `test_record_fps_change_syncs_between_views` (line 120) \u2014 **REWRITE** \u2014 Tests synchronization of FPS setting between controls.",
+          "- *Sanctioned rewrite path:* Rewrite using `qtbot` user interaction (`qtbot.keyClicks` or `spinBox.setValue`) to assert UI sync via public signals."
+        ]
+      },
+      {
+        "file": "tests/test_camera_tab.py",
+        "name": "test_crosshair_toggle_no_raise_with_no_frame",
+        "text": [
+          "- `test_crosshair_toggle_no_raise_with_no_frame` (line 131) \u2014 **REWRITE** \u2014 Tests crosshair toggle robustness when no video feed is active.",
+          "- *Sanctioned rewrite path:* Rewrite using `qtbot.mouseClick` on the crosshair action/button."
+        ]
+      }
+    ]
+  },
+  "tests/test_drag_panel.py": {
+    "DELETE": [
+      {
+        "file": "tests/test_drag_panel.py",
+        "name": "test_initial_state_one_empty_col",
+        "text": [
+          "- `test_initial_state_one_empty_col` (line 53) \u2014 **DELETE** \u2014 Tests private `_cols` list initial structure.",
+          "- *Deletion rationale:* White-box inspection of private internal storage (`_cols`). Violates ADR 0001 \u00a75."
+        ]
+      },
+      {
+        "file": "tests/test_drag_panel.py",
+        "name": "test_add_to_col0",
+        "text": [
+          "- `test_add_to_col0` (line 58) \u2014 **DELETE** \u2014 Tests private `_cols` list mutation on append.",
+          "- *Deletion rationale:* White-box inspection of private internal storage (`_cols`)."
+        ]
+      },
+      {
+        "file": "tests/test_drag_panel.py",
+        "name": "test_add_two_panels_same_col_ordered",
+        "text": [
+          "- `test_add_two_panels_same_col_ordered` (line 63) \u2014 **DELETE** \u2014 Tests private `_cols` list ordering.",
+          "- *Deletion rationale:* White-box inspection of private internal storage (`_cols`)."
+        ]
+      },
+      {
+        "file": "tests/test_drag_panel.py",
+        "name": "test_add_four_panels_same_col_ordered",
+        "text": [
+          "- `test_add_four_panels_same_col_ordered` (line 69) \u2014 **DELETE** \u2014 Tests private `_cols` list multi-item ordering.",
+          "- *Deletion rationale:* White-box inspection of private internal storage (`_cols`)."
+        ]
+      },
+      {
+        "file": "tests/test_drag_panel.py",
+        "name": "test_add_to_col1_creates_new_col",
+        "text": [
+          "- `test_add_to_col1_creates_new_col` (line 75) \u2014 **DELETE** \u2014 Tests private `_cols` column expansion.",
+          "- *Deletion rationale:* White-box inspection of private internal storage (`_cols`)."
+        ]
+      },
+      {
+        "file": "tests/test_drag_panel.py",
+        "name": "test_add_skips_intermediate_empty_cols",
+        "text": [
+          "- `test_add_skips_intermediate_empty_cols` (line 84) \u2014 **DELETE** \u2014 Tests private `_cols` index gap handling.",
+          "- *Deletion rationale:* White-box inspection of private internal storage (`_cols`)."
+        ]
+      },
+      {
+        "file": "tests/test_drag_panel.py",
+        "name": "test_area_reference_set_on_panel",
+        "text": [
+          "- `test_area_reference_set_on_panel` (line 93) \u2014 **DELETE** \u2014 Tests internal backlink assignment `panel._area`.",
+          "- *Deletion rationale:* White-box inspection of internal pointer assignment."
+        ]
+      },
+      {
+        "file": "tests/test_drag_panel.py",
+        "name": "test_stack_two_cols_independently",
+        "text": [
+          "- `test_stack_two_cols_independently` (line 98) \u2014 **DELETE** \u2014 Tests private `_cols` multi-column structure.",
+          "- *Deletion rationale:* White-box inspection of private internal storage (`_cols`)."
+        ]
+      },
+      {
+        "file": "tests/test_drag_panel.py",
+        "name": "test_find_only_panel",
+        "text": [
+          "- `test_find_only_panel` (line 114) \u2014 **DELETE** \u2014 Tests private helper `_find(panel)`.",
+          "- *Deletion rationale:* Unit testing private helper method directly."
+        ]
+      },
+      {
+        "file": "tests/test_drag_panel.py",
+        "name": "test_find_two_in_same_col",
+        "text": [
+          "- `test_find_two_in_same_col` (line 119) \u2014 **DELETE** \u2014 Tests private helper `_find(panel)` with multiple panels.",
+          "- *Deletion rationale:* Unit testing private helper method directly."
+        ]
+      },
+      {
+        "file": "tests/test_drag_panel.py",
+        "name": "test_find_in_second_col",
+        "text": [
+          "- `test_find_in_second_col` (line 126) \u2014 **DELETE** \u2014 Tests private helper `_find(panel)` in column 1.",
+          "- *Deletion rationale:* Unit testing private helper method directly."
+        ]
+      },
+      {
+        "file": "tests/test_drag_panel.py",
+        "name": "test_find_across_multiple_cols",
+        "text": [
+          "- `test_find_across_multiple_cols` (line 133) \u2014 **DELETE** \u2014 Tests private helper `_find(panel)` across columns.",
+          "- *Deletion rationale:* Unit testing private helper method directly."
+        ]
+      },
+      {
+        "file": "tests/test_drag_panel.py",
+        "name": "test_find_uses_identity_not_equality",
+        "text": [
+          "- `test_find_uses_identity_not_equality` (line 146) \u2014 **DELETE** \u2014 Tests private helper `_find(panel)` pointer comparison semantics.",
+          "- *Deletion rationale:* Unit testing private helper method directly."
+        ]
+      },
+      {
+        "file": "tests/test_drag_panel.py",
+        "name": "test_no_op_same_row",
+        "text": [
+          "- `test_no_op_same_row` (line 169) \u2014 **DELETE** \u2014 Tests private helper `_apply_move(...)` no-op path.",
+          "- *Deletion rationale:* Unit testing private helper method directly."
+        ]
+      },
+      {
+        "file": "tests/test_drag_panel.py",
+        "name": "test_move_first_to_end",
+        "text": [
+          "- `test_move_first_to_end` (line 174) \u2014 **DELETE** \u2014 Tests private helper `_apply_move(...)` reordering.",
+          "- *Deletion rationale:* Unit testing private helper method directly."
+        ]
+      },
+      {
+        "file": "tests/test_drag_panel.py",
+        "name": "test_move_last_to_first",
+        "text": [
+          "- `test_move_last_to_first` (line 180) \u2014 **DELETE** \u2014 Tests private helper `_apply_move(...)` reordering.",
+          "- *Deletion rationale:* Unit testing private helper method directly."
+        ]
+      },
+      {
+        "file": "tests/test_drag_panel.py",
+        "name": "test_move_middle_up",
+        "text": [
+          "- `test_move_middle_up` (line 185) \u2014 **DELETE** \u2014 Tests private helper `_apply_move(...)` reordering.",
+          "- *Deletion rationale:* Unit testing private helper method directly."
+        ]
+      },
+      {
+        "file": "tests/test_drag_panel.py",
+        "name": "test_move_middle_to_end",
+        "text": [
+          "- `test_move_middle_to_end` (line 190) \u2014 **DELETE** \u2014 Tests private helper `_apply_move(...)` reordering.",
+          "- *Deletion rationale:* Unit testing private helper method directly."
+        ]
+      },
+      {
+        "file": "tests/test_drag_panel.py",
+        "name": "test_index_shift_moving_forward",
+        "text": [
+          "- `test_index_shift_moving_forward` (line 195) \u2014 **DELETE** \u2014 Tests private helper `_apply_move(...)` index recalculations.",
+          "- *Deletion rationale:* Unit testing private helper method directly."
+        ]
+      },
+      {
+        "file": "tests/test_drag_panel.py",
+        "name": "test_col_count_unchanged_after_reorder",
+        "text": [
+          "- `test_col_count_unchanged_after_reorder` (line 202) \u2014 **DELETE** \u2014 Tests private helper `_apply_move(...)` column count preservation.",
+          "- *Deletion rationale:* Unit testing private helper method directly."
+        ]
+      },
+      {
+        "file": "tests/test_drag_panel.py",
+        "name": "test_move_to_front_of_other_col",
+        "text": [
+          "- `test_move_to_front_of_other_col` (line 213) \u2014 **DELETE** \u2014 Tests private helper `_apply_move(...)` inter-column move.",
+          "- *Deletion rationale:* Unit testing private helper method directly."
+        ]
+      },
+      {
+        "file": "tests/test_drag_panel.py",
+        "name": "test_move_to_end_of_other_col",
+        "text": [
+          "- `test_move_to_end_of_other_col` (line 223) \u2014 **DELETE** \u2014 Tests private helper `_apply_move(...)` inter-column move.",
+          "- *Deletion rationale:* Unit testing private helper method directly."
+        ]
+      },
+      {
+        "file": "tests/test_drag_panel.py",
+        "name": "test_move_from_multi_row_col_preserves_remainder",
+        "text": [
+          "- `test_move_from_multi_row_col_preserves_remainder` (line 232) \u2014 **DELETE** \u2014 Tests private helper `_apply_move(...)` remainder preservation.",
+          "- *Deletion rationale:* Unit testing private helper method directly."
+        ]
+      },
+      {
+        "file": "tests/test_drag_panel.py",
+        "name": "test_empty_col_is_pruned_after_move_out",
+        "text": [
+          "- `test_empty_col_is_pruned_after_move_out` (line 243) \u2014 **DELETE** \u2014 Tests private helper `_apply_move(...)` empty column pruning.",
+          "- *Deletion rationale:* Unit testing private helper method directly."
+        ]
+      },
+      {
+        "file": "tests/test_drag_panel.py",
+        "name": "test_move_preserves_two_col_structure",
+        "text": [
+          "- `test_move_preserves_two_col_structure` (line 253) \u2014 **DELETE** \u2014 Tests private helper `_apply_move(...)` multi-column preservation.",
+          "- *Deletion rationale:* Unit testing private helper method directly."
+        ]
+      },
+      {
+        "file": "tests/test_drag_panel.py",
+        "name": "test_move_to_new_col_at_right",
+        "text": [
+          "- `test_move_to_new_col_at_right` (line 272) \u2014 **DELETE** \u2014 Tests private helper `_apply_move(...)` new column insertion.",
+          "- *Deletion rationale:* Unit testing private helper method directly."
+        ]
+      },
+      {
+        "file": "tests/test_drag_panel.py",
+        "name": "test_move_only_panel_to_new_col_stays_one_col",
+        "text": [
+          "- `test_move_only_panel_to_new_col_stays_one_col` (line 281) \u2014 **DELETE** \u2014 Tests private helper `_apply_move(...)` single column invariant.",
+          "- *Deletion rationale:* Unit testing private helper method directly."
+        ]
+      },
+      {
+        "file": "tests/test_drag_panel.py",
+        "name": "test_new_col_beyond_existing_appended_at_end",
+        "text": [
+          "- `test_new_col_beyond_existing_appended_at_end` (line 290) \u2014 **DELETE** \u2014 Tests private helper `_apply_move(...)` boundary clamping.",
+          "- *Deletion rationale:* Unit testing private helper method directly."
+        ]
+      },
+      {
+        "file": "tests/test_drag_panel.py",
+        "name": "test_always_at_least_one_col",
+        "text": [
+          "- `test_always_at_least_one_col` (line 307) \u2014 **DELETE** \u2014 Tests private `_cols` list non-empty invariant.",
+          "- *Deletion rationale:* White-box inspection of private internal storage."
+        ]
+      },
+      {
+        "file": "tests/test_drag_panel.py",
+        "name": "test_pruning_keeps_or_falls_back_to_one_empty_col",
+        "text": [
+          "- `test_pruning_keeps_or_falls_back_to_one_empty_col` (line 314) \u2014 **DELETE** \u2014 Tests a pure Python list comprehension `[c for c in cols if c] or [[]]` in isolation without calling production code.",
+          "- *Deletion rationale:* Pure tautology testing Python language syntax without touching any application classes or methods."
+        ]
+      }
+    ],
+    "REWRITE": []
+  },
+  "tests/test_dynamic_adjustment_tab.py": {
+    "DELETE": [
+      {
+        "file": "tests/test_dynamic_adjustment_tab.py",
+        "name": "test_on_labjack_connected_updates_state",
+        "text": [
+          "- `test_on_labjack_connected_updates_state` (line 118) \u2014 **DELETE** \u2014 Asserts `tab._connected == True` after invoking private method `_on_labjack_connected`.",
+          "- *Deletion rationale:* Direct test of private attribute mutation with no observable UI behavior. Violates ADR 0001 \u00a75."
+        ]
+      },
+      {
+        "file": "tests/test_dynamic_adjustment_tab.py",
+        "name": "test_on_labjack_disconnected_updates_state",
+        "text": [
+          "- `test_on_labjack_disconnected_updates_state` (line 122) \u2014 **DELETE** \u2014 Asserts `tab._connected == False` after invoking private method.",
+          "- *Deletion rationale:* Direct test of private attribute mutation. Violates ADR 0001 \u00a75."
+        ]
+      },
+      {
+        "file": "tests/test_dynamic_adjustment_tab.py",
+        "name": "test_on_profile_changed_is_cached",
+        "text": [
+          "- `test_on_profile_changed_is_cached` (line 127) \u2014 **DELETE** \u2014 Asserts `tab._current_profile == profile` on private callback.",
+          "- *Deletion rationale:* White-box testing of private field caching. Violates ADR 0001 \u00a75."
+        ]
+      },
+      {
+        "file": "tests/test_dynamic_adjustment_tab.py",
+        "name": "test_on_window_forwards_to_trial",
+        "text": [
+          "- `test_on_window_forwards_to_trial` (line 131) \u2014 **DELETE** \u2014 Asserts private `_trial.process_window` mock is called.",
+          "- *Deletion rationale:* Tautological mock forwarding test violating ADR 0001 \u00a75."
+        ]
+      },
+      {
+        "file": "tests/test_dynamic_adjustment_tab.py",
+        "name": "test_shutdown_does_not_raise",
+        "text": [
+          "- `test_shutdown_does_not_raise` (line 140) \u2014 **DELETE** \u2014 Empty smoke test calling private `tab._shutdown()`.",
+          "- *Deletion rationale:* Redundant lifecycle smoke test already covered by widget parent deletion."
+        ]
+      }
+    ],
+    "REWRITE": [
+      {
+        "file": "tests/test_dynamic_adjustment_tab.py",
+        "name": "test_run_without_labjack_connection_warns",
+        "text": [
+          "- `test_run_without_labjack_connection_warns` (line 42) \u2014 **REWRITE** \u2014 Tests user warning dialog when starting run disconnected.",
+          "- *Sanctioned rewrite path:* Rewrite with `qtbot` and `QMessageBox` spy to test user warning presentation on button click."
+        ]
+      },
+      {
+        "file": "tests/test_dynamic_adjustment_tab.py",
+        "name": "test_run_without_pot_position_warns",
+        "text": [
+          "- `test_run_without_pot_position_warns` (line 52) \u2014 **REWRITE** \u2014 Tests user validation warning on missing pot position.",
+          "- *Sanctioned rewrite path:* Rewrite with `qtbot` to enter invalid input and verify UI feedback."
+        ]
+      },
+      {
+        "file": "tests/test_dynamic_adjustment_tab.py",
+        "name": "test_run_with_whitespace_only_pot_position_warns",
+        "text": [
+          "- `test_run_with_whitespace_only_pot_position_warns` (line 62) \u2014 **REWRITE** \u2014 Tests user validation warning on whitespace input.",
+          "- *Sanctioned rewrite path:* Rewrite with `qtbot` to test input validation UI."
+        ]
+      },
+      {
+        "file": "tests/test_dynamic_adjustment_tab.py",
+        "name": "test_run_without_generator_connected_warns",
+        "text": [
+          "- `test_run_without_generator_connected_warns` (line 73) \u2014 **REWRITE** \u2014 Tests generator disconnection warning.",
+          "- *Sanctioned rewrite path:* Rewrite with `qtbot` verifying warning when generator is offline."
+        ]
+      },
+      {
+        "file": "tests/test_dynamic_adjustment_tab.py",
+        "name": "test_no_trials_shows_placeholder_hint",
+        "text": [
+          "- `test_no_trials_shows_placeholder_hint` (line 86) \u2014 **REWRITE** \u2014 Tests initial table placeholder text.",
+          "- *Sanctioned rewrite path:* Rewrite to inspect visible QTableWidget items without mock inspection."
+        ]
+      },
+      {
+        "file": "tests/test_dynamic_adjustment_tab.py",
+        "name": "test_trials_populate_the_table_and_winner_hint",
+        "text": [
+          "- `test_trials_populate_the_table_and_winner_hint` (line 90) \u2014 **REWRITE** \u2014 Tests table population and recommendation hint on completed trials.",
+          "- *Sanctioned rewrite path:* Rewrite using signal emission to supply trial data and verifying QTableWidget contents."
+        ]
+      },
+      {
+        "file": "tests/test_dynamic_adjustment_tab.py",
+        "name": "test_large_creep_winner_suggests_a_direction",
+        "text": [
+          "- `test_large_creep_winner_suggests_a_direction` (line 106) \u2014 **REWRITE** \u2014 Tests suggestion banner text formatting based on creep sign.",
+          "- *Sanctioned rewrite path:* Rewrite to verify suggestion banner label update."
+        ]
+      }
+    ]
+  },
+  "tests/test_funcgen_panel_status.py": {
+    "DELETE": [],
+    "REWRITE": [
+      {
+        "file": "tests/test_funcgen_panel_status.py",
+        "name": "test_dc_mode_hides_each_units_label_with_its_box",
+        "text": [
+          "- `test_dc_mode_hides_each_units_label_with_its_box` (line 192) \u2014 **REWRITE** \u2014 Tests widget visibility toggling when switching to DC mode.",
+          "- *Sanctioned rewrite path:* Rewrite with `qtbot` to change combo box selection and assert widget `isVisible()` state directly."
+        ]
+      },
+      {
+        "file": "tests/test_funcgen_panel_status.py",
+        "name": "test_a_high_frequency_is_not_flagged_by_float_dust",
+        "text": [
+          "- `test_a_high_frequency_is_not_flagged_by_float_dust` (line 205) \u2014 **REWRITE** \u2014 Floating point comparison tolerance test in badge logic.",
+          "- *Sanctioned rewrite path:* Rewrite to exercise panel setpoint sync via public widget setters."
+        ]
+      }
+    ]
+  },
+  "tests/test_funcgen_sync.py": {
+    "DELETE": [],
+    "REWRITE": [
+      {
+        "file": "tests/test_funcgen_sync.py",
+        "name": "test_all_configured_before_any_output_enabled",
+        "text": [
+          "- `test_all_configured_before_any_output_enabled` (line 87) \u2014 **REWRITE** \u2014 Sequencing test verifying all channel parameters are sent before output enable.",
+          "- *Sanctioned rewrite path:* Rewrite using a recorded call log on a `FakeAsyncHardwareManager` rather than fragile `unittest.mock.call` order assertions."
+        ]
+      },
+      {
+        "file": "tests/test_funcgen_sync.py",
+        "name": "test_align_phase_runs_once_per_unit_after_enable",
+        "text": [
+          "- `test_align_phase_runs_once_per_unit_after_enable` (line 107) \u2014 **REWRITE** \u2014 Protocol sync test verifying phase alignment command sequence.",
+          "- *Sanctioned rewrite path:* Rewrite using fake hardware protocol logger."
+        ]
+      },
+      {
+        "file": "tests/test_funcgen_sync.py",
+        "name": "test_output_enable_burst_is_contiguous",
+        "text": [
+          "- `test_output_enable_burst_is_contiguous` (line 126) \u2014 **REWRITE** \u2014 Timing requirement test verifying enable commands are dispatched without interleaving.",
+          "- *Sanctioned rewrite path:* Rewrite using fake hardware protocol logger."
+        ]
+      },
+      {
+        "file": "tests/test_funcgen_sync.py",
+        "name": "test_channels_left_off_are_disabled_not_enabled",
+        "text": [
+          "- `test_channels_left_off_are_disabled_not_enabled` (line 141) \u2014 **REWRITE** \u2014 Safety test ensuring unselected channels are explicitly commanded off.",
+          "- *Sanctioned rewrite path:* Rewrite using fake hardware state verification."
+        ]
+      },
+      {
+        "file": "tests/test_funcgen_sync.py",
+        "name": "test_start_phase_called_four_times_before_output_on",
+        "text": [
+          "- `test_start_phase_called_four_times_before_output_on` (line 160) \u2014 **REWRITE** \u2014 SCPI sequence check for phase reset.",
+          "- *Sanctioned rewrite path:* Rewrite using fake hardware protocol logger."
+        ]
+      },
+      {
+        "file": "tests/test_funcgen_sync.py",
+        "name": "test_poll_readback_republishes_via_beamline",
+        "text": [
+          "- `test_poll_readback_republishes_via_beamline` (line 199) \u2014 **REWRITE** \u2014 Telemetry publication test.",
+          "- *Sanctioned rewrite path:* Rewrite using Qt signal spy on Beamline model rather than mock callback spying."
+        ]
+      },
+      {
+        "file": "tests/test_funcgen_sync.py",
+        "name": "test_poll_readback_marks_unconnected_generator",
+        "text": [
+          "- `test_poll_readback_marks_unconnected_generator` (line 214) \u2014 **REWRITE** \u2014 Disconnection handling test.",
+          "- *Sanctioned rewrite path:* Rewrite with fake disconnected instrument to assert telemetry status flags."
+        ]
+      },
+      {
+        "file": "tests/test_funcgen_sync.py",
+        "name": "test_widget_apply_is_rejected_by_the_same_interlock",
+        "text": [
+          "- `test_widget_apply_is_rejected_by_the_same_interlock` (line 241) \u2014 **REWRITE** \u2014 Safety interlock test for UI apply button.",
+          "- *Sanctioned rewrite path:* Rewrite with `qtbot.mouseClick` on Apply button while interlocked, asserting rejection status."
+        ]
+      },
+      {
+        "file": "tests/test_funcgen_sync.py",
+        "name": "test_both_paths_reach_the_same_beamline_and_agree",
+        "text": [
+          "- `test_both_paths_reach_the_same_beamline_and_agree` (line 273) \u2014 **REWRITE** \u2014 Parity test between UI and API execution paths.",
+          "- *Sanctioned rewrite path:* Rewrite using unified fake hardware manager to assert state parity."
+        ]
+      },
+      {
+        "file": "tests/test_funcgen_sync.py",
+        "name": "test_toggle_calls_verify_external_lock_on_gen_b",
+        "text": [
+          "- `test_toggle_calls_verify_external_lock_on_gen_b` (line 296) \u2014 **REWRITE** \u2014 Clock lock verification sequence test.",
+          "- *Sanctioned rewrite path:* Rewrite using fake hardware protocol logger."
+        ]
+      },
+      {
+        "file": "tests/test_funcgen_sync.py",
+        "name": "test_untoggle_returns_both_internal",
+        "text": [
+          "- `test_untoggle_returns_both_internal` (line 304) \u2014 **REWRITE** \u2014 Clock lock restore sequence test.",
+          "- *Sanctioned rewrite path:* Rewrite using fake hardware protocol logger."
+        ]
+      },
+      {
+        "file": "tests/test_funcgen_sync.py",
+        "name": "test_ext_lock_failure_triggers_warning",
+        "text": [
+          "- `test_ext_lock_failure_triggers_warning` (line 310) \u2014 **REWRITE** \u2014 External clock sync fault handling test.",
+          "- *Sanctioned rewrite path:* Rewrite using fake hardware returning lock failure and asserting UI warning dialog."
+        ]
+      },
+      {
+        "file": "tests/test_funcgen_sync.py",
+        "name": "test_toggle_guard_refuses_when_gen_a_is_ext",
+        "text": [
+          "- `test_toggle_guard_refuses_when_gen_a_is_ext` (line 324) \u2014 **REWRITE** \u2014 Invalid clock configuration guard test.",
+          "- *Sanctioned rewrite path:* Rewrite using fake hardware to verify guard error return."
+        ]
+      }
+    ]
+  },
+  "tests/test_gui_hardware.py": {
+    "DELETE": [
+      {
+        "file": "tests/test_gui_hardware.py",
+        "name": "test_click_motors_shows_motors",
+        "text": [
+          "- `test_click_motors_shows_motors` (line 112) \u2014 **DELETE** \u2014 Navigation click test asserting `_stack.currentIndex() == 1`.",
+          "- *Deletion rationale:* Restates basic Qt `QStackedWidget` framework behavior without asserting application contracts."
+        ]
+      },
+      {
+        "file": "tests/test_gui_hardware.py",
+        "name": "test_click_current_shows_current",
+        "text": [
+          "- `test_click_current_shows_current` (line 116) \u2014 **DELETE** \u2014 Navigation click test asserting `_stack.currentIndex() == 2`.",
+          "- *Deletion rationale:* Restates basic Qt `QStackedWidget` framework behavior."
+        ]
+      },
+      {
+        "file": "tests/test_gui_hardware.py",
+        "name": "test_click_amplifiers_shows_amplifiers",
+        "text": [
+          "- `test_click_amplifiers_shows_amplifiers` (line 120) \u2014 **DELETE** \u2014 Navigation click test asserting `_stack.currentIndex() == 3`.",
+          "- *Deletion rationale:* Restates basic Qt `QStackedWidget` framework behavior."
+        ]
+      },
+      {
+        "file": "tests/test_gui_hardware.py",
+        "name": "test_click_funcgen_shows_funcgen",
+        "text": [
+          "- `test_click_funcgen_shows_funcgen` (line 124) \u2014 **DELETE** \u2014 Navigation click test asserting `_stack.currentIndex() == 4`.",
+          "- *Deletion rationale:* Restates basic Qt `QStackedWidget` framework behavior."
+        ]
+      },
+      {
+        "file": "tests/test_gui_hardware.py",
+        "name": "test_switch_away_and_back_lands_correctly",
+        "text": [
+          "- `test_switch_away_and_back_lands_correctly` (line 128) \u2014 **DELETE** \u2014 Rapid tab switching test asserting currentIndex.",
+          "- *Deletion rationale:* Restates basic Qt `QStackedWidget` framework behavior."
+        ]
+      },
+      {
+        "file": "tests/test_gui_hardware.py",
+        "name": "test_multiple_rapid_switches_land_correctly",
+        "text": [
+          "- `test_multiple_rapid_switches_land_correctly` (line 134) \u2014 **DELETE** \u2014 Rapid tab switching test asserting currentIndex.",
+          "- *Deletion rationale:* Restates basic Qt `QStackedWidget` framework behavior."
+        ]
+      },
+      {
+        "file": "tests/test_gui_hardware.py",
+        "name": "test_clicking_same_tab_twice_stays_put",
+        "text": [
+          "- `test_clicking_same_tab_twice_stays_put` (line 139) \u2014 **DELETE** \u2014 Duplicate tab click test asserting currentIndex.",
+          "- *Deletion rationale:* Restates basic Qt `QStackedWidget` framework behavior."
+        ]
+      },
+      {
+        "file": "tests/test_gui_hardware.py",
+        "name": "test_funcgen_reachable_from_any_tab",
+        "text": [
+          "- `test_funcgen_reachable_from_any_tab` (line 144) \u2014 **DELETE** \u2014 Redundant tab reachability check asserting currentIndex.",
+          "- *Deletion rationale:* Restates basic Qt `QStackedWidget` framework behavior."
+        ]
+      }
+    ],
+    "REWRITE": [
+      {
+        "file": "tests/test_gui_hardware.py",
+        "name": "test_one_window_updates_the_current_and_amp_tabs",
+        "text": [
+          "- `test_one_window_updates_the_current_and_amp_tabs` (line 74) \u2014 **REWRITE** \u2014 Multi-tab data distribution test.",
+          "- *Sanctioned rewrite path:* Rewrite using signal emission to verify both tabs update concurrently without internal mock spying."
+        ]
+      },
+      {
+        "file": "tests/test_gui_hardware.py",
+        "name": "test_neither_tab_sees_the_other_half",
+        "text": [
+          "- `test_neither_tab_sees_the_other_half` (line 88) \u2014 **REWRITE** \u2014 Tab channel isolation test.",
+          "- *Sanctioned rewrite path:* Rewrite using signal emission and verifying isolation via public tab data properties."
+        ]
+      },
+      {
+        "file": "tests/test_gui_hardware.py",
+        "name": "test_current_tab_redraw_only_while_visible",
+        "text": [
+          "- `test_current_tab_redraw_only_while_visible` (line 191) \u2014 **REWRITE** \u2014 Rendering performance optimization test.",
+          "- *Sanctioned rewrite path:* Rewrite to verify plot paint events skip when hidden using QtBot."
+        ]
+      },
+      {
+        "file": "tests/test_gui_hardware.py",
+        "name": "test_amp_tab_redraw_only_while_visible",
+        "text": [
+          "- `test_amp_tab_redraw_only_while_visible` (line 206) \u2014 **REWRITE** \u2014 Rendering performance optimization test.",
+          "- *Sanctioned rewrite path:* Rewrite to verify plot paint events skip when hidden using QtBot."
+        ]
+      },
+      {
+        "file": "tests/test_gui_hardware.py",
+        "name": "test_disconnect_stops_redraw_even_while_visible",
+        "text": [
+          "- `test_disconnect_stops_redraw_even_while_visible` (line 221) \u2014 **REWRITE** \u2014 Plot timer stop on disconnect.",
+          "- *Sanctioned rewrite path:* Rewrite with fake hardware disconnect signal and verifying timer active status."
+        ]
+      },
+      {
+        "file": "tests/test_gui_hardware.py",
+        "name": "test_window_updates_buffers_and_labels",
+        "text": [
+          "- `test_window_updates_buffers_and_labels` (line 334) \u2014 **REWRITE** \u2014 Current monitor display update test.",
+          "- *Sanctioned rewrite path:* Rewrite with signal emission and verify QLabel text updates."
+        ]
+      },
+      {
+        "file": "tests/test_gui_hardware.py",
+        "name": "test_raw_voltage_is_shown_beside_the_current",
+        "text": [
+          "- `test_raw_voltage_is_shown_beside_the_current` (line 341) \u2014 **REWRITE** \u2014 Current monitor telemetry display test.",
+          "- *Sanctioned rewrite path:* Rewrite with signal emission and verify QLabel text updates."
+        ]
+      },
+      {
+        "file": "tests/test_gui_hardware.py",
+        "name": "test_unsampled_channel_shows_paused_not_stale",
+        "text": [
+          "- `test_unsampled_channel_shows_paused_not_stale` (line 347) \u2014 **REWRITE** \u2014 Stale channel detection display test.",
+          "- *Sanctioned rewrite path:* Rewrite with signal emission and verify QLabel status styling."
+        ]
+      },
+      {
+        "file": "tests/test_gui_hardware.py",
+        "name": "test_drag_slider_left_enters_frozen",
+        "text": [
+          "- `test_drag_slider_left_enters_frozen` (line 381) \u2014 **REWRITE** \u2014 Stream history slider interaction test.",
+          "- *Sanctioned rewrite path:* Rewrite with `qtbot` slider events."
+        ]
+      },
+      {
+        "file": "tests/test_gui_hardware.py",
+        "name": "test_jump_to_live_returns_to_live",
+        "text": [
+          "- `test_jump_to_live_returns_to_live` (line 390) \u2014 **REWRITE** \u2014 Stream view \"Jump to Live\" button test.",
+          "- *Sanctioned rewrite path:* Rewrite with `qtbot.mouseClick`."
+        ]
+      },
+      {
+        "file": "tests/test_gui_hardware.py",
+        "name": "test_slider_far_right_is_live",
+        "text": [
+          "- `test_slider_far_right_is_live` (line 398) \u2014 **REWRITE** \u2014 Stream slider right edge behavior test.",
+          "- *Sanctioned rewrite path:* Rewrite with `qtbot`."
+        ]
+      },
+      {
+        "file": "tests/test_gui_hardware.py",
+        "name": "test_three_passes_then_define_zero",
+        "text": [
+          "- `test_three_passes_then_define_zero` (line 438) \u2014 **REWRITE** \u2014 Auto-home workflow execution test.",
+          "- *Sanctioned rewrite path:* Rewrite with `FakeAsyncHardwareManager` motor controller."
+        ]
+      },
+      {
+        "file": "tests/test_gui_hardware.py",
+        "name": "test_backs_off_when_starting_on_home_switch",
+        "text": [
+          "- `test_backs_off_when_starting_on_home_switch` (line 451) \u2014 **REWRITE** \u2014 Auto-home switch backoff sequence test.",
+          "- *Sanctioned rewrite path:* Rewrite with `FakeAsyncHardwareManager` motor controller."
+        ]
+      },
+      {
+        "file": "tests/test_gui_hardware.py",
+        "name": "test_cancel_before_pass_aborts",
+        "text": [
+          "- `test_cancel_before_pass_aborts` (line 464) \u2014 **REWRITE** \u2014 Auto-home user cancellation test.",
+          "- *Sanctioned rewrite path:* Rewrite with `FakeAsyncHardwareManager` motor controller."
+        ]
+      },
+      {
+        "file": "tests/test_gui_hardware.py",
+        "name": "test_restores_default_speed_after_homing",
+        "text": [
+          "- `test_restores_default_speed_after_homing` (line 478) \u2014 **REWRITE** \u2014 Auto-home speed restore test.",
+          "- *Sanctioned rewrite path:* Rewrite with `FakeAsyncHardwareManager` motor controller."
+        ]
+      },
+      {
+        "file": "tests/test_gui_hardware.py",
+        "name": "test_poll_worker_emits_error_and_stops_on_exception",
+        "text": [
+          "- `test_poll_worker_emits_error_and_stops_on_exception` (line 491) \u2014 **REWRITE** \u2014 Async polling worker error handling test.",
+          "- *Sanctioned rewrite path:* Rewrite using `qtbot.waitUntil` and proper exception injection."
+        ]
+      },
+      {
+        "file": "tests/test_gui_hardware.py",
+        "name": "test_every_step_runs_in_order",
+        "text": [
+          "- `test_every_step_runs_in_order` (line 542) \u2014 **REWRITE** \u2014 Connection wizard sequence execution test.",
+          "- *Sanctioned rewrite path:* Rewrite with fake subsystem orchestrator."
+        ]
+      },
+      {
+        "file": "tests/test_gui_hardware.py",
+        "name": "test_the_button_is_re_armed_when_the_sequence_finishes",
+        "text": [
+          "- `test_the_button_is_re_armed_when_the_sequence_finishes` (line 552) \u2014 **REWRITE** \u2014 Connection wizard button re-arm test.",
+          "- *Sanctioned rewrite path:* Rewrite with `qtbot`."
+        ]
+      },
+      {
+        "file": "tests/test_gui_hardware.py",
+        "name": "test_one_failure_does_not_stop_the_rest",
+        "text": [
+          "- `test_one_failure_does_not_stop_the_rest` (line 558) \u2014 **REWRITE** \u2014 Connection wizard fault tolerance test.",
+          "- *Sanctioned rewrite path:* Rewrite with fake subsystem orchestrator."
+        ]
+      },
+      {
+        "file": "tests/test_gui_hardware.py",
+        "name": "test_a_failure_is_named_with_its_reason",
+        "text": [
+          "- `test_a_failure_is_named_with_its_reason` (line 567) \u2014 **REWRITE** \u2014 Connection wizard error reporting test.",
+          "- *Sanctioned rewrite path:* Rewrite with fake subsystem orchestrator."
+        ]
+      },
+      {
+        "file": "tests/test_gui_hardware.py",
+        "name": "test_a_raising_step_is_caught_and_reported",
+        "text": [
+          "- `test_a_raising_step_is_caught_and_reported` (line 578) \u2014 **REWRITE** \u2014 Connection wizard exception trap test.",
+          "- *Sanctioned rewrite path:* Rewrite with fake subsystem orchestrator."
+        ]
+      },
+      {
+        "file": "tests/test_gui_hardware.py",
+        "name": "test_all_good_reports_everything_connected",
+        "text": [
+          "- `test_all_good_reports_everything_connected` (line 589) \u2014 **REWRITE** \u2014 Connection wizard success reporting test.",
+          "- *Sanctioned rewrite path:* Rewrite with fake subsystem orchestrator."
+        ]
+      }
+    ]
+  },
+  "tests/test_load_characterization_tab.py": {
+    "DELETE": [
+      {
+        "file": "tests/test_load_characterization_tab.py",
+        "name": "test_on_labjack_connected_updates_state",
+        "text": [
+          "- `test_on_labjack_connected_updates_state` (line 107) \u2014 **DELETE** \u2014 Asserts private attribute `tab._connected == True`.",
+          "- *Deletion rationale:* Private attribute mutation test violating ADR 0001 \u00a75."
+        ]
+      },
+      {
+        "file": "tests/test_load_characterization_tab.py",
+        "name": "test_on_labjack_disconnected_aborts_any_run",
+        "text": [
+          "- `test_on_labjack_disconnected_aborts_any_run` (line 111) \u2014 **DELETE** \u2014 Asserts private method forwarding `runner.abort()`.",
+          "- *Deletion rationale:* Tautological mock forwarding test violating ADR 0001 \u00a75."
+        ]
+      },
+      {
+        "file": "tests/test_load_characterization_tab.py",
+        "name": "test_on_profile_changed_is_cached",
+        "text": [
+          "- `test_on_profile_changed_is_cached` (line 122) \u2014 **DELETE** \u2014 Asserts private attribute `tab._current_profile == profile`.",
+          "- *Deletion rationale:* Private attribute mutation test violating ADR 0001 \u00a75."
+        ]
+      },
+      {
+        "file": "tests/test_load_characterization_tab.py",
+        "name": "test_on_window_forwards_to_runner",
+        "text": [
+          "- `test_on_window_forwards_to_runner` (line 126) \u2014 **DELETE** \u2014 Asserts private method forwarding `runner.process_window()`.",
+          "- *Deletion rationale:* Tautological mock forwarding test violating ADR 0001 \u00a75."
+        ]
+      },
+      {
+        "file": "tests/test_load_characterization_tab.py",
+        "name": "test_shutdown_aborts_any_run",
+        "text": [
+          "- `test_shutdown_aborts_any_run` (line 135) \u2014 **DELETE** \u2014 Asserts private method forwarding on `tab._shutdown()`.",
+          "- *Deletion rationale:* Tautological mock forwarding test violating ADR 0001 \u00a75."
+        ]
+      }
+    ],
+    "REWRITE": [
+      {
+        "file": "tests/test_load_characterization_tab.py",
+        "name": "test_defaults_to_mode_a_on_plates",
+        "text": [
+          "- `test_defaults_to_mode_a_on_plates` (line 41) \u2014 **REWRITE** \u2014 Tests UI combo box initial mode selection.",
+          "- *Sanctioned rewrite path:* Rewrite with `qtbot` inspecting combo box state."
+        ]
+      },
+      {
+        "file": "tests/test_load_characterization_tab.py",
+        "name": "test_mode_b_selection",
+        "text": [
+          "- `test_mode_b_selection` (line 45) \u2014 **REWRITE** \u2014 Tests combo box mode switching.",
+          "- *Sanctioned rewrite path:* Rewrite with `qtbot.keyClicks` or `setCurrentText` and assert model update."
+        ]
+      },
+      {
+        "file": "tests/test_load_characterization_tab.py",
+        "name": "test_mode_c_selection",
+        "text": [
+          "- `test_mode_c_selection` (line 49) \u2014 **REWRITE** \u2014 Tests combo box mode switching.",
+          "- *Sanctioned rewrite path:* Rewrite with `qtbot`."
+        ]
+      },
+      {
+        "file": "tests/test_load_characterization_tab.py",
+        "name": "test_disconnected_condition_selection",
+        "text": [
+          "- `test_disconnected_condition_selection` (line 53) \u2014 **REWRITE** \u2014 Tests condition dropdown selection.",
+          "- *Sanctioned rewrite path:* Rewrite with `qtbot`."
+        ]
+      },
+      {
+        "file": "tests/test_load_characterization_tab.py",
+        "name": "test_run_without_labjack_connection_warns_and_does_not_start",
+        "text": [
+          "- `test_run_without_labjack_connection_warns_and_does_not_start` (line 59) \u2014 **REWRITE** \u2014 Disconnection warning test.",
+          "- *Sanctioned rewrite path:* Rewrite with `qtbot` and message box spy."
+        ]
+      },
+      {
+        "file": "tests/test_load_characterization_tab.py",
+        "name": "test_run_without_generator_connected_warns",
+        "text": [
+          "- `test_run_without_generator_connected_warns` (line 68) \u2014 **REWRITE** \u2014 Generator disconnection warning test.",
+          "- *Sanctioned rewrite path:* Rewrite with `qtbot`."
+        ]
+      },
+      {
+        "file": "tests/test_load_characterization_tab.py",
+        "name": "test_abort_with_no_runner_is_a_noop",
+        "text": [
+          "- `test_abort_with_no_runner_is_a_noop` (line 78) \u2014 **REWRITE** \u2014 Robustness test for abort button when idle.",
+          "- *Sanctioned rewrite path:* Rewrite with `qtbot.mouseClick`."
+        ]
+      },
+      {
+        "file": "tests/test_load_characterization_tab.py",
+        "name": "test_unmeasured_channels_show_placeholder",
+        "text": [
+          "- `test_unmeasured_channels_show_placeholder` (line 83) \u2014 **REWRITE** \u2014 UI table placeholder test for unmeasured channels.",
+          "- *Sanctioned rewrite path:* Rewrite with `qtbot` inspecting table items."
+        ]
+      },
+      {
+        "file": "tests/test_load_characterization_tab.py",
+        "name": "test_measured_channel_shows_values",
+        "text": [
+          "- `test_measured_channel_shows_values` (line 88) \u2014 **REWRITE** \u2014 UI table display test for measured channel data.",
+          "- *Sanctioned rewrite path:* Rewrite with signal emission and verify table widget cell text."
+        ]
+      },
+      {
+        "file": "tests/test_load_characterization_tab.py",
+        "name": "test_outlier_conductance_is_flagged",
+        "text": [
+          "- `test_outlier_conductance_is_flagged` (line 96) \u2014 **REWRITE** \u2014 UI visual indicator test for conductance outlier warning.",
+          "- *Sanctioned rewrite path:* Rewrite with signal emission and verify visual alert styling."
+        ]
+      }
+    ]
+  },
+  "tests/test_no_scroll_inputs.py": {
+    "DELETE": [
+      {
+        "file": "tests/test_no_scroll_inputs.py",
+        "name": "TestNoScrollComboBox.test_a_plain_combo_box_would_have",
+        "text": [
+          "- `TestNoScrollComboBox.test_a_plain_combo_box_would_have` \u2014 **DELETE** \u2014 Restates Qt framework default behavior (verifying that a standard `QComboBox` changes index on wheel event); churn test that tests third-party library behavior rather than application code."
+        ]
+      },
+      {
+        "file": "tests/test_no_scroll_inputs.py",
+        "name": "TestQuietDoubleSpinBox.test_a_plain_spin_box_would_have",
+        "text": [
+          "- `TestQuietDoubleSpinBox.test_a_plain_spin_box_would_have` \u2014 **DELETE** \u2014 Restates Qt framework default behavior (verifying standard `QDoubleSpinBox` changes value on wheel event); churn test testing upstream library defaults."
+        ]
+      }
+    ],
+    "REWRITE": []
+  },
+  "tests/test_overview_tab.py": {
+    "DELETE": [
+      {
+        "file": "tests/test_overview_tab.py",
+        "name": "test_redraw_is_a_noop_while_hidden",
+        "text": [
+          "- `test_redraw_is_a_noop_while_hidden` \u2014 **DELETE** \u2014 Tests private `_visible` guard in internal `_redraw()`; churn test verifying internal widget flag optimization."
+        ]
+      },
+      {
+        "file": "tests/test_overview_tab.py",
+        "name": "test_show_event_starts_timer_and_repaints_immediately",
+        "text": [
+          "- `test_show_event_starts_timer_and_repaints_immediately` \u2014 **DELETE** \u2014 Tests internal `_redraw_timer` lifecycle during Qt `showEvent`; framework event plumbing churn test."
+        ]
+      }
+    ],
+    "REWRITE": [
+      {
+        "file": "tests/test_overview_tab.py",
+        "name": "test_caches_motor_state_and_redraws_slit_bar",
+        "text": [
+          "- `test_caches_motor_state_and_redraws_slit_bar` \u2014 **REWRITE** \u2014 Covers motor position caching and slit bar label rendering, but invokes private `tab._redraw()`. Sanctioned path: emit `beamline.motors_changed` and assert on operator-visible `tab.slits[\"X+\"].bar.lbl_value.text()`."
+        ]
+      },
+      {
+        "file": "tests/test_overview_tab.py",
+        "name": "test_slit_bar_blank_when_motors_disconnected",
+        "text": [
+          "- `test_slit_bar_blank_when_motors_disconnected` \u2014 **REWRITE** \u2014 Covers disconnected motor state rendering, but invokes private `tab._redraw()`. Sanctioned path: emit disconnected `motors_changed` on `Beamline` and assert on `tab.slits[\"X+\"].bar.lbl_value.text()` and `bar.fraction()`."
+        ]
+      },
+      {
+        "file": "tests/test_overview_tab.py",
+        "name": "test_gap_is_the_sum_of_both_slit_positions",
+        "text": [
+          "- `test_gap_is_the_sum_of_both_slit_positions` \u2014 **REWRITE** \u2014 Covers slit gap summation display, but uses helper that invokes `tab._redraw()`. Sanctioned path: emit `motors_changed` on `Beamline` and assert on operator-visible `tab.lbl_gaps.text()`."
+        ]
+      },
+      {
+        "file": "tests/test_overview_tab.py",
+        "name": "test_gap_unknown_while_disconnected",
+        "text": [
+          "- `test_gap_unknown_while_disconnected` \u2014 **REWRITE** \u2014 Covers disconnected gap display, but invokes `tab._redraw()`. Sanctioned path: emit disconnected `motors_changed` and assert on `tab.lbl_gaps.text()`."
+        ]
+      },
+      {
+        "file": "tests/test_overview_tab.py",
+        "name": "test_logamp_state_feeds_the_beam_indicator",
+        "text": [
+          "- `test_logamp_state_feeds_the_beam_indicator` \u2014 **REWRITE** \u2014 Covers beam position indicator current feeds, but reads private `tab.beam._currents` and calls `_redraw()`. Sanctioned path: feed stream window via `tests/payloads.py` `LabJackFeed` (or `beamline.logamps_changed`) and assert on `BeamPositionIndicator` visual rendering or public state."
+        ]
+      },
+      {
+        "file": "tests/test_overview_tab.py",
+        "name": "test_logamp_state_feeds_the_per_slit_current_bars",
+        "text": [
+          "- `test_logamp_state_feeds_the_per_slit_current_bars` \u2014 **REWRITE** \u2014 Covers log-amp current bar rendering, but invokes `tab._redraw()`. Sanctioned path: push window payload via `tests/payloads.py` `LabJackFeed` and assert on `tab.currents[\"X+\"].fraction()` and label text."
+        ]
+      },
+      {
+        "file": "tests/test_overview_tab.py",
+        "name": "test_current_bar_blank_for_an_unsampled_channel",
+        "text": [
+          "- `test_current_bar_blank_for_an_unsampled_channel` \u2014 **REWRITE** \u2014 Covers unsampled channel (NaN) blank bar handling, but calls `tab._redraw()`. Sanctioned path: push profile payload with missing/NaN channel via `tests/payloads.py` and assert blank current bar label."
+        ]
+      },
+      {
+        "file": "tests/test_overview_tab.py",
+        "name": "test_amp_state_feeds_the_hv_peak_bars",
+        "text": [
+          "- `test_amp_state_feeds_the_hv_peak_bars` \u2014 **REWRITE** \u2014 Covers HV amplifier peak voltage readouts on Overview, but calls `tab._redraw()`. Sanctioned path: feed amplifier stream window through `tests/payloads.py` `LabJackFeed` and assert on `tab.hv_peak` bars and text."
+        ]
+      },
+      {
+        "file": "tests/test_overview_tab.py",
+        "name": "test_a_push_pull_pair_reads_as_locked",
+        "text": [
+          "- `test_a_push_pull_pair_reads_as_locked` \u2014 **REWRITE** \u2014 Covers push-pull phase lock detection and display, but calls `tab._redraw()`. Sanctioned path: push differential waveforms through `tests/payloads.py` `LabJackFeed` and assert on phase-lock indicator label text."
+        ]
+      },
+      {
+        "file": "tests/test_overview_tab.py",
+        "name": "test_two_in_phase_channels_are_flagged",
+        "text": [
+          "- `test_two_in_phase_channels_are_flagged` \u2014 **REWRITE** \u2014 Covers in-phase fault detection on push-pull pair, but calls `tab._redraw()`. Sanctioned path: push in-phase waveforms through `tests/payloads.py` `LabJackFeed` and assert on operator-visible warning banner."
+        ]
+      },
+      {
+        "file": "tests/test_overview_tab.py",
+        "name": "test_no_waveform_is_reported_as_absent_not_as_a_fault",
+        "text": [
+          "- `test_no_waveform_is_reported_as_absent_not_as_a_fault` \u2014 **REWRITE** \u2014 Covers absent waveform rendering during non-sampling profiles, but calls `tab._redraw()`. Sanctioned path: push payload without waveform arrays via `tests/payloads.py` and assert clean status."
+        ]
+      },
+      {
+        "file": "tests/test_overview_tab.py",
+        "name": "test_trace_caption_reads_back_the_window_it_settled_on",
+        "text": [
+          "- `test_trace_caption_reads_back_the_window_it_settled_on` \u2014 **REWRITE** \u2014 Covers trace window span caption, but calls `tab._redraw()`. Sanctioned path: push window payload with span metadata and assert on trace caption label text."
+        ]
+      },
+      {
+        "file": "tests/test_overview_tab.py",
+        "name": "test_trace_caption_says_when_no_cycle_was_found",
+        "text": [
+          "- `test_trace_caption_says_when_no_cycle_was_found` \u2014 **REWRITE** \u2014 Covers unmeasured frequency trace caption, but calls `tab._redraw()`. Sanctioned path: push raw window payload without detected cycles and assert caption text."
+        ]
+      },
+      {
+        "file": "tests/test_overview_tab.py",
+        "name": "test_trace_caption_is_blank_without_a_window",
+        "text": [
+          "- `test_trace_caption_is_blank_without_a_window` \u2014 **REWRITE** \u2014 Covers blank caption when no amp window received, but calls `tab._redraw()`. Sanctioned path: emit empty `AmpState` on `Beamline` and assert blank caption text."
+        ]
+      },
+      {
+        "file": "tests/test_overview_tab.py",
+        "name": "test_funcgen_readback_feeds_the_axis_amplitude_bar",
+        "text": [
+          "- `test_funcgen_readback_feeds_the_axis_amplitude_bar` \u2014 **REWRITE** \u2014 Covers funcgen readback amplitude bar display, but calls `tab._redraw()`. Sanctioned path: emit `beamline.funcgens_changed` and assert on `tab.drives[\"X\"].bar.lbl_value.text()`."
+        ]
+      },
+      {
+        "file": "tests/test_overview_tab.py",
+        "name": "test_axis_bar_blank_when_generator_not_connected",
+        "text": [
+          "- `test_axis_bar_blank_when_generator_not_connected` \u2014 **REWRITE** \u2014 Covers disconnected generator display on axis bar, but calls `tab._redraw()`. Sanctioned path: emit disconnected `funcgens_changed` and assert blank axis bar text."
+        ]
+      },
+      {
+        "file": "tests/test_overview_tab.py",
+        "name": "test_a_split_pair_is_called_out_on_the_live_line",
+        "text": [
+          "- `test_a_split_pair_is_called_out_on_the_live_line` \u2014 **REWRITE** \u2014 Covers split pair warning banner on live readback, but calls `tab._redraw()`. Sanctioned path: emit mismatched `FuncGenState` on `Beamline` and assert on warning label text."
+        ]
+      },
+      {
+        "file": "tests/test_overview_tab.py",
+        "name": "test_move_marks_the_commanded_target_on_the_bar",
+        "text": [
+          "- `test_move_marks_the_commanded_target_on_the_bar` \u2014 **REWRITE** \u2014 Covers target caret marking on slit bar, but calls private `tab._on_move_requested` and reads `_target`. Sanctioned path: click `tab.slits[\"X+\"].btn_move` and assert target position via public bar target property."
+        ]
+      },
+      {
+        "file": "tests/test_overview_tab.py",
+        "name": "test_target_published_by_another_screen_lands_on_this_one",
+        "text": [
+          "- `test_target_published_by_another_screen_lands_on_this_one` \u2014 **REWRITE** \u2014 Covers cross-screen target synchronization, but reads private `bar.track._target`. Sanctioned path: emit `beamline.slit_target_changed` and assert on `tab.slits[\"X+\"].spn_target.value()` and public bar target fraction."
+        ]
+      },
+      {
+        "file": "tests/test_overview_tab.py",
+        "name": "test_move_refused_and_reported_while_disconnected",
+        "text": [
+          "- `test_move_refused_and_reported_while_disconnected` \u2014 **REWRITE** \u2014 Covers refusal and reporting of move when Galil is disconnected, but calls `_on_move_requested` and `_redraw()`. Sanctioned path: trigger move via UI button and assert status message."
+        ]
+      },
+      {
+        "file": "tests/test_overview_tab.py",
+        "name": "test_unzeroed_move_needs_confirmation",
+        "text": [
+          "- `test_unzeroed_move_needs_confirmation` \u2014 **REWRITE** \u2014 Covers safety confirmation dialog on unzeroed motor move, but monkeypatches `_confirm_unzeroed_move` and calls `_on_move_requested`. Sanctioned path: trigger move on unzeroed axis via public button with a mock dialog factory."
+        ]
+      },
+      {
+        "file": "tests/test_overview_tab.py",
+        "name": "test_zeroed_move_asks_nothing",
+        "text": [
+          "- `test_zeroed_move_asks_nothing` \u2014 **REWRITE** \u2014 Covers direct move execution without confirmation when zeroed, but monkeypatches `_confirm_unzeroed_move` and calls `_on_move_requested`. Sanctioned path: trigger move on zeroed axis and assert immediate command dispatch."
+        ]
+      },
+      {
+        "file": "tests/test_overview_tab.py",
+        "name": "test_command_note_expires_and_the_warning_returns",
+        "text": [
+          "- `test_command_note_expires_and_the_warning_returns` \u2014 **REWRITE** \u2014 Covers status note timer expiration, but reaches into `_NOTE_FRAMES`, `_confirm_unzeroed_move`, `_on_move_requested`, and `_redraw()`. Sanctioned path: trigger move and let status message timer elapse."
+        ]
+      },
+      {
+        "file": "tests/test_overview_tab.py",
+        "name": "test_slit_controls_follow_the_galil_connection",
+        "text": [
+          "- `test_slit_controls_follow_the_galil_connection` \u2014 **REWRITE** \u2014 Covers slit control enable/disable tracking Galil connection, but calls `tab._redraw()`. Sanctioned path: emit `motors_changed` on `Beamline` and assert `tab.slits[\"X+\"].btn_move.isEnabled()`."
+        ]
+      },
+      {
+        "file": "tests/test_overview_tab.py",
+        "name": "test_apply_all_asks_before_a_high_peak",
+        "text": [
+          "- `test_apply_all_asks_before_a_high_peak` \u2014 **REWRITE** \u2014 Covers high peak voltage confirmation dialog on Apply All, but monkeypatches private `tab._confirm_high_peak`. Sanctioned path: drive Apply All with high setpoint using a dialog factory or public confirmation hook."
+        ]
+      },
+      {
+        "file": "tests/test_overview_tab.py",
+        "name": "test_apply_all_does_not_ask_below_the_advisory_threshold",
+        "text": [
+          "- `test_apply_all_does_not_ask_below_the_advisory_threshold` \u2014 **REWRITE** \u2014 Covers Apply All execution without confirmation below advisory threshold, but monkeypatches `_confirm_high_peak`. Sanctioned path: drive Apply All below threshold and assert immediate dispatch."
+        ]
+      },
+      {
+        "file": "tests/test_overview_tab.py",
+        "name": "test_redraw_does_not_fight_the_operator_typing_an_amplitude",
+        "text": [
+          "- `test_redraw_does_not_fight_the_operator_typing_an_amplitude` \u2014 **REWRITE** \u2014 Covers spinbox edit preservation during funcgen state redraws, but calls `tab._redraw()`. Sanctioned path: emit `funcgens_changed` on `Beamline` while editing and assert spinner value."
+        ]
+      },
+      {
+        "file": "tests/test_overview_tab.py",
+        "name": "test_a_failed_lock_leaves_the_box_unchecked",
+        "text": [
+          "- `test_a_failed_lock_leaves_the_box_unchecked` \u2014 **REWRITE** \u2014 Covers timebase lock failure unchecking box, but monkeypatches private `tab._warn`. Sanctioned path: simulate failed timebase lock via `Beamline` and assert `tab.chk_timebase.isChecked()` is False."
+        ]
+      },
+      {
+        "file": "tests/test_overview_tab.py",
+        "name": "test_the_lock_state_follows_the_other_tab",
+        "text": [
+          "- `test_the_lock_state_follows_the_other_tab` \u2014 **REWRITE** \u2014 Covers timebase sync between tabs, but calls private `tab._on_timebase_changed()`. Sanctioned path: emit `beamline.timebase_locked_changed` and assert `tab.chk_timebase.isChecked()`."
+        ]
+      },
+      {
+        "file": "tests/test_overview_tab.py",
+        "name": "test_lock_state_arrives_on_the_funcgen_snapshot",
+        "text": [
+          "- `test_lock_state_arrives_on_the_funcgen_snapshot` \u2014 **REWRITE** \u2014 Covers timebase lock state display from FuncGen snapshot, but calls `tab._redraw()`. Sanctioned path: emit `funcgens_changed` and assert `tab.chk_timebase.isChecked()`."
+        ]
+      },
+      {
+        "file": "tests/test_overview_tab.py",
+        "name": "TestHvInterlockIndicator.test_no_payload_yet_shows_placeholder",
+        "text": [
+          "- `TestHvInterlockIndicator.test_no_payload_yet_shows_placeholder` \u2014 **REWRITE** \u2014 Covers initial HV interlock indicator placeholder, but reads `tab._hv_interlock` and calls `_redraw_hv_interlock()`. Sanctioned path: assert `tab.lbl_hv_interlock.text()` directly on constructed tab."
+        ]
+      },
+      {
+        "file": "tests/test_overview_tab.py",
+        "name": "TestHvInterlockIndicator.test_ok_state_is_shown",
+        "text": [
+          "- `TestHvInterlockIndicator.test_ok_state_is_shown` \u2014 **REWRITE** \u2014 Covers OK interlock state display, but writes `tab._hv_interlock` and calls `_redraw_hv_interlock()`. Sanctioned path: emit `beamline.hv_interlock_changed` (or `vacuum_changed`) and assert on `tab.lbl_hv_interlock` text and style."
+        ]
+      },
+      {
+        "file": "tests/test_overview_tab.py",
+        "name": "TestHvInterlockIndicator.test_block_state_is_shown",
+        "text": [
+          "- `TestHvInterlockIndicator.test_block_state_is_shown` \u2014 **REWRITE** \u2014 Covers BLOCKED interlock state display, but writes `tab._hv_interlock` and calls `_redraw_hv_interlock()`. Sanctioned path: emit blocked interlock state on `Beamline` and assert on `tab.lbl_hv_interlock` text and style."
+        ]
+      },
+      {
+        "file": "tests/test_overview_tab.py",
+        "name": "TestHvInterlockIndicator.test_stale_reading_reads_distinctly_from_a_pressure_block",
+        "text": [
+          "- `TestHvInterlockIndicator.test_stale_reading_reads_distinctly_from_a_pressure_block` \u2014 **REWRITE** \u2014 Covers STALE interlock state display, but writes `tab._hv_interlock` and calls `_redraw_hv_interlock()`. Sanctioned path: emit stale vacuum state on `Beamline` and assert on `tab.lbl_hv_interlock` text."
+        ]
+      },
+      {
+        "file": "tests/test_overview_tab.py",
+        "name": "TestHvInterlockIndicator.test_beamline_signal_reaches_the_tab",
+        "text": [
+          "- `TestHvInterlockIndicator.test_beamline_signal_reaches_the_tab` \u2014 **REWRITE** \u2014 Covers Beamline interlock signal connection, but calls `_recompute_hv_interlock` and reads `_hv_interlock`. Sanctioned path: emit `beamline.hv_interlock_changed` and assert on `tab.lbl_hv_interlock.text()`."
+        ]
+      }
+    ]
+  },
+  "tests/test_ramp_engine.py": {
+    "DELETE": [],
+    "REWRITE": [
+      {
+        "file": "tests/test_ramp_engine.py",
+        "name": "TestRetargetMidRamp.test_updates_in_place_rather_than_queuing",
+        "text": [
+          "- `TestRetargetMidRamp.test_updates_in_place_rather_than_queuing` \u2014 **REWRITE** \u2014 Covers mid-ramp retargeting behavior, but reads private `engine._ramps`. Sanctioned path: call `retarget()` mid-ramp and verify seamless progress to final target via public `current_step_value` and generator state without inspecting `_ramps`."
+        ]
+      },
+      {
+        "file": "tests/test_ramp_engine.py",
+        "name": "TestAbort.test_clears_all_ramps_without_commanding",
+        "text": [
+          "- `TestAbort.test_clears_all_ramps_without_commanding` \u2014 **REWRITE** \u2014 Covers ramp aborting, but reads private `engine._timer.isActive()`. Sanctioned path: call `abort()` and assert `is_ramping()` and `ramping_labels()` are empty without inspecting internal timer."
+        ]
+      }
+    ]
+  },
+  "tests/test_raster_planner_tab.py": {
+    "DELETE": [
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestGoneForGood.test_no_steerer_picker",
+        "text": [
+          "- `TestGoneForGood.test_no_steerer_picker` \u2014 **DELETE** \u2014 Asserts `not hasattr(tab, \"cmb_steerer\")`; churn test asserting negative attribute existence on legacy deleted widget."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestGoneForGood.test_no_single_capacitance_channel_picker",
+        "text": [
+          "- `TestGoneForGood.test_no_single_capacitance_channel_picker` \u2014 **DELETE** \u2014 Asserts `not hasattr(tab, \"cmb_cap_channel\")`; churn test checking dead legacy attribute."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestGoneForGood.test_no_lissajous_readout",
+        "text": [
+          "- `TestGoneForGood.test_no_lissajous_readout` \u2014 **DELETE** \u2014 Asserts `not hasattr(tab, \"lbl_lissajous\")`; churn test checking dead legacy attribute."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestGoneForGood.test_no_bare_unlabelled_kv_readouts",
+        "text": [
+          "- `TestGoneForGood.test_no_bare_unlabelled_kv_readouts` \u2014 **DELETE** \u2014 Asserts `not hasattr(tab, \"lbl_v_x\")` and `\"lbl_v_y\"`; churn test checking dead legacy attributes."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestGoneForGood.test_no_half_width_boxes",
+        "text": [
+          "- `TestGoneForGood.test_no_half_width_boxes` \u2014 **DELETE** \u2014 Asserts `not hasattr(tab, \"spn_half_w\")` and `\"spn_half_h\"`; churn test checking dead legacy attributes."
+        ]
+      }
+    ],
+    "REWRITE": [
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestPerChannelCapacitance.test_reports_all_four_channels",
+        "text": [
+          "- `TestPerChannelCapacitance.test_reports_all_four_channels` \u2014 **REWRITE** \u2014 Covers reporting all four amplifier channels, but calls private `tab._channel_capacitance()`. Sanctioned path: inspect capacitance table column items or public getter."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestPerChannelCapacitance.test_unmeasured_channels_fall_back_and_say_so",
+        "text": [
+          "- `TestPerChannelCapacitance.test_unmeasured_channels_fall_back_and_say_so` \u2014 **REWRITE** \u2014 Covers fallback indicator for unmeasured channels, but calls `tab._channel_capacitance()`. Sanctioned path: inspect capacitance table status text for fallback annotation."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestPerChannelCapacitance.test_one_measured_channel_does_not_change_the_others",
+        "text": [
+          "- `TestPerChannelCapacitance.test_one_measured_channel_does_not_change_the_others` \u2014 **REWRITE** \u2014 Covers isolated channel calibration update, but calls `tab._channel_capacitance()`. Sanctioned path: update calibration in store, click refresh, and assert table status text."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestPerChannelCapacitance.test_each_channel_current_uses_its_own_capacitance",
+        "text": [
+          "- `TestPerChannelCapacitance.test_each_channel_current_uses_its_own_capacitance` \u2014 **REWRITE** \u2014 Covers per-channel current calculation scaling with channel capacitance, but calls `tab._recompute()` and parses `tab.lbl_currents.text()`. Sanctioned path: save distinct capacitances in store and assert current readouts on UI labels."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestPerChannelCapacitance.test_a_fallback_channel_is_flagged_not_silent",
+        "text": [
+          "- `TestPerChannelCapacitance.test_a_fallback_channel_is_flagged_not_silent` \u2014 **REWRITE** \u2014 Covers visible flagging of fallback channels, but calls `tab._recompute()`. Sanctioned path: assert fallback notification in `tab.lbl_c_source.text()`."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheJawsAreImagedOntoTheSample.test_the_patch_is_the_size_that_was_asked_for",
+        "text": [
+          "- `TestTheJawsAreImagedOntoTheSample.test_the_patch_is_the_size_that_was_asked_for` \u2014 **REWRITE** \u2014 Covers patch size calculation at sample, but calls `tab._recompute()` and reads `_solution`. Sanctioned path: set patch spinboxes and assert patch size readout label."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheJawsAreImagedOntoTheSample.test_the_jaws_are_set_narrower_than_the_patch",
+        "text": [
+          "- `TestTheJawsAreImagedOntoTheSample.test_the_jaws_are_set_narrower_than_the_patch` \u2014 **REWRITE** \u2014 Covers jaw gap calculation set narrower than sample patch, but calls `tab._recompute()` and reads `_solution`. Sanctioned path: assert jaw gap readout label is narrower than requested patch."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheJawsAreImagedOntoTheSample.test_the_two_axes_get_different_magnifications",
+        "text": [
+          "- `TestTheJawsAreImagedOntoTheSample.test_the_two_axes_get_different_magnifications` \u2014 **REWRITE** \u2014 Covers unequal axis magnifications due to differing slit distances, but calls `tab._recompute()` and reads `_solution`. Sanctioned path: assert magnification label text."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheJawsAreImagedOntoTheSample.test_a_square_request_gives_unequal_jaws",
+        "text": [
+          "- `TestTheJawsAreImagedOntoTheSample.test_a_square_request_gives_unequal_jaws` \u2014 **REWRITE** \u2014 Covers square patch producing unequal X and Y jaw gaps, but calls `tab._recompute()` and reads `_solution`. Sanctioned path: set square patch and assert differing X/Y jaw gap labels."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheJawsAreImagedOntoTheSample.test_moving_the_slit_plane_moves_the_magnification",
+        "text": [
+          "- `TestTheJawsAreImagedOntoTheSample.test_moving_the_slit_plane_moves_the_magnification` \u2014 **REWRITE** \u2014 Covers slit plane fraction effect on magnification, but calls `tab._recompute()` and reads `_solution`. Sanctioned path: change slit fraction spinbox and assert magnification label text updates."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestBladePositions.test_all_four_blades_are_named_in_motor_tab_units",
+        "text": [
+          "- `TestBladePositions.test_all_four_blades_are_named_in_motor_tab_units` \u2014 **REWRITE** \u2014 Covers blade position naming matching motor tab, but calls `_recompute()`. Sanctioned path: assert blade labels in UI."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestBladePositions.test_symmetric_by_default",
+        "text": [
+          "- `TestBladePositions.test_symmetric_by_default` \u2014 **REWRITE** \u2014 Covers symmetric default blade positions, but calls `_recompute()` and reads `_solution`. Sanctioned path: assert symmetrical blade positions in UI table."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestBladePositions.test_a_blade_that_would_cross_centre_is_flagged",
+        "text": [
+          "- `TestBladePositions.test_a_blade_that_would_cross_centre_is_flagged` \u2014 **REWRITE** \u2014 Covers crossing-centre warning on blade positions, but calls `_recompute()`. Sanctioned path: set invalid blade target and assert warning indicator/text."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestBladePositions.test_apply_is_disabled_without_a_beamline",
+        "text": [
+          "- `TestBladePositions.test_apply_is_disabled_without_a_beamline` \u2014 **REWRITE** \u2014 Covers Apply button disabled state without beamline, but calls `_recompute()`. Sanctioned path: assert `tab.btn_apply.isEnabled()` without beamline."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestBladePositions.test_apply_is_offered_once_a_beamline_is_wired",
+        "text": [
+          "- `TestBladePositions.test_apply_is_offered_once_a_beamline_is_wired` \u2014 **REWRITE** \u2014 Covers Apply button enabled state when beamline is wired, but calls `_recompute()`. Sanctioned path: wire beamline and assert `tab.btn_apply.isEnabled()`."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheOverscanIsAtTheJaw.test_the_margin_is_k_times_the_slit_plane_fwhm",
+        "text": [
+          "- `TestTheOverscanIsAtTheJaw.test_the_margin_is_k_times_the_slit_plane_fwhm` \u2014 **REWRITE** \u2014 Covers overscan margin scaling with k * FWHM, but calls `_recompute()` and reads `_solution`. Sanctioned path: assert on overscan margin readout."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheOverscanIsAtTheJaw.test_the_beam_width_does_not_change_the_patch",
+        "text": [
+          "- `TestTheOverscanIsAtTheJaw.test_the_beam_width_does_not_change_the_patch` \u2014 **REWRITE** \u2014 Covers sample patch size independence from beam FWHM, but calls `_recompute()` and reads `_solution`. Sanctioned path: change FWHM spinner and assert sample patch size label remains constant."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheOverscanIsAtTheJaw.test_a_wider_beam_costs_amplitude",
+        "text": [
+          "- `TestTheOverscanIsAtTheJaw.test_a_wider_beam_costs_amplitude` \u2014 **REWRITE** \u2014 Covers required amplitude increase for wider beam, but calls `_recompute()`. Sanctioned path: increase FWHM spinner and assert amplitude label increases."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheOverscanIsAtTheJaw.test_the_droop_readout_tracks_k",
+        "text": [
+          "- `TestTheOverscanIsAtTheJaw.test_the_droop_readout_tracks_k` \u2014 **REWRITE** \u2014 Covers droop readout tracking k, but calls `_recompute()`. Sanctioned path: change k spinner and assert droop label updates."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheOverscanIsAtTheJaw.test_the_dose_is_flat_across_the_patch",
+        "text": [
+          "- `TestTheOverscanIsAtTheJaw.test_the_dose_is_flat_across_the_patch` \u2014 **REWRITE** \u2014 Covers patch dose flatness verification, but calls `_recompute()` and reads `_solution`. Sanctioned path: assert dose uniformity label/table."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheCostOfOverscan.test_transmission_is_reported_for_both_axes_and_combined",
+        "text": [
+          "- `TestTheCostOfOverscan.test_transmission_is_reported_for_both_axes_and_combined` \u2014 **REWRITE** \u2014 Covers transmission reporting per axis and combined, but calls `_recompute()`. Sanctioned path: assert transmission label text."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheCostOfOverscan.test_more_overscan_throws_more_beam_away",
+        "text": [
+          "- `TestTheCostOfOverscan.test_more_overscan_throws_more_beam_away` \u2014 **REWRITE** \u2014 Covers transmission drop with increased overscan, but calls `_recompute()` and reads `_solution`. Sanctioned path: increase overscan and assert lower transmission on UI label."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheCostOfOverscan.test_the_cost_is_named_as_a_trade_not_a_fault",
+        "text": [
+          "- `TestTheCostOfOverscan.test_the_cost_is_named_as_a_trade_not_a_fault` \u2014 **REWRITE** \u2014 Covers transmission labelling wording, but calls `_recompute()`. Sanctioned path: assert transmission label wording."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestAsymmetry.test_the_jaw_offset_moves_the_patch_without_touching_the_drive",
+        "text": [
+          "- `TestAsymmetry.test_the_jaw_offset_moves_the_patch_without_touching_the_drive` \u2014 **REWRITE** \u2014 Covers jaw offset shifting patch position independently of drive, but calls `_recompute()` and reads `_solution`. Sanctioned path: set offset spinner and assert patch position readout."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestAsymmetry.test_centring_the_sweep_buys_the_amplitude_back",
+        "text": [
+          "- `TestAsymmetry.test_centring_the_sweep_buys_the_amplitude_back` \u2014 **REWRITE** \u2014 Covers amplitude reduction when sweep is centred, but calls `_recompute()`. Sanctioned path: assert amplitude label reduction when centred."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestAsymmetry.test_the_dc_term_is_spelled_out_as_equal_and_opposite",
+        "text": [
+          "- `TestAsymmetry.test_the_dc_term_is_spelled_out_as_equal_and_opposite` \u2014 **REWRITE** \u2014 Covers DC offset term presentation, but calls `_recompute()`. Sanctioned path: assert DC offset readouts."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestAsymmetry.test_an_x_offset_does_not_disturb_y",
+        "text": [
+          "- `TestAsymmetry.test_an_x_offset_does_not_disturb_y` \u2014 **REWRITE** \u2014 Covers cross-axis offset isolation, but calls `_recompute()`. Sanctioned path: change X offset and assert Y readouts unchanged."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheDriveReadoutSaysWhoseVoltsTheseAre.test_the_generator_line_names_the_channels_and_the_phase",
+        "text": [
+          "- `TestTheDriveReadoutSaysWhoseVoltsTheseAre.test_the_generator_line_names_the_channels_and_the_phase` \u2014 **REWRITE** \u2014 Covers generator drive readout text and phase, but calls `_recompute()`. Sanctioned path: assert generator line text."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheDriveReadoutSaysWhoseVoltsTheseAre.test_the_plate_line_gives_both_per_plate_and_differential",
+        "text": [
+          "- `TestTheDriveReadoutSaysWhoseVoltsTheseAre.test_the_plate_line_gives_both_per_plate_and_differential` \u2014 **REWRITE** \u2014 Covers plate voltage readout giving both single-plate and differential values, but calls `_recompute()`. Sanctioned path: assert plate voltage line text."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheDriveReadoutSaysWhoseVoltsTheseAre.test_vpp_and_differential_kv_are_numerically_equal_but_labelled_apart",
+        "text": [
+          "- `TestTheDriveReadoutSaysWhoseVoltsTheseAre.test_vpp_and_differential_kv_are_numerically_equal_but_labelled_apart` \u2014 **REWRITE** \u2014 Covers distinction between Vpp and differential kV labels, but calls `_recompute()` and reads `_solution`. Sanctioned path: assert labels distinguish Vpp and differential kV."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheDriveReadoutSaysWhoseVoltsTheseAre.test_over_rating_is_flagged_on_the_axis_that_exceeds_it",
+        "text": [
+          "- `TestTheDriveReadoutSaysWhoseVoltsTheseAre.test_over_rating_is_flagged_on_the_axis_that_exceeds_it` \u2014 **REWRITE** \u2014 Covers plate voltage over-rating warning badge, but calls `_recompute()`. Sanctioned path: set large sweep and assert warning badge on exceeding axis."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheDriveReadoutSaysWhoseVoltsTheseAre.test_the_generator_rail_is_checked_in_generator_volts",
+        "text": [
+          "- `TestTheDriveReadoutSaysWhoseVoltsTheseAre.test_the_generator_rail_is_checked_in_generator_volts` \u2014 **REWRITE** \u2014 Covers generator voltage rail check in generator units, but calls `_recompute()`. Sanctioned path: set out-of-range drive and assert generator rail warning."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestModeSwitch.test_steerer_mode_still_sizes_from_the_sample_edge",
+        "text": [
+          "- `TestModeSwitch.test_steerer_mode_still_sizes_from_the_sample_edge` \u2014 **REWRITE** \u2014 Covers sweep sizing from sample edge in steerer mode, but calls `_recompute()` and reads `_solution`. Sanctioned path: select steerer mode and assert sweep readouts."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestModeSwitch.test_slit_mode_needs_less_amplitude_than_steerer_mode",
+        "text": [
+          "- `TestModeSwitch.test_slit_mode_needs_less_amplitude_than_steerer_mode` \u2014 **REWRITE** \u2014 Covers comparison of required amplitude between slit mode and steerer mode, but calls `_recompute()`. Sanctioned path: compare amplitude readouts between modes."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheBeamlineTable.test_it_has_a_row_for_each_slit_pair_and_the_sample",
+        "text": [
+          "- `TestTheBeamlineTable.test_it_has_a_row_for_each_slit_pair_and_the_sample` \u2014 **REWRITE** \u2014 Covers beamline summary table row structure, but calls `_recompute()`. Sanctioned path: assert table row count and header text."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheBeamlineTable.test_the_slit_rows_say_where_to_put_the_jaws",
+        "text": [
+          "- `TestTheBeamlineTable.test_the_slit_rows_say_where_to_put_the_jaws` \u2014 **REWRITE** \u2014 Covers slit row target jaw values in beamline table, but calls `_recompute()`. Sanctioned path: assert slit row table cell text."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheBeamlineTable.test_the_alumina_only_appears_when_it_is_offset",
+        "text": [
+          "- `TestTheBeamlineTable.test_the_alumina_only_appears_when_it_is_offset` \u2014 **REWRITE** \u2014 Covers alumina screen row display only when offset, but calls `_recompute()`. Sanctioned path: toggle alumina offset and assert table row visibility."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheBeamlineTable.test_the_alumina_sees_a_slightly_bigger_patch_than_the_sample",
+        "text": [
+          "- `TestTheBeamlineTable.test_the_alumina_sees_a_slightly_bigger_patch_than_the_sample` \u2014 **REWRITE** \u2014 Covers beam patch size at alumina screen, but calls `_recompute()`. Sanctioned path: assert alumina patch cell value."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheBeamlineTable.test_the_drift_tube_is_checked_against_its_bore",
+        "text": [
+          "- `TestTheBeamlineTable.test_the_drift_tube_is_checked_against_its_bore` \u2014 **REWRITE** \u2014 Covers drift tube clearance checking, but calls `_recompute()`. Sanctioned path: assert drift tube clearance cell text."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheBeamlineTable.test_a_sweep_that_paints_the_drift_tube_is_warned_about",
+        "text": [
+          "- `TestTheBeamlineTable.test_a_sweep_that_paints_the_drift_tube_is_warned_about` \u2014 **REWRITE** \u2014 Covers drift tube collision warning, but calls `_recompute()`. Sanctioned path: set oversized sweep and assert drift tube warning style/text."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestSpeciesTable.test_the_selected_species_lands_exactly_on_the_target",
+        "text": [
+          "- `TestSpeciesTable.test_the_selected_species_lands_exactly_on_the_target` \u2014 **REWRITE** \u2014 Covers species selection targeting, but calls `_recompute()` and reads `_solution`. Sanctioned path: select species and assert patch size readout."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestSpeciesTable.test_a_higher_charge_state_sweeps_further_at_the_same_voltage",
+        "text": [
+          "- `TestSpeciesTable.test_a_higher_charge_state_sweeps_further_at_the_same_voltage` \u2014 **REWRITE** \u2014 Covers charge-state effect on required deflection voltage, but calls `_recompute()`. Sanctioned path: select higher charge state and assert lower required voltage on UI label."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestSpeciesTable.test_mass_does_not_affect_deflection",
+        "text": [
+          "- `TestSpeciesTable.test_mass_does_not_affect_deflection` \u2014 **REWRITE** \u2014 Covers mass independence in species table selection, but calls `_recompute()`. Sanctioned path: compare voltage readouts for isotopes."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestSpeciesTable.test_selecting_a_different_species_redesigns_the_drive",
+        "text": [
+          "- `TestSpeciesTable.test_selecting_a_different_species_redesigns_the_drive` \u2014 **REWRITE** \u2014 Covers drive recalculation upon species change, but calls `_recompute()`. Sanctioned path: select species and assert updated drive parameters."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestSpeciesTable.test_an_unparseable_row_does_not_raise",
+        "text": [
+          "- `TestSpeciesTable.test_an_unparseable_row_does_not_raise` \u2014 **REWRITE** \u2014 Covers error handling for malformed species entries, but calls `_recompute()`. Sanctioned path: edit species table with invalid text and assert graceful error display."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestEnvelopeCheck.test_low_frequency_low_amplitude_is_inside",
+        "text": [
+          "- `TestEnvelopeCheck.test_low_frequency_low_amplitude_is_inside` \u2014 **REWRITE** \u2014 Covers amplifier operating envelope check, but calls `_recompute()`. Sanctioned path: set low freq/amp and assert safe envelope status label."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestEnvelopeCheck.test_it_names_the_binding_channel",
+        "text": [
+          "- `TestEnvelopeCheck.test_it_names_the_binding_channel` \u2014 **REWRITE** \u2014 Covers identifying the binding channel in envelope readout, but calls `_recompute()`. Sanctioned path: assert binding channel name in envelope label."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestEnvelopeCheck.test_envelope_shrinks_at_higher_frequency",
+        "text": [
+          "- `TestEnvelopeCheck.test_envelope_shrinks_at_higher_frequency` \u2014 **REWRITE** \u2014 Covers envelope frequency derating, but calls `_recompute()`. Sanctioned path: increase frequency and assert envelope headroom readout."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestEnvelopeCheck.test_beyond_bandwidth_wall_is_flagged",
+        "text": [
+          "- `TestEnvelopeCheck.test_beyond_bandwidth_wall_is_flagged` \u2014 **REWRITE** \u2014 Covers bandwidth wall warning, but calls `_recompute()`. Sanctioned path: set frequency beyond limit and assert warning status text."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestFrequencyIsNotGeometry.test_frequency_does_not_change_the_required_voltage",
+        "text": [
+          "- `TestFrequencyIsNotGeometry.test_frequency_does_not_change_the_required_voltage` \u2014 **REWRITE** \u2014 Covers frequency independence of spatial deflection voltage, but calls `_recompute()`. Sanctioned path: change frequency spinner and assert voltage label is unchanged."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestFrequencyIsNotGeometry.test_frequency_does_change_the_predicted_current",
+        "text": [
+          "- `TestFrequencyIsNotGeometry.test_frequency_does_change_the_predicted_current` \u2014 **REWRITE** \u2014 Covers capacitive load current scaling with frequency, but calls `_recompute()`. Sanctioned path: change frequency spinner and assert current label updates."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheProfilerIsOfferedNeverAdopted.test_without_a_profiler_the_button_is_dead",
+        "text": [
+          "- `TestTheProfilerIsOfferedNeverAdopted.test_without_a_profiler_the_button_is_dead` \u2014 **REWRITE** \u2014 Covers profiler adopt button disabled when profiler disconnected, but calls `_recompute()`. Sanctioned path: assert button enabled state without profiler snapshot."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheProfilerIsOfferedNeverAdopted.test_a_reading_is_shown_but_not_taken",
+        "text": [
+          "- `TestTheProfilerIsOfferedNeverAdopted.test_a_reading_is_shown_but_not_taken` \u2014 **REWRITE** \u2014 Covers profiler FWHM advisory display without auto-adoption, but calls `_use_profiler_fwhm` and `_recompute()`. Sanctioned path: emit profiler snapshot and assert FWHM offered in UI without auto-applying."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestCapacitanceRefresh.test_refresh_picks_up_a_measurement_taken_after_construction",
+        "text": [
+          "- `TestCapacitanceRefresh.test_refresh_picks_up_a_measurement_taken_after_construction` \u2014 **REWRITE** \u2014 Covers capacitance reload on button refresh, but calls `_recompute()`. Sanctioned path: update store, click refresh button, and assert table text."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestCapacitanceRefresh.test_on_plates_wins_over_a_later_disconnected_sweep",
+        "text": [
+          "- `TestCapacitanceRefresh.test_on_plates_wins_over_a_later_disconnected_sweep` \u2014 **REWRITE** \u2014 Covers capacitance priority selection, but accesses private `tab._channel_capacitance`. Sanctioned path: assert selected capacitance priority in table/label."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestCapacitanceRefresh.test_a_disconnected_only_channel_says_which_condition_it_is",
+        "text": [
+          "- `TestCapacitanceRefresh.test_a_disconnected_only_channel_says_which_condition_it_is` \u2014 **REWRITE** \u2014 Covers disconnected capacitance status reporting, but accesses private `tab._channel_capacitance`. Sanctioned path: assert condition text in UI table."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestThePlaneTableIsHonestAtTheJaw.test_the_slit_row_shows_its_own_axis_clipped",
+        "text": [
+          "- `TestThePlaneTableIsHonestAtTheJaw.test_the_slit_row_shows_its_own_axis_clipped` \u2014 **REWRITE** \u2014 Covers plane table clipping display, but calls `_recompute()` and reads `_solution`. Sanctioned path: assert clipped axis values in plane table."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestThePlaneTableIsHonestAtTheJaw.test_an_x_aperture_is_never_applied_to_the_y_axis",
+        "text": [
+          "- `TestThePlaneTableIsHonestAtTheJaw.test_an_x_aperture_is_never_applied_to_the_y_axis` \u2014 **REWRITE** \u2014 Covers aperture axis independence in plane table, but calls `_recompute()`. Sanctioned path: change X aperture and assert Y plane table cells unaffected."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheBeamFrameIsNotTheSlitFrame.test_a_beam_offset_moves_only_the_blade_numbers",
+        "text": [
+          "- `TestTheBeamFrameIsNotTheSlitFrame.test_a_beam_offset_moves_only_the_blade_numbers` \u2014 **REWRITE** \u2014 Covers beam center offset effect on mechanical blade positions, but calls `_recompute()` and reads `_solution`. Sanctioned path: set beam offset spinner and assert blade position table."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheBeamFrameIsNotTheSlitFrame.test_the_blade_readout_is_in_the_slits_own_frame",
+        "text": [
+          "- `TestTheBeamFrameIsNotTheSlitFrame.test_the_blade_readout_is_in_the_slits_own_frame` \u2014 **REWRITE** \u2014 Covers mechanical slit frame blade readout, but accesses `_mechanical_blades`, `_recompute`, and `_solution`. Sanctioned path: assert blade table values in mechanical frame."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheBeamFrameIsNotTheSlitFrame.test_an_uneven_y_pair_is_untouched_by_an_x_beam_offset",
+        "text": [
+          "- `TestTheBeamFrameIsNotTheSlitFrame.test_an_uneven_y_pair_is_untouched_by_an_x_beam_offset` \u2014 **REWRITE** \u2014 Covers cross-axis independence of beam frame offsets, but accesses `_mechanical_blades`, `_recompute`, and `_solution`. Sanctioned path: assert Y blade table values unaffected by X beam offset."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheBeamFrameIsNotTheSlitFrame.test_apply_commands_the_mechanical_numbers_not_the_beam_frame_ones",
+        "text": [
+          "- `TestTheBeamFrameIsNotTheSlitFrame.test_apply_commands_the_mechanical_numbers_not_the_beam_frame_ones` \u2014 **REWRITE** \u2014 Covers Apply Slits commanding mechanical slit coordinates, but calls `_apply_slits` and `_recompute`. Sanctioned path: click Apply Slits and assert commanded positions on `Beamline`."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheBeamFrameIsNotTheSlitFrame.test_a_beam_offset_never_moves_the_picture",
+        "text": [
+          "- `TestTheBeamFrameIsNotTheSlitFrame.test_a_beam_offset_never_moves_the_picture` \u2014 **REWRITE** \u2014 Covers beamline plot remaining centered when beam moves, but accesses `_ax_line_x` and `_recompute`. Sanctioned path: assert plot lines remain centred via plot canvas or public visual export."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheBeamFrameIsNotTheSlitFrame.test_a_patch_offset_DOES_move_the_picture",
+        "text": [
+          "- `TestTheBeamFrameIsNotTheSlitFrame.test_a_patch_offset_DOES_move_the_picture` \u2014 **REWRITE** \u2014 Covers patch offset updating beamline plot rendering, but accesses `_recompute` and `_solution`. Sanctioned path: set patch offset and assert patch centre in UI table / plot."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheBeamFrameIsNotTheSlitFrame.test_a_blade_driven_past_mechanical_centre_is_flagged",
+        "text": [
+          "- `TestTheBeamFrameIsNotTheSlitFrame.test_a_blade_driven_past_mechanical_centre_is_flagged` \u2014 **REWRITE** \u2014 Covers mechanical center crossing warning, but calls `_recompute`. Sanctioned path: set excessive offset and assert warning text/color on blade table."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheJawPanel.test_it_has_its_own_axes_not_an_inset",
+        "text": [
+          "- `TestTheJawPanel.test_it_has_its_own_axes_not_an_inset` \u2014 **REWRITE** \u2014 Covers jaw panel standalone canvas structure, but reads `tab._ax_jaw_x` and `tab._ax_line_x`. Sanctioned path: assert jaw panel canvas exists as distinct widget in layout."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheJawPanel.test_it_draws_the_beam_at_the_jaw_and_at_the_turnaround",
+        "text": [
+          "- `TestTheJawPanel.test_it_draws_the_beam_at_the_jaw_and_at_the_turnaround` \u2014 **REWRITE** \u2014 Covers drawing beam at jaw and turnaround, but reads `tab._ax_jaw_x` and calls `_recompute`. Sanctioned path: assert jaw plot lines via public plot handles or visual snapshot."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheJawPanel.test_it_dimensions_the_overscan_in_beam_widths",
+        "text": [
+          "- `TestTheJawPanel.test_it_dimensions_the_overscan_in_beam_widths` \u2014 **REWRITE** \u2014 Covers overscan dimension annotation in beam widths, but reads `tab._ax_jaw_x` and calls `_recompute`. Sanctioned path: assert overscan dimension label."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheJawPanel.test_the_beamline_plot_dimensions_the_patch_at_the_sample",
+        "text": [
+          "- `TestTheJawPanel.test_the_beamline_plot_dimensions_the_patch_at_the_sample` \u2014 **REWRITE** \u2014 Covers beamline plot sample patch dimension annotation, but reads `tab._ax_line_x` and calls `_recompute`. Sanctioned path: assert patch dimension readout."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheJawPanel.test_steerer_mode_has_no_jaw_panel_to_draw",
+        "text": [
+          "- `TestTheJawPanel.test_steerer_mode_has_no_jaw_panel_to_draw` \u2014 **REWRITE** \u2014 Covers jaw panel hiding in steerer mode, but reads `tab._ax_jaw_x`. Sanctioned path: select steerer mode and assert jaw panel hidden/disabled via public widget state."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheJawPanel.test_the_beam_marker_is_a_capped_bar_not_a_filled_box",
+        "text": [
+          "- `TestTheJawPanel.test_the_beam_marker_is_a_capped_bar_not_a_filled_box` \u2014 **REWRITE** \u2014 Covers beam marker visual styling, but reads `tab._ax_line_x` and calls `_recompute`. Sanctioned path: assert beam marker rendering."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheJawPanel.test_the_panel_shades_the_OPPOSITE_jaw_when_the_zoom_reaches_it",
+        "text": [
+          "- `TestTheJawPanel.test_the_panel_shades_the_OPPOSITE_jaw_when_the_zoom_reaches_it` \u2014 **REWRITE** \u2014 Covers opposite jaw shading on zoom, but reads `tab._ax_jaw_x`, `_recompute`, and `_solution`. Sanctioned path: assert jaw shading artists on canvas."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheJawPanel.test_a_shallow_zoom_shows_only_the_near_jaw",
+        "text": [
+          "- `TestTheJawPanel.test_a_shallow_zoom_shows_only_the_near_jaw` \u2014 **REWRITE** \u2014 Covers shallow zoom showing near jaw only, but reads `tab._ax_jaw_y` and calls `_recompute`. Sanctioned path: assert jaw plot limits."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheJawPanel.test_the_beam_axis_is_marked_so_a_negative_reading_reads",
+        "text": [
+          "- `TestTheJawPanel.test_the_beam_axis_is_marked_so_a_negative_reading_reads` \u2014 **REWRITE** \u2014 Covers beam axis marker display, but reads `tab._ax_jaw_x` and calls `_recompute`. Sanctioned path: assert beam axis marker line on jaw plot."
+        ]
+      },
+      {
+        "file": "tests/test_raster_planner_tab.py",
+        "name": "TestTheJawPanel.test_the_scale_says_it_is_measured_from_the_beam",
+        "text": [
+          "- `TestTheJawPanel.test_the_scale_says_it_is_measured_from_the_beam` \u2014 **REWRITE** \u2014 Covers jaw plot axis measurement label, but reads `tab._ax_jaw_x` and calls `_recompute`. Sanctioned path: assert X-axis label text on jaw plot canvas."
+        ]
+      }
+    ]
+  },
+  "tests/test_recording_panel.py": {
+    "DELETE": [
+      {
+        "file": "tests/test_recording_panel.py",
+        "name": "test_panel_constructs_without_error",
+        "text": [
+          "- `test_panel_constructs_without_error` \u2014 **DELETE** \u2014 Asserts `p is not None` on a constructed widget; churn test that verifies no functional invariant and would not catch any real defect."
+        ]
+      }
+    ],
+    "REWRITE": [
+      {
+        "file": "tests/test_recording_panel.py",
+        "name": "test_start_session_enabled_with_no_camera",
+        "text": [
+          "- `test_start_session_enabled_with_no_camera` \u2014 **REWRITE** \u2014 Covers START SESSION button enablement when camera is closed, but reads private `p._btn_session`. Sanctioned path: find public button by text 'START SESSION' (or public property) and assert `btn.isEnabled()`."
+        ]
+      },
+      {
+        "file": "tests/test_recording_panel.py",
+        "name": "test_record_video_checkbox_disabled_with_camera_closed",
+        "text": [
+          "- `test_record_video_checkbox_disabled_with_camera_closed` \u2014 **REWRITE** \u2014 Covers 'Record video' checkbox disabled when camera is closed, but reads private `p._chk_video`. Sanctioned path: find checkbox child by text 'Record video' (or public property) and assert `chk.isEnabled()` is False."
+        ]
+      },
+      {
+        "file": "tests/test_recording_panel.py",
+        "name": "test_settings_disable_while_recording",
+        "text": [
+          "- `test_settings_disable_while_recording` \u2014 **REWRITE** \u2014 Covers settings controls disabling during active recording session, but reads private `_spin_rec_fps`, `_spin_csv`, `_combo_seg`. Sanctioned path: start recording on recorder stub and assert control enablement via public widget queries."
+        ]
+      },
+      {
+        "file": "tests/test_recording_panel.py",
+        "name": "test_settings_reenable_after_stop",
+        "text": [
+          "- `test_settings_reenable_after_stop` \u2014 **REWRITE** \u2014 Covers settings controls re-enabling after session stop, but reads private `_spin_rec_fps`, `_spin_csv`. Sanctioned path: cycle recording start/stop and assert public controls are re-enabled."
+        ]
+      }
+    ]
+  },
+  "tests/test_regulation_monitor.py": {
+    "DELETE": [],
+    "REWRITE": [
+      {
+        "file": "tests/test_regulation_monitor.py",
+        "name": "TestReset.test_reset_one_label_clears_only_that_label",
+        "text": [
+          "- `TestReset.test_reset_one_label_clears_only_that_label` \u2014 **REWRITE** \u2014 Covers single-channel fault monitor reset, but inspects private `monitor._consec`. Sanctioned path: call `reset('X+')` and assert behavioral reset via `evaluate()` signal emission timing."
+        ]
+      },
+      {
+        "file": "tests/test_regulation_monitor.py",
+        "name": "TestReset.test_reset_all_clears_everything",
+        "text": [
+          "- `TestReset.test_reset_all_clears_everything` \u2014 **REWRITE** \u2014 Covers global monitor reset, but inspects private `monitor._consec`. Sanctioned path: call `reset()` and assert debounce reset behavior across all channels via `evaluate()`."
+        ]
+      }
+    ]
+  },
+  "tests/test_scope_acquisition_and_ports.py": {
+    "DELETE": [
+      {
+        "file": "tests/test_scope_acquisition_and_ports.py",
+        "name": "TestShotCannotStickForever.test_the_measure_step_catches_more_than_transport_errors",
+        "text": [
+          "- `TestShotCannotStickForever.test_the_measure_step_catches_more_than_transport_errors` \u2014 **DELETE** \u2014 Performs source-code string inspection using `inspect.getsource(ScopeWorker._run_loop)`; churn test that verifies implementation syntax rather than runtime behavior."
+        ]
+      }
+    ],
+    "REWRITE": [
+      {
+        "file": "tests/test_scope_acquisition_and_ports.py",
+        "name": "TestAcquisitionMode.test_starts_idle_not_free_running",
+        "text": [
+          "- `TestAcquisitionMode.test_starts_idle_not_free_running` \u2014 **REWRITE** \u2014 Covers initial idle mode on scope worker, but reads `tab._worker`. Sanctioned path: query public worker acquisition state via Beamline / tab interface."
+        ]
+      },
+      {
+        "file": "tests/test_scope_acquisition_and_ports.py",
+        "name": "TestAcquisitionMode.test_no_shot_is_pending_on_construction",
+        "text": [
+          "- `TestAcquisitionMode.test_no_shot_is_pending_on_construction` \u2014 **REWRITE** \u2014 Covers initial pending shot status, but reads `tab._worker`. Sanctioned path: query public shot pending status."
+        ]
+      },
+      {
+        "file": "tests/test_scope_acquisition_and_ports.py",
+        "name": "TestAcquisitionMode.test_request_shot_latches",
+        "text": [
+          "- `TestAcquisitionMode.test_request_shot_latches` \u2014 **REWRITE** \u2014 Covers single-shot request latching, but reads `tab._worker`. Sanctioned path: call public `request_shot()` and assert signal/status."
+        ]
+      },
+      {
+        "file": "tests/test_scope_acquisition_and_ports.py",
+        "name": "TestAcquisitionMode.test_a_shot_is_consumed_exactly_once",
+        "text": [
+          "- `TestAcquisitionMode.test_a_shot_is_consumed_exactly_once` \u2014 **REWRITE** \u2014 Covers single-shot consumption, but reads `tab._worker` and `_snapshot_settings`. Sanctioned path: process shot and verify snapshot produced exactly once."
+        ]
+      },
+      {
+        "file": "tests/test_scope_acquisition_and_ports.py",
+        "name": "TestAcquisitionMode.test_repeated_requests_do_not_queue_up",
+        "text": [
+          "- `TestAcquisitionMode.test_repeated_requests_do_not_queue_up` \u2014 **REWRITE** \u2014 Covers deduplication of shot requests, but reads `tab._worker` and `_snapshot_settings`. Sanctioned path: request multiple shots and verify single execution."
+        ]
+      },
+      {
+        "file": "tests/test_scope_acquisition_and_ports.py",
+        "name": "TestAcquisitionMode.test_continuous_can_be_turned_on_and_off",
+        "text": [
+          "- `TestAcquisitionMode.test_continuous_can_be_turned_on_and_off` \u2014 **REWRITE** \u2014 Covers continuous acquisition toggling, but reads `tab._worker` and `_snapshot_settings`. Sanctioned path: toggle continuous mode via public worker interface."
+        ]
+      },
+      {
+        "file": "tests/test_scope_acquisition_and_ports.py",
+        "name": "TestAcquisitionMode.test_mode_does_not_disturb_analysis_settings",
+        "text": [
+          "- `TestAcquisitionMode.test_mode_does_not_disturb_analysis_settings` \u2014 **REWRITE** \u2014 Covers analysis settings preservation across mode changes, but reads `tab._worker` and `_snapshot_settings`. Sanctioned path: change mode and assert public ScopeState analysis settings."
+        ]
+      },
+      {
+        "file": "tests/test_scope_acquisition_and_ports.py",
+        "name": "TestAcquisitionMode.test_a_shot_survives_a_failed_connect",
+        "text": [
+          "- `TestAcquisitionMode.test_a_shot_survives_a_failed_connect` \u2014 **REWRITE** \u2014 Covers pending shot survival across failed connection attempts, but reads `tab._worker` and `_snapshot_settings`. Sanctioned path: assert shot persistence via public state."
+        ]
+      },
+      {
+        "file": "tests/test_scope_acquisition_and_ports.py",
+        "name": "TestRecordSlice.test_settings_reach_the_snapshot",
+        "text": [
+          "- `TestRecordSlice.test_settings_reach_the_snapshot` \u2014 **REWRITE** \u2014 Covers record slice settings reaching snapshot, but reads `tab._worker` and `_snapshot_settings`. Sanctioned path: set slice parameters and verify in public ScopeState."
+        ]
+      },
+      {
+        "file": "tests/test_scope_acquisition_and_ports.py",
+        "name": "TestRecordSlice.test_poll_interval_is_settable_and_never_negative",
+        "text": [
+          "- `TestRecordSlice.test_poll_interval_is_settable_and_never_negative` \u2014 **REWRITE** \u2014 Covers poll interval setting and clamping, but reads `tab._worker` and `_snapshot_settings`. Sanctioned path: set poll interval and verify in public ScopeState."
+        ]
+      },
+      {
+        "file": "tests/test_scope_acquisition_and_ports.py",
+        "name": "TestProfilerTabDefaults.test_mode_defaults_to_single_shot",
+        "text": [
+          "- `TestProfilerTabDefaults.test_mode_defaults_to_single_shot` \u2014 **REWRITE** \u2014 Covers mode combobox default selection, but reads private `tab._cb_mode`. Sanctioned path: query combobox by objectName or public UI property."
+        ]
+      },
+      {
+        "file": "tests/test_scope_acquisition_and_ports.py",
+        "name": "TestProfilerTabDefaults.test_interval_is_disabled_until_continuous",
+        "text": [
+          "- `TestProfilerTabDefaults.test_interval_is_disabled_until_continuous` \u2014 **REWRITE** \u2014 Covers interval dropdown enablement tracking continuous mode, but reads `tab._cb_mode` and `tab._cb_poll`. Sanctioned path: interact via public comboboxes and assert `isEnabled()`."
+        ]
+      },
+      {
+        "file": "tests/test_scope_acquisition_and_ports.py",
+        "name": "TestProfilerTabDefaults.test_take_shot_is_disabled_until_connected",
+        "text": [
+          "- `TestProfilerTabDefaults.test_take_shot_is_disabled_until_connected` \u2014 **REWRITE** \u2014 Covers Take Shot button disabled when disconnected, but reads `tab._btn_shot`. Sanctioned path: query button enablement via public property or child search."
+        ]
+      },
+      {
+        "file": "tests/test_scope_acquisition_and_ports.py",
+        "name": "TestProfilerTabDefaults.test_take_shot_while_disconnected_says_so_and_does_not_hang",
+        "text": [
+          "- `TestProfilerTabDefaults.test_take_shot_while_disconnected_says_so_and_does_not_hang` \u2014 **REWRITE** \u2014 Covers Take Shot click handling while disconnected, but calls `_on_take_shot` and reads `_lbl_status`, `_shot_pending`. Sanctioned path: click Take Shot button and assert `tab.lbl_status.text()`."
+        ]
+      },
+      {
+        "file": "tests/test_scope_acquisition_and_ports.py",
+        "name": "TestProfilerTabDefaults.test_an_idle_snapshot_does_not_dirty_the_plot",
+        "text": [
+          "- `TestProfilerTabDefaults.test_an_idle_snapshot_does_not_dirty_the_plot` \u2014 **REWRITE** \u2014 Covers idle snapshot ignoring plot dirty flag, but calls `_on_scope_state` and reads `_plot_dirty`, `_readout_dirty`. Sanctioned path: push idle snapshot via Beamline and assert plot redraw is not triggered."
+        ]
+      },
+      {
+        "file": "tests/test_scope_acquisition_and_ports.py",
+        "name": "TestProfilerTabDefaults.test_a_measurement_dirties_the_plot_once",
+        "text": [
+          "- `TestProfilerTabDefaults.test_a_measurement_dirties_the_plot_once` \u2014 **REWRITE** \u2014 Covers measurement snapshot triggering single plot redraw, but calls `_on_scope_state` and reads `_plot_dirty`. Sanctioned path: push measurement snapshot via Beamline and assert plot is updated."
+        ]
+      },
+      {
+        "file": "tests/test_scope_acquisition_and_ports.py",
+        "name": "TestIdleSnapshotsDoNotEraseTheMeasurement.test_an_idle_snapshot_does_not_erase_the_last_trace",
+        "text": [
+          "- `TestIdleSnapshotsDoNotEraseTheMeasurement.test_an_idle_snapshot_does_not_erase_the_last_trace` \u2014 **REWRITE** \u2014 Covers measurement trace preservation during idle pings, but calls `_on_scope_state` and reads `_last_measured`. Sanctioned path: push measurement then idle snapshot via Beamline and assert waveform trace is retained."
+        ]
+      },
+      {
+        "file": "tests/test_scope_acquisition_and_ports.py",
+        "name": "TestIdleSnapshotsDoNotEraseTheMeasurement.test_a_shot_followed_by_idle_still_draws_the_waveform",
+        "text": [
+          "- `TestIdleSnapshotsDoNotEraseTheMeasurement.test_a_shot_followed_by_idle_still_draws_the_waveform` \u2014 **REWRITE** \u2014 Covers waveform plot canvas retention after shot, but calls `_on_scope_state` and reads `_ax_wave`. Sanctioned path: push measurement then idle snapshot and assert waveform lines on canvas."
+        ]
+      },
+      {
+        "file": "tests/test_scope_acquisition_and_ports.py",
+        "name": "TestIdleSnapshotsDoNotEraseTheMeasurement.test_an_error_snapshot_does_not_arm_an_empty_redraw",
+        "text": [
+          "- `TestIdleSnapshotsDoNotEraseTheMeasurement.test_an_error_snapshot_does_not_arm_an_empty_redraw` \u2014 **REWRITE** \u2014 Covers error snapshot preventing empty plot redraws, but calls `_on_scope_state` and reads `_plot_dirty`. Sanctioned path: push error snapshot and assert existing plot display is maintained."
+        ]
+      },
+      {
+        "file": "tests/test_scope_acquisition_and_ports.py",
+        "name": "TestIdleSnapshotsDoNotEraseTheMeasurement.test_idle_snapshots_do_not_pad_the_fwhm_history",
+        "text": [
+          "- `TestIdleSnapshotsDoNotEraseTheMeasurement.test_idle_snapshots_do_not_pad_the_fwhm_history` \u2014 **REWRITE** \u2014 Covers FWHM history filtering out idle snapshots, but calls `_on_scope_state` and reads `_fwhm_history`. Sanctioned path: push idle snapshots and query public FWHM history length / plot."
+        ]
+      },
+      {
+        "file": "tests/test_scope_acquisition_and_ports.py",
+        "name": "TestIdleSnapshotsDoNotEraseTheMeasurement.test_the_widths_survive_the_idle_ping",
+        "text": [
+          "- `TestIdleSnapshotsDoNotEraseTheMeasurement.test_the_widths_survive_the_idle_ping` \u2014 **REWRITE** \u2014 Covers width label readout survival across idle pings, but calls `_on_scope_state` and reads `_lbl_axis_value`, `_lbl_status`. Sanctioned path: push idle snapshot and assert width readout label text."
+        ]
+      },
+      {
+        "file": "tests/test_scope_acquisition_and_ports.py",
+        "name": "TestShotCannotStickForever.test_an_error_ends_a_pending_shot",
+        "text": [
+          "- `TestShotCannotStickForever.test_an_error_ends_a_pending_shot` \u2014 **REWRITE** \u2014 Covers error handling resetting pending shot state, but calls `_on_scope_error` and reads `_shot_pending`, `_btn_shot`. Sanctioned path: emit scope error signal and assert shot button is re-enabled."
+        ]
+      },
+      {
+        "file": "tests/test_scope_acquisition_and_ports.py",
+        "name": "TestShotCannotStickForever.test_the_watchdog_re_arms_a_shot_that_never_landed",
+        "text": [
+          "- `TestShotCannotStickForever.test_the_watchdog_re_arms_a_shot_that_never_landed` \u2014 **REWRITE** \u2014 Covers watchdog timeout re-arming hung single shot, but calls `_on_shot_timeout` and reads `_shot_pending`, `_btn_shot`, `_lbl_status`. Sanctioned path: trigger watchdog timeout signal and assert status text and button re-enablement."
+        ]
+      },
+      {
+        "file": "tests/test_scope_acquisition_and_ports.py",
+        "name": "TestShotCannotStickForever.test_the_watchdog_does_not_fire_when_nothing_is_pending",
+        "text": [
+          "- `TestShotCannotStickForever.test_the_watchdog_does_not_fire_when_nothing_is_pending` \u2014 **REWRITE** \u2014 Covers watchdog timeout when idle, but calls `_on_shot_timeout` and reads `_lbl_status`. Sanctioned path: trigger watchdog timeout when idle and assert status text remains unchanged."
+        ]
+      }
+    ]
+  },
+  "tests/test_session_recorder.py": {
+    "DELETE": [],
+    "REWRITE": [
+      {
+        "file": "tests/test_session_recorder.py",
+        "name": "test_wall_utc_derived_not_sampled",
+        "text": [
+          "- `test_wall_utc_derived_not_sampled` \u2014 **REWRITE** \u2014 Covers UTC timestamp derivation in session CSV, but reads private `rec._t0_wall`. Sanctioned path: verify timestamps in `data.csv` relative to session start time recorded in `session.json` without inspecting internal `_t0_wall`."
+        ]
+      },
+      {
+        "file": "tests/test_session_recorder.py",
+        "name": "test_schema_roll_creates_two_parts",
+        "text": [
+          "- `test_schema_roll_creates_two_parts` \u2014 **REWRITE** \u2014 Covers automatic CSV file segmentation when snapshot schema changes, but manually invokes private `rec._write_csv_row()`. Sanctioned path: update snapshot provider callback and let session capture write `data_002.csv`."
+        ]
+      },
+      {
+        "file": "tests/test_session_recorder.py",
+        "name": "test_flush_per_row_survives_hard_kill",
+        "text": [
+          "- `test_flush_per_row_survives_hard_kill` \u2014 **REWRITE** \u2014 Covers CSV row flush durability on ungraceful process kill, but calls `_write_csv_row()` and closes private `_csv_writer`, `_events_file`. Sanctioned path: write rows via public timer/snapshot triggers and verify CSV readability."
+        ]
+      }
+    ]
+  },
+  "tests/test_slit_control.py": {
+    "DELETE": [],
+    "REWRITE": [
+      {
+        "file": "tests/test_slit_control.py",
+        "name": "test_target_box_marks_the_bar_before_anything_moves",
+        "text": [
+          "- `test_target_box_marks_the_bar_before_anything_moves` \u2014 **REWRITE** \u2014 Covers target caret marking on bar, but reads private `ctrl.bar.track._target`. Sanctioned path: set target spinner and assert via public bar target fraction property."
+        ]
+      },
+      {
+        "file": "tests/test_slit_control.py",
+        "name": "test_moving_axis_is_called_out",
+        "text": [
+          "- `test_moving_axis_is_called_out` \u2014 **REWRITE** \u2014 Covers moving axis status display, but reads private `ctrl.bar.track._color`. Sanctioned path: assert `ctrl.lbl_state.text() == 'moving'` and public bar styling."
+        ]
+      }
+    ]
+  },
+  "tests/test_slit_cross_screen.py": {
+    "DELETE": [],
+    "REWRITE": [
+      {
+        "file": "tests/test_slit_cross_screen.py",
+        "name": "test_stepper_tab_move_marks_the_target_on_the_overview_bar",
+        "text": [
+          "- `test_stepper_tab_move_marks_the_target_on_the_overview_bar` \u2014 **REWRITE** \u2014 Covers Stepper Motors tab move updating Overview bar target caret, but calls private `motors.axes[\"C\"]._move_absolute()` and reads `_target`. Sanctioned path: click `motors.axes[\"C\"].btn_move` and assert `overview.slits[\"Y+\"].spn_target.value()` and public bar target fraction."
+        ]
+      },
+      {
+        "file": "tests/test_slit_cross_screen.py",
+        "name": "test_stepper_tab_move_still_reaches_the_controller",
+        "text": [
+          "- `test_stepper_tab_move_still_reaches_the_controller` \u2014 **REWRITE** \u2014 Covers Stepper Motors tab move dispatch to controller, but calls `_move_absolute()`. Sanctioned path: click `motors.axes[\"A\"].btn_move` and assert Galil moves received."
+        ]
+      },
+      {
+        "file": "tests/test_slit_cross_screen.py",
+        "name": "test_stepper_tab_move_is_logged_once_not_twice",
+        "text": [
+          "- `test_stepper_tab_move_is_logged_once_not_twice` \u2014 **REWRITE** \u2014 Covers console logging deduplication for stepper moves, but calls `_move_absolute()`. Sanctioned path: click `motors.axes[\"B\"].btn_move` and assert single console log entry."
+        ]
+      }
+    ]
+  },
+  "tests/test_video_transcoder.py": {
+    "DELETE": [
+      {
+        "file": "tests/test_video_transcoder.py",
+        "name": "test_find_ffmpeg_no_exception_when_absent",
+        "text": [
+          "- `test_find_ffmpeg_no_exception_when_absent` \u2014 **DELETE** \u2014 Duplicate churn test: calls `find_ffmpeg()` in a try/except, testing nothing beyond the preceding test."
+        ]
+      }
+    ],
+    "REWRITE": [
+      {
+        "file": "tests/test_video_transcoder.py",
+        "name": "test_queue_emits_failed_when_ffmpeg_absent",
+        "text": [
+          "- `test_queue_emits_failed_when_ffmpeg_absent` \u2014 **REWRITE** \u2014 Covers transcode failure when ffmpeg is missing, but invokes private `tq._transcode(avi)`. Sanctioned path: submit task via public transcode queue interface and assert on `finished_one` signal."
+        ]
+      },
+      {
+        "file": "tests/test_video_transcoder.py",
+        "name": "test_command_contains_required_flags",
+        "text": [
+          "- `test_command_contains_required_flags` \u2014 **REWRITE** \u2014 Covers ffmpeg subprocess argument construction, but invokes `tq._transcode(avi)`. Sanctioned path: submit task via public queue API and inspect arguments passed to `subprocess.run`."
+        ]
+      },
+      {
+        "file": "tests/test_video_transcoder.py",
+        "name": "test_failed_transcode_leaves_avi_intact",
+        "text": [
+          "- `test_failed_transcode_leaves_avi_intact` \u2014 **REWRITE** \u2014 Covers source AVI preservation when transcode fails, but invokes `tq._transcode(avi)`. Sanctioned path: submit task and assert source file is preserved on disk."
+        ]
+      },
+      {
+        "file": "tests/test_video_transcoder.py",
+        "name": "test_part_file_renamed_on_success",
+        "text": [
+          "- `test_part_file_renamed_on_success` \u2014 **REWRITE** \u2014 Covers atomic rename of `.mp4.part` to `.mp4` on success, but invokes `tq._transcode(avi)`. Sanctioned path: submit task and assert completed `.mp4` file."
+        ]
+      }
+    ]
+  },
+  "tests/test_widgets_mini.py": {
+    "DELETE": [],
+    "REWRITE": [
+      {
+        "file": "tests/test_widgets_mini.py",
+        "name": "TestMiniBar.test_value_within_range_sets_fraction",
+        "text": [
+          "- `TestMiniBar.test_value_within_range_sets_fraction` \u2014 **REWRITE** \u2014 Covers `MiniBar` fraction calculation, but reads private `bar.track._frac`. Sanctioned path: assert via public `bar.fraction()` and `bar.lbl_value.text()`."
+        ]
+      },
+      {
+        "file": "tests/test_widgets_mini.py",
+        "name": "TestMiniBar.test_none_value_has_no_fraction",
+        "text": [
+          "- `TestMiniBar.test_none_value_has_no_fraction` \u2014 **REWRITE** \u2014 Covers `MiniBar.set(None)`, but reads private `bar.track._frac`. Sanctioned path: assert `bar.fraction() is None` and `bar.lbl_value.text() == '\u2014'`."
+        ]
+      },
+      {
+        "file": "tests/test_widgets_mini.py",
+        "name": "TestMiniBar.test_stale_mutes_the_bar_colour",
+        "text": [
+          "- `TestMiniBar.test_stale_mutes_the_bar_colour` \u2014 **REWRITE** \u2014 Covers stale color styling on `MiniBar`, but reads private `bar.track._color`. Sanctioned path: assert via public style/state accessor."
+        ]
+      },
+      {
+        "file": "tests/test_widgets_mini.py",
+        "name": "TestMiniBar.test_role_overrides_the_bar_colour",
+        "text": [
+          "- `TestMiniBar.test_role_overrides_the_bar_colour` \u2014 **REWRITE** \u2014 Covers role color override on `MiniBar`, but reads private `bar.track._color`. Sanctioned path: assert via public style/state accessor."
+        ]
+      },
+      {
+        "file": "tests/test_widgets_mini.py",
+        "name": "TestMiniBar.test_target_marks_a_setpoint_on_the_same_scale",
+        "text": [
+          "- `TestMiniBar.test_target_marks_a_setpoint_on_the_same_scale` \u2014 **REWRITE** \u2014 Covers setpoint target marker calculation on `MiniBar`, but reads private `bar.track._target`. Sanctioned path: assert via public `bar.target_fraction()` or target property."
+        ]
+      },
+      {
+        "file": "tests/test_widgets_mini.py",
+        "name": "TestMiniBar.test_target_none_clears_the_marker",
+        "text": [
+          "- `TestMiniBar.test_target_none_clears_the_marker` \u2014 **REWRITE** \u2014 Covers clearing target marker on `MiniBar`, but reads private `bar.track._target`. Sanctioned path: assert via public target property."
+        ]
+      },
+      {
+        "file": "tests/test_widgets_mini.py",
+        "name": "TestMiniBar.test_scale_captions_label_both_ends_and_the_middle",
+        "text": [
+          "- `TestMiniBar.test_scale_captions_label_both_ends_and_the_middle` \u2014 **REWRITE** \u2014 Covers scale tick caption generation, but reads private `bar.track._tick_labels`. Sanctioned path: assert via public tick labels property or visual layout."
+        ]
+      },
+      {
+        "file": "tests/test_widgets_mini.py",
+        "name": "TestSparkline.test_push_updates_label_and_history",
+        "text": [
+          "- `TestSparkline.test_push_updates_label_and_history` \u2014 **REWRITE** \u2014 Covers `Sparkline.push()` updating label and data history, but reads private `spark._values`. Sanctioned path: assert `spark.lbl_value.text()` and public history accessor."
+        ]
+      },
+      {
+        "file": "tests/test_widgets_mini.py",
+        "name": "TestSparkline.test_history_caps_at_max_points",
+        "text": [
+          "- `TestSparkline.test_history_caps_at_max_points` \u2014 **REWRITE** \u2014 Covers history buffer capacity capping, but sets `spark._max_points` and reads `spark._values`. Sanctioned path: pass capacity in constructor and query public history length."
+        ]
+      },
+      {
+        "file": "tests/test_widgets_mini.py",
+        "name": "TestSparkline.test_trace_sees_the_same_history",
+        "text": [
+          "- `TestSparkline.test_trace_sees_the_same_history` \u2014 **REWRITE** \u2014 Covers sparkline trace widget data synchronization, but reads private `spark.trace._values`. Sanctioned path: assert via public trace rendering / accessor."
+        ]
+      }
+    ]
+  }
+}

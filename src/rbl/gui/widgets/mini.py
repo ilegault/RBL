@@ -113,6 +113,22 @@ class BarTrack(QWidget):
         self._tick_labels = list(labels)
         self.update()
 
+    @property
+    def target_fraction(self):
+        return self._target
+
+    @property
+    def fraction(self):
+        return self._frac
+
+    @property
+    def color(self):
+        return self._color
+
+    @property
+    def tick_labels(self):
+        return list(self._tick_labels)
+
     # ---- Paint ---------------------------------------------------------------
 
     def paintEvent(self, event):
@@ -289,6 +305,10 @@ class MiniBar(QWidget):
         """Mark a commanded setpoint on the scale, or clear it with None."""
         self.track.set_target_fraction(
             self._position(value) if _is_number(value) else None)
+
+    @property
+    def target_fraction(self):
+        return self.track.target_fraction
 
 
 class VBarTrack(QWidget):
@@ -504,6 +524,10 @@ class TraceArea(QWidget):
         self._values = values
         self.update()
 
+    @property
+    def values(self):
+        return list(self._values)
+
     def paintEvent(self, event):
         points = [v for v in self._values if _is_number(v)]
         if len(points) < 2:
@@ -542,11 +566,11 @@ class Sparkline(QWidget):
     just moved".
     """
 
-    def __init__(self, name: str, color: str = None, parent=None):
+    def __init__(self, name: str, color: str = None, max_points: int = 60, parent=None):
         super().__init__(parent)
         self._color = color or theme.OK
         self._values = []
-        self._max_points = 60
+        self._max_points = max_points
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(4, 2, 4, 2)
@@ -569,6 +593,10 @@ class Sparkline(QWidget):
 
         self.trace = TraceArea(self._color)
         lay.addWidget(self.trace)
+
+    @property
+    def values(self):
+        return list(self._values)
 
     def push(self, value: float, fmt: str = "{:.2f}"):
         self._values.append(value)

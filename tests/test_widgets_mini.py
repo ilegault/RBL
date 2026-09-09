@@ -57,7 +57,7 @@ class TestMiniBar:
         bar = MiniBar("Amp A1", 0.0, 10.0)
         bar.set(5.0)
         assert bar.fraction() == pytest.approx(0.5)
-        assert bar.track._frac == pytest.approx(0.5)
+        assert bar.track.fraction == pytest.approx(0.5)
 
     def test_value_clamped_below_minimum(self, qapp):
         from rbl.gui.widgets.mini import MiniBar
@@ -77,7 +77,7 @@ class TestMiniBar:
         bar.set(5.0)
         bar.set(None)
         assert bar.fraction() is None
-        assert bar.track._frac is None
+        assert bar.track.fraction is None
         assert bar.lbl_value.text() == "—"
 
     def test_nan_value_has_no_fraction(self, qapp):
@@ -100,27 +100,27 @@ class TestMiniBar:
         from rbl.gui.widgets.mini import MiniBar
         bar = MiniBar("Amp A1", 0.0, 10.0)
         bar.set(5.0, stale=True)
-        assert bar.track._color == theme.MUTED
+        assert bar.track.color == theme.MUTED
 
     def test_role_overrides_the_bar_colour(self, qapp):
         from rbl.gui import theme
         from rbl.gui.widgets.mini import MiniBar
         bar = MiniBar("Amp A1", 0.0, 10.0)
         bar.set(5.0, role=theme.WARN)
-        assert bar.track._color == theme.WARN
+        assert bar.track.color == theme.WARN
 
     def test_target_marks_a_setpoint_on_the_same_scale(self, qapp):
         from rbl.gui.widgets.mini import MiniBar
         bar = MiniBar("X+ position", 0.0, 10.0)
         bar.set_target(2.5)
-        assert bar.track._target == pytest.approx(0.25)
+        assert bar.target_fraction == pytest.approx(0.25)
 
     def test_target_none_clears_the_marker(self, qapp):
         from rbl.gui.widgets.mini import MiniBar
         bar = MiniBar("X+ position", 0.0, 10.0)
         bar.set_target(2.5)
         bar.set_target(None)
-        assert bar.track._target is None
+        assert bar.target_fraction is None
 
     def test_log_scale_places_a_value_by_decade(self, qapp):
         """Three of six decades up (1 µA on a 1 nA–1 mA log amp) is half way
@@ -155,7 +155,7 @@ class TestMiniBar:
     def test_scale_captions_label_both_ends_and_the_middle(self, qapp):
         from rbl.gui.widgets.mini import MiniBar
         bar = MiniBar("X+ position", 0.0, 10.0, ticks=5)
-        labels = bar.track._tick_labels
+        labels = bar.track.tick_labels
         assert labels[0] == "0"
         assert labels[-1] == "10"
         assert labels[len(labels) // 2] == "5"
@@ -172,7 +172,7 @@ class TestSparkline:
         spark = Sparkline("HV X+")
         spark.push(3.14159)
         assert spark.lbl_value.text() == "3.14"
-        assert spark._values == [3.14159]
+        assert spark.values == [3.14159]
 
     def test_push_nan_shows_placeholder(self, qapp):
         from rbl.gui.widgets.mini import Sparkline
@@ -182,15 +182,14 @@ class TestSparkline:
 
     def test_history_caps_at_max_points(self, qapp):
         from rbl.gui.widgets.mini import Sparkline
-        spark = Sparkline("HV X+")
-        spark._max_points = 3
+        spark = Sparkline("HV X+", max_points=3)
         for v in range(5):
             spark.push(float(v))
-        assert spark._values == [2.0, 3.0, 4.0]
+        assert spark.values == [2.0, 3.0, 4.0]
 
     def test_trace_sees_the_same_history(self, qapp):
         from rbl.gui.widgets.mini import Sparkline
         spark = Sparkline("HV X+")
         for v in (1.0, 2.0, 3.0):
             spark.push(v)
-        assert spark.trace._values == [1.0, 2.0, 3.0]
+        assert spark.trace.values == [1.0, 2.0, 3.0]

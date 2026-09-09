@@ -25,13 +25,24 @@ declaration describes the tabs, not the stack's live state.
 
 **Blocked by:** 11
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The tab titles, widget construction and stack order derive from one declaration.
-- [ ] No parallel hand-ordered tab sequence remains in the main window.
-- [ ] The stream-consuming tab set is derived from the declaration, not maintained separately.
-- [ ] The application opens on the same tab as before, and split view still reorders correctly.
-- [ ] Reordering entries in the declaration reorders the tab bar and the stack together, demonstrated once and reverted.
-- [ ] The suite is green in CI.
+- [x] The tab titles, widget construction and stack order derive from one declaration.
+- [x] No parallel hand-ordered tab sequence remains in the main window.
+- [x] The stream-consuming tab set is derived from the declaration, not maintained separately.
+- [x] The application opens on the same tab as before, and split view still reorders correctly.
+- [x] Reordering entries in the declaration reorders the tab bar and the stack together, demonstrated once and reverted.
+- [x] The suite is green in CI.
 
 Reference: spec section "The single new seam"; ADR 0001 decision 5.
+
+## Comments
+
+- Replaced 3 parallel hand-ordered tab lists (tab bar `addTab` calls, manual widget assignments, and `_outer_stack.addWidget` calls) with a single `TAB_DECLARATIONS` tuple of `TabDeclaration(title, attr_name, factory, consumes_stream)` in [`src/rbl/gui/app.py`](file:///C:/Users/IGLeg/PycharmProjects/RBL/src/rbl/gui/app.py).
+- `MainWindow.__init__` now builds the tab bar and stacked widget iteratively in a single loop over `self.TAB_DECLARATIONS`.
+- Derived `stream_consuming_tabs` (and legacy `_lj_tabs` alias) as a property over `TAB_DECLARATIONS` where `consumes_stream=True`.
+- Application continues opening on "Overview" via dynamic index lookup, and split view behavior operates identically.
+- Added tests `test_tabs_derive_from_single_declaration`, `test_stream_consuming_tabs_derived_from_declaration`, and `test_split_view_reordering_and_restoration` to [`tests/test_gui_hardware.py`](file:///C:/Users/IGLeg/PycharmProjects/RBL/tests/test_gui_hardware.py).
+- Demonstrated reordering by temporarily swapping "Stepper Motors" and "Beam Current" in `TAB_DECLARATIONS` and verifying that tab bar and stack reordered synchronously in `test_tabs_derive_from_single_declaration`, then reverted back to original declaration order.
+- Verified test suite passes cleanly.
+

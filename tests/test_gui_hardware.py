@@ -109,43 +109,65 @@ class TestTabNavigation:
         assert win._outer_tabbar.currentIndex() == idx
         assert win._outer_tabbar.tabText(idx) == "Overview"
 
-    def test_click_motors_shows_motors(self, win):
-        win._on_outer_tab_clicked(0)
-        assert win._outer_stack.currentIndex() == 0
 
-    def test_click_current_shows_current(self, win):
+
+
+
+
+
+
+
+    def test_tabs_derive_from_single_declaration(self, win):
+        from rbl.gui.app import TAB_DECLARATIONS
+        assert win._outer_tabbar.count() == len(TAB_DECLARATIONS)
+        assert win._outer_stack.count() == len(TAB_DECLARATIONS)
+
+        for i, decl in enumerate(TAB_DECLARATIONS):
+            assert win._outer_tabbar.tabText(i) == decl.title
+            scroll_area = win._outer_stack.widget(i)
+            assert scroll_area.widget() is getattr(win, decl.attr_name)
+
+    def test_stream_consuming_tabs_derived_from_declaration(self, win):
+        from rbl.gui.app import TAB_DECLARATIONS
+        expected = tuple(
+            getattr(win, decl.attr_name)
+            for decl in TAB_DECLARATIONS
+            if decl.consumes_stream
+        )
+        assert win.stream_consuming_tabs == expected
+        assert win._lj_tabs == expected
+
+    def test_split_view_reordering_and_restoration(self, win, qapp):
+        # Initial: Overview active
+        overview_idx = win._tab_index("Overview")
+        assert win._outer_stack.currentIndex() == overview_idx
+
+        # Right click Stepper Motors (index 0) to put into right split pane
+        win._on_tab_right_clicked(0)
+        qapp.processEvents()
+        assert win._split_index == 0
+        assert win._split_stack.isVisible()
+        assert win._split_stack.currentWidget().widget() is win.motor_tab
+
+        # In split mode, the outer stack has one fewer widget and indices shift
+        assert win._outer_stack.count() == len(win.TAB_DECLARATIONS) - 1
+
+        # Left click another tab (e.g. Beam Current at tabbar index 1)
+        # Should map to stack index 0 because 0 was removed
         win._on_outer_tab_clicked(1)
-        assert win._outer_stack.currentIndex() == 1
-
-    def test_click_amplifiers_shows_amplifiers(self, win):
-        win._on_outer_tab_clicked(2)
-        assert win._outer_stack.currentIndex() == 2
-
-    def test_click_funcgen_shows_funcgen(self, win):
-        win._on_outer_tab_clicked(3)
-        assert win._outer_stack.currentIndex() == 3
-
-    def test_switch_away_and_back_lands_correctly(self, win):
-        win._on_outer_tab_clicked(0)
-        win._on_outer_tab_clicked(1)
-        win._on_outer_tab_clicked(0)
+        qapp.processEvents()
         assert win._outer_stack.currentIndex() == 0
+        assert win._outer_stack.currentWidget().widget() is win.current_tab
 
-    def test_multiple_rapid_switches_land_correctly(self, win):
-        for idx in (0, 1, 2, 3, 1, 0, 3):
-            win._on_outer_tab_clicked(idx)
-        assert win._outer_stack.currentIndex() == 3
+        # Right-click same tab (index 0) to exit split view
+        win._on_tab_right_clicked(0)
+        qapp.processEvents()
+        assert win._split_index == -1
+        assert not win._split_stack.isVisible()
+        assert win._outer_stack.count() == len(win.TAB_DECLARATIONS)
+        # Tab at position 0 in outer stack is motor_tab again
+        assert win._outer_stack.widget(0).widget() is win.motor_tab
 
-    def test_clicking_same_tab_twice_stays_put(self, win):
-        win._on_outer_tab_clicked(0)
-        win._on_outer_tab_clicked(0)
-        assert win._outer_stack.currentIndex() == 0
-
-    def test_funcgen_reachable_from_any_tab(self, win):
-        for start in (0, 1, 2):
-            win._on_outer_tab_clicked(start)
-            win._on_outer_tab_clicked(3)
-            assert win._outer_stack.currentIndex() == 3
 
 
 class TestTabStatePersistence:
@@ -381,7 +403,7 @@ class TestCurrentTab:
     def test_drag_slider_left_enters_frozen(self, current, feed):
         for i in range(5):
             feed.send(LOG_AMPS_AT_1UA, t=float(i))
-        current.plot._on_slider_changed(4000)
+        current.plot.slider.setValue(4000)
         assert current.plot.is_live is False
         assert current.plot.frozen_right_edge is not None
         # isVisibleTo ignores whether the (un-shown) tab itself is on screen.
@@ -390,13 +412,13 @@ class TestCurrentTab:
     def test_jump_to_live_returns_to_live(self, current, feed):
         for i in range(5):
             feed.send(LOG_AMPS_AT_1UA, t=float(i))
-        current.plot._on_slider_changed(4000)
-        current.plot.jump_to_live()
+        current.plot.slider.setValue(4000)
+        current.btn_jump_live.click()
         assert current.plot.is_live is True
         assert current.plot.slider.value() == 10_000
 
     def test_slider_far_right_is_live(self, current):
-        current.plot._on_slider_changed(9_900)
+        current.plot.slider.setValue(9_900)
         assert current.plot.is_live is True
 
     def test_redraw_does_not_raise_when_empty(self, current):
@@ -545,13 +567,13 @@ class TestConnectAll:
             ("LabJack T7", ("already", "already connected")),
             ("Scope", ("connected", "COM5")),
         ])
-        win._on_connect_all()
+        win.overview_tab.btn_connect_all.click()
         self._drain(win, qapp)
         assert calls == ["Galil", "LabJack T7", "Scope"]
 
     def test_the_button_is_re_armed_when_the_sequence_finishes(self, win, qapp):
         self._fake_steps(win, [("Galil", ("connected", "ok"))])
-        win._on_connect_all()
+        win.overview_tab.btn_connect_all.click()
         self._drain(win, qapp)
         assert win.overview_tab.btn_connect_all.isEnabled() is True
 
@@ -560,7 +582,7 @@ class TestConnectAll:
             ("Galil", ("failed", "no route to host")),
             ("Scope", ("connected", "COM5")),
         ])
-        win._on_connect_all()
+        win.overview_tab.btn_connect_all.click()
         self._drain(win, qapp)
         assert calls == ["Galil", "Scope"]
 
@@ -569,7 +591,7 @@ class TestConnectAll:
             ("Galil", ("failed", "no route to host")),
             ("Scope", ("connected", "COM5")),
         ])
-        win._on_connect_all()
+        win.overview_tab.btn_connect_all.click()
         self._drain(win, qapp)
         text = win.overview_tab.lbl_connect_all.text()
         assert "Galil" in text and "no route to host" in text
@@ -581,7 +603,7 @@ class TestConnectAll:
 
         win._connect_all_steps = lambda: [("Galil", boom),
                                           ("Scope", lambda: ("connected", "COM5"))]
-        win._on_connect_all()
+        win.overview_tab.btn_connect_all.click()
         self._drain(win, qapp)
         assert "driver exploded" in win.overview_tab.lbl_connect_all.text()
         assert win.overview_tab.btn_connect_all.isEnabled() is True
@@ -591,7 +613,7 @@ class TestConnectAll:
             ("Galil", ("connected", "ok")),
             ("Scope", ("already", "already connected")),
         ])
-        win._on_connect_all()
+        win.overview_tab.btn_connect_all.click()
         self._drain(win, qapp)
         text = win.overview_tab.lbl_connect_all.text()
         assert text.startswith("Connected:")

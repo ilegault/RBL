@@ -55,6 +55,8 @@ def screens(qapp):
     beamline = Beamline()
     beamline.galil = _FakeGalil()
     motors = MotorTab(beamline)
+    for ax in motors.axes.values():
+        ax.set_enabled(True)
     overview = OverviewTab(beamline)
     overview._visible = True
     return motors, overview, beamline
@@ -117,11 +119,11 @@ def test_stepper_tab_move_marks_the_target_on_the_overview_bar(screens):
     motors, overview, beamline = screens
     motors.axes["C"].cbo_target_unit.setCurrentText("mm")
     motors.axes["C"].spn_target.setValue(6.0)
-    motors.axes["C"]._move_absolute()
+    motors.axes["C"].btn_move.click()
 
     assert overview.slits["Y+"].spn_target.value() == pytest.approx(
         6.0, abs=STEP_MM)
-    assert overview.slits["Y+"].bar.track._target == pytest.approx(
+    assert overview.slits["Y+"].bar.target_fraction == pytest.approx(
         6.0 / SC.SLIT_DISPLAY_MAX_MM, abs=STEP_MM)
 
 
@@ -130,7 +132,7 @@ def test_stepper_tab_move_still_reaches_the_controller(screens):
     motors, overview, beamline = screens
     motors.axes["A"].cbo_target_unit.setCurrentText("mm")
     motors.axes["A"].spn_target.setValue(1.5)
-    motors.axes["A"]._move_absolute()
+    motors.axes["A"].btn_move.click()
     assert beamline.galil.moves == [("A", SC.mm_to_counts("A", 1.5))]
 
 
@@ -139,7 +141,7 @@ def test_stepper_tab_move_is_logged_once_not_twice(screens):
     motors, overview, beamline = screens
     motors.axes["B"].cbo_target_unit.setCurrentText("mm")
     motors.axes["B"].spn_target.setValue(2.5)
-    motors.axes["B"]._move_absolute()
+    motors.axes["B"].btn_move.click()
     assert motors.console.toPlainText().count("PA B=") == 1
 
 

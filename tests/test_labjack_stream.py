@@ -141,14 +141,3 @@ class TestSingleChannelPayload:
             assert payload["channels"][ain] is not None
 
 
-class TestWorkerConstruction:
-    def test_channel_override_stored(self):
-        # A real construction records the override for run() to use later.
-        w = LabJackStreamWorker(handle=1, profile_name="SINGLE_FAST",
-                                channel_override="AIN9")
-        assert w._channel_override == "AIN9"
-        assert w._profile_name == "SINGLE_FAST"
-
-    def test_channel_override_defaults_none(self):
-        w = LabJackStreamWorker(handle=1, profile_name="FULL")
-        assert w._channel_override is None

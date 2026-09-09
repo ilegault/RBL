@@ -547,6 +547,11 @@ class OverviewTab(QWidget):
 
     def _on_hv_interlock(self, payload: dict):
         self._hv_interlock = payload
+        self._redraw_hv_interlock()
+
+    def redraw(self):
+        """Public redraw method to update all widgets."""
+        self._redraw()
 
     def _on_slit_target_changed(self, slit: str, mm: float):
         """Some screen commanded *slit* to *mm* — show it on that slit's bar."""

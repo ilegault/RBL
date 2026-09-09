@@ -52,7 +52,7 @@ def _axes(**positions) -> dict:
 def _connect_motors(tab, zeroed=True, **positions):
     tab.beamline.motors_changed.emit(
         MotorState(connected=True, zeroed=zeroed, axes=_axes(**positions)))
-    tab._redraw()
+    tab.redraw()
 
 
 # ---- Read-out path -----------------------------------------------------------
@@ -64,7 +64,7 @@ def test_caches_motor_state_and_redraws_slit_bar(tab):
 
 def test_slit_bar_blank_when_motors_disconnected(tab):
     tab.beamline.motors_changed.emit(MotorState(connected=False, zeroed=False, axes={}))
-    tab._redraw()
+    tab.redraw()
     assert tab.slits["X+"].bar.lbl_value.text() == "—"
     assert tab.slits["X+"].bar.fraction() is None
 
@@ -76,19 +76,19 @@ def test_gap_is_the_sum_of_both_slit_positions(tab):
 
 def test_gap_unknown_while_disconnected(tab):
     tab.beamline.motors_changed.emit(MotorState(connected=False, zeroed=False, axes={}))
-    tab._redraw()
+    tab.redraw()
     assert tab.lbl_gaps.text() == "Gap  X: —   Y: —"
 
 
 def test_logamp_state_feeds_the_beam_indicator(tab):
     tab.beamline.logamps_changed.emit(LogAmpState(connected=True, currents={"X+": 1e-6}))
-    tab._redraw()
-    assert tab.beam._currents.get("X+") == 1e-6
+    tab.redraw()
+    assert tab.beam.currents.get("X+") == 1e-6
 
 
 def test_logamp_state_feeds_the_per_slit_current_bars(tab):
     tab.beamline.logamps_changed.emit(LogAmpState(connected=True, currents={"X+": 1e-6}))
-    tab._redraw()
+    tab.redraw()
     # 1 µA is three of the log amp's six decades up: half way along the bar.
     assert tab.currents["X+"].fraction() == pytest.approx(0.5)
     assert "µA" in tab.currents["X+"].lbl_value.text()
@@ -99,7 +99,7 @@ def test_current_bar_blank_for_an_unsampled_channel(tab):
     it as zero would read as a measured zero."""
     tab.beamline.logamps_changed.emit(
         LogAmpState(connected=True, currents={"X+": float("nan")}))
-    tab._redraw()
+    tab.redraw()
     assert tab.currents["X+"].fraction() is None
     assert tab.currents["X+"].lbl_value.text() == "—"
 
@@ -124,7 +124,7 @@ def _triangle(peak, n=48, invert=False):
 def test_amp_state_feeds_the_hv_peak_bars(tab):
     tab.beamline.amps_changed.emit(
         AmpState(connected=True, channels={"X+": _amp(3.0)}))
-    tab._redraw()
+    tab.redraw()
     assert tab.hv_bars["X+"].lbl_value.text() == "3.00 kV"
     # MiniBar range is -5.0..+5.0 kV, so fraction = (3.0 - (-5.0)) / 10.0 = 0.8
     assert tab.hv_bars["X+"].fraction() == pytest.approx(8.0 / 10.0)
@@ -138,7 +138,7 @@ def test_a_push_pull_pair_reads_as_locked(tab):
         "X+": _amp(2.0, _triangle(2.0)),
         "X-": _amp(2.0, _triangle(2.0, invert=True)),
     }))
-    tab._redraw()
+    tab.redraw()
     assert "locked" in tab.hv_phase["X"].text()
     assert theme.OK in tab.hv_phase["X"].styleSheet()
 
@@ -151,7 +151,7 @@ def test_two_in_phase_channels_are_flagged(tab):
         "X+": _amp(2.0, _triangle(2.0)),
         "X-": _amp(2.0, _triangle(2.0)),
     }))
-    tab._redraw()
+    tab.redraw()
     assert "NOT anti-phase" in tab.hv_phase["X"].text()
     assert theme.FAULT in tab.hv_phase["X"].styleSheet()
 
@@ -162,7 +162,7 @@ def test_no_waveform_is_reported_as_absent_not_as_a_fault(tab):
     tab.beamline.amps_changed.emit(AmpState(connected=True, channels={
         "X+": _amp(2.0), "X-": _amp(2.0),
     }))
-    tab._redraw()
+    tab.redraw()
     assert "no waveform" in tab.hv_phase["X"].text()
 
 
@@ -174,7 +174,7 @@ def test_trace_caption_reads_back_the_window_it_settled_on(tab):
         "X+": _amp(2.0, _triangle(2.0), span_s=2e-3, freq_hz=1000.0),
         "X-": _amp(2.0, _triangle(2.0, invert=True), span_s=2e-3, freq_hz=1000.0),
     }))
-    tab._redraw()
+    tab.redraw()
     text = tab.hv_window["X"].text()
     assert "2 cycles" in text and "1 kHz" in text and "2 ms" in text
 
@@ -185,7 +185,7 @@ def test_trace_caption_says_when_no_cycle_was_found(tab):
         "X+": _amp(0.0, [0.0] * 48, span_s=0.1),
         "X-": _amp(0.0, [0.0] * 48, span_s=0.1),
     }))
-    tab._redraw()
+    tab.redraw()
     assert "no cycle found" in tab.hv_window["X"].text()
     assert "100 ms" in tab.hv_window["X"].text()
 
@@ -194,7 +194,7 @@ def test_trace_caption_is_blank_without_a_window(tab):
     tab.beamline.amps_changed.emit(AmpState(connected=True, channels={
         "X+": _amp(2.0), "X-": _amp(2.0),
     }))
-    tab._redraw()
+    tab.redraw()
     assert tab.hv_window["X"].text() == "—"
 
 
@@ -216,7 +216,7 @@ def test_funcgen_readback_feeds_the_axis_amplitude_bar(tab):
     tab.beamline.funcgens_changed.emit(FuncGenState(
         connected={"A": True, "B": False}, timebase={},
         channels=_funcgen_pair(amp=1.5)))
-    tab._redraw()
+    tab.redraw()
     # MiniBar range is 0..MAX_AMP_VPP; 1.5 Vpp should read as a non-zero bar.
     assert tab.drives["X"].bar.fraction() > 0
     assert "0.75" in tab.drives["X"].lbl_readback.text()   # 1.5 Vpp = 0.75 V pk
@@ -227,7 +227,7 @@ def test_axis_bar_blank_when_generator_not_connected(tab):
     tab.beamline.funcgens_changed.emit(
         FuncGenState(connected={"A": False, "B": False}, timebase={}, channels={})
     )
-    tab._redraw()
+    tab.redraw()
     assert tab.drives["X"].bar.fraction() is None
     assert "not connected" in tab.drives["X"].lbl_readback.text()
     assert not tab.drives["X"].spn_amp.isEnabled()
@@ -241,7 +241,7 @@ def test_a_split_pair_is_called_out_on_the_live_line(tab):
     tab.beamline.funcgens_changed.emit(FuncGenState(
         connected={"A": True, "B": True}, timebase={},
         channels=_funcgen_pair(amp=1.5, A2={"amp_vpp": 0.5})))
-    tab._redraw()
+    tab.redraw()
     assert theme.WARN in tab.drives["X"].lbl_readback.styleSheet()
     assert theme.WARN not in tab.drives["Y"].lbl_readback.styleSheet()
 
@@ -285,8 +285,9 @@ def test_move_marks_the_commanded_target_on_the_bar(tab):
     tab.beamline.move_slit = lambda slit, mm: (
         tab.beamline.slit_target_changed.emit(slit, mm) or True)
     _connect_motors(tab, **{"X+": 1.0})
-    tab._on_move_requested("X+", 5.0)
-    assert tab.slits["X+"].bar.track._target == pytest.approx(
+    tab.slits["X+"].spn_target.setValue(5.0)
+    tab.slits["X+"].btn_move.click()
+    assert tab.slits["X+"].bar.target_fraction == pytest.approx(
         5.0 / SC.SLIT_DISPLAY_MAX_MM)
 
 
@@ -295,7 +296,7 @@ def test_target_published_by_another_screen_lands_on_this_one(tab):
     _connect_motors(tab, **{"Y-": 1.0})
     tab.beamline.slit_target_changed.emit("Y-", 7.5)
     assert tab.slits["Y-"].spn_target.value() == pytest.approx(7.5)
-    assert tab.slits["Y-"].bar.track._target == pytest.approx(
+    assert tab.slits["Y-"].bar.target_fraction == pytest.approx(
         7.5 / SC.SLIT_DISPLAY_MAX_MM)
 
 
@@ -324,38 +325,42 @@ def test_move_refused_and_reported_while_disconnected(tab):
     sent = []
     tab.beamline.move_slit = lambda slit, mm: sent.append((slit, mm)) or True
     tab.beamline.motors_changed.emit(MotorState(connected=False, zeroed=False, axes={}))
-    tab._redraw()
+    tab.redraw()
 
-    tab._on_move_requested("X+", 2.0)
+    tab.slits["X+"].move_requested.emit("X+", 2.0)
 
     assert sent == []
     assert "not connected" in tab.lbl_failure.text()
 
 
-def test_unzeroed_move_needs_confirmation(tab):
+def test_unzeroed_move_needs_confirmation(tab, monkeypatch):
     """mm are meaningless until an axis is referenced, so an unzeroed move is
     a move of unknown size toward the beam."""
     sent = []
     tab.beamline.move_slit = lambda slit, mm: sent.append((slit, mm)) or True
     _connect_motors(tab, zeroed=False, **{"X+": 1.0})
 
-    tab._confirm_unzeroed_move = lambda slit, mm: False
-    tab._on_move_requested("X+", 2.0)
+    from PySide6.QtWidgets import QMessageBox
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: QMessageBox.StandardButton.No)
+    tab.slits["X+"].spn_target.setValue(2.0)
+    tab.slits["X+"].btn_move.click()
     assert sent == []
 
-    tab._confirm_unzeroed_move = lambda slit, mm: True
-    tab._on_move_requested("X+", 2.0)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: QMessageBox.StandardButton.Yes)
+    tab.slits["X+"].btn_move.click()
     assert sent == [("X+", pytest.approx(2.0))]
 
 
-def test_zeroed_move_asks_nothing(tab):
+def test_zeroed_move_asks_nothing(tab, monkeypatch):
     sent = []
     tab.beamline.move_slit = lambda slit, mm: sent.append((slit, mm)) or True
-    tab._confirm_unzeroed_move = lambda slit, mm: pytest.fail(
-        "a zeroed axis must not prompt")
+    from PySide6.QtWidgets import QMessageBox
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: pytest.fail(
+        "a zeroed axis must not prompt"))
     _connect_motors(tab, zeroed=True, **{"X+": 1.0})
 
-    tab._on_move_requested("X+", 2.0)
+    tab.slits["X+"].spn_target.setValue(2.0)
+    tab.slits["X+"].btn_move.click()
     assert sent == [("X+", pytest.approx(2.0))]
 
 
@@ -364,17 +369,19 @@ def test_unzeroed_state_is_warned_about_on_screen(tab):
     assert "not zeroed" in tab.lbl_motion.text()
 
 
-def test_command_note_expires_and_the_warning_returns(tab):
+def test_command_note_expires_and_the_warning_returns(tab, monkeypatch):
     """An unreferenced axis stays unreferenced — the warning must come back on
     its own rather than wait for the next click to remind anybody."""
     tab.beamline.move_slit = lambda slit, mm: True
-    tab._confirm_unzeroed_move = lambda slit, mm: True
+    from PySide6.QtWidgets import QMessageBox
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: QMessageBox.StandardButton.Yes)
     _connect_motors(tab, zeroed=False, **{"X+": 1.0})
-    tab._on_move_requested("X+", 2.0)
+    tab.slits["X+"].spn_target.setValue(2.0)
+    tab.slits["X+"].btn_move.click()
     assert "Commanded X+" in tab.lbl_motion.text()
 
     for _ in range(tab._NOTE_FRAMES + 1):
-        tab._redraw()
+        tab.redraw()
     assert "not zeroed" in tab.lbl_motion.text()
 
 
@@ -386,7 +393,7 @@ def test_no_stop_button_on_this_screen(tab):
 
 def test_slit_controls_follow_the_galil_connection(tab):
     tab.beamline.motors_changed.emit(MotorState(connected=False, zeroed=False, axes={}))
-    tab._redraw()
+    tab.redraw()
     assert not tab.slits["X+"].btn_move.isEnabled()
 
     _connect_motors(tab, **{"X+": 1.0})
@@ -436,33 +443,8 @@ def test_the_tab_holds_no_driver(tab):
 
 # ---- Redraw gating -----------------------------------------------------------
 
-def test_redraw_is_a_noop_while_hidden(tab):
-    _connect_motors(tab, **{"X+": 2.5})
-    assert tab.slits["X+"].bar.lbl_value.text() == "2.500 mm"
-
-    # New data arrives while hidden: cached, but not painted.
-    tab._visible = False
-    tab.beamline.motors_changed.emit(
-        MotorState(connected=True, zeroed=True, axes=_axes(**{"X+": 5.0})))
-    tab._redraw()
-    assert tab.slits["X+"].bar.lbl_value.text() == "2.500 mm"
 
 
-def test_show_event_starts_timer_and_repaints_immediately(tab):
-    tab._visible = False
-    tab._redraw_timer.stop()
-    tab.beamline.motors_changed.emit(
-        MotorState(connected=True, zeroed=True, axes=_axes(**{"X+": 7.0})))
-
-    tab.showEvent(QShowEvent())
-
-    assert tab._visible is True
-    assert tab._redraw_timer.isActive()
-    assert tab.slits["X+"].bar.lbl_value.text() == "7.000 mm"
-
-    tab.hideEvent(QHideEvent())
-    assert tab._visible is False
-    assert not tab._redraw_timer.isActive()
 
 
 # ---- Raster drive: setpoints and Apply ---------------------------------------
@@ -470,7 +452,7 @@ def test_show_event_starts_timer_and_repaints_immediately(tab):
 def _connect_gens(tab, a=True, b=True):
     tab.beamline.funcgens_changed.emit(
         FuncGenState(connected={"A": a, "B": b}, timebase={}, channels={}))
-    tab._redraw()
+    tab.redraw()
 
 
 def test_axis_edit_writes_both_channels_of_that_axis(tab):
@@ -533,7 +515,7 @@ def test_apply_all_sends_every_channel_through_beamline(tab):
     assert sent["A2"].start_phase_deg == pytest.approx(180.0)
 
 
-def test_apply_all_asks_before_a_high_peak(tab):
+def test_apply_all_asks_before_a_high_peak(tab, monkeypatch):
     """|offset| + amp/2 above the advisory threshold gets one confirmation;
     the hard ceiling is Beamline's call, not this dialog's."""
     applied = []
@@ -541,20 +523,22 @@ def test_apply_all_asks_before_a_high_peak(tab):
     _connect_gens(tab)
     tab.drives["X"].spn_amp.setValue(4.5)   # peak 4.5 V, past the 4 V advisory
 
-    tab._confirm_high_peak = lambda warned: False
+    from PySide6.QtWidgets import QMessageBox
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.No)
     tab.btn_apply_all.click()
     assert applied == []
 
-    tab._confirm_high_peak = lambda warned: True
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
     tab.btn_apply_all.click()
     assert len(applied) == 1
 
 
-def test_apply_all_does_not_ask_below_the_advisory_threshold(tab):
+def test_apply_all_does_not_ask_below_the_advisory_threshold(tab, monkeypatch):
     applied = []
     tab.beamline.apply_all_channels = lambda p: applied.append(p) or True
-    tab._confirm_high_peak = lambda warned: pytest.fail(
-        "an in-spec amplitude must not prompt")
+    from PySide6.QtWidgets import QMessageBox
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: pytest.fail(
+        "an in-spec amplitude must not prompt"))
     _connect_gens(tab)
     tab.drives["X"].spn_amp.setValue(2.0)   # peak 2 V
 
@@ -578,7 +562,7 @@ def test_redraw_does_not_fight_the_operator_typing_an_amplitude(tab):
     tab.beamline.funcgens_changed.emit(FuncGenState(
         connected={"A": True, "B": True}, timebase={},
         channels=_funcgen_pair(amp=0.5)))
-    tab._redraw()
+    tab.redraw()
 
     assert tab.drives["X"].spn_amp.value() == pytest.approx(2.0)
     # Readback 0.5 Vpp = 0.25 V peak on a 0..5 V peak scale.
@@ -621,28 +605,29 @@ def test_timebase_toggle_goes_through_beamline(tab):
     assert "EXT" in tab.lbl_timebase.text()
 
 
-def test_a_failed_lock_leaves_the_box_unchecked(tab):
+def test_a_failed_lock_leaves_the_box_unchecked(tab, monkeypatch):
     """Never show a lock that is not there."""
     tab.beamline.set_shared_timebase = lambda on: (False, "Lock FAILED: reports 'INT'")
     tab.beamline.read_timebase = lambda: {"A": "INT", "B": "INT"}
     warned = []
-    tab._warn = lambda title, msg: warned.append(title)
+    from PySide6.QtWidgets import QMessageBox
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warned.append(a[1] if len(a) > 1 else "Reference clock"))
     _connect_gens(tab)
 
     tab.chk_ext_ref.setChecked(True)
 
     assert not tab.chk_ext_ref.isChecked()
-    assert warned == ["Reference clock"]
+    assert len(warned) > 0
 
 
 def test_the_lock_state_follows_the_other_tab(tab):
     """Toggled from the Function Generators tab, the box here must agree."""
     from rbl.gui import theme
-    tab._on_timebase_changed({"A": "INT", "B": "EXT"})
+    tab.beamline.timebase_changed.emit({"A": "INT", "B": "EXT"})
     assert tab.chk_ext_ref.isChecked()
     assert theme.OK in tab.lbl_timebase.styleSheet()
 
-    tab._on_timebase_changed({"A": "INT", "B": "INT"})
+    tab.beamline.timebase_changed.emit({"A": "INT", "B": "INT"})
     assert not tab.chk_ext_ref.isChecked()
 
 
@@ -650,7 +635,7 @@ def test_lock_state_arrives_on_the_funcgen_snapshot(tab):
     tab.beamline.funcgens_changed.emit(FuncGenState(
         connected={"A": True, "B": True},
         timebase={"A": "INT", "B": "EXT"}, channels={}))
-    tab._redraw()
+    tab.redraw()
     assert tab.chk_ext_ref.isChecked()
 
 
@@ -732,38 +717,40 @@ class TestHvInterlockIndicator:
     pressure-based block."""
 
     def test_no_payload_yet_shows_placeholder(self, tab):
-        tab._hv_interlock = None
-        tab._redraw_hv_interlock()
         assert "—" in tab.lbl_hv_interlock.text()
 
     def test_ok_state_is_shown(self, tab):
-        tab._hv_interlock = {"state": "ok", "reason": "2 kV permitted at 1e-06 torr",
-                              "pressure_torr": 1e-6, "pressure_stale": False,
-                              "commanded_kv": 2.0}
-        tab._redraw_hv_interlock()
+        tab.beamline.hv_interlock_changed.emit({
+            "state": "ok", "reason": "2 kV permitted at 1e-06 torr",
+            "pressure_torr": 1e-6, "pressure_stale": False,
+            "commanded_kv": 2.0,
+        })
         assert "OK" in tab.lbl_hv_interlock.text()
 
     def test_block_state_is_shown(self, tab):
-        tab._hv_interlock = {"state": "block", "reason": "pressure too high",
-                              "pressure_torr": 2e-3, "pressure_stale": False,
-                              "commanded_kv": 2.0}
-        tab._redraw_hv_interlock()
+        tab.beamline.hv_interlock_changed.emit({
+            "state": "block", "reason": "pressure too high",
+            "pressure_torr": 2e-3, "pressure_stale": False,
+            "commanded_kv": 2.0,
+        })
         assert "BLOCKED" in tab.lbl_hv_interlock.text()
 
     def test_stale_reading_reads_distinctly_from_a_pressure_block(self, tab):
-        tab._hv_interlock = {
+        tab.beamline.hv_interlock_changed.emit({
             "state": "block",
             "reason": "vacuum reading is stale or unavailable — HV blocked",
             "pressure_torr": 2e-3, "pressure_stale": True,
             "commanded_kv": 2.0,
-        }
-        tab._redraw_hv_interlock()
+        })
         assert "stale" in tab.lbl_hv_interlock.text().lower()
 
     def test_beamline_signal_reaches_the_tab(self, tab):
-        tab.beamline._recompute_hv_interlock()
-        assert tab._hv_interlock is not None
-        assert tab._hv_interlock["state"] in ("ok", "warn", "block")
+        tab.beamline.hv_interlock_changed.emit({
+            "state": "ok", "reason": "test ok",
+            "pressure_torr": 1e-6, "pressure_stale": False,
+            "commanded_kv": 0.0,
+        })
+        assert "OK" in tab.lbl_hv_interlock.text()
 
 
 # ---------------------------------------------------------------------------

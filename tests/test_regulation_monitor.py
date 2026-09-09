@@ -102,19 +102,29 @@ class TestRampCoupling:
 
 class TestReset:
     def test_reset_one_label_clears_only_that_label(self, qapp):
-        monitor = RegulationMonitor(debounce_windows=5)
+        monitor = RegulationMonitor(debounce_windows=2)
         monitor.evaluate("X+", 0.01, 3.0, 0.1, 20.0)
         monitor.evaluate("Y+", 0.01, 3.0, 0.1, 20.0)
         monitor.reset("X+")
-        assert "X+" not in monitor._consec
-        assert "Y+" in monitor._consec
+
+        faults = []
+        monitor.fault_detected.connect(lambda *a: faults.append(a))
+        monitor.evaluate("X+", 0.01, 3.0, 0.1, 20.0)
+        assert not any(f[0] == "X+" for f in faults)
+        monitor.evaluate("Y+", 0.01, 3.0, 0.1, 20.0)
+        assert any(f[0] == "Y+" for f in faults)
 
     def test_reset_all_clears_everything(self, qapp):
-        monitor = RegulationMonitor(debounce_windows=5)
+        monitor = RegulationMonitor(debounce_windows=2)
         monitor.evaluate("X+", 0.01, 3.0, 0.1, 20.0)
         monitor.evaluate("Y+", 0.01, 3.0, 0.1, 20.0)
         monitor.reset()
-        assert not monitor._consec
+
+        faults = []
+        monitor.fault_detected.connect(lambda *a: faults.append(a))
+        monitor.evaluate("X+", 0.01, 3.0, 0.1, 20.0)
+        monitor.evaluate("Y+", 0.01, 3.0, 0.1, 20.0)
+        assert not faults
 
 
 class TestIdleAndOk:

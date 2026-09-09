@@ -64,20 +64,28 @@ def _single_payload(profile, target_ain, value):
 
 class TestSingleChannelMode:
     def test_target_selector_enables_in_single_mode(self, tab):
+        from rbl.gui.widgets.inputs import NoScrollComboBox
+        combos = tab.findChildren(NoScrollComboBox)
+        profile_combo, target_combo = combos[1], combos[2]
+
         tab.on_profile_changed("SINGLE_FAST")
-        assert tab._single_mode is True
-        assert tab._single_combo.isEnabled()
+        assert target_combo.isEnabled()
 
         tab.on_profile_changed("FULL")
-        assert tab._single_mode is False
-        assert not tab._single_combo.isEnabled()
+        assert not target_combo.isEnabled()
 
     def test_streamed_channel_updates_and_others_paused(self, tab, feed):
+        from PySide6.QtWidgets import QPushButton
+        from rbl.gui.widgets.inputs import NoScrollComboBox
+        combos = tab.findChildren(NoScrollComboBox)
+        profile_combo, target_combo = combos[1], combos[2]
+        apply_btn = [b for b in tab.findChildren(QPushButton) if b.text() == "Apply"][0]
+
         # Target the X- voltage monitor (AIN11).
         target = SC.AMP_CHANNEL_MAP["X-"]["voltage"]   # AIN11
-        idx = tab._single_combo.findData(target)
-        tab._single_combo.setCurrentIndex(idx)
-        tab.on_profile_changed("SINGLE_FAST")
+        profile_combo.setCurrentIndex(profile_combo.findData("SINGLE_FAST"))
+        target_combo.setCurrentIndex(target_combo.findData(target))
+        apply_btn.click()
 
         feed.send_payload(_single_payload("SINGLE_FAST", target, 2.0))
 
@@ -86,42 +94,35 @@ class TestSingleChannelMode:
         assert "#bbb" not in tab.lbl_meas["X-"].styleSheet()
 
         # A different amplifier's readout is muted (paused).
-        # _refresh_monitors overwrites _apply_paused_styling's #bbb with #999
-        # for channels where v_live is False.
         assert "#999" in tab.lbl_meas["X+"].styleSheet()
 
     def test_current_target_waveform_follows_selection(self, tab, feed):
+        from PySide6.QtWidgets import QPushButton
+        from rbl.gui.widgets.inputs import NoScrollComboBox
+        combos = tab.findChildren(NoScrollComboBox)
+        profile_combo, target_combo = combos[1], combos[2]
+        apply_btn = [b for b in tab.findChildren(QPushButton) if b.text() == "Apply"][0]
+
         # Target a CURRENT monitor and confirm the single-plot waveform snapshot
         # picks it up on the current axis.
         target = SC.AMP_CHANNEL_MAP["Y-"]["current"]   # AIN6
-        # Populate the combo first (on_profile_changed re-clears it on profile
-        # switch), then select AIN6, then re-apply the same profile with it.
-        tab.on_profile_changed("SINGLE_HIRES")
-        idx = tab._single_combo.findData(target)
-        tab._single_combo.setCurrentIndex(idx)
-        tab.on_profile_changed("SINGLE_HIRES")
+        profile_combo.setCurrentIndex(profile_combo.findData("SINGLE_HIRES"))
+        target_combo.setCurrentIndex(target_combo.findData(target))
+        apply_btn.click()
 
         feed.send_payload(_single_payload("SINGLE_HIRES", target, 0.5))
-
-        assert tab._single_target_ain == target
 
         # A current target shows only the current axis (voltage axis hidden).
         assert tab.ax_i.get_visible()
         assert not tab.ax_v.get_visible()
 
-        # The raw waveform is stored in mA (0.5 V * 10 mA/V = 5 mA).
-        chunks = tab.wave_ring._chunks[target]
-        assert len(chunks) > 0
-        _, vals = chunks[-1]
-        assert vals.max() == pytest.approx(5.0)
+        # Current readout reflects live conversion
+        assert "5.000 mA" in tab.lbl_cur["Y-"].text()
 
-        # Zoom into the waveform (snapshot mode) and confirm the target line
-        # on the current axis actually receives data.
-        tab.plot.window_seconds = 0.05
-        tab.plot.is_live = True
-        assert tab._is_snapshot()
-        tab._redraw_plot()
-        assert len(tab._lines_i["Y-"].get_xdata()) > 0
+        # Zoom into the waveform (snapshot mode)
+        while tab.plot.window_seconds > 0.05:
+            tab.plot.zoom_in()
+        assert "waveform" in tab.lbl_mode.text().lower()
 
     def test_multichannel_mode_keeps_all_live(self, tab):
         # Regression: FULL profile leaves every monitor un-muted.
@@ -132,33 +133,52 @@ class TestSingleChannelMode:
 
 class TestApplyAndSnapshot:
     def test_combo_change_stages_without_emitting(self, tab):
+        from PySide6.QtWidgets import QPushButton
+        from rbl.gui.widgets.inputs import NoScrollComboBox
         # Changing the profile combo must NOT touch the hardware; it only stages.
         emitted = []
         tab.profile_change_requested.connect(emitted.append)
 
-        idx = tab._profile_combo.findData("WAVEFORM")
-        tab._profile_combo.setCurrentIndex(idx)
+        combos = tab.findChildren(NoScrollComboBox)
+        profile_combo = combos[1]
+        apply_btn = [b for b in tab.findChildren(QPushButton) if b.text() == "Apply"][0]
+
+        # First ensure applied profile is FULL
+        tab.on_profile_changed("FULL")
+
+        idx = profile_combo.findData("WAVEFORM")
+        profile_combo.setCurrentIndex(idx)
 
         assert emitted == []                      # nothing applied yet
-        assert tab._apply_btn.isEnabled()         # Apply lit up as pending
+        assert apply_btn.isEnabled()              # Apply lit up as pending
 
     def test_apply_emits_and_clears_pending(self, tab):
+        from PySide6.QtWidgets import QPushButton
+        from rbl.gui.widgets.inputs import NoScrollComboBox
         emitted = []
         tab.profile_change_requested.connect(emitted.append)
 
-        idx = tab._profile_combo.findData("WAVEFORM")
-        tab._profile_combo.setCurrentIndex(idx)
-        tab._apply_stream_settings()
+        combos = tab.findChildren(NoScrollComboBox)
+        profile_combo = combos[1]
+        apply_btn = [b for b in tab.findChildren(QPushButton) if b.text() == "Apply"][0]
+
+        # Ensure applied profile is FULL
+        tab.on_profile_changed("FULL")
+
+        idx = profile_combo.findData("WAVEFORM")
+        profile_combo.setCurrentIndex(idx)
+        apply_btn.click()
 
         assert emitted == ["WAVEFORM"]
-        assert not tab._apply_btn.isEnabled()     # staged == applied now
+        assert not apply_btn.isEnabled()          # staged == applied now
 
     def test_wide_window_is_trend_small_window_is_snapshot(self, tab, feed):
         tab.on_profile_changed("FULL")
         target = SC.AMP_CHANNEL_MAP["X+"]["voltage"]
         feed.send_payload(_single_payload("FULL", target, 3.0))
 
-        tab.plot.window_seconds = 120.0
-        assert not tab._is_snapshot()
-        tab.plot.window_seconds = 0.02
-        assert tab._is_snapshot()
+        # Default is wide window (> 1s)
+        assert "waveform" not in tab.lbl_mode.text().lower()
+        while tab.plot.window_seconds > 0.05:
+            tab.plot.zoom_in()
+        assert "waveform" in tab.lbl_mode.text().lower()

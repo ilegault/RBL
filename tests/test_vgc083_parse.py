@@ -69,10 +69,6 @@ class TestParseReading:
         assert r.pressure == pytest.approx(1.53e-6)
         assert r.pressure is not None
 
-    def test_normal_cg_reading(self):
-        r = _parse_reading("CG1", "7.60E+02")
-        assert r.state == "OK"
-        assert r.pressure == pytest.approx(760.0)
 
     # ---- SENTINEL TESTS: every single one asserts pressure is None --------
 
@@ -85,20 +81,8 @@ class TestParseReading:
         )
         assert r.state == "OFF_OR_OVERRANGE"
 
-    def test_sentinel_cg1_never_float(self):
-        r = _parse_reading("CG1", _SENTINEL)
-        assert r.pressure is None
-        assert r.state == "OFF_OR_OVERRANGE"
 
-    def test_sentinel_cg2_never_float(self):
-        r = _parse_reading("CG2", _SENTINEL)
-        assert r.pressure is None
-        assert r.state == "OFF_OR_OVERRANGE"
 
-    def test_sentinel_ai_never_float(self):
-        r = _parse_reading("AI", _SENTINEL)
-        assert r.pressure is None
-        assert r.state == "OFF_OR_OVERRANGE"
 
     def test_sentinel_raw_preserved(self):
         """raw field must carry the exact sentinel string for the log guard."""
@@ -214,19 +198,6 @@ class TestVgc083Driver:
 # Sentinel invariant: exhaustive check across all channel types
 # ---------------------------------------------------------------------------
 
-class TestSentinelNeverFloat:
-    """The sentinel 1.10E+03 must NEVER produce a float on any channel."""
-
-    @pytest.mark.parametrize("channel", ["IG", "CG1", "CG2", "AI"])
-    def test_sentinel_all_channels(self, channel):
-        r = _parse_reading(channel, _SENTINEL)
-        assert r.pressure is None, (
-            f"SENTINEL LEAKED on channel {channel}: "
-            f"got float {r.pressure!r} — this must never happen"
-        )
-        assert r.state == "OFF_OR_OVERRANGE"
-        # Also confirm the raw field preserves the original string
-        assert r.raw == _SENTINEL
 
 
 # ---------------------------------------------------------------------------

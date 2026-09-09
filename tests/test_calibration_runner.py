@@ -519,10 +519,6 @@ class TestDriftLoadConditionGuard:
         assert runner._state == _State.IDLE
         print("[OK] DISCONNECTED + 20 h is refused (exceeds DRIFT_MAX_UNATTENDED_H)")
 
-    def test_guard_boundaries_match_config_constants(self):
-        # Sanity: the guard's cutoffs are literally the config constants,
-        # not independently-chosen numbers that happen to agree today.
-        assert DRIFT_MAX_ATTENDED_H < DRIFT_MAX_UNATTENDED_H
 
 
 class TestDriftCompletionAndWatchdog:

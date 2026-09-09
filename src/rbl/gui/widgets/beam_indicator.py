@@ -543,6 +543,10 @@ class BeamPositionIndicator(QWidget):
             self._edges[slit] = abs(mm) if slit.endswith("+") else -abs(mm)
         self._recompute()
 
+    @property
+    def currents(self) -> dict:
+        return dict(self._currents)
+
     # ---- Internals ----------------------------------------------------------
 
     def _update_fwhm_label(self):

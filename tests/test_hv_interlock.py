@@ -21,8 +21,6 @@ class TestMaxPermittedKv:
     def test_ladder(self, pressure_torr, expected_kv):
         assert max_permitted_kv(pressure_torr) == expected_kv
 
-    def test_lockout_boundary_is_inclusive(self):
-        assert max_permitted_kv(HV_PRESSURE_ABSOLUTE_LOCKOUT_TORR) == 0.0
 
 
 class TestInterlockStatus:

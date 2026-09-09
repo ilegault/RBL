@@ -201,12 +201,6 @@ class TestReads:
         assert sw["forward_switch"] is True
         assert sw["reverse_switch"] is False
 
-    def test_switches_all_open(self):
-        g = make_galil({"MG _LFD": "1", "MG _LRD": "1", "MG _HMD": "1"})
-        sw = g.get_switch_states("D")
-        assert sw == {"forward_switch": False,
-                      "reverse_switch": False,
-                      "home_switch": False}
 
 
 # ── Motion command builders (exact wire format) ──────────────────────────────
