@@ -15,6 +15,7 @@ from rbl.snapshots import (  # noqa: F401 — re-export
     AxisSnapshot,
     ChannelParams,
     ChannelSnapshot,
+    CupState,
     FuncGenState,
     LogAmpState,
     MotorState,

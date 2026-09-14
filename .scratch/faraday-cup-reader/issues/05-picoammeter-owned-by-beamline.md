@@ -9,7 +9,7 @@ bytes on the wire to a published snapshot, verifiable on its own through the tes
 
 **Blocked by:** 04
 
-**Status:** ready-for-agent
+**Status:** done
 
 The test seam introduced here is the one the rest of the feature is tested through, so
 it matters more than the usual test helper. A cup feed helper joins the existing test
@@ -18,25 +18,35 @@ a real `Beamline` wired as the main window wires it. Follow the LabJack feed's s
 read its docstring first: the previous approach fed a widget's private method directly
 and so tested a widget-shaped imitation of the production path instead of the path.
 
-- [ ] A polling worker performs all blocking instrument I/O on its own thread and
+- [x] A polling worker performs all blocking instrument I/O on its own thread and
       communicates only by signals
-- [ ] The worker owns its instrument handle for its lifetime
-- [ ] A link mixin joins `Beamline`, following the shape of the existing vacuum link
-- [ ] `Beamline` owns the instrument — no widget constructs or tears one down
-- [ ] Cup current is published as a frozen snapshot carrying `connected`, like every
+- [x] The worker owns its instrument handle for its lifetime
+- [x] A link mixin joins `Beamline`, following the shape of the existing vacuum link
+- [x] `Beamline` owns the instrument — no widget constructs or tears one down
+- [x] Cup current is published as a frozen snapshot carrying `connected`, like every
       other snapshot
-- [ ] The snapshot carries current, instrument timestamp, status word, and an over-range
+- [x] The snapshot carries current, instrument timestamp, status word, and an over-range
       flag
-- [ ] No unit conversion happens anywhere in this path — the instrument returns amps
+- [x] No unit conversion happens anywhere in this path — the instrument returns amps
       already scaled, and that must remain true
-- [ ] The picoammeter participates in the stepped Connect All sequence without making
+- [x] The picoammeter participates in the stepped Connect All sequence without making
       the window appear hung
-- [ ] Connect and disconnect are available independently of the rest of the beamline
-- [ ] Teardown is ordered correctly in shutdown and leaves the instrument's state alone
-- [ ] Idle polling runs at 2 Hz; both poll rates live in the config layer, not as
+- [x] Connect and disconnect are available independently of the rest of the beamline
+- [x] Teardown is ordered correctly in shutdown and leaves the instrument's state alone
+- [x] Idle polling runs at 2 Hz; both poll rates live in the config layer, not as
       literals
-- [ ] A cup feed helper exists in the test payload module and injects raw SCPI strings
+- [x] A cup feed helper exists in the test payload module and injects raw SCPI strings
       into a real `Beamline`
-- [ ] A test drives that helper and asserts on the snapshot `Beamline` publishes,
+- [x] A test drives that helper and asserts on the snapshot `Beamline` publishes,
       including an over-range sample
-- [ ] Nothing connected produces a snapshot with `connected` false, not a zeroed reading
+- [x] Nothing connected produces a snapshot with `connected` false, not a zeroed reading
+
+## Comments
+
+### 2026-09-14 — Implemented Keithley 6482 ownership in Beamline
+- Created `PicoammeterWorker` QThread for non-blocking I/O polling Keithley 6482 at configurable 2 Hz idle / 10 Hz acquiring rates.
+- Created `PicoammeterLinkMixin` mixed into `Beamline` managing driver lifecycle and publishing frozen `CupState` snapshots.
+- Added `CupFeed` to `tests/payloads.py` for inject-raw test seam testing.
+- Added `"Faraday cup"` step to `MainWindow._connect_all_steps()`.
+- Verified all quality gates and test suites pass.
+
