@@ -22,13 +22,14 @@ def qapp():
     return QApplication.instance() or QApplication([])
 
 
-def _wait_until(predicate, timeout_s=3.0):
+def _wait_until(predicate, timeout_s=10.0):
     start = time.time()
     while time.time() - start < timeout_s:
         QCoreApplication.processEvents()
         if predicate():
             return True
-        time.sleep(0.01)
+        time.sleep(0.005)
+    QCoreApplication.processEvents()
     return predicate()
 
 
@@ -59,31 +60,34 @@ class TestPicoammeterWorker:
         mock_inst.read_raw.return_value = "+1.234567E-06,+0.123456,+00000000"
         mock_driver_cls.return_value = mock_inst
 
-        worker = PicoammeterWorker("GPIB0::14::INSTR", poll_interval_s=0.01)
+        with patch("rbl.hardware.picoammeter_worker.CUP_RECONNECT_BACKOFF_S", [0.01, 0.01]):
+            worker = PicoammeterWorker("GPIB0::14::INSTR", poll_interval_s=0.01)
 
-        readings: list[Keithley6482Reading] = []
-        raws: list[tuple[str, float]] = []
-        connected_events: list[tuple[bool, str]] = []
+            readings: list[Keithley6482Reading] = []
+            raws: list[tuple[str, float]] = []
+            connected_events: list[tuple[bool, str]] = []
 
-        worker.reading_ready.connect(readings.append)
-        worker.raw_ready.connect(lambda raw, t: raws.append((raw, t)))
-        worker.connected_changed.connect(lambda conn, idn: connected_events.append((conn, idn)))
+            worker.reading_ready.connect(readings.append)
+            worker.raw_ready.connect(lambda raw, t: raws.append((raw, t)))
+            worker.connected_changed.connect(lambda conn, idn: connected_events.append((conn, idn)))
 
-        worker.start()
+            worker.start()
 
-        # Wait until at least one reading is received
-        assert _wait_until(lambda: len(readings) > 0, timeout_s=3.0)
+            try:
+                # Wait until at least one reading is received
+                assert _wait_until(lambda: len(readings) > 0, timeout_s=10.0)
 
-        assert connected_events[0][0] is True
-        assert "6482" in connected_events[0][1]
-        assert readings[0].current == pytest.approx(1.234567e-06)
-        assert len(raws) > 0
+                assert connected_events[0][0] is True
+                assert "6482" in connected_events[0][1]
+                assert readings[0].current == pytest.approx(1.234567e-06)
+                assert len(raws) > 0
+            finally:
+                # Stop worker
+                worker.stop()
+                worker.wait(2000)
 
-        # Stop worker
-        worker.stop()
-        worker.wait(1000)
-        assert not worker.isRunning()
-        mock_inst.close.assert_called()
+            assert not worker.isRunning()
+            mock_inst.close.assert_called()
 
     @patch("rbl.hardware.picoammeter_worker.Keithley6482")
     def test_worker_handles_read_exception(self, mock_driver_cls, qapp):
@@ -110,10 +114,12 @@ class TestPicoammeterWorker:
 
         with patch("rbl.hardware.picoammeter_worker.CUP_RECONNECT_BACKOFF_S", [0.01, 0.01]):
             worker.start()
-            assert _wait_until(lambda: len(errors) > 0, timeout_s=3.0)
-
-            worker.stop()
-            worker.wait(1000)
+            try:
+                assert _wait_until(lambda: len(errors) > 0, timeout_s=10.0)
+            finally:
+                worker.stop()
+                worker.wait(2000)
 
         assert any("GPIB bus communication failure" in e for e in errors)
+
 

@@ -121,6 +121,15 @@ python tools/type_gate.py
 pytest --tb=short -q -n auto --dist loadfile
 ```
 
+### Strict Test-First and Zero-Failure Enforcement
+
+1. **Tests First**: Tests must be written against the acceptance criteria before or alongside the implementation.
+2. **Observe Failure & Diagnose Root Cause**: When a test fails:
+   - Inspect the failure log carefully.
+   - Figure out the actual root cause: timing/thread synchronization, Qt event loop processing (`QCoreApplication.processEvents()`), timeout tolerances under heavy CPU/xdist load, missing signal connections, or driver/state logic errors.
+   - Fix the underlying implementation or test harness properly. **Never weaken an assertion, never loosen tolerances without domain justification, and never bypass/mute a test (ADR 0001).**
+3. **Mandatory 100% Pass Before Push**: You **MUST** run the full test suite and confirm **0 failures** before pushing any branch or creating any PR. Never assume tests will pass or push when any test fails in the full suite. If even one test fails, investigate, fix, and re-run the full suite to 100% green.
+
 Notes that matter:
 
 - **The type gate is layered, not a bare mypy run.** Any error under `rbl.config` or

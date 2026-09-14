@@ -42,6 +42,7 @@ from rbl.config.cup_config import (
 from rbl.hardware.keithley6482_driver import (
     Keithley6482,
     discover,
+    parse_reading,
 )
 
 log = logging.getLogger(__name__)
@@ -180,9 +181,7 @@ class PicoammeterWorker(QThread):
                 try:
                     t_host = time.time()
                     raw = self._driver.read_raw()
-                    reading = self._driver.read_reading() if False else None
                     # Parse using driver's protocol mode
-                    from rbl.hardware.keithley6482_driver import parse_reading
                     reading = parse_reading(raw, protocol_mode=self._driver.protocol_mode)
 
                     self.raw_ready.emit(raw, t_host)
