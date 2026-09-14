@@ -39,13 +39,14 @@ from rbl.state.funcgen_control import FuncGenControlMixin
 from rbl.state.hv_interlock_link import HvInterlockLinkMixin
 from rbl.state.labjack_link import LabJackLinkMixin
 from rbl.state.motor_control import MotorControlMixin
+from rbl.state.picoammeter_link import PicoammeterLinkMixin
 from rbl.state.scope_link import ScopeLinkMixin
 from rbl.state.vacuum_link import VacuumLinkMixin
 from rbl.util import best_effort
 
 
 class Beamline(LabJackLinkMixin, FuncGenControlMixin, MotorControlMixin, VacuumLinkMixin,
-               ScopeLinkMixin, HvInterlockLinkMixin, QObject):
+               ScopeLinkMixin, PicoammeterLinkMixin, HvInterlockLinkMixin, QObject):
     motors_changed   = Signal(object)   # MotorState
     logamps_changed  = Signal(object)   # LogAmpState
     amps_changed     = Signal(object)   # AmpState
@@ -56,6 +57,10 @@ class Beamline(LabJackLinkMixin, FuncGenControlMixin, MotorControlMixin, VacuumL
     vacuum_error     = Signal(str)
     scope_changed    = Signal(object)   # ScopeState
     scope_error      = Signal(str)
+    cup_changed      = Signal(object)   # CupState
+    cup_error        = Signal(str)
+    cup_connected    = Signal(str)
+    cup_disconnected_evt = Signal()
 
     # Vacuum <-> HV interlock (hv_interlock_link.py). dict:
     # {"state": "ok"|"warn"|"block", "reason": str, "pressure_torr": float,
@@ -90,6 +95,7 @@ class Beamline(LabJackLinkMixin, FuncGenControlMixin, MotorControlMixin, VacuumL
         self._init_motors()
         self._init_vacuum()
         self._init_scope()
+        self._init_picoammeter()
         self._init_hv_interlock()
 
         # Last-resort safety net: if the process is torn down without a clean
@@ -131,11 +137,13 @@ class Beamline(LabJackLinkMixin, FuncGenControlMixin, MotorControlMixin, VacuumL
         outputs here — they are meant to retain state after the app exits
         (see FuncGenTab.close_session's docstring; this mirrors it).
         """
-        best_effort("disconnect_labjack",  self.disconnect_labjack)
-        best_effort("galil.abort",          lambda: self.galil.connected and self.galil.abort())
-        best_effort("galil.disconnect",     self.galil.disconnect)
-        best_effort("shutdown_vacuum",      self._shutdown_vacuum)
-        best_effort("shutdown_scope",       self._shutdown_scope)
+        best_effort("disconnect_labjack",   self.disconnect_labjack)
+        best_effort("galil.abort",           lambda: self.galil.connected and self.galil.abort())
+        best_effort("galil.disconnect",      self.galil.disconnect)
+        best_effort("shutdown_vacuum",       self._shutdown_vacuum)
+        best_effort("shutdown_scope",        self._shutdown_scope)
+        best_effort("shutdown_picoammeter",  self._shutdown_picoammeter)
         for gen in (self.dg_a, self.dg_b):
             if gen is not None:
                 best_effort("funcgen.close", gen.close)
+

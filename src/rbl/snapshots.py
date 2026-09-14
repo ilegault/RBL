@@ -412,3 +412,33 @@ class AmpState:
     active_profile: str = ""
     t: float = float("nan")
     sample_period: float | None = None
+
+
+@dataclass(frozen=True)
+class CupState:
+    """Faraday cup current snapshot from the Keithley 6482 picoammeter.
+
+    `connected` distinguishes "no data because instrument is not connected"
+    from "connected and reading".
+    `current` is the measured current in Amperes on Channel 1, or None if
+    disconnected, over-range, or unavailable.
+    `timestamp` is the instrument relative timestamp in seconds reported by
+    the Keithley timer (NaN when disconnected).
+    `status_word` is the raw integer status word reported by the instrument.
+    `over_range` is True if status word bit 6 is set OR the reading is the
+    over-range sentinel.
+    `unavailable` is True if the reading is the unavailable sentinel (e.g. zero-check).
+    `valid` is True if reading was successfully parsed and is not unavailable.
+    `t_host` is the host timestamp (time.time()) when the reading was received.
+    `raw` is the untouched wire string from the instrument.
+    """
+    connected: bool
+    current: float | None = None
+    timestamp: float = float("nan")
+    status_word: int = 0
+    over_range: bool = False
+    unavailable: bool = False
+    valid: bool = False
+    t_host: float = float("nan")
+    raw: str = ""
+

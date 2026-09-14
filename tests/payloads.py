@@ -115,3 +115,37 @@ class LabJackFeed:
         self.beamline.raw_window_ready.emit(payload)
         self.beamline.ingest_labjack_window(payload, active_profile=active_profile)
 
+
+class CupFeed:
+    """A real Beamline wired to Faraday Cup consumers / tabs, as MainWindow wires it.
+
+    Injects raw SCPI response strings — what the instrument puts on the wire —
+    into Beamline.ingest_cup_raw(), exercising the full path through pure response
+    parsing, snapshot construction, and snapshot emission.
+    """
+
+    def __init__(self, *tabs, beamline: Beamline = None):
+        self.beamline = beamline or Beamline()
+        for tab in tabs:
+            if hasattr(tab, "on_cup_state"):
+                self.beamline.cup_changed.connect(tab.on_cup_state)
+            if hasattr(tab, "on_cup_error"):
+                self.beamline.cup_error.connect(tab.on_cup_error)
+            if hasattr(tab, "on_cup_connected"):
+                self.beamline.cup_connected.connect(tab.on_cup_connected)
+            if hasattr(tab, "on_cup_disconnected"):
+                self.beamline.cup_disconnected_evt.connect(tab.on_cup_disconnected)
+
+    def send_raw(self, raw_response: str, protocol_mode: int | None = 1, t_host: float = 1.0):
+        """Inject raw SCPI response text into Beamline."""
+        return self.beamline.ingest_cup_raw(
+            raw_response, protocol_mode=protocol_mode, t_host=t_host
+        )
+
+    def send_reading(self, current: float, timestamp: float = 1.0, status_word: int = 0,
+                     protocol_mode: int = 1, t_host: float = 1.0):
+        """Format a synthetic SCPI response string and send it through Beamline."""
+        raw = f"{current:+.8E},{timestamp:+.6f},{status_word:+08d}"
+        return self.send_raw(raw, protocol_mode=protocol_mode, t_host=t_host)
+
+

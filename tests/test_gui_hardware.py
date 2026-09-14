@@ -637,7 +637,7 @@ class TestConnectAll:
 
     def test_the_real_step_list_covers_every_subsystem(self, win):
         names = [name for name, _fn in win._connect_all_steps()]
-        assert names == ["Galil", "LabJack T7", "Function generators",
+        assert names == ["Galil", "LabJack T7", "Faraday cup", "Function generators",
                          "Scope", "Vacuum gauges"]
 
     def test_connect_all_never_disconnects_anything(self, win):

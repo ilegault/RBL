@@ -454,10 +454,21 @@ class MainWindow(QMainWindow):
         return [
             ("Galil",              self.motor_tab.connect_if_needed),
             ("LabJack T7",         self._labjack_connect_if_needed),
+            ("Faraday cup",        self._picoammeter_connect_if_needed),
             ("Function generators", self.funcgen_tab.connect_if_needed),
             ("Scope",              self.profiler_tab.connect_if_needed),
             ("Vacuum gauges",      self.vacuum_tab.connect_if_needed),
         ]
+
+    def _picoammeter_connect_if_needed(self) -> tuple:
+        """The Keithley 6482 is owned by Beamline; its connect step lives here."""
+        if self.beamline.picoammeter_connected:
+            return "already", "Faraday cup picoammeter already connected"
+        try:
+            self.beamline.connect_picoammeter()
+        except Exception as exc:
+            return "failed", f"Picoammeter: {exc}"
+        return "connected", "Faraday cup picoammeter"
 
     def _labjack_connect_if_needed(self) -> tuple:
         """The T7 is owned here, not by a tab, so its step lives here too."""
