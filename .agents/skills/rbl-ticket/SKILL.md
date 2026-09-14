@@ -51,6 +51,8 @@ Read, in this order:
 one. If the only unblocked ticket is marked a developer bench task, say so and stop —
 do not claim it, do not simulate it, do not build around it.
 
+**Claim the ticket**: Before starting implementation, set the ticket's `Status:` line in `.scratch/<effort>/issues/NN-*.md` to `in-progress`.
+
 ## 2. Decide whether to split into parallel agents
 
 Splitting is powerful and frequently wrong here. Judge by the seam, not by size.
@@ -162,8 +164,11 @@ Check, concretely:
 
 Follow this sequence once the local gate (ruff, check_tests_first, type_gate, pytest) passes and adversarial review is complete:
 
-1. **Update ticket file**: Set `Status: done` (exact casing) and tick all acceptance criteria checkboxes `[x]` in `.scratch/<effort>/issues/NN-*.md`.
-2. **Commit all changes**: Commit application code, tests, docstrings, and the updated ticket file to the ticket branch. Never commit directly to `master`.
+1. **Update ticket file**:
+   - Set `Status: done` (exact casing) in `.scratch/<effort>/issues/NN-*.md`.
+   - Tick all completed acceptance criteria checkboxes (`- [x]`).
+   - Append a summary of implementation details, test coverage, and any bench/mock verification under `## Comments` with today's date (`YYYY-MM-DD`).
+2. **Commit all changes**: Commit application code, tests, docstrings, and the updated ticket file to the ticket branch. Ensure the commit includes the updated ticket file so that the PR automatically brings the updated status into `master` upon merge. Never commit directly to `master`.
 3. **Push the branch**: Push the branch to remote with `git push -u origin <branch-name>`.
 4. **Create the Pull Request**:
    - If GitHub CLI (`gh`) is installed and authenticated:
@@ -186,10 +191,10 @@ explaining, so an explanation was invented. Do not invent.
 **When you cannot fix it, escalate in four steps and stop:**
 
 1. Commit the finished, correct work to the branch. Nothing good is thrown away.
-2. Set the ticket's `Status:` to `blocked`.
+2. Set the ticket's `Status:` to `blocked` in `.scratch/<effort>/issues/NN-*.md`.
 3. Append under the ticket's `## Comments` heading: what you attempted, what failed,
    and what needs a human decision.
-4. Push the branch (`git push -u origin <branch-name>`) and open the pull request as a **draft** (`gh pr create --draft ...` or via GitHub web). Master is untouched.
+4. Commit the ticket file update, push the branch (`git push -u origin <branch-name>`), and open the pull request as a **draft** (`gh pr create --draft ...` or via GitHub web). Master is untouched.
 
 The report goes in the ticket file under `.scratch/`, never under `.claude/` — that
 directory is gitignored, so anything written there is never pushed and no reviewer,
