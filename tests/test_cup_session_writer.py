@@ -103,15 +103,22 @@ class TestCupSessionWriterDirect:
 
         writer.close()
 
-    def test_over_range_sample_is_flagged_not_dropped(self, tmp_path):
+    def test_over_range_samples_logged_and_flagged(self, tmp_path):
         writer = CupSessionWriter(output_dir=tmp_path)
+        writer.write_run_opened(
+            t_host=10.0,
+            run_id=1,
+            arm_threshold=0.5e-6,
+            release_threshold=0.25e-6,
+        )
         writer.write_sample(
-            t_host=2.0,
-            t_inst=0.2,
+            t_host=11.0,
+            t_inst=1.0,
             current=None,
-            status_word=64,
+            status_word=0x00000040,
             over_range=True,
             run_id=1,
+            details="over_range",
         )
         writer.close()
 
@@ -119,13 +126,83 @@ class TestCupSessionWriterDirect:
             reader = csv.DictReader([line for line in f if not line.startswith("#")])
             rows = list(reader)
 
-        assert len(rows) == 1
-        row = rows[0]
-        assert row["record_type"] == "sample"
-        assert row["over_range"] == "True"
-        assert row["status_word"] == "0x00000040"
-        assert row["current_a"] == ""  # current is None for over-range sentinel
-        assert row["run_id"] == "1"
+        samples = [r for r in rows if r["record_type"] == "sample"]
+        assert len(samples) == 1
+        assert samples[0]["over_range"] == "True"
+        assert samples[0]["status_word"] == "0x00000040"
+        assert samples[0]["run_id"] == "1"
+
+    def test_active_run_stats_calculation(self, tmp_path):
+        """active_run_stats computes duration, sample counts, and running average."""
+        writer = CupSessionWriter(output_dir=tmp_path)
+        assert writer.active_run_stats.run_id is None
+        assert writer.active_run_stats.total_samples == 0
+
+        writer.write_run_opened(
+            t_host=10.0,
+            run_id=1,
+            arm_threshold=0.5e-6,
+            release_threshold=0.25e-6,
+        )
+        stats0 = writer.active_run_stats
+        assert stats0.run_id == 1
+        assert stats0.total_samples == 0
+        assert stats0.valid_samples == 0
+        assert stats0.over_range_samples == 0
+        assert stats0.average_current_a is None
+
+        # Write sample 1: 1.0 µA
+        writer.write_sample(
+            t_host=11.0,
+            t_inst=1.0,
+            current=1.0e-6,
+            status_word=0,
+            over_range=False,
+            run_id=1,
+        )
+        stats1 = writer.active_run_stats
+        assert stats1.total_samples == 1
+        assert stats1.valid_samples == 1
+        assert stats1.over_range_samples == 0
+        assert stats1.duration_s == pytest.approx(1.0)
+        assert stats1.average_current_a == pytest.approx(1.0e-6)
+
+        # Write sample 2: 3.0 µA
+        writer.write_sample(
+            t_host=13.0,
+            t_inst=3.0,
+            current=3.0e-6,
+            status_word=0,
+            over_range=False,
+            run_id=1,
+        )
+        stats2 = writer.active_run_stats
+        assert stats2.total_samples == 2
+        assert stats2.valid_samples == 2
+        assert stats2.over_range_samples == 0
+        assert stats2.duration_s == pytest.approx(3.0)
+        assert stats2.average_current_a == pytest.approx(2.0e-6)
+
+        # Write sample 3: over-range
+        writer.write_sample(
+            t_host=14.0,
+            t_inst=4.0,
+            current=None,
+            status_word=0x40,
+            over_range=True,
+            run_id=1,
+        )
+        stats3 = writer.active_run_stats
+        assert stats3.total_samples == 3
+        assert stats3.valid_samples == 2
+        assert stats3.over_range_samples == 1
+        assert stats3.duration_s == pytest.approx(4.0)
+        # Average remains 2.0 µA because over-range is excluded
+        assert stats3.average_current_a == pytest.approx(2.0e-6)
+
+        # Close run
+        writer.write_run_closed(t_host=15.0, run_id=1, reason="released")
+        writer.close()
 
     def test_all_marker_types_written_correctly(self, tmp_path):
         writer = CupSessionWriter(output_dir=tmp_path)
