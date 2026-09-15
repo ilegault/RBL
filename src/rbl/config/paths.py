@@ -33,6 +33,7 @@ DATA_DIR: Path   = LOG_ROOT / "data"
 CALIBRATION_DIR: Path = DATA_DIR / "calibration"
 SCOPE_DIR:        Path = DATA_DIR / "scope"
 VACUUM_DIR:       Path = DATA_DIR / "vacuum"
+FARADAY_CUP_DIR:  Path = DATA_DIR / "faraday_cup"
 
 # Per-subsystem history files (JSONL, one record per event)
 TRIP_HISTORY_PATH:               Path = DATA_DIR / "trip_history.jsonl"

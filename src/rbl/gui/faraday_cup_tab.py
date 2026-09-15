@@ -51,11 +51,19 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from rbl.config.cup_config import KEITHLEY_6482_DEFAULT_RESOURCE
+from rbl.config.cup_config import (
+    CUP_IDLE_HEARTBEAT_INTERVAL_S,
+    KEITHLEY_6482_DEFAULT_RESOURCE,
+)
 from rbl.gui import theme
 from rbl.gui.widgets.connection_bar import StatusPill
 from rbl.hardware.current_monitor import format_current
-from rbl.services.cup_acquisition import CupAcquisitionStateMachine
+from rbl.services.cup_acquisition import (
+    CupAcquisitionStateMachine,
+    RunClosed,
+    RunOpened,
+)
+from rbl.services.cup_session_writer import CupSessionWriter
 from rbl.snapshots import CupState
 
 if TYPE_CHECKING:
@@ -67,11 +75,20 @@ log = logging.getLogger(__name__)
 class FaradayCupTab(QWidget):
     """The 'Faraday Cup' outer tab."""
 
-    def __init__(self, beamline: Beamline | None = None, parent: QWidget | None = None):
+    def __init__(
+        self,
+        beamline: Beamline | None = None,
+        session_writer: CupSessionWriter | None = None,
+        parent: QWidget | None = None,
+    ):
         super().__init__(parent)
         self.beamline = beamline
         self._connected = False
         self.acquisition = CupAcquisitionStateMachine()
+        self.session_writer: CupSessionWriter = (
+            session_writer if session_writer is not None else CupSessionWriter()
+        )
+        self._last_heartbeat_t: float = 0.0
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -215,15 +232,31 @@ class FaradayCupTab(QWidget):
                 log.exception("FaradayCupTab connect failed: %s", exc)
 
     def _on_force_start_clicked(self) -> None:
-        transition = self.acquisition.force_start(t=time.time())
-        if transition is not None and self.beamline is not None:
-            self.beamline.set_cup_acquiring(True)
+        t_now = time.time()
+        transition = self.acquisition.force_start(t=t_now)
+        if transition is not None:
+            self.session_writer.write_run_opened(
+                t_host=t_now,
+                run_id=transition.run_id,
+                arm_threshold=transition.arm_threshold,
+                release_threshold=transition.release_threshold,
+                forced=True,
+            )
+            if self.beamline is not None:
+                self.beamline.set_cup_acquiring(True)
         self._update_acquisition_view()
 
     def _on_force_stop_clicked(self) -> None:
-        transition = self.acquisition.force_stop(t=time.time())
-        if transition is not None and self.beamline is not None:
-            self.beamline.set_cup_acquiring(False)
+        t_now = time.time()
+        transition = self.acquisition.force_stop(t=t_now)
+        if transition is not None:
+            self.session_writer.write_run_closed(
+                t_host=t_now,
+                run_id=transition.run_id,
+                reason=transition.reason,
+            )
+            if self.beamline is not None:
+                self.beamline.set_cup_acquiring(False)
         self._update_acquisition_view()
 
     def _update_acquisition_view(self) -> None:
@@ -251,7 +284,9 @@ class FaradayCupTab(QWidget):
             self.btn_force_start.setEnabled(True)
             self.btn_force_stop.setEnabled(False)
 
-    def _set_disconnected_view(self) -> None:
+    def _set_disconnected_view(self, t: float | None = None) -> None:
+        t_now = time.time() if t is None else t
+        was_connected = self._connected
         self._connected = False
         self.status_pill.set_connected(False)
         self.btn_connect.setText("Connect")
@@ -261,7 +296,15 @@ class FaradayCupTab(QWidget):
         self.lbl_detail.setStyleSheet(f"color: {theme.MUTED}; font-style: italic;")
         self.lbl_ident.setText("")
         self.lbl_meta.setText("")
-        self.acquisition.disconnect(t=time.time())
+        transition = self.acquisition.disconnect(t=t_now)
+        if transition is not None:
+            self.session_writer.write_run_closed(
+                t_host=t_now,
+                run_id=transition.run_id,
+                reason=transition.reason,
+            )
+        if was_connected:
+            self.session_writer.write_disconnected(t_host=t_now)
         if self.beamline is not None:
             self.beamline.set_cup_acquiring(False)
         self._update_acquisition_view()
@@ -269,25 +312,76 @@ class FaradayCupTab(QWidget):
     # ── Snapshot / State Updates ──────────────────────────────────────────────
 
     def on_cup_state(self, state: CupState) -> None:
-        """Render a CupState snapshot published by Beamline."""
+        """Render a CupState snapshot published by Beamline and log samples/markers."""
+        t_sample = (
+            state.t_host
+            if (state.t_host == state.t_host and state.t_host is not None)
+            else time.time()
+        )
+
         if not state.connected:
-            self._set_disconnected_view()
+            self._set_disconnected_view(t=t_sample)
             return
 
+        was_connected = self._connected
         self._connected = True
         self.status_pill.set_connected(True)
         self.btn_connect.setText("Disconnect")
 
+        if not was_connected:
+            self.session_writer.write_connected(
+                t_host=t_sample,
+                ident=self.lbl_ident.text(),
+                resource=self.get_resource(),
+            )
+            self._last_heartbeat_t = t_sample
+
         # Update acquisition state machine
-        t_sample = state.t_host if state.t_host == state.t_host else time.time()
         transition = self.acquisition.update(
             current=state.current,
             t=t_sample,
             over_range=state.over_range,
             connected=True,
         )
-        if transition is not None and self.beamline is not None:
-            self.beamline.set_cup_acquiring(self.acquisition.is_acquiring)
+
+        if transition is not None:
+            if isinstance(transition, RunOpened):
+                self.session_writer.write_run_opened(
+                    t_host=t_sample,
+                    run_id=transition.run_id,
+                    arm_threshold=transition.arm_threshold,
+                    release_threshold=transition.release_threshold,
+                    forced=transition.forced,
+                    t_inst=state.timestamp,
+                )
+            elif isinstance(transition, RunClosed):
+                self.session_writer.write_run_closed(
+                    t_host=t_sample,
+                    run_id=transition.run_id,
+                    reason=transition.reason,
+                    t_inst=state.timestamp,
+                )
+            if self.beamline is not None:
+                self.beamline.set_cup_acquiring(self.acquisition.is_acquiring)
+
+        # Log sample if acquiring, or periodic heartbeat if idle
+        if self.acquisition.is_acquiring:
+            run_id = self.acquisition.current_run_id or 1
+            self.session_writer.write_sample(
+                t_host=t_sample,
+                t_inst=state.timestamp,
+                current=state.current,
+                status_word=state.status_word,
+                over_range=state.over_range,
+                run_id=run_id,
+            )
+        else:
+            if (t_sample - self._last_heartbeat_t) >= CUP_IDLE_HEARTBEAT_INTERVAL_S:
+                self.session_writer.write_idle_heartbeat(
+                    t_host=t_sample,
+                    t_inst=state.timestamp,
+                )
+                self._last_heartbeat_t = t_sample
 
         self._update_acquisition_view()
 
@@ -316,12 +410,19 @@ class FaradayCupTab(QWidget):
 
     def on_cup_connected(self, ident: str) -> None:
         """Called when Keithley 6482 connects successfully."""
+        was_connected = self._connected
         self._connected = True
         self.status_pill.set_connected(True)
         self.btn_connect.setText("Disconnect")
         self.lbl_ident.setText(f"{ident}" if ident else "Keithley 6482")
         self.btn_force_start.setEnabled(True)
         self.btn_force_stop.setEnabled(False)
+        if not was_connected:
+            self.session_writer.write_connected(
+                t_host=time.time(),
+                ident=ident,
+                resource=self.get_resource(),
+            )
 
     def on_cup_disconnected(self) -> None:
         """Called when Keithley 6482 disconnects."""
@@ -332,4 +433,10 @@ class FaradayCupTab(QWidget):
         log.warning("FaradayCupTab error: %s", msg)
         self.lbl_detail.setText(f"Error: {msg}")
         self.lbl_detail.setStyleSheet(f"color: {theme.FAULT}; font-style: italic;")
+
+    def closeEvent(self, event) -> None:
+        """Close session writer when widget closes."""
+        self.session_writer.close()
+        super().closeEvent(event)
+
 
