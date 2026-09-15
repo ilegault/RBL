@@ -40,6 +40,7 @@ import json
 import logging
 import math
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -53,6 +54,19 @@ from rbl.config.cup_config import (
 from rbl.config.paths import FARADAY_CUP_DIR
 
 log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class CupRunStats:
+    """Statistics for an acquisition run computed directly from logged samples."""
+
+    run_id: int | None
+    duration_s: float
+    total_samples: int
+    valid_samples: int
+    over_range_samples: int
+    average_current_a: float | None
+
 
 # Column schema for the Faraday cup session CSV
 CSV_COLUMNS: list[str] = [
@@ -128,6 +142,16 @@ class CupSessionWriter:
         self._sample_count: int = 0
         self._runs_recorded: set[int] = set()
 
+        # Active run statistics (computed strictly from logged samples)
+        self._active_run_id: int | None = None
+        self._active_run_t_start: float = 0.0
+        self._active_run_t_last: float = 0.0
+        self._active_run_total_samples: int = 0
+        self._active_run_valid_samples: int = 0
+        self._active_run_over_range_samples: int = 0
+        self._active_run_current_sum: float = 0.0
+        self._last_run_stats: CupRunStats | None = None
+
     def _write_header_comments(self) -> None:
         """Write self-describing comments at the top of the CSV file."""
         self._file.write(f"# cup_session_writer RBL {_now_iso()}\n")
@@ -175,6 +199,16 @@ class CupSessionWriter:
         self._sample_count += 1
         self._runs_recorded.add(run_id)
 
+        # Update active run sample accumulation
+        if self._active_run_id is not None and run_id == self._active_run_id:
+            self._active_run_total_samples += 1
+            self._active_run_t_last = t_host
+            if over_range:
+                self._active_run_over_range_samples += 1
+            elif current is not None and not math.isnan(current) and not math.isinf(current):
+                self._active_run_valid_samples += 1
+                self._active_run_current_sum += current
+
     def write_run_opened(
         self,
         t_host: float,
@@ -204,6 +238,16 @@ class CupSessionWriter:
         self._write_row(row)
         self._runs_recorded.add(run_id)
 
+        # Initialize active run tracking
+        self._active_run_id = run_id
+        self._active_run_t_start = t_host
+        self._active_run_t_last = t_host
+        self._active_run_total_samples = 0
+        self._active_run_valid_samples = 0
+        self._active_run_over_range_samples = 0
+        self._active_run_current_sum = 0.0
+        self._last_run_stats = None
+
     def write_run_closed(
         self,
         t_host: float,
@@ -215,6 +259,26 @@ class CupSessionWriter:
         details: str = "",
     ) -> None:
         """Write a marker recording that an acquisition run ended."""
+        if self._active_run_id is not None and self._active_run_id == run_id:
+            dur = max(0.0, t_host - self._active_run_t_start) if duration_s <= 0.0 else duration_s
+            cnt = self._active_run_total_samples if sample_count <= 0 else sample_count
+            avg = (
+                (self._active_run_current_sum / self._active_run_valid_samples)
+                if self._active_run_valid_samples > 0
+                else None
+            )
+            self._last_run_stats = CupRunStats(
+                run_id=run_id,
+                duration_s=dur,
+                total_samples=self._active_run_total_samples,
+                valid_samples=self._active_run_valid_samples,
+                over_range_samples=self._active_run_over_range_samples,
+                average_current_a=avg,
+            )
+            sample_count = cnt
+            duration_s = dur
+            self._active_run_id = None
+
         close_info = f"reason={reason}"
         if sample_count > 0:
             close_info += f", samples={sample_count}"
@@ -362,3 +426,32 @@ class CupSessionWriter:
     @property
     def run_count(self) -> int:
         return len(self._runs_recorded)
+
+    @property
+    def active_run_stats(self) -> CupRunStats:
+        """Return running statistics for the active acquisition run (or last completed run)."""
+        if self._active_run_id is not None:
+            dur = max(0.0, self._active_run_t_last - self._active_run_t_start)
+            avg = (
+                (self._active_run_current_sum / self._active_run_valid_samples)
+                if self._active_run_valid_samples > 0
+                else None
+            )
+            return CupRunStats(
+                run_id=self._active_run_id,
+                duration_s=dur,
+                total_samples=self._active_run_total_samples,
+                valid_samples=self._active_run_valid_samples,
+                over_range_samples=self._active_run_over_range_samples,
+                average_current_a=avg,
+            )
+        if self._last_run_stats is not None:
+            return self._last_run_stats
+        return CupRunStats(
+            run_id=None,
+            duration_s=0.0,
+            total_samples=0,
+            valid_samples=0,
+            over_range_samples=0,
+            average_current_a=None,
+        )

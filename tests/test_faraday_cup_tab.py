@@ -14,6 +14,7 @@ Covers:
     with the log-amp path.
   * Assertions check operator-visible text, not private widget attributes.
 """
+import csv
 import os
 
 import pytest
@@ -24,6 +25,8 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from rbl.gui.app import MainWindow
 from rbl.gui.faraday_cup_tab import FaradayCupTab
+from rbl.hardware.current_monitor import format_current
+from rbl.services.cup_session_writer import CupSessionWriter
 from rbl.state.beamline import Beamline
 from tests.payloads import CupFeed, window_payload
 
@@ -328,4 +331,236 @@ class TestFaradayCupTabAcquisitionRuns:
         assert not tab.btn_force_start.isEnabled()
         assert not tab.btn_force_stop.isEnabled()
         assert not beamline.cup_acquiring
+
+
+class TestFaradayCupTabRunMetricsAndAverage:
+    """Tests for active run duration, sample counts, running average, and over-range exclusion."""
+
+    def test_run_duration_and_samples_updated_during_run(self, qapp):
+        beamline = Beamline()
+        tab = FaradayCupTab(beamline=beamline)
+        feed = CupFeed(tab, beamline=beamline)
+        tab.show()
+        qapp.processEvents()
+
+        # Reading at t_host=10.0 (debouncing starts)
+        feed.send_reading(1.0e-6, timestamp=1.0, t_host=10.0)
+        qapp.processEvents()
+
+        # Reading at t_host=11.0 (>= 1.0 s debounce -> Run 1 opens at t_host=11.0)
+        feed.send_reading(1.0e-6, timestamp=2.0, t_host=11.0)
+        qapp.processEvents()
+        assert "ACQUIRING" in tab.lbl_run_status.text()
+
+        # Send subsequent samples at t_host=12.0, 13.0, 14.0
+        feed.send_reading(1.0e-6, timestamp=3.0, t_host=12.0)
+        feed.send_reading(1.0e-6, timestamp=4.0, t_host=13.0)
+        feed.send_reading(1.0e-6, timestamp=5.0, t_host=14.0)
+        qapp.processEvents()
+
+        # Duration is 14.0 - 11.0 = 3.0 s, 4 samples total in run
+        assert "3.0 s" in tab.lbl_duration.text()
+        assert tab.lbl_samples.text() == "4"
+
+    def test_running_average_agrees_with_session_file(self, qapp, tmp_path):
+        """Running average matches the average computed from logged session file."""
+        beamline = Beamline()
+        session_writer = CupSessionWriter(output_dir=tmp_path)
+        tab = FaradayCupTab(beamline=beamline, session_writer=session_writer)
+        feed = CupFeed(tab, beamline=beamline)
+        tab.show()
+        qapp.processEvents()
+
+        feed.send_reading(0.0, timestamp=0.0, t_host=0.0)
+        qapp.processEvents()
+
+        # Force start run
+        tab.btn_force_start.click()
+        qapp.processEvents()
+
+        # Send series: 1.0 µA, 2.0 µA, 3.0 µA
+        feed.send_reading(1.0e-6, timestamp=1.0, t_host=1.0)
+        feed.send_reading(2.0e-6, timestamp=2.0, t_host=2.0)
+        feed.send_reading(3.0e-6, timestamp=3.0, t_host=3.0)
+        qapp.processEvents()
+
+        # Capture displayed running average while run is open
+        displayed_average = tab.lbl_average.text()
+        assert "2.00 µA" in displayed_average
+
+        # Close run and file
+        tab.btn_force_stop.click()
+        tab.close()
+        qapp.processEvents()
+
+        # Read the logged session CSV file and compute average independently
+        with open(session_writer.csv_path, encoding="utf-8") as f:
+            reader = csv.DictReader([line for line in f if not line.startswith("#")])
+            rows = list(reader)
+
+        sample_rows = [r for r in rows if r["record_type"] == "sample" and r["run_id"] == "1"]
+        assert len(sample_rows) == 3
+        valid_currents = [
+            float(r["current_a"]) for r in sample_rows if r["over_range"] == "False"
+        ]
+        file_average = sum(valid_currents) / len(valid_currents)
+
+        assert file_average == pytest.approx(2.0e-6)
+        # Displayed text and computed file average must agree
+        assert displayed_average == format_current(file_average)
+
+    def test_over_range_samples_excluded_from_average_and_visibly_flagged(self, qapp):
+        """Over-range samples are excluded from average calculation and flagged on UI."""
+        beamline = Beamline()
+        tab = FaradayCupTab(beamline=beamline)
+        feed = CupFeed(tab, beamline=beamline)
+        tab.show()
+        qapp.processEvents()
+
+        feed.send_reading(0.0, timestamp=0.0, t_host=0.0)
+        qapp.processEvents()
+
+        tab.btn_force_start.click()
+        qapp.processEvents()
+
+        # 2 normal samples (4.0 µA, 6.0 µA) -> average = 5.0 µA
+        feed.send_reading(4.0e-6, timestamp=1.0, t_host=1.0)
+        feed.send_reading(6.0e-6, timestamp=2.0, t_host=2.0)
+        qapp.processEvents()
+        assert "5.00 µA" in tab.lbl_average.text()
+
+        # 1 over-range sample (+9.91e37 with status word 0x40)
+        feed.send_raw("+9.910000E+37,+1.000000,+00000064", t_host=3.0)
+        qapp.processEvents()
+
+        # Running average remains 5.00 µA (over-range excluded)
+        assert "5.00 µA" in tab.lbl_average.text()
+
+        # Total samples and over-range exclusion are explicitly visible
+        assert "1 over-range excluded" in tab.lbl_samples.text()
+        assert "1 over-range excluded" in tab.lbl_avg_detail.text()
+        assert "2 valid samples" in tab.lbl_avg_detail.text()
+
+    def test_disconnected_tab_metrics_are_clean_and_not_zeroed(self, qapp):
+        beamline = Beamline()
+        tab = FaradayCupTab(beamline=beamline)
+        tab.show()
+        qapp.processEvents()
+
+        assert "—" in tab.lbl_average.text()
+        assert "—" in tab.lbl_duration.text()
+        assert "—" in tab.lbl_samples.text()
+        assert "Not connected" in tab.lbl_avg_detail.text()
+        assert "0" not in tab.lbl_average.text()
+
+    def test_mid_run_disconnection_resets_metrics_honestly(self, qapp):
+        beamline = Beamline()
+        tab = FaradayCupTab(beamline=beamline)
+        feed = CupFeed(tab, beamline=beamline)
+        tab.show()
+        qapp.processEvents()
+
+        feed.send_reading(1.0e-6, timestamp=0.0, t_host=0.0)
+        feed.send_reading(1.0e-6, timestamp=1.0, t_host=1.0)
+        qapp.processEvents()
+        assert "ACQUIRING" in tab.lbl_run_status.text()
+        assert "1.00 µA" in tab.lbl_average.text()
+
+        # Disconnect mid-run
+        beamline.disconnect_picoammeter()
+        qapp.processEvents()
+
+        assert "Disconnected" in tab.lbl_run_status.text()
+        assert "—" in tab.lbl_average.text()
+        assert "—" in tab.lbl_duration.text()
+        assert "—" in tab.lbl_samples.text()
+        assert "Not connected" in tab.lbl_avg_detail.text()
+
+
+class TestFaradayCupTabLivePlot:
+    """Tests for FaradayCupTab live scrolling plot, navigation, and zoom controls."""
+
+    def test_live_plot_receives_data_and_navigation_controls(self, qapp):
+        beamline = Beamline()
+        tab = FaradayCupTab(beamline=beamline)
+        feed = CupFeed(tab, beamline=beamline)
+        tab.show()
+        qapp.processEvents()
+
+        feed.send_reading(1.5e-6, timestamp=1.0, t_host=1.0)
+        feed.send_reading(2.5e-6, timestamp=2.0, t_host=2.0)
+        qapp.processEvents()
+
+        latest_t, latest_v = tab.buffer.latest()
+        assert latest_t == 2.0
+        assert latest_v == pytest.approx(2.5e-6)
+
+        assert tab.plot.is_live
+        assert "● LIVE" in tab.lbl_mode.text()
+        assert not tab.btn_jump_live.isVisible()
+
+        # Zoom out
+        initial_window = tab.plot.window_seconds
+        tab.plot.zoom_out()
+        qapp.processEvents()
+        assert tab.plot.window_seconds > initial_window
+        assert "LIVE" in tab.lbl_mode.text()
+
+        # Zoom in
+        tab.plot.zoom_in()
+        qapp.processEvents()
+        assert tab.plot.window_seconds == initial_window
+
+        # Drag slider into frozen mode
+        tab.plot.slider.setValue(5000)
+        qapp.processEvents()
+        assert not tab.plot.is_live
+        assert tab.btn_jump_live.isVisible()
+        assert "Frozen" in tab.lbl_mode.text()
+
+        # Click Jump to Live
+        tab.btn_jump_live.click()
+        qapp.processEvents()
+        assert tab.plot.is_live
+        assert not tab.btn_jump_live.isVisible()
+        assert "● LIVE" in tab.lbl_mode.text()
+
+    def test_show_hide_controls_redraw_timer(self, qapp):
+        beamline = Beamline()
+        tab = FaradayCupTab(beamline=beamline)
+        feed = CupFeed(tab, beamline=beamline)
+        tab.show()
+        qapp.processEvents()
+
+        feed.send_reading(1.0e-6, timestamp=1.0, t_host=1.0)
+        qapp.processEvents()
+        assert tab.plot.redraw_timer.isActive()
+
+        # Hide tab
+        tab.hide()
+        qapp.processEvents()
+        assert not tab.plot.redraw_timer.isActive()
+
+        # Show tab again
+        tab.show()
+        qapp.processEvents()
+        assert tab.plot.redraw_timer.isActive()
+
+    def test_disconnection_clears_plot_trace(self, qapp):
+        beamline = Beamline()
+        tab = FaradayCupTab(beamline=beamline)
+        feed = CupFeed(tab, beamline=beamline)
+        tab.show()
+        qapp.processEvents()
+
+        feed.send_reading(3.0e-6, timestamp=1.0, t_host=1.0)
+        qapp.processEvents()
+
+        # Disconnect
+        beamline.disconnect_picoammeter()
+        qapp.processEvents()
+
+        assert "—" in tab.lbl_current.text()
+        assert not tab.plot.redraw_timer.isActive()
+
 
