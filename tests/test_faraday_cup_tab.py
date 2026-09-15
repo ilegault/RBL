@@ -212,3 +212,120 @@ class TestCrossTabAgreementSlitVsCupCurrent:
         # Slit currents tab remains unaffected
         for ain in ("AIN0", "AIN1", "AIN2", "AIN3"):
             assert "4.50" not in win.current_tab.lbl_i[ain].text()
+
+
+class TestFaradayCupTabAcquisitionRuns:
+    """Tests for threshold-triggered runs and force start/stop controls on FaradayCupTab."""
+
+    def test_run_status_initial_disconnected(self, qapp):
+        beamline = Beamline()
+        tab = FaradayCupTab(beamline=beamline)
+        tab.show()
+        qapp.processEvents()
+
+        assert "Disconnected" in tab.lbl_run_status.text()
+        assert not tab.btn_force_start.isEnabled()
+        assert not tab.btn_force_stop.isEnabled()
+
+    def test_run_status_connected_idle(self, qapp):
+        beamline = Beamline()
+        tab = FaradayCupTab(beamline=beamline)
+        feed = CupFeed(tab, beamline=beamline)
+        tab.show()
+        qapp.processEvents()
+
+        # Send reading below arm threshold (0.1 µA < 0.5 µA)
+        feed.send_reading(0.1e-6, timestamp=0.0, t_host=0.0)
+        qapp.processEvents()
+
+        assert "Idle" in tab.lbl_run_status.text()
+        assert tab.btn_force_start.isEnabled()
+        assert not tab.btn_force_stop.isEnabled()
+
+    def test_threshold_triggered_acquisition_and_release(self, qapp):
+        beamline = Beamline()
+        tab = FaradayCupTab(beamline=beamline)
+        feed = CupFeed(tab, beamline=beamline)
+        tab.show()
+        qapp.processEvents()
+
+        # Insertion begins at t=1.0 with 1.0 µA
+        feed.send_reading(1.0e-6, timestamp=1.0, t_host=1.0)
+        qapp.processEvents()
+        # Debounce pending
+        assert "In Beam" in tab.lbl_run_status.text() or "Idle" in tab.lbl_run_status.text()
+
+        # At t=2.0 (>= 1.0s debounce elapsed), run 1 opens
+        feed.send_reading(1.0e-6, timestamp=2.0, t_host=2.0)
+        qapp.processEvents()
+
+        assert "ACQUIRING (Run #1)" in tab.lbl_run_status.text()
+        assert not tab.btn_force_start.isEnabled()
+        assert tab.btn_force_stop.isEnabled()
+        assert beamline.cup_acquiring
+
+        # Cup withdrawn at t=10.0 (0.0 A)
+        feed.send_reading(0.0, timestamp=10.0, t_host=10.0)
+        qapp.processEvents()
+        # Still acquiring during release interval
+        assert "ACQUIRING" in tab.lbl_run_status.text()
+
+        # At t=13.0 (>= 3.0s release elapsed), run 1 closes
+        feed.send_reading(0.0, timestamp=13.0, t_host=13.0)
+        qapp.processEvents()
+
+        assert "Idle" in tab.lbl_run_status.text()
+        assert tab.btn_force_start.isEnabled()
+        assert not tab.btn_force_stop.isEnabled()
+        assert not beamline.cup_acquiring
+
+    def test_force_start_and_force_stop_buttons(self, qapp):
+        beamline = Beamline()
+        tab = FaradayCupTab(beamline=beamline)
+        feed = CupFeed(tab, beamline=beamline)
+        tab.show()
+        qapp.processEvents()
+
+        feed.send_reading(0.0, timestamp=0.0, t_host=0.0)
+        qapp.processEvents()
+        assert tab.btn_force_start.isEnabled()
+
+        # Click Force Start
+        tab.btn_force_start.click()
+        qapp.processEvents()
+
+        assert "ACQUIRING (Run #1)" in tab.lbl_run_status.text()
+        assert not tab.btn_force_start.isEnabled()
+        assert tab.btn_force_stop.isEnabled()
+        assert beamline.cup_acquiring
+
+        # Click Force Stop
+        tab.btn_force_stop.click()
+        qapp.processEvents()
+
+        assert "Idle" in tab.lbl_run_status.text()
+        assert tab.btn_force_start.isEnabled()
+        assert not tab.btn_force_stop.isEnabled()
+        assert not beamline.cup_acquiring
+
+    def test_disconnection_mid_run_cleans_up_tab(self, qapp):
+        beamline = Beamline()
+        tab = FaradayCupTab(beamline=beamline)
+        feed = CupFeed(tab, beamline=beamline)
+        tab.show()
+        qapp.processEvents()
+
+        feed.send_reading(1.0e-6, timestamp=0.0, t_host=0.0)
+        feed.send_reading(1.0e-6, timestamp=1.0, t_host=1.0)
+        qapp.processEvents()
+        assert "ACQUIRING" in tab.lbl_run_status.text()
+
+        # Disconnect mid-run
+        beamline.disconnect_picoammeter()
+        qapp.processEvents()
+
+        assert "Disconnected" in tab.lbl_run_status.text()
+        assert not tab.btn_force_start.isEnabled()
+        assert not tab.btn_force_stop.isEnabled()
+        assert not beamline.cup_acquiring
+

@@ -62,6 +62,7 @@ class PicoammeterLinkMixin:
         """Called from Beamline.__init__ — sets up mixin state without I/O."""
         self._picoammeter_worker: PicoammeterWorker | None = None
         self._picoammeter_resource: str = ""
+        self._cup_acquiring: bool = False
         self._last_cup_state: CupState = CupState(connected=False)
 
     # ── Connection Lifecycle ──────────────────────────────────────────────────
@@ -78,6 +79,7 @@ class PicoammeterLinkMixin:
             return
 
         self._picoammeter_resource = resource or ""
+        self._cup_acquiring = False
         worker = PicoammeterWorker(resource_name=resource)
         worker.reading_ready.connect(self._on_picoammeter_reading)
         worker.error.connect(self._on_picoammeter_error)
@@ -104,6 +106,7 @@ class PicoammeterLinkMixin:
             worker.finished.connect(worker.deleteLater)
             worker.stop()
 
+        self._cup_acquiring = False
         self._last_cup_state = CupState(connected=False)
         self.cup_changed.emit(self._last_cup_state)
         self.cup_disconnected_evt.emit()
@@ -119,8 +122,14 @@ class PicoammeterLinkMixin:
         """Return the most recent CupState snapshot."""
         return self._last_cup_state
 
+    @property
+    def cup_acquiring(self) -> bool:
+        """Return True if the picoammeter worker is currently polling at acquiring rate."""
+        return self._cup_acquiring
+
     def set_cup_acquiring(self, acquiring: bool) -> None:
         """Set polling rate to acquiring (10 Hz) or idle (2 Hz)."""
+        self._cup_acquiring = acquiring
         if self._picoammeter_worker is not None:
             self._picoammeter_worker.set_acquiring(acquiring)
 

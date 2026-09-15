@@ -431,6 +431,9 @@ class CupState:
     `valid` is True if reading was successfully parsed and is not unavailable.
     `t_host` is the host timestamp (time.time()) when the reading was received.
     `raw` is the untouched wire string from the instrument.
+    `acquiring` is True if an acquisition run is currently active.
+    `run_id` is the integer run identifier when acquiring, or None when idle.
+    `cup_in_beam` is True if the cup is currently detected in the beam.
     """
     connected: bool
     current: float | None = None
@@ -441,4 +444,7 @@ class CupState:
     valid: bool = False
     t_host: float = float("nan")
     raw: str = ""
+    acquiring: bool = False
+    run_id: int | None = None
+    cup_in_beam: bool = False
 
