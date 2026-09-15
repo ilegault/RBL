@@ -32,6 +32,7 @@ from rbl.gui.amp_tab import AmpTab
 from rbl.gui.calibration_tab import CalibrationTab
 from rbl.gui.camera_tab import CameraTab
 from rbl.gui.dynamic_adjustment_tab import DynamicAdjustmentTab
+from rbl.gui.faraday_cup_tab import FaradayCupTab
 from rbl.gui.funcgen_tab import FuncGenTab
 from rbl.gui.load_characterization_tab import LoadCharacterizationTab
 from rbl.gui.logamp_tab import CurrentTab
@@ -106,6 +107,12 @@ TAB_DECLARATIONS: tuple[TabDeclaration, ...] = (
         consumes_stream=True,
     ),
     TabDeclaration(
+        title="Faraday Cup",
+        attr_name="faraday_cup_tab",
+        factory=lambda win: FaradayCupTab(win.beamline, win),
+        consumes_stream=False,
+    ),
+    TabDeclaration(
         title="Beam Profiler",
         attr_name="profiler_tab",
         factory=lambda win: ProfilerTab(win.beamline, win),
@@ -168,6 +175,7 @@ class MainWindow(QMainWindow):
     vacuum_tab: VacuumTab
     motor_tab: MotorTab
     current_tab: CurrentTab
+    faraday_cup_tab: FaradayCupTab
     profiler_tab: ProfilerTab
     camera_tab: CameraTab
     raster_planner_tab: RasterPlannerTab
@@ -364,6 +372,12 @@ class MainWindow(QMainWindow):
         self.motor_tab.motors_disconnected.connect(self.beamline.motors_disconnected)
         self.beamline.motors_changed.connect(self.current_tab.on_motor_state)
 
+        # Faraday Cup: Keithley 6482 picoammeter state snapshots & lifecycle
+        self.beamline.cup_changed.connect(self.faraday_cup_tab.on_cup_state)
+        self.beamline.cup_error.connect(self.faraday_cup_tab.on_cup_error)
+        self.beamline.cup_connected.connect(self.faraday_cup_tab.on_cup_connected)
+        self.beamline.cup_disconnected_evt.connect(self.faraday_cup_tab.on_cup_disconnected)
+
         # Start on Overview.  It is the screen that answers "what is this
         # beamline doing right now" without pressing anything, and it is
         # where Connect All lives - so it is the first thing an operator
@@ -454,21 +468,11 @@ class MainWindow(QMainWindow):
         return [
             ("Galil",              self.motor_tab.connect_if_needed),
             ("LabJack T7",         self._labjack_connect_if_needed),
-            ("Faraday cup",        self._picoammeter_connect_if_needed),
+            ("Faraday cup",        self.faraday_cup_tab.connect_if_needed),
             ("Function generators", self.funcgen_tab.connect_if_needed),
             ("Scope",              self.profiler_tab.connect_if_needed),
             ("Vacuum gauges",      self.vacuum_tab.connect_if_needed),
         ]
-
-    def _picoammeter_connect_if_needed(self) -> tuple:
-        """The Keithley 6482 is owned by Beamline; its connect step lives here."""
-        if self.beamline.picoammeter_connected:
-            return "already", "Faraday cup picoammeter already connected"
-        try:
-            self.beamline.connect_picoammeter()
-        except Exception as exc:
-            return "failed", f"Picoammeter: {exc}"
-        return "connected", "Faraday cup picoammeter"
 
     def _labjack_connect_if_needed(self) -> tuple:
         """The T7 is owned here, not by a tab, so its step lives here too."""
