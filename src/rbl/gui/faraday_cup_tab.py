@@ -36,6 +36,7 @@ Over-range conditions are shown explicitly as "OVER-RANGE" rather than numbers.
 from __future__ import annotations
 
 import logging
+import time
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt
@@ -54,6 +55,7 @@ from rbl.config.cup_config import KEITHLEY_6482_DEFAULT_RESOURCE
 from rbl.gui import theme
 from rbl.gui.widgets.connection_bar import StatusPill
 from rbl.hardware.current_monitor import format_current
+from rbl.services.cup_acquisition import CupAcquisitionStateMachine
 from rbl.snapshots import CupState
 
 if TYPE_CHECKING:
@@ -69,6 +71,7 @@ class FaradayCupTab(QWidget):
         super().__init__(parent)
         self.beamline = beamline
         self._connected = False
+        self.acquisition = CupAcquisitionStateMachine()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -141,6 +144,40 @@ class FaradayCupTab(QWidget):
         reading_lay.addLayout(detail_lay)
 
         layout.addWidget(reading_box)
+
+        # ── Acquisition Run Panel ─────────────────────────────────────────────
+        acq_box = QGroupBox("Acquisition Run")
+        acq_lay = QHBoxLayout(acq_box)
+        acq_lay.setSpacing(10)
+        acq_lay.setContentsMargins(12, 10, 12, 10)
+
+        acq_lay.addWidget(QLabel("Run Status:"))
+        self.lbl_run_status = QLabel("Idle")
+        self.lbl_run_status.setStyleSheet(theme.status_label(theme.MUTED))
+        self.lbl_run_status.setMinimumWidth(160)
+        acq_lay.addWidget(self.lbl_run_status)
+
+        acq_lay.addSpacing(20)
+
+        self.btn_force_start = QPushButton("Force Start")
+        self.btn_force_start.setStyleSheet("font-weight: bold; padding: 4px 12px;")
+        self.btn_force_start.setToolTip(
+            "Force an acquisition run to begin immediately regardless of current"
+        )
+        self.btn_force_start.clicked.connect(self._on_force_start_clicked)
+        acq_lay.addWidget(self.btn_force_start)
+
+        self.btn_force_stop = QPushButton("Force Stop")
+        self.btn_force_stop.setStyleSheet("font-weight: bold; padding: 4px 12px;")
+        self.btn_force_stop.setToolTip(
+            "Force the active acquisition run to stop immediately regardless of current"
+        )
+        self.btn_force_stop.clicked.connect(self._on_force_stop_clicked)
+        acq_lay.addWidget(self.btn_force_stop)
+
+        acq_lay.addStretch(1)
+
+        layout.addWidget(acq_box)
         layout.addStretch(1)
 
         # Set initial disconnected state
@@ -177,6 +214,43 @@ class FaradayCupTab(QWidget):
             except Exception as exc:
                 log.exception("FaradayCupTab connect failed: %s", exc)
 
+    def _on_force_start_clicked(self) -> None:
+        transition = self.acquisition.force_start(t=time.time())
+        if transition is not None and self.beamline is not None:
+            self.beamline.set_cup_acquiring(True)
+        self._update_acquisition_view()
+
+    def _on_force_stop_clicked(self) -> None:
+        transition = self.acquisition.force_stop(t=time.time())
+        if transition is not None and self.beamline is not None:
+            self.beamline.set_cup_acquiring(False)
+        self._update_acquisition_view()
+
+    def _update_acquisition_view(self) -> None:
+        if not self._connected:
+            self.lbl_run_status.setText("Disconnected")
+            self.lbl_run_status.setStyleSheet(theme.status_label(theme.MUTED))
+            self.btn_force_start.setEnabled(False)
+            self.btn_force_stop.setEnabled(False)
+            return
+
+        if self.acquisition.is_acquiring:
+            run_id = self.acquisition.current_run_id
+            run_lbl = f"ACQUIRING (Run #{run_id})" if run_id else "ACQUIRING"
+            self.lbl_run_status.setText(run_lbl)
+            self.lbl_run_status.setStyleSheet(theme.status_label(theme.OK))
+            self.btn_force_start.setEnabled(False)
+            self.btn_force_stop.setEnabled(True)
+        else:
+            if self.acquisition.cup_in_beam:
+                self.lbl_run_status.setText("In Beam (Arming)")
+                self.lbl_run_status.setStyleSheet(theme.status_label(theme.WARN))
+            else:
+                self.lbl_run_status.setText("Idle")
+                self.lbl_run_status.setStyleSheet(theme.status_label(theme.MUTED))
+            self.btn_force_start.setEnabled(True)
+            self.btn_force_stop.setEnabled(False)
+
     def _set_disconnected_view(self) -> None:
         self._connected = False
         self.status_pill.set_connected(False)
@@ -187,6 +261,10 @@ class FaradayCupTab(QWidget):
         self.lbl_detail.setStyleSheet(f"color: {theme.MUTED}; font-style: italic;")
         self.lbl_ident.setText("")
         self.lbl_meta.setText("")
+        self.acquisition.disconnect(t=time.time())
+        if self.beamline is not None:
+            self.beamline.set_cup_acquiring(False)
+        self._update_acquisition_view()
 
     # ── Snapshot / State Updates ──────────────────────────────────────────────
 
@@ -199,6 +277,19 @@ class FaradayCupTab(QWidget):
         self._connected = True
         self.status_pill.set_connected(True)
         self.btn_connect.setText("Disconnect")
+
+        # Update acquisition state machine
+        t_sample = state.t_host if state.t_host == state.t_host else time.time()
+        transition = self.acquisition.update(
+            current=state.current,
+            t=t_sample,
+            over_range=state.over_range,
+            connected=True,
+        )
+        if transition is not None and self.beamline is not None:
+            self.beamline.set_cup_acquiring(self.acquisition.is_acquiring)
+
+        self._update_acquisition_view()
 
         if state.over_range:
             self.lbl_current.setText("OVER-RANGE")
@@ -229,6 +320,8 @@ class FaradayCupTab(QWidget):
         self.status_pill.set_connected(True)
         self.btn_connect.setText("Disconnect")
         self.lbl_ident.setText(f"{ident}" if ident else "Keithley 6482")
+        self.btn_force_start.setEnabled(True)
+        self.btn_force_stop.setEnabled(False)
 
     def on_cup_disconnected(self) -> None:
         """Called when Keithley 6482 disconnects."""
@@ -239,3 +332,4 @@ class FaradayCupTab(QWidget):
         log.warning("FaradayCupTab error: %s", msg)
         self.lbl_detail.setText(f"Error: {msg}")
         self.lbl_detail.setStyleSheet(f"color: {theme.FAULT}; font-style: italic;")
+

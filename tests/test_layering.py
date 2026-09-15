@@ -15,6 +15,7 @@ tracked in docs/IMPROVE_CODEBASE_ARCHITECTURE.md §1.4:
 Every other upward import is a bug. This test prevents new ones from being
 added.
 """
+import os
 import pathlib
 import sys
 
@@ -45,7 +46,7 @@ def test_no_new_layer_violations():
     all_violations = find_violations(_REPO_ROOT / 'src' / 'rbl')
     new = [
         msg for key, msg in all_violations
-        if not any(key.endswith(k.replace('/', pathlib.sep))
+        if not any(key.endswith(k.replace('/', os.sep))
                    or key.endswith(k)
                    for k in _KNOWN_VIOLATIONS)
     ]
