@@ -47,6 +47,11 @@ CUP_RELEASE_THRESHOLD_A: float = 0.25e-6   # 0.25 µA to trigger run release
 CUP_ARM_DEBOUNCE_S: float = 1.0            # 1.0 s sustained reading before run opens
 CUP_RELEASE_INTERVAL_S: float = 3.0        # 3.0 s below release threshold before run closes
 
+# ---- Session Logging & Heartbeat (ADR 0002) -------------------------------
+# Periodic idle heartbeat interval in seconds while watching out-of-beam baseline.
+CUP_IDLE_HEARTBEAT_INTERVAL_S: float = 10.0
+
 # ---- Display & Stale-data guard -------------------------------------------
 # A snapshot older than this many seconds is considered stale.
 CUP_STALE_THRESHOLD_S: float = 3.0 * CUP_POLL_INTERVAL_IDLE_S
+
