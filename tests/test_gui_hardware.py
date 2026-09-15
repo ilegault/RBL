@@ -108,6 +108,7 @@ class TestTabNavigation:
             "Vacuum",
             "Stepper Motors",
             "Slit Currents",
+            "Faraday Cup",
             "Beam Profiler",
             "Camera",
             "Raster Planner",
