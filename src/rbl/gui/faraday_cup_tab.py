@@ -54,10 +54,23 @@ With nothing connected, the tab clearly displays a disconnected status and
 placeholder ("—"), never displaying zero or a stale measurement.
 Over-range conditions are shown explicitly as "OVER-RANGE" rather than numbers.
 Disconnection mid-run cleanly closes the active run and resets all metrics.
+
+CUP ACTUATION AND POSITION FEEDBACK (ADR 0003)
+----------------------------------------------
+The Faraday cup tab provides manual Insert (IN) and Retract (OUT) actuation
+controls operated via the LabJack T7. Commanded position and confirmed position
+are presented as two distinct, always-visible indicators and are never merged.
+The controller status contacts report IN, OUT, In Transit, or Indeterminate.
+An indeterminate reading is presented as a fault, not as a position.
+A commanded move that fails to confirm within CUP_MOVE_CONFIRMATION_TIMEOUT_S (2.0 s)
+raises a visible fault naming which move failed and does not re-command.
+When the controller is not in AUTO mode, the tab clearly informs the operator
+that remote commands will be accepted and ignored.
 """
 from __future__ import annotations
 
 import logging
+import math
 import time
 from typing import TYPE_CHECKING
 
@@ -76,11 +89,13 @@ from PySide6.QtWidgets import (
 
 from rbl.config.cup_config import (
     CUP_IDLE_HEARTBEAT_INTERVAL_S,
+    CUP_MOVE_CONFIRMATION_TIMEOUT_S,
     KEITHLEY_6482_DEFAULT_RESOURCE,
 )
 from rbl.gui import theme
 from rbl.gui.widgets.connection_bar import StatusPill
 from rbl.gui.widgets.live_plot import LivePlotPanel
+from rbl.hardware.cup_status import CupPosition
 from rbl.hardware.current_monitor import RollingBuffer, format_current
 from rbl.services.cup_acquisition import (
     CupAcquisitionStateMachine,
@@ -89,7 +104,7 @@ from rbl.services.cup_acquisition import (
     RunOpened,
 )
 from rbl.services.cup_session_writer import CupSessionWriter
-from rbl.snapshots import CupState
+from rbl.snapshots import CupActuationState, CupState
 
 if TYPE_CHECKING:
     from rbl.state.beamline import Beamline
@@ -120,6 +135,18 @@ class FaradayCupTab(QWidget):
         )
         self._last_heartbeat_t: float = 0.0
         self.buffer = RollingBuffer(self.BUFFER_CAPACITY)
+
+        # Faraday cup actuation state (ADR 0003)
+        self._actuation_connected: bool = False
+        self._commanded: CupPosition = CupPosition.IN
+        self._confirmed: CupPosition = CupPosition.IN_TRANSIT
+        self._auto_mode: bool = False
+        self._stale: bool = False
+        self._move_in_flight: bool = False
+        self._move_target: CupPosition | None = None
+        self._move_start_t: float = float("nan")
+        self._last_state_t: float = float("nan")
+        self._move_fault: str = ""
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -197,6 +224,85 @@ class FaradayCupTab(QWidget):
         reading_lay.addStretch()
 
         mid_row.addWidget(reading_box, stretch=1)
+
+        # Middle: Cup Actuation & Position Panel (ADR 0003)
+        act_box = QGroupBox("Cup Actuation")
+        act_lay = QVBoxLayout(act_box)
+        act_lay.setSpacing(6)
+        act_lay.setContentsMargins(12, 10, 12, 10)
+
+        # Command Buttons Row
+        btn_lay = QHBoxLayout()
+        btn_lay.setSpacing(8)
+
+        self.btn_insert = QPushButton("Insert")
+        self.btn_insert.setToolTip("Command Faraday cup IN (into beam path)")
+        self.btn_insert.setStyleSheet("font-weight: bold; padding: 4px 12px;")
+        self.btn_insert.setEnabled(False)
+        self.btn_insert.clicked.connect(self._on_insert_clicked)
+        btn_lay.addWidget(self.btn_insert)
+
+        self.btn_retract = QPushButton("Retract")
+        self.btn_retract.setToolTip("Command Faraday cup OUT (retracted from beam path)")
+        self.btn_retract.setStyleSheet("font-weight: bold; padding: 4px 12px;")
+        self.btn_retract.setEnabled(False)
+        self.btn_retract.clicked.connect(self._on_retract_clicked)
+        btn_lay.addWidget(self.btn_retract)
+
+        btn_lay.addStretch()
+        act_lay.addLayout(btn_lay)
+
+        # Position indicators grid (Commanded & Confirmed kept strictly apart)
+        pos_grid = QGridLayout()
+        pos_grid.setContentsMargins(0, 4, 0, 0)
+        pos_grid.setSpacing(6)
+
+        lbl_cmd_title = QLabel("Commanded Position:")
+        lbl_cmd_title.setStyleSheet(f"font-size: {theme.FS_LABEL}px; color: {theme.NEUTRAL};")
+        pos_grid.addWidget(lbl_cmd_title, 0, 0)
+
+        self.lbl_commanded = QLabel("  —    ")
+        self.lbl_commanded.setStyleSheet(theme.status_label(theme.MUTED))
+        self.lbl_commanded.setMinimumWidth(140)
+        pos_grid.addWidget(self.lbl_commanded, 0, 1)
+
+        lbl_conf_title = QLabel("Confirmed Position:")
+        lbl_conf_title.setStyleSheet(f"font-size: {theme.FS_LABEL}px; color: {theme.NEUTRAL};")
+        pos_grid.addWidget(lbl_conf_title, 1, 0)
+
+        self.lbl_confirmed = QLabel("  —    ")
+        self.lbl_confirmed.setStyleSheet(theme.status_label(theme.MUTED))
+        self.lbl_confirmed.setMinimumWidth(140)
+        pos_grid.addWidget(self.lbl_confirmed, 1, 1)
+
+        act_lay.addLayout(pos_grid)
+
+        # Status notices & warnings
+        self.lbl_auto_mode = QLabel("")
+        self.lbl_auto_mode.setStyleSheet(
+            f"color: {theme.WARN}; font-size: {theme.FS_TINY}px; font-weight: bold;"
+        )
+        self.lbl_auto_mode.setWordWrap(True)
+        self.lbl_auto_mode.setVisible(False)
+        act_lay.addWidget(self.lbl_auto_mode)
+
+        self.lbl_stale = QLabel("")
+        self.lbl_stale.setStyleSheet(
+            f"color: {theme.WARN}; font-style: italic; font-size: {theme.FS_TINY}px;"
+        )
+        self.lbl_stale.setWordWrap(True)
+        self.lbl_stale.setVisible(False)
+        act_lay.addWidget(self.lbl_stale)
+
+        self.lbl_fault = QLabel("")
+        self.lbl_fault.setStyleSheet(theme.status_label(theme.FAULT))
+        self.lbl_fault.setWordWrap(True)
+        self.lbl_fault.setVisible(False)
+        act_lay.addWidget(self.lbl_fault)
+
+        act_lay.addStretch()
+
+        mid_row.addWidget(act_box, stretch=1)
 
         # Right: Acquisition Run Panel
         acq_box = QGroupBox("Acquisition Run")
@@ -354,6 +460,7 @@ class FaradayCupTab(QWidget):
 
         self._on_navigation_changed()
         self._set_disconnected_view()
+        self._set_actuation_disconnected_view()
 
     # ── Connection Handling ───────────────────────────────────────────────────
 
@@ -762,3 +869,185 @@ class FaradayCupTab(QWidget):
         self.ax.relim()
         self.ax.autoscale_view(scalex=False, scaley=True)
         self.plot.canvas.draw_idle()
+
+    # ── Cup Actuation and Confirmed Position (ADR 0003) ──────────────────────
+
+    def _on_insert_clicked(self) -> None:
+        """Handle operator pressing Insert button."""
+        if self._move_in_flight:
+            return
+        if not self._actuation_connected:
+            return
+        self._start_move(CupPosition.IN)
+        if self.beamline is not None:
+            self.beamline.command_cup_in()
+
+    def _on_retract_clicked(self) -> None:
+        """Handle operator pressing Retract button."""
+        if self._move_in_flight:
+            return
+        if not self._actuation_connected:
+            return
+        self._start_move(CupPosition.OUT)
+        if self.beamline is not None:
+            self.beamline.command_cup_out()
+
+    def _start_move(self, target: CupPosition) -> None:
+        """Initiate a commanded cup move and start confirmation timeout tracking."""
+        self._move_in_flight = True
+        self._move_target = target
+        start_t = self._last_state_t if not math.isnan(self._last_state_t) else time.time()
+        self._move_start_t = start_t
+        self._move_fault = ""
+        self._commanded = target
+        self._update_actuation_view()
+
+    def on_cup_actuation_state(self, state: CupActuationState) -> None:
+        """Ingest CupActuationState snapshot published by Beamline (ADR 0003)."""
+        if not state.connected:
+            self._set_actuation_disconnected_view()
+            return
+
+        self._actuation_connected = True
+        t_now = state.t if not math.isnan(state.t) else time.time()
+        self._last_state_t = t_now
+
+        # If commanded position changed externally (e.g. from script or another tab)
+        if state.commanded != self._commanded:
+            self._commanded = state.commanded
+            if state.commanded != state.confirmed and not self._move_in_flight:
+                self._move_in_flight = True
+                self._move_target = state.commanded
+                self._move_start_t = t_now
+                self._move_fault = ""
+
+        # Move confirmation and timeout checking
+        if self._move_in_flight and self._move_target is not None:
+            if state.confirmed == self._move_target:
+                # Move confirmed!
+                self._move_in_flight = False
+                self._move_target = None
+                self._move_fault = ""
+            elif state.confirmed == CupPosition.INDETERMINATE:
+                # Indeterminate contact reading during move
+                self._move_in_flight = False
+                target_name = "IN" if self._move_target == CupPosition.IN else "OUT"
+                self._move_fault = (
+                    f"Move Fault: Command {target_name} failed: contacts indeterminate"
+                )
+                self._move_target = None
+            elif not math.isnan(self._move_start_t):
+                elapsed = t_now - self._move_start_t
+                if elapsed >= CUP_MOVE_CONFIRMATION_TIMEOUT_S:
+                    self._move_in_flight = False
+                    target_name = "IN" if self._move_target == CupPosition.IN else "OUT"
+                    self._move_fault = (
+                        f"Move Fault: Command {target_name} did not confirm "
+                        f"within {CUP_MOVE_CONFIRMATION_TIMEOUT_S:.1f} s"
+                    )
+                    self._move_target = None
+
+        self._commanded = state.commanded
+        self._confirmed = state.confirmed
+        self._auto_mode = state.auto_mode
+        self._stale = state.stale
+
+        self._update_actuation_view()
+
+    def _update_actuation_view(self) -> None:
+        """Update actuation buttons, commanded/confirmed indicators, and warning labels."""
+        if not self._actuation_connected:
+            self._set_actuation_disconnected_view()
+            return
+
+        self.btn_insert.setEnabled(True)
+        self.btn_retract.setEnabled(True)
+
+        # Commanded position indicator
+        if self._commanded == CupPosition.IN:
+            self.lbl_commanded.setText("IN")
+            self.lbl_commanded.setStyleSheet(theme.status_label(theme.OK))
+        elif self._commanded == CupPosition.OUT:
+            self.lbl_commanded.setText("OUT")
+            self.lbl_commanded.setStyleSheet(theme.status_label(theme.OK))
+        else:
+            self.lbl_commanded.setText("  —    ")
+            self.lbl_commanded.setStyleSheet(theme.status_label(theme.MUTED))
+
+        # Confirmed position indicator: four distinct states
+        if self._confirmed == CupPosition.IN:
+            self.lbl_confirmed.setText("IN")
+            self.lbl_confirmed.setStyleSheet(theme.status_label(theme.OK))
+        elif self._confirmed == CupPosition.OUT:
+            self.lbl_confirmed.setText("OUT")
+            self.lbl_confirmed.setStyleSheet(theme.status_label(theme.OK))
+        elif self._confirmed == CupPosition.IN_TRANSIT:
+            self.lbl_confirmed.setText("In Transit")
+            self.lbl_confirmed.setStyleSheet(theme.status_label(theme.WARN))
+        elif self._confirmed == CupPosition.INDETERMINATE:
+            self.lbl_confirmed.setText("FAULT (Indeterminate)")
+            self.lbl_confirmed.setStyleSheet(theme.status_label(theme.FAULT))
+        else:
+            self.lbl_confirmed.setText("  —    ")
+            self.lbl_confirmed.setStyleSheet(theme.status_label(theme.MUTED))
+
+        # Fault label
+        if self._confirmed == CupPosition.INDETERMINATE:
+            self.lbl_fault.setText(
+                "Fault: Indeterminate status contacts (both IN and OUT asserted)"
+            )
+            self.lbl_fault.setStyleSheet(theme.status_label(theme.FAULT))
+            self.lbl_fault.setVisible(True)
+        elif self._move_fault:
+            self.lbl_fault.setText(self._move_fault)
+            self.lbl_fault.setStyleSheet(theme.status_label(theme.FAULT))
+            self.lbl_fault.setVisible(True)
+        else:
+            self.lbl_fault.setText("")
+            self.lbl_fault.setVisible(False)
+
+        # AUTO mode status
+        if not self._auto_mode:
+            self.lbl_auto_mode.setText(
+                "Controller not in AUTO (LOCAL mode) — remote commands will be accepted and ignored"
+            )
+            self.lbl_auto_mode.setStyleSheet(
+                f"color: {theme.WARN}; font-weight: bold; font-size: {theme.FS_TINY}px;"
+            )
+            self.lbl_auto_mode.setVisible(True)
+        else:
+            self.lbl_auto_mode.setText("AUTO mode (remote actuation enabled)")
+            self.lbl_auto_mode.setStyleSheet(f"color: {theme.OK}; font-size: {theme.FS_TINY}px;")
+            self.lbl_auto_mode.setVisible(True)
+
+        # Stale reading status
+        if self._stale:
+            self.lbl_stale.setText(
+                "Status reading is stale (position feedback unavailable in non-FULL profile)"
+            )
+            self.lbl_stale.setStyleSheet(
+                f"color: {theme.WARN}; font-style: italic; font-size: {theme.FS_TINY}px;"
+            )
+            self.lbl_stale.setVisible(True)
+        else:
+            self.lbl_stale.setText("")
+            self.lbl_stale.setVisible(False)
+
+    def _set_actuation_disconnected_view(self) -> None:
+        """Reset actuation panel to disconnected view."""
+        self._actuation_connected = False
+        self._move_in_flight = False
+        self._move_target = None
+        self._move_fault = ""
+        self.btn_insert.setEnabled(False)
+        self.btn_retract.setEnabled(False)
+        self.lbl_commanded.setText("  —    ")
+        self.lbl_commanded.setStyleSheet(theme.status_label(theme.MUTED))
+        self.lbl_confirmed.setText("  —    ")
+        self.lbl_confirmed.setStyleSheet(theme.status_label(theme.MUTED))
+        self.lbl_auto_mode.setText("")
+        self.lbl_auto_mode.setVisible(False)
+        self.lbl_stale.setText("")
+        self.lbl_stale.setVisible(False)
+        self.lbl_fault.setText("")
+        self.lbl_fault.setVisible(False)

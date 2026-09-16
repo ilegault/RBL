@@ -377,6 +377,10 @@ class MainWindow(QMainWindow):
         self.beamline.cup_error.connect(self.faraday_cup_tab.on_cup_error)
         self.beamline.cup_connected.connect(self.faraday_cup_tab.on_cup_connected)
         self.beamline.cup_disconnected_evt.connect(self.faraday_cup_tab.on_cup_disconnected)
+        # Faraday Cup Actuation: T7 digital I/O status & confirmed position feedback (ADR 0003).
+        # Beamline publishes CupActuationState snapshots with commanded/confirmed positions
+        # derived from FIO_STATE; FaradayCupTab renders indicators and issues commands.
+        self.beamline.cup_actuation_changed.connect(self.faraday_cup_tab.on_cup_actuation_state)
 
         # Start on Overview.  It is the screen that answers "what is this
         # beamline doing right now" without pressing anything, and it is

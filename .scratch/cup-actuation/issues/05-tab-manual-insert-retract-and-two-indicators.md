@@ -11,7 +11,7 @@ the operator and the cup.
 
 **Blocked by:** 04
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Read `docs/adr/0003-commanded-and-confirmed-cup-position.md` first**, decisions 2 and
 3. `docs/adr/0001-tests-first-and-no-muted-failures.md` is binding.
@@ -37,29 +37,53 @@ the operator and the cup.
 Invoke `/design-taste-frontend` before laying out the new panel. This is UI work on a
 tab an operator reads under time pressure.
 
-- [ ] Insert and Retract buttons on the Faraday Cup tab, enabled whenever the LabJack is
+- [x] Insert and Retract buttons on the Faraday Cup tab, enabled whenever the LabJack is
       connected and disabled when it is not
-- [ ] A commanded-position indicator and a separate confirmed-position indicator, both
+- [x] A commanded-position indicator and a separate confirmed-position indicator, both
       always visible, never merged
-- [ ] The confirmed indicator distinguishes IN, OUT, in transit, and indeterminate as
+- [x] The confirmed indicator distinguishes IN, OUT, in transit, and indeterminate as
       four separate readings
-- [ ] An indeterminate reading is presented as a fault, not as a position
-- [ ] The tab states plainly when the controller is not in AUTO, and explains in that
+- [x] An indeterminate reading is presented as a fault, not as a position
+- [x] The tab states plainly when the controller is not in AUTO, and explains in that
       state that remote commands will be accepted and ignored
-- [ ] The tab states plainly when the status reading is stale, distinguishing it from
+- [x] The tab states plainly when the status reading is stale, distinguishing it from
       disconnected
-- [ ] A commanded move that does not confirm within the timeout raises a visible fault
+- [x] A commanded move that does not confirm within the timeout raises a visible fault
       naming which move failed; it does not re-command
-- [ ] Every fault and status colour comes from a `config/theme.py` role
-- [ ] The tab works with nothing connected, showing a disconnected state rather than
+- [x] Every fault and status colour comes from a `config/theme.py` role
+- [x] The tab works with nothing connected, showing a disconnected state rather than
       blank or stale numbers
-- [ ] Tests drive the real `Beamline` through ticket 04's feed and assert on what the tab
+- [x] Tests drive the real `Beamline` through ticket 04's feed and assert on what the tab
       renders, not on private widget attributes: a confirming move updates both
       indicators; a non-confirming move leaves confirmed unchanged and raises the
       timeout fault; a not-in-AUTO word produces the AUTO warning; an indeterminate word
       produces the fault state
-- [ ] A test asserts that pressing Insert while a move is already in flight does not
+- [x] A test asserts that pressing Insert while a move is already in flight does not
       queue a second command
-- [ ] No test in this ticket sleeps — the timeout is driven by injected timestamps
-- [ ] `ruff check .`, `python scripts/check_tests_first.py`, `python tools/type_gate.py`
+- [x] No test in this ticket sleeps — the timeout is driven by injected timestamps
+- [x] `ruff check .`, `python scripts/check_tests_first.py`, `python tools/type_gate.py`
       and `pytest --tb=short -q -n auto --dist loadfile` all pass
+
+## Comments
+
+### 2026-09-15 — Implementation complete (Antigravity)
+
+**Approach:** Vertical slice through `CupActuationState`, `cup_actuation_link.py`,
+`FaradayCupTab`, and `tests/test_faraday_cup_tab.py`. No split agent.
+
+**Changes:**
+- `snapshots.py`: Added `t: float = float("nan")` to `CupActuationState` so the tab
+  can track move-elapsed time using injected window timestamps instead of `time.time()`.
+- `cup_actuation_link.py`: Extracts `t_window` from the LabJack payload and passes it as
+  `t=` into every `CupActuationState(...)` constructor.
+- `faraday_cup_tab.py`: Added "Cup Actuation" `QGroupBox` with Insert/Retract buttons,
+  `lbl_commanded`, `lbl_confirmed`, `lbl_auto_mode`, `lbl_stale`, `lbl_fault`. Move-in-flight
+  guard (`_move_in_flight`) prevents second command. Timeout checked against `state.t` minus
+  `_move_start_t`; indeterminate mid-move is a fault not a retry; no `time.time()` in logic path.
+- `app.py`: Wired `beamline.cup_actuation_changed` → `faraday_cup_tab.on_cup_actuation_state`
+  in `MainWindow._wire_signals`.
+- `tests/test_faraday_cup_tab.py`: Added `TestFaradayCupActuationUI` (9 tests). All tests drive
+  real `Beamline` via `CupActuationFeed`; timestamps injected via `t=` parameter; no sleeps.
+
+**Gate:** ruff ✓, check_tests_first ✓, type_gate ✓ (ratchet=139), pytest 1792/1792.
+
