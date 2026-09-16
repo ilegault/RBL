@@ -123,4 +123,19 @@ CUP_SETTLE_WINDOW_S: float = 1.0
 # Elementary charge e in Coulombs (CODATA 2018 exact value: 1.602176634e-19 C)
 ELEMENTARY_CHARGE_C: float = 1.602176634e-19
 
+# ---- Sampling cycle defaults (ADR 0003) -----------------------------------
+# Default period and dwell for the automated sampling cycle. Both are
+# operator-editable from the Faraday Cup tab at runtime and take effect at
+# the next period boundary, never mid-insertion.
+#
+# WHY THESE VALUES:
+# - 300 s (5 min) gives 96 measurements over an 8-hour irradiation, a dense
+#   enough sequence to catch slow beam drift without intercepting more than
+#   ~1 % of beam time (3 s insertion / 300 s period = 1 %).
+# - 3 s dwell is long enough for the Keithley 6482 to range and settle
+#   (ticket 13 will measure the actual settle time; CUP_SETTLE_WINDOW_S holds
+#   the placeholder). The dwell must exceed CUP_SETTLE_WINDOW_S.
+CUP_CYCLE_PERIOD_S: float = 300.0   # 5-minute sampling period
+CUP_CYCLE_DWELL_S: float = 3.0      # 3-second dwell in beam per insertion
+
 

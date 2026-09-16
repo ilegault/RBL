@@ -656,3 +656,50 @@ class TestFaradayCupTabSessionIntegration:
             for t in transitions
         )
 
+
+class TestWriteCycleInsertionSkipped:
+    """write_cycle_insertion_skipped records a skip marker in the session file."""
+
+    def test_skip_row_written(self, tmp_path):
+        from rbl.services.cup_session_writer import CupSessionWriter
+
+        sw = CupSessionWriter(session_id="test_skip", output_dir=tmp_path)
+        sw.write_cycle_insertion_skipped(t_host=300.0, insertion_due_t=300.0)
+        sw.close()
+
+        with open(sw.csv_path, encoding="utf-8") as f:
+            reader = csv.DictReader([line for line in f if not line.startswith("#")])
+            rows = list(reader)
+
+        skip_rows = [r for r in rows if r["record_type"] == "cycle_insertion_skipped"]
+        assert len(skip_rows) == 1
+        assert float(skip_rows[0]["host_timestamp"]) == pytest.approx(300.0)
+        assert "300.000" in skip_rows[0]["details"]
+        assert "manual run was open" in skip_rows[0]["details"]
+
+    def test_skip_row_with_details(self, tmp_path):
+        from rbl.services.cup_session_writer import CupSessionWriter
+
+        sw = CupSessionWriter(session_id="test_skip2", output_dir=tmp_path)
+        sw.write_cycle_insertion_skipped(
+            t_host=600.0, insertion_due_t=600.0, details="extra context"
+        )
+        sw.close()
+
+        with open(sw.csv_path, encoding="utf-8") as f:
+            reader = csv.DictReader([line for line in f if not line.startswith("#")])
+            rows = list(reader)
+
+        skip_rows = [r for r in rows if r["record_type"] == "cycle_insertion_skipped"]
+        assert "extra context" in skip_rows[0]["details"]
+
+    def test_skip_does_not_affect_run_stats(self, tmp_path):
+        """A skip marker must not increment sample count or affect active-run stats."""
+        from rbl.services.cup_session_writer import CupSessionWriter
+
+        sw = CupSessionWriter(session_id="test_skip3", output_dir=tmp_path)
+        sw.write_run_opened(t_host=0.0, run_id=1, arm_threshold=0.5e-6, release_threshold=0.25e-6)
+        sw.write_cycle_insertion_skipped(t_host=300.0, insertion_due_t=300.0)
+        assert sw.sample_count == 0
+        sw.close()
+
