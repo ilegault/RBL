@@ -27,7 +27,9 @@ from rbl.config.cup_config import (
     CUP_RELEASE_THRESHOLD_A,
 )
 from rbl.gui.faraday_cup_tab import FaradayCupTab
+from rbl.hardware.cup_status import CupPosition
 from rbl.services.cup_session_writer import CSV_COLUMNS, CupSessionWriter
+from rbl.snapshots import CupActuationState
 from rbl.state.beamline import Beamline
 from tests.payloads import CupFeed
 
@@ -254,6 +256,153 @@ class TestCupSessionWriterDirect:
         assert "reason=released" in rows[4]["details"]
         assert "reason=user_unplugged" in rows[5]["details"]
 
+    def test_position_transition_written_and_flushed(self, tmp_path):
+        writer = CupSessionWriter(output_dir=tmp_path)
+        writer.write_position_transition(
+            t_host=10.123456, position=CupPosition.IN, details="in_confirmed"
+        )
+        writer.write_position_transition(
+            t_host=15.654321, position=CupPosition.OUT, details="out_confirmed"
+        )
+        writer.close()
+
+        with open(writer.csv_path, encoding="utf-8") as f:
+            reader = csv.DictReader([line for line in f if not line.startswith("#")])
+            rows = list(reader)
+
+        transitions = [r for r in rows if r["record_type"] == "position_transition"]
+        assert len(transitions) == 2
+        assert transitions[0]["host_timestamp"] == "10.123456"
+        assert transitions[0]["position"] == "IN"
+        assert transitions[0]["details"] == "in_confirmed"
+        assert transitions[1]["host_timestamp"] == "15.654321"
+        assert transitions[1]["position"] == "OUT"
+        assert transitions[1]["details"] == "out_confirmed"
+
+    def test_all_four_fault_kinds_distinguishable_by_record_type(self, tmp_path):
+        writer = CupSessionWriter(output_dir=tmp_path)
+        writer.write_fault_move_not_confirmed(
+            t_host=1.0, commanded=CupPosition.IN, timeout_s=2.0
+        )
+        writer.write_fault_controller_not_in_auto(
+            t_host=2.0, details="controller in LOCAL mode"
+        )
+        writer.write_fault_impossible_status(
+            t_host=3.0, raw_status=0x0C, details="both IN and OUT asserted"
+        )
+        writer.write_fault_disagreement(
+            t_host=4.0, position=CupPosition.IN, current=0.0, details="position IN but current 0"
+        )
+        writer.close()
+
+        with open(writer.csv_path, encoding="utf-8") as f:
+            reader = csv.DictReader([line for line in f if not line.startswith("#")])
+            rows = list(reader)
+
+        fault_types = [r["record_type"] for r in rows]
+        # Each must be distinct and non-empty
+        assert len(set(fault_types)) == 4
+        assert fault_types == [
+            "fault_move_not_confirmed",
+            "fault_controller_not_in_auto",
+            "fault_impossible_status",
+            "fault_disagreement",
+        ]
+
+        # Check disagreement row carries confirmed position and measured current
+        disag_row = next(r for r in rows if r["record_type"] == "fault_disagreement")
+        assert disag_row["position"] == "IN"
+        assert float(disag_row["current_a"]) == 0.0
+        assert "0.00000000e+00" in disag_row["current_a"]
+
+        # Check move fault names commanded move
+        move_row = next(r for r in rows if r["record_type"] == "fault_move_not_confirmed")
+        assert "IN" in move_row["position"] or "IN" in move_row["details"]
+
+        # Check impossible status carries status_word
+        imp_row = next(r for r in rows if r["record_type"] == "fault_impossible_status")
+        assert imp_row["status_word"] == "0x0000000C" or "0x0000000C" in imp_row["details"]
+
+    def test_transition_and_sample_same_clock_and_format(self, tmp_path):
+        writer = CupSessionWriter(output_dir=tmp_path)
+        t_trans = 100.123456
+        t_samp = 100.223456
+        writer.write_position_transition(t_host=t_trans, position=CupPosition.IN)
+        writer.write_sample(
+            t_host=t_samp,
+            t_inst=0.1,
+            current=1.0e-6,
+            status_word=0,
+            over_range=False,
+            run_id=1,
+        )
+
+        # Read unclosed file directly (verifying immediate flush)
+        with open(writer.csv_path, encoding="utf-8") as f:
+            reader = csv.DictReader([line for line in f if not line.startswith("#")])
+            rows = list(reader)
+
+        assert len(rows) == 2
+        trans_row = rows[0]
+        samp_row = rows[1]
+
+        # Both formatted to exactly 6 decimal places (same clock format)
+        assert trans_row["host_timestamp"] == "100.123456"
+        assert samp_row["host_timestamp"] == "100.223456"
+        delta = float(samp_row["host_timestamp"]) - float(trans_row["host_timestamp"])
+        assert delta == pytest.approx(0.1, abs=1e-6)
+
+        writer.close()
+
+    def test_file_survives_simulated_mid_run_abort(self, tmp_path):
+        writer = CupSessionWriter(output_dir=tmp_path)
+        writer.write_connected(t_host=1.0, ident="Keithley 6482")
+        writer.write_position_transition(t_host=2.0, position=CupPosition.IN)
+        writer.write_run_opened(
+            t_host=2.0, run_id=1, arm_threshold=1e-6, release_threshold=0.5e-6
+        )
+        writer.write_sample(
+            t_host=3.0,
+            t_inst=1.0,
+            current=2.0e-6,
+            status_word=0,
+            over_range=False,
+            run_id=1,
+        )
+        writer.write_fault_disagreement(
+            t_host=4.0, position=CupPosition.OUT, current=2.0e-6
+        )
+
+        # DO NOT call writer.close() — simulate crash/abort!
+        # The file on disk must be completely valid CSV with all 5 rows intact
+        with open(writer.csv_path, encoding="utf-8") as f:
+            reader = csv.DictReader([line for line in f if not line.startswith("#")])
+            rows = list(reader)
+
+        assert len(rows) == 5
+        types = [r["record_type"] for r in rows]
+        assert types == [
+            "connected",
+            "position_transition",
+            "run_opened",
+            "sample",
+            "fault_disagreement",
+        ]
+
+        # Clean up file descriptor via public close()
+        writer.close()
+
+    def test_csv_comment_header_describes_new_row_kinds(self, tmp_path):
+        writer = CupSessionWriter(output_dir=tmp_path)
+        writer.close()
+
+        with open(writer.csv_path, encoding="utf-8") as f:
+            comment_lines = [line.strip() for line in f if line.startswith("#")]
+
+        header_text = "\n".join(comment_lines)
+        assert "position_transition" in header_text
+        assert "fault" in header_text.lower()
+
 
 class TestFaradayCupTabSessionIntegration:
     """Integration tests driving FaradayCupTab through CupFeed and verifying session log."""
@@ -434,3 +583,76 @@ class TestFaradayCupTabSessionIntegration:
         assert len(samples) == 1
         assert len(closed) == 1
         assert "reason=forced_stop" in closed[0]["details"]
+
+    def test_tab_logs_position_transitions_and_faults(self, qapp, tmp_path):
+        """Verify FaradayCupTab writes position transitions and faults via CupActuationState."""
+        beamline = Beamline()
+        session_writer = CupSessionWriter(output_dir=tmp_path)
+        tab = FaradayCupTab(beamline=beamline, session_writer=session_writer)
+        tab.show()
+        qapp.processEvents()
+
+        # Connect actuation with confirmed IN
+        tab.on_cup_actuation_state(
+            CupActuationState(
+                connected=True,
+                commanded=CupPosition.IN,
+                confirmed=CupPosition.IN,
+                auto_mode=True,
+                stale=False,
+                last_transition_t=10.0,
+                t=10.0,
+            )
+        )
+        qapp.processEvents()
+
+        # Transition to OUT
+        tab.on_cup_actuation_state(
+            CupActuationState(
+                connected=True,
+                commanded=CupPosition.OUT,
+                confirmed=CupPosition.OUT,
+                auto_mode=True,
+                stale=False,
+                last_transition_t=20.0,
+                t=20.0,
+            )
+        )
+        qapp.processEvents()
+
+        # Indeterminate fault
+        tab.on_cup_actuation_state(
+            CupActuationState(
+                connected=True,
+                commanded=CupPosition.OUT,
+                confirmed=CupPosition.INDETERMINATE,
+                auto_mode=True,
+                stale=False,
+                last_transition_t=25.0,
+                t=25.0,
+            )
+        )
+        qapp.processEvents()
+
+        tab.close()
+        qapp.processEvents()
+
+        with open(session_writer.csv_path, encoding="utf-8") as f:
+            reader = csv.DictReader([line for line in f if not line.startswith("#")])
+            rows = list(reader)
+
+        row_types = [r["record_type"] for r in rows]
+        assert "position_transition" in row_types
+        assert "fault_impossible_status" in row_types
+
+        # Check that transition rows carry position and timestamps
+        transitions = [r for r in rows if r["record_type"] == "position_transition"]
+        assert any(
+            t["position"] == "IN" and float(t["host_timestamp"]) == 10.0
+            for t in transitions
+        )
+        assert any(
+            t["position"] == "OUT" and float(t["host_timestamp"]) == 20.0
+            for t in transitions
+        )
+

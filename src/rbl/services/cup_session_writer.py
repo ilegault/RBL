@@ -4,13 +4,28 @@ CSV + JSON metadata sidecar session log for Faraday cup current acquisition runs
 
 WHY THIS EXISTS
 ---------------
-ADR 0002 records that the Faraday cup is inserted manually and carries no position
-sensor. The application infers an insertion from measured cup current, starting an
-acquisition run when the cup enters the beam and closing it when the cup is withdrawn.
+ADR 0002 recorded that the Faraday cup was historically inserted manually and carried
+no position sensor. The application inferred an insertion from measured cup current,
+starting an acquisition run when the cup enters the beam and closing it when withdrawn.
 
-This session writer logs every sample inside an acquisition run to disk, allowing an
-irradiation's delivered dose to be reconstructed accurately after the shift from the
-application's own records rather than handwritten notes.
+ADR 0003 introduces remote actuation via LabJack T7 digital outputs and confirmed
+position feedback via the controller's isolated status contacts (FIO2 = IN, FIO3 = OUT,
+FIO4 = AUTO). The session file now logs:
+1. Active acquisition samples during runs.
+2. Confirmed position transitions (IN and OUT).
+3. Actuation and authority faults:
+   - Move commanded but not confirmed within timeout.
+   - Controller not in AUTO (LOCAL mode).
+   - Impossible status combination (both contacts asserted / indeterminate).
+   - Position-versus-current disagreement (carrying both readings).
+
+TIMING AND CLOCK CONSISTENCY
+----------------------------
+The logging is consistent or it is useless. A transition marker's timestamp and a
+sample row's timestamp must be the same clock and the same format, so a reader can
+interleave them chronologically without guessing. Transition markers, fault rows,
+and sample rows share the exact same host_timestamp format (f"{t_host:.6f}") and
+UTC ISO timestamp.
 
 ONE FILE PER APPLICATION SESSION
 ---------------------------------
@@ -30,8 +45,8 @@ are recorded as marker rows.
 
 CRASH RESILIENCE
 ----------------
-The CSV file is flushed after every row (sample or marker). An 11-hour drift run that
-dies at hour 11 leaves 11 hours of usable data on disk.
+The CSV file is flushed after every row (sample, transition, fault, or marker). An 11-hour
+drift run that dies at hour 11 leaves 11 hours of usable data on disk.
 """
 from __future__ import annotations
 
@@ -52,6 +67,7 @@ from rbl.config.cup_config import (
     CUP_RELEASE_THRESHOLD_A,
 )
 from rbl.config.paths import FARADAY_CUP_DIR
+from rbl.hardware.cup_status import CupPosition
 
 log = logging.getLogger(__name__)
 
@@ -79,6 +95,7 @@ CSV_COLUMNS: list[str] = [
     "over_range",
     "run_id",
     "details",
+    "position",
 ]
 
 
@@ -160,6 +177,12 @@ class CupSessionWriter:
             f"release={CUP_RELEASE_THRESHOLD_A:.3e} A  "
             f"arm_debounce={CUP_ARM_DEBOUNCE_S:.1f} s  "
             f"release_interval={CUP_RELEASE_INTERVAL_S:.1f} s\n"
+        )
+        self._file.write(
+            "# record types: sample, run_opened, run_closed, idle_heartbeat, "
+            "connected, disconnected, position_transition, "
+            "fault_move_not_confirmed, fault_controller_not_in_auto, "
+            "fault_impossible_status, fault_disagreement\n"
         )
         self._file.write("# columns: " + ", ".join(CSV_COLUMNS) + "\n")
 
@@ -368,6 +391,135 @@ class CupSessionWriter:
             "over_range": "",
             "run_id": "",
             "details": "; ".join(info) if info else "disconnected",
+        }
+        self._write_row(row)
+
+    def write_position_transition(
+        self,
+        t_host: float,
+        position: CupPosition | str,
+        details: str = "",
+        t_inst: float | None = None,
+    ) -> None:
+        """Write a confirmed position transition marker (IN or OUT)."""
+        pos_str = position.value if hasattr(position, "value") else str(position)
+        row = {
+            "record_type": "position_transition",
+            "iso_timestamp": _now_iso(),
+            "host_timestamp": f"{t_host:.6f}",
+            "inst_timestamp": _safe_float(t_inst, ".6f"),
+            "current_a": "",
+            "status_word": "",
+            "over_range": "",
+            "run_id": str(self._active_run_id) if self._active_run_id is not None else "",
+            "details": details or f"confirmed_{pos_str.lower()}",
+            "position": pos_str,
+        }
+        self._write_row(row)
+
+    def write_fault_move_not_confirmed(
+        self,
+        t_host: float,
+        commanded: CupPosition | str,
+        timeout_s: float,
+        details: str = "",
+        t_inst: float | None = None,
+    ) -> None:
+        """Write a fault marker for a commanded move that did not confirm within timeout."""
+        cmd_str = commanded.value if hasattr(commanded, "value") else str(commanded)
+        desc = f"command={cmd_str} not confirmed within {timeout_s:.1f} s"
+        det = f"{desc}; {details}" if details else desc
+        row = {
+            "record_type": "fault_move_not_confirmed",
+            "iso_timestamp": _now_iso(),
+            "host_timestamp": f"{t_host:.6f}",
+            "inst_timestamp": _safe_float(t_inst, ".6f"),
+            "current_a": "",
+            "status_word": "",
+            "over_range": "",
+            "run_id": str(self._active_run_id) if self._active_run_id is not None else "",
+            "details": det,
+            "position": cmd_str,
+        }
+        self._write_row(row)
+
+    def write_fault_controller_not_in_auto(
+        self,
+        t_host: float,
+        details: str = "controller in LOCAL mode; remote commands ignored",
+        t_inst: float | None = None,
+    ) -> None:
+        """Write a fault marker when the controller is not in AUTO mode."""
+        row = {
+            "record_type": "fault_controller_not_in_auto",
+            "iso_timestamp": _now_iso(),
+            "host_timestamp": f"{t_host:.6f}",
+            "inst_timestamp": _safe_float(t_inst, ".6f"),
+            "current_a": "",
+            "status_word": "",
+            "over_range": "",
+            "run_id": str(self._active_run_id) if self._active_run_id is not None else "",
+            "details": details,
+            "position": "",
+        }
+        self._write_row(row)
+
+    def write_fault_impossible_status(
+        self,
+        t_host: float,
+        raw_status: int | None = None,
+        details: str = "both IN and OUT contacts asserted",
+        t_inst: float | None = None,
+    ) -> None:
+        """Write a fault marker for an impossible contact status (indeterminate)."""
+        row = {
+            "record_type": "fault_impossible_status",
+            "iso_timestamp": _now_iso(),
+            "host_timestamp": f"{t_host:.6f}",
+            "inst_timestamp": _safe_float(t_inst, ".6f"),
+            "current_a": "",
+            "status_word": f"0x{raw_status:08X}" if raw_status is not None else "",
+            "over_range": "",
+            "run_id": str(self._active_run_id) if self._active_run_id is not None else "",
+            "details": details,
+            "position": "INDETERMINATE",
+        }
+        self._write_row(row)
+
+    def write_fault_disagreement(
+        self,
+        t_host: float,
+        position: CupPosition | str,
+        current: float | None,
+        details: str = "",
+        t_inst: float | None = None,
+    ) -> None:
+        """Write a fault marker when confirmed position and current inference disagree."""
+        pos_str = (
+            position.value
+            if hasattr(position, "value")
+            else str(position)
+            if position is not None
+            else ""
+        )
+        cur_str = _safe_float(current, ".8e")
+        desc = (
+            f"position={pos_str} disagrees with current={cur_str} A"
+            if (pos_str and cur_str)
+            else "position-current disagreement"
+        )
+        det = f"{desc}; {details}" if details else desc
+        row = {
+            "record_type": "fault_disagreement",
+            "iso_timestamp": _now_iso(),
+            "host_timestamp": f"{t_host:.6f}",
+            "inst_timestamp": _safe_float(t_inst, ".6f"),
+            "current_a": cur_str,
+            "status_word": "",
+            "over_range": "",
+            "run_id": str(self._active_run_id) if self._active_run_id is not None else "",
+            "details": det,
+            "position": pos_str,
         }
         self._write_row(row)
 
