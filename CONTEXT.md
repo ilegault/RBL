@@ -118,6 +118,57 @@ a current sitting near the boundary cannot start and stop runs repeatedly.
 
 ---
 
+## Cup actuation and dose
+
+**Commanded position** — where the application has told the cup to go. It is a
+statement about what was asked for, never about where the cup is.
+
+**Confirmed position** — where the Faraday Cup Controller's own status contacts say
+the cup is. This is the authority. Between the two lies a real mechanical lag, and a
+cup that was commanded and did not move is the specific failure the pair exists to
+expose.
+
+**In transit** — neither the IN nor the OUT status contact asserted. The normal
+reading while the cup is moving. Distinct from **indeterminate**, where both are
+asserted at once, which is a wiring or controller fault and is never resolved in
+favour of one.
+
+**AUTO mode** — the controller state in which it honours remote commands. In LOCAL it
+accepts a contact closure and does nothing, so the application reads the AUTO status
+contact and does not assume it.
+
+**Sampling insertion** — a short, commanded insertion whose purpose is to measure the
+transmitted current once, not to irradiate anything. Seconds, not minutes. The thing
+a sampling insertion is optimised for is brevity: every second it spends in the beam
+is a second the specimen is not being irradiated.
+
+**Sampling cycle** — the repeating schedule of sampling insertions across an
+irradiation. Its **period** is the interval between insertions and its **dwell** is
+how long each one lasts.
+
+**Settle window** — the span at the start of an insertion during which the
+picoammeter is still autoranging and its readings are not yet trustworthy. Samples
+inside it are recorded but excluded from the insertion's mean.
+
+**Beam-on interval** — the span of time that one insertion's measured current is held
+to represent. It runs between insertions, not during them: while the cup is in the
+beam, the specimen is not being irradiated.
+
+**Accumulated charge** — the integral of transmitted current over the irradiation, by
+zero-order hold: each insertion's current multiplied by its beam-on interval, summed.
+It is the honest description of what a periodic sample supports, and it is an
+approximation whose error is whatever the beam drifted between insertions.
+
+**Displacement coefficient** — displacements per ion per unit fluence, quoted at a
+stated depth. It comes from SRIM, it is entered by an operator, and nothing in this
+application can derive it. A dpa figure whose coefficient cannot be traced to a
+version and a depth is not a result.
+
+**Fails into the beam** — the property that any loss of drive returns the cup to the
+beam path. It belongs to the wiring, not to any code path, and must stay that way.
+
+---
+
 ## Known collisions
 
 **"Beam current" means two things.** The four slit currents and the one cup
@@ -129,3 +180,6 @@ current*. Do not write *beam current* unqualified.
 between the steerer and the sample. In calibration it is a long-running pass
 that holds a setpoint and watches it wander over hours. Prefer *drift distance*
 and *drift pass* wherever both could be meant.
+
+**"Position" means commanded or confirmed, never both.** They differ by a mechanical
+lag and, when something is wrong, by more than that. Say which one is meant.

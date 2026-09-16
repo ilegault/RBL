@@ -360,63 +360,96 @@ only the tool that has that command.
 <!-- ACTIVE-PLAN:START -->
 ## Active implementation plan
 
-_Written by the planning model on 2026-09-14 17:53. Implement this. If something in it is wrong, say so before changing course._
+_Written by the planning model on 2026-09-15 19:46. Implement this. If something in it is wrong, say so before changing course._
 
-# Active work: Faraday cup reader
+# Active work: Faraday cup actuation, sampling cycle and dose tracking
 
 This is a **pointer**, not the work. The work is a ticket set.
 
-- Spec: `.scratch/faraday-cup-reader/spec.md`
-- Decision record: `docs/adr/0002-cup-acquisition-triggered-by-current.md` — **read it before ticket 07**
-- Binding: `docs/adr/0001-tests-first-and-no-muted-failures.md` — still in force
-- Glossary: `CONTEXT.md`, "Beam interception and collection" — slit current vs cup current
-- Tickets: `.scratch/faraday-cup-reader/issues/01…10`
+- Spec: `.scratch/cup-actuation/spec.md`
+- Decision record: `docs/adr/0003-commanded-and-confirmed-cup-position.md` — **read it
+  before any ticket in this set.** It supersedes ADR 0002 decision 6 and records why
+  confirmed position is authoritative over current inference, and why the cup fails to IN.
+- Still in force: `docs/adr/0002-cup-acquisition-triggered-by-current.md` — only decision
+  6 is superseded. Its current-inference detector stays in service for hand insertions
+  and as the cross-check.
+- Binding on all test work: `docs/adr/0001-tests-first-and-no-muted-failures.md`
+- Glossary: `CONTEXT.md`, "Cup actuation and dose" — commanded vs confirmed, in transit
+  vs indeterminate, sampling insertion, settle window, beam-on interval
+- Tickets: `.scratch/cup-actuation/issues/01…14`
 - Tracker conventions: `docs/agents/issue-tracker.md`
 
-Done: **01** (VISA/GPIB transport proven), **02** (bundled-installer path retired),
-**03** (Slit Currents rename and tab reorder). Previous effort
-`.scratch/test-suite-overhaul/` is also complete.
+Previous effort `.scratch/faraday-cup-reader/` is complete except its ticket **10**
+(existing instruments under Keysight VISA), which is a developer bench task and **must
+pass before a build ships**.
 
-## Next up
+## Next up — four tickets are unblocked and independent
 
-- **04 — Keithley 6482 driver and parsing.** Unblocked, and the only thing on the
-  frontier. Everything from 05 onward chains off it.
+- **01 — One reading structure for the cup detector seam.** Pure refactor of
+  `rbl/services/cup_acquisition.py` plus the one-second-insertion regression test.
+- **02 — T7 digital output drive and pure status decoding.** The first digital I/O this
+  repo has ever had.
+- **08 — The dose chain, and a traceable displacement coefficient.** Pure math in
+  `rbl/hardware/`, plus wiring the irradiated area through from the Raster Planner.
+- **13 — Bench: 6482 autorange settle time.** Developer task. An agent must not claim it.
 
-**Read ticket 01's Comments before starting 04.** The bench work found things that
-change how the driver should be written, not just whether it can connect:
+01, 02 and 08 touch disjoint files and can be worked in parallel.
 
-- The instrument currently on the bench is a **6485 stand-in**. The 6482 is the target
-  and every ticket is written against it deliberately. Do not rewrite them for the
-  6485 — it is single-channel with no voltage source, so the 6482's source-output
-  safety rules look unnecessary against it and are not.
-- **`list_resources()` succeeding proves very little.** On GPIB it can be answered
-  from the VISA configuration store without touching the bus. `viOpen` is the first
-  real hardware access. A connect path must not report success on enumeration alone.
-- **Protocol mode is SCPI, not 488.1**, so compound queries are permitted. Query it at
-  connect anyway — it is a front-panel setting stored in EEPROM that can change with
-  no software involvement.
-- A plain `pyvisa.ResourceManager()` reaches the instrument with no DLL-path help, so
-  the application needs no dependency-path shim.
+## Dependency order
 
-## Also open
+```
+01 ─┐
+02 ─┼─ 03 ── 04 ─┬─ 05 ─┬─ 07 ─┐
+    │            └─ 06 ─┘      │
+    │               └── 09 ── 10 ── 11 ── 14
+08 ─────────────────────┘              │
+12 (bench, after 02+03) ───────────────┘
+13 (bench, independent)
+```
 
-- **10 — Existing instruments under Keysight VISA.** Developer bench task, blocked by
-  01, blocks nothing. The function generators and scope were not connected during 01,
-  so their regression check is still outstanding. **Must pass before a build ships.**
+- 12 and 14 are developer bench tasks. **An agent must not claim them.**
+- **12 gates the first commanded move on real hardware.** Its wiring and polarity checks
+  must be complete before ticket 05 is exercised against the actual cup.
 
 ## Rules for working this set
 
-- Do not start a ticket whose `Blocked by:` line names an unfinished ticket.
-  Work the frontier: any ticket whose blockers are all done.
-- Ticket 10 is a developer task. An agent must not claim it.
-- A failing test is fixed or escalated, never muted. The escalation path —
-  commit to branch, ticket `Status: blocked`, comment on the ticket, draft PR —
-  is ADR 0001 decision 3.
-- Two requirements in this set are structural and will be quietly violated if
-  read as preferences: SCPI response parsing is a **pure function outside the
-  polling thread** (ticket 04), and the acquisition state machine **takes
-  timestamps as inputs and never calls the clock** (ticket 07). Both exist so
-  the feature is testable at one high seam; burying either collapses the seam.
-- The 6482's configure command is never sent. It turns the voltage source
-  outputs on, and those outputs would drive the cup collector.
+- Do not start a ticket whose `Blocked by:` line names an unfinished ticket. Work the
+  frontier: any ticket whose blockers are all done.
+- A failing test is fixed or escalated, never muted. The escalation path — commit to
+  branch, ticket `Status: blocked`, comment on the ticket, draft PR — is ADR 0001
+  decision 3, and the report goes in the ticket file under `.scratch/`, never `.claude/`.
+
+## Five requirements that will be quietly violated if read as preferences
+
+1. **The cycle scheduler takes timestamps as inputs and never calls the clock**
+   (ticket 09). An eight-hour cycle with a real clock inside it cannot be tested, and a
+   cycle never tested across a fault will fail silently across one.
+2. **`CupAcquisitionStateMachine` does not change in ticket 06.** Not one line. No
+   `hasattr`, no `isinstance`, no detector-dependent branch. If it must change, ticket
+   01's contract was wrong and that is an escalation, not a workaround.
+3. **Status decoding and the dose arithmetic are pure functions with no Qt on their call
+   path** (tickets 02 and 08). They are the only parts of this feature that can be
+   checked against numbers worked by hand.
+4. **No software path drives the cup as a safety measure.** The cup fails IN because
+   cup-OUT needs two contact closures; that is a property of the wiring and must stay
+   one. Shutdown releases drive, it does not command a position.
+5. **A move that does not confirm disarms the cycle. It never retries.** A controller in
+   LOCAL accepts a closure and does nothing, so a retry loop produces an application that
+   looks busy for hours while the cup never moves.
+
+## Two numbers in the spec are guesses
+
+The 6482's autorange settle time (ticket 13) and the mechanical lag from relay closure to
+cup movement (ticket 14). Neither blocks the software. `CUP_SETTLE_WINDOW_S = 1.0` is a
+placeholder and its docstring says so.
+
+## One decision made during ticket-writing, recorded here
+
+`FIO_STATE` joins the **`FULL` profile only**. The other four stream profiles are
+amplifier diagnostics, are run during sweeps that never move the cup, and all sit at the
+T7's 100 kS/s aggregate ceiling. `FULL` drops from 8 000 to 7 500 Hz per channel to make
+room for the thirteenth channel — ~3.75x oversampling at the 2 kHz fast axis instead of
+~4x. The consequence is that **position feedback is unavailable in any diagnostic
+profile**, which is why ticket 10 refuses to arm the cycle outside `FULL` and disarms it
+on a profile change.
 <!-- ACTIVE-PLAN:END -->
