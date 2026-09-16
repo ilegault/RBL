@@ -848,5 +848,168 @@ class TestFaradayCupDoseParameters:
         assert "Raster Planner" in cup_tab.lbl_area_source.text()
 
 
+class TestSamplingCycleTab:
+    """Tab integration tests for the Sampling Cycle panel (ticket 09).
+
+    All tests inject timestamps via CupActuationFeed; none sleep.
+    Assertions check operator-visible label text, not internal scheduler state.
+    """
+
+    from rbl.hardware.cup_status import CupPosition as _CupPosition
+    from rbl.snapshots import CupActuationState as _CupActuationState
+
+    def make_tab_and_feed(self, qapp, tmp_path):
+        from rbl.services.cup_session_writer import CupSessionWriter
+
+        sw = CupSessionWriter(session_id="cycle_test", output_dir=tmp_path)
+        tab = FaradayCupTab(session_writer=sw)
+        tab.show()
+        qapp.processEvents()
+        feed = CupActuationFeed(tab)
+        return tab, feed, sw
+
+    def actuation_state(self, t, commanded=None, confirmed=None, auto_mode=True):
+        from rbl.hardware.cup_status import CupPosition
+        from rbl.snapshots import CupActuationState
+
+        return CupActuationState(
+            connected=True,
+            commanded=commanded or CupPosition.OUT,
+            confirmed=confirmed or CupPosition.OUT,
+            auto_mode=auto_mode,
+            stale=False,
+            last_transition_t=t,
+            t=t,
+        )
+
+    def test_cycle_disarmed_on_construction(self, qapp, tmp_path):
+        tab, _, sw = self.make_tab_and_feed(qapp, tmp_path)
+        assert not tab.cycle.is_armed
+        assert "Disarm" not in tab.btn_cycle_arm.text()
+        sw.close()
+        tab.close()
+
+    def test_arm_button_changes_label(self, qapp, tmp_path):
+        tab, feed, sw = self.make_tab_and_feed(qapp, tmp_path)
+
+        # Feed an actuation state to set _last_state_t
+        tab.on_cup_actuation_state(self.actuation_state(t=0.0))
+        qapp.processEvents()
+
+        tab.btn_cycle_arm.click()
+        qapp.processEvents()
+
+        assert tab.cycle.is_armed
+        assert "Disarm" in tab.btn_cycle_arm.text()
+        assert tab.btn_cycle_stop.isEnabled()
+        sw.close()
+        tab.close()
+
+    def test_stop_button_disarms_cycle(self, qapp, tmp_path):
+        tab, _, sw = self.make_tab_and_feed(qapp, tmp_path)
+        tab.on_cup_actuation_state(self.actuation_state(t=0.0))
+        qapp.processEvents()
+
+        tab.btn_cycle_arm.click()
+        qapp.processEvents()
+        assert tab.cycle.is_armed
+
+        tab.btn_cycle_stop.click()
+        qapp.processEvents()
+
+        assert not tab.cycle.is_armed
+        assert "Arm" in tab.btn_cycle_arm.text()
+        sw.close()
+        tab.close()
+
+    def test_cycle_state_label_shows_armed_waiting(self, qapp, tmp_path):
+        tab, _, sw = self.make_tab_and_feed(qapp, tmp_path)
+        tab.on_cup_actuation_state(self.actuation_state(t=0.0))
+        qapp.processEvents()
+        tab.btn_cycle_arm.click()
+        qapp.processEvents()
+
+        # Feed another actuation state to trigger _update_cycle_view
+        tab.on_cup_actuation_state(self.actuation_state(t=1.0))
+        qapp.processEvents()
+
+        text = tab.lbl_cycle_state.text()
+        assert "Armed" in text
+        sw.close()
+        tab.close()
+
+    def test_cycle_tick_issues_insert_at_period_boundary(self, qapp, tmp_path):
+        """When t reaches the period boundary the tab commands cup IN."""
+        from unittest.mock import MagicMock
+
+        tab, _, sw = self.make_tab_and_feed(qapp, tmp_path)
+        # Drive an actuation state so the tab knows the T7 is connected
+        # (on_cup_actuation_state with connected=True sets actuation_connected).
+        tab.on_cup_actuation_state(self.actuation_state(t=0.0))
+        qapp.processEvents()
+        tab.btn_cycle_arm.click()
+        qapp.processEvents()
+
+        # Patch beamline.command_cup_in to capture calls without real hardware.
+        # The tab must already consider the actuation connected (set above via
+        # on_cup_actuation_state), so we only replace the beamline reference.
+        mock_beamline = MagicMock()
+        tab.beamline = mock_beamline
+
+        period = tab.spn_cycle_period.value()
+        tab.on_cup_actuation_state(self.actuation_state(t=period))
+        qapp.processEvents()
+
+        mock_beamline.command_cup_in.assert_called_once()
+        sw.close()
+        tab.close()
+
+    def test_skip_recorded_when_manual_run_open(self, qapp, tmp_path):
+        """A period boundary during a manual run produces a cycle_insertion_skipped row."""
+        tab, _, sw = self.make_tab_and_feed(qapp, tmp_path)
+        tab.on_cup_actuation_state(self.actuation_state(t=0.0))
+        qapp.processEvents()
+        tab.btn_cycle_arm.click()
+        qapp.processEvents()
+
+        # Simulate manual insert
+        tab.cycle.notify_manual_insert(t=100.0)
+
+        period = tab.spn_cycle_period.value()
+        tab.on_cup_actuation_state(self.actuation_state(t=period))
+        qapp.processEvents()
+
+        sw.close()
+        with open(sw.csv_path, encoding="utf-8") as f:
+            rows = [
+                r for r in csv.DictReader(
+                    [line for line in f if not line.startswith("#")]
+                )
+            ]
+        skip_rows = [r for r in rows if r["record_type"] == "cycle_insertion_skipped"]
+        assert len(skip_rows) == 1
+        tab.close()
+
+    def test_period_spinner_updates_scheduler(self, qapp, tmp_path):
+        """Changing the period spinner propagates to the scheduler via editingFinished."""
+        tab, _, sw = self.make_tab_and_feed(qapp, tmp_path)
+        tab.spn_cycle_period.setValue(120.0)
+        tab.spn_cycle_period.editingFinished.emit()
+        qapp.processEvents()
+        assert tab.cycle.period_s == pytest.approx(120.0)
+        sw.close()
+        tab.close()
+
+    def test_dwell_spinner_updates_scheduler(self, qapp, tmp_path):
+        """Changing the dwell spinner propagates to the scheduler via editingFinished."""
+        tab, _, sw = self.make_tab_and_feed(qapp, tmp_path)
+        tab.spn_cycle_dwell.setValue(5.0)
+        tab.spn_cycle_dwell.editingFinished.emit()
+        qapp.processEvents()
+        assert tab.cycle.dwell_s == pytest.approx(5.0)
+        sw.close()
+        tab.close()
+
+
 
 

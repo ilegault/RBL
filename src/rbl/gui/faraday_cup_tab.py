@@ -77,6 +77,20 @@ the controller is in LOCAL mode, inference governs so hand insertions still reco
 When both sources disagree (position says IN but current is below the arm
 threshold, or vice versa), the disagreement is displayed as a fault carrying both
 readings. Nothing in this code resolves the disagreement.
+
+AUTOMATED SAMPLING CYCLE (ADR 0003)
+------------------------------------
+The Sampling Cycle panel lets an operator arm a repeating insert-dwell-retract
+sequence (ticket 09). The scheduler is a pure object (SamplingCycleScheduler)
+that receives the current time as a parameter and returns the action to take —
+INSERT, RETRACT, or SKIPPED. It calls no clock. The tab drives it on every
+actuation state update from the T7, which arrives on the stream worker's
+schedule. Period and dwell are editable via QuietDoubleSpinBox and take effect
+at the next period boundary, never mid-insertion. The cycle is disarmed on
+construction and after every application start; arming is always an explicit
+operator action. A manual insert or retract calls notify_manual_insert /
+notify_manual_retract immediately, so the next scheduled boundary that falls
+while a manual run is open is skipped and recorded in the session file.
 """
 from __future__ import annotations
 
@@ -99,6 +113,8 @@ from PySide6.QtWidgets import (
 )
 
 from rbl.config.cup_config import (
+    CUP_CYCLE_DWELL_S,
+    CUP_CYCLE_PERIOD_S,
     CUP_IDLE_HEARTBEAT_INTERVAL_S,
     CUP_MOVE_CONFIRMATION_TIMEOUT_S,
     KEITHLEY_6482_DEFAULT_RESOURCE,
@@ -122,6 +138,13 @@ from rbl.services.cup_acquisition import (
     RunOpened,
 )
 from rbl.services.cup_session_writer import CupSessionWriter
+from rbl.services.sampling_cycle import (
+    CycleInsert,
+    CycleRetract,
+    CycleSkipped,
+    CycleState,
+    SamplingCycleScheduler,
+)
 from rbl.snapshots import CupActuationState, CupState
 
 if TYPE_CHECKING:
@@ -169,6 +192,12 @@ class FaradayCupTab(QWidget):
         self._last_logged_indeterminate: bool = False
         self._disagreement_logged: bool = False
         self._was_auto_mode: bool | None = None
+
+        # Sampling cycle scheduler (ADR 0003, ticket 09)
+        self.cycle = SamplingCycleScheduler(
+            period_s=CUP_CYCLE_PERIOD_S,
+            dwell_s=CUP_CYCLE_DWELL_S,
+        )
 
         # Dose & displacement damage tracking (ADR 0003)
         self._patch_width_x_mm: float = 0.0
@@ -426,7 +455,67 @@ class FaradayCupTab(QWidget):
         mid_row.addWidget(acq_box, stretch=1)
         layout.addLayout(mid_row)
 
-        # ── 2b. Dose & Displacement Parameters (ADR 0003) ─────────────────────
+        # ── 2b. Sampling Cycle (ADR 0003, ticket 09) ──────────────────────────
+        cycle_box = QGroupBox("Sampling Cycle")
+        cycle_lay = QHBoxLayout(cycle_box)
+        cycle_lay.setContentsMargins(12, 8, 12, 8)
+        cycle_lay.setSpacing(16)
+
+        # Period and dwell spinners (uses project input widgets, never bare spinbox)
+        cycle_lay.addWidget(QLabel("Period:"))
+        self.spn_cycle_period = QuietDoubleSpinBox()
+        self.spn_cycle_period.setRange(10.0, 86400.0)
+        self.spn_cycle_period.setDecimals(0)
+        self.spn_cycle_period.setValue(CUP_CYCLE_PERIOD_S)
+        self.spn_cycle_period.setToolTip(
+            "Seconds between successive scheduled cup insertions (10 – 86400 s)"
+        )
+        self.spn_cycle_period.editingFinished.connect(self._on_cycle_period_changed)
+        cycle_lay.addLayout(unit_row(self.spn_cycle_period, "s"))
+
+        cycle_lay.addWidget(QLabel("Dwell:"))
+        self.spn_cycle_dwell = QuietDoubleSpinBox()
+        self.spn_cycle_dwell.setRange(1.0, 60.0)
+        self.spn_cycle_dwell.setDecimals(1)
+        self.spn_cycle_dwell.setValue(CUP_CYCLE_DWELL_S)
+        self.spn_cycle_dwell.setToolTip(
+            "Seconds the cup stays in the beam per scheduled insertion (1 – 60 s)"
+        )
+        self.spn_cycle_dwell.editingFinished.connect(self._on_cycle_dwell_changed)
+        cycle_lay.addLayout(unit_row(self.spn_cycle_dwell, "s"))
+
+        # Arm / Disarm button
+        self.btn_cycle_arm = QPushButton("Arm Cycle")
+        self.btn_cycle_arm.setStyleSheet("font-weight: bold; padding: 4px 14px;")
+        self.btn_cycle_arm.setToolTip(
+            "Arm the sampling cycle — first insertion at start + period"
+        )
+        self.btn_cycle_arm.clicked.connect(self._on_cycle_arm_clicked)
+        cycle_lay.addWidget(self.btn_cycle_arm)
+
+        # Stop button
+        self.btn_cycle_stop = QPushButton("Stop Cycle")
+        self.btn_cycle_stop.setStyleSheet("font-weight: bold; padding: 4px 14px;")
+        self.btn_cycle_stop.setToolTip(
+            "Stop the sampling cycle; retracts the cup if currently inserting"
+        )
+        self.btn_cycle_stop.setEnabled(False)
+        self.btn_cycle_stop.clicked.connect(self._on_cycle_stop_clicked)
+        cycle_lay.addWidget(self.btn_cycle_stop)
+
+        cycle_lay.addSpacing(8)
+
+        # Status label (cycle state + time to next insertion)
+        self.lbl_cycle_state = QLabel("Disarmed")
+        self.lbl_cycle_state.setStyleSheet(
+            f"color: {theme.MUTED}; font-style: italic; font-size: {theme.FS_LABEL}px;"
+        )
+        self.lbl_cycle_state.setMinimumWidth(260)
+        cycle_lay.addWidget(self.lbl_cycle_state, stretch=1)
+
+        layout.addWidget(cycle_box)
+
+        # ── 2d. Dose & Displacement Parameters (ADR 0003) ─────────────────────
         dose_box = QGroupBox("Dose Tracking & Displacement Parameters")
         dose_grid = QGridLayout(dose_box)
         dose_grid.setContentsMargins(12, 6, 12, 6)
@@ -568,6 +657,7 @@ class FaradayCupTab(QWidget):
         self._on_navigation_changed()
         self._set_disconnected_view()
         self._set_actuation_disconnected_view()
+        self._update_cycle_view(0.0)
 
     # ── Connection Handling ───────────────────────────────────────────────────
 
@@ -1012,9 +1102,13 @@ class FaradayCupTab(QWidget):
             return
         if not self._actuation_connected:
             return
+        # Inform the cycle scheduler that a manual insertion is starting
+        t_now = self._last_state_t if not math.isnan(self._last_state_t) else time.time()
+        self.cycle.notify_manual_insert(t_now)
         self._start_move(CupPosition.IN)
         if self.beamline is not None:
             self.beamline.command_cup_in()
+        self._update_cycle_view(t_now)
 
     def _on_retract_clicked(self) -> None:
         """Handle operator pressing Retract button."""
@@ -1022,9 +1116,13 @@ class FaradayCupTab(QWidget):
             return
         if not self._actuation_connected:
             return
+        # Inform the cycle scheduler that a manual retraction is starting
+        t_now = self._last_state_t if not math.isnan(self._last_state_t) else time.time()
+        self.cycle.notify_manual_retract(t_now)
         self._start_move(CupPosition.OUT)
         if self.beamline is not None:
             self.beamline.command_cup_out()
+        self._update_cycle_view(t_now)
 
     def _start_move(self, target: CupPosition) -> None:
         """Initiate a commanded cup move and start confirmation timeout tracking."""
@@ -1035,6 +1133,118 @@ class FaradayCupTab(QWidget):
         self._move_fault = ""
         self._commanded = target
         self._update_actuation_view()
+
+    # ── Sampling Cycle (ADR 0003, ticket 09) ─────────────────────────────────
+
+    def _on_cycle_arm_clicked(self) -> None:
+        """Arm or disarm the sampling cycle."""
+        t_now = self._last_state_t if not math.isnan(self._last_state_t) else time.time()
+        if self.cycle.is_armed:
+            self.cycle.disarm()
+        else:
+            self.cycle.arm(t=t_now)
+        self._update_cycle_view(t_now)
+
+    def _on_cycle_stop_clicked(self) -> None:
+        """Stop the cycle; retract the cup if currently inserting."""
+        t_now = self._last_state_t if not math.isnan(self._last_state_t) else time.time()
+        retract_action = self.cycle.stop(t=t_now)
+        if retract_action is not None and not self._move_in_flight and self._actuation_connected:
+            self._start_move(CupPosition.OUT)
+            if self.beamline is not None:
+                self.beamline.command_cup_out()
+        self._update_cycle_view(t_now)
+
+    def _on_cycle_period_changed(self) -> None:
+        """Apply updated period from the spinner to the scheduler."""
+        self.cycle.set_period(self.spn_cycle_period.value())
+
+    def _on_cycle_dwell_changed(self) -> None:
+        """Apply updated dwell from the spinner to the scheduler."""
+        self.cycle.set_dwell(self.spn_cycle_dwell.value())
+
+    def _tick_cycle(self, t: float) -> None:
+        """Advance the cycle scheduler to time t and act on the result.
+
+        Called on every on_cup_actuation_state update. The scheduler is pure
+        and calls no clock; t comes from the T7 window timestamp.
+        """
+        if not self.cycle.is_armed:
+            return
+
+        result = self.cycle.tick(t)
+        if result is None:
+            return
+
+        if isinstance(result, CycleInsert):
+            # Scheduled insertion — command cup IN if no move is already in flight
+            if not self._move_in_flight and self._actuation_connected:
+                self._start_move(CupPosition.IN)
+                if self.beamline is not None:
+                    self.beamline.command_cup_in()
+
+        elif isinstance(result, CycleRetract):
+            # Dwell expired — command cup OUT
+            if not self._move_in_flight and self._actuation_connected:
+                self._start_move(CupPosition.OUT)
+                if self.beamline is not None:
+                    self.beamline.command_cup_out()
+
+        elif isinstance(result, CycleSkipped):
+            # Scheduled insertion skipped because a manual run was open.
+            # Record the skip in the session file; do not command the cup.
+            self.session_writer.write_cycle_insertion_skipped(
+                t_host=t,
+                insertion_due_t=result.insertion_due_t,
+            )
+
+        self._update_cycle_view(t)
+
+    def _update_cycle_view(self, t: float) -> None:
+        """Update the Sampling Cycle panel to reflect the current scheduler state."""
+        state = self.cycle.state
+        if state == CycleState.DISARMED:
+            self.btn_cycle_arm.setText("Arm Cycle")
+            self.btn_cycle_arm.setStyleSheet("font-weight: bold; padding: 4px 14px;")
+            self.btn_cycle_stop.setEnabled(False)
+            self.lbl_cycle_state.setText("Disarmed")
+            self.lbl_cycle_state.setStyleSheet(
+                f"color: {theme.MUTED}; font-style: italic; font-size: {theme.FS_LABEL}px;"
+            )
+        elif state == CycleState.WAITING:
+            self.btn_cycle_arm.setText("Disarm Cycle")
+            self.btn_cycle_arm.setStyleSheet(
+                f"font-weight: bold; padding: 4px 14px; color: {theme.WARN};"
+            )
+            self.btn_cycle_stop.setEnabled(True)
+            tti = self.cycle.time_to_next_insertion(t)
+            if tti is not None:
+                mins, secs = divmod(int(tti), 60)
+                countdown = f"{mins:02d}:{secs:02d}"
+                self.lbl_cycle_state.setText(
+                    f"Armed — next insertion in {countdown}"
+                )
+            else:
+                self.lbl_cycle_state.setText("Armed — waiting")
+            self.lbl_cycle_state.setStyleSheet(
+                f"color: {theme.OK}; font-size: {theme.FS_LABEL}px;"
+            )
+        elif state == CycleState.INSERTING:
+            self.btn_cycle_arm.setText("Disarm Cycle")
+            self.btn_cycle_arm.setStyleSheet(
+                f"font-weight: bold; padding: 4px 14px; color: {theme.WARN};"
+            )
+            self.btn_cycle_stop.setEnabled(True)
+            ttr = self.cycle.time_to_retract(t)
+            if ttr is not None:
+                self.lbl_cycle_state.setText(
+                    f"Armed — inserting (retract in {ttr:.1f} s)"
+                )
+            else:
+                self.lbl_cycle_state.setText("Armed — inserting")
+            self.lbl_cycle_state.setStyleSheet(
+                f"color: {theme.OK}; font-weight: bold; font-size: {theme.FS_LABEL}px;"
+            )
 
     def on_cup_actuation_state(self, state: CupActuationState) -> None:
         """Ingest CupActuationState snapshot published by Beamline (ADR 0003)."""
@@ -1126,6 +1336,9 @@ class FaradayCupTab(QWidget):
         self._confirmed = state.confirmed
         self._auto_mode = state.auto_mode
         self._stale = state.stale
+
+        # Tick the sampling cycle scheduler on every actuation state update
+        self._tick_cycle(t_now)
 
         self._update_actuation_view()
 

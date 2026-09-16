@@ -182,7 +182,8 @@ class CupSessionWriter:
             "# record types: sample, run_opened, run_closed, idle_heartbeat, "
             "connected, disconnected, position_transition, "
             "fault_move_not_confirmed, fault_controller_not_in_auto, "
-            "fault_impossible_status, fault_disagreement\n"
+            "fault_impossible_status, fault_disagreement, "
+            "cycle_insertion_skipped\n"
         )
         self._file.write("# columns: " + ", ".join(CSV_COLUMNS) + "\n")
 
@@ -520,6 +521,34 @@ class CupSessionWriter:
             "run_id": str(self._active_run_id) if self._active_run_id is not None else "",
             "details": det,
             "position": pos_str,
+        }
+        self._write_row(row)
+
+    def write_cycle_insertion_skipped(
+        self,
+        t_host: float,
+        insertion_due_t: float,
+        details: str = "",
+    ) -> None:
+        """Write a marker when a scheduled cycle insertion is skipped.
+
+        A skip happens when a period boundary falls due while a manual run is
+        open. The insertion is not queued — the scheduler advances to the next
+        period boundary. This row records the skipped insertion time so a
+        reviewer can tell the gap apart from instrument downtime.
+        """
+        desc = f"insertion_due_t={insertion_due_t:.3f} s skipped; manual run was open"
+        det = f"{desc}; {details}" if details else desc
+        row = {
+            "record_type": "cycle_insertion_skipped",
+            "iso_timestamp": _now_iso(),
+            "host_timestamp": f"{t_host:.6f}",
+            "inst_timestamp": "",
+            "current_a": "",
+            "status_word": "",
+            "over_range": "",
+            "run_id": str(self._active_run_id) if self._active_run_id is not None else "",
+            "details": det,
         }
         self._write_row(row)
 
