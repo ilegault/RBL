@@ -105,7 +105,19 @@ def estimate_period_samples(wave, min_rms: float = DEFAULT_MIN_RMS) -> float:
     if first >= max_lag:
         return float("nan")
 
-    lag = first + int(np.argmax(ac[first:max_lag]))
+    # Isolate the first positive lobe rather than taking the global argmax across
+    # all lags: for non-integer sample periods (e.g. 7.5 samples/cycle at 1 kHz with
+    # a 7.5 kS/s stream), discrete samples at a higher harmonic (e.g. lag 15) can have
+    # higher correlation than the off-grid fundamental peak near lag 7.5, which would
+    # cause octave jumping (halving the measured frequency).
+    pos = np.flatnonzero(ac[first:max_lag] > 0.0)
+    if pos.size == 0:
+        return float("nan")
+    start_pos = first + int(pos[0])
+    neg_after = np.flatnonzero(ac[start_pos:max_lag] < 0.0)
+    end_pos = start_pos + int(neg_after[0]) if neg_after.size else max_lag
+
+    lag = start_pos + int(np.argmax(ac[start_pos:end_pos]))
     if ac[lag] < MIN_CORRELATION:
         return float("nan")
     return _interpolate_peak(ac, lag)
