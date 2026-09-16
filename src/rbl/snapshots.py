@@ -477,6 +477,7 @@ class CupActuationState:
     auto_mode: bool = False
     stale: bool = False
     last_transition_t: float = float("nan")
+    t: float = float("nan")
 
     @property
     def commanded_position(self) -> CupPosition:

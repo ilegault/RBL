@@ -75,6 +75,7 @@ class CupActuationLinkMixin:
         self._cup_auto_mode: bool = False
         self._cup_stale: bool = False
         self._cup_last_transition_t: float = float("nan")
+        self._cup_last_window_t: float = float("nan")
 
         # Per-scan debounce state tracking
         self._cup_candidate_position: CupPosition | None = None
@@ -93,6 +94,7 @@ class CupActuationLinkMixin:
             auto_mode=self._cup_auto_mode,
             stale=self._cup_stale,
             last_transition_t=self._cup_last_transition_t,
+            t=self._cup_last_window_t,
         )
         if hasattr(self, "cup_actuation_changed"):
             self.cup_actuation_changed.emit(snapshot)
@@ -171,6 +173,8 @@ class CupActuationLinkMixin:
 
     def ingest_cup_actuation_window(self, payload: dict) -> None:
         """Ingest a stream window payload from LabJackStreamWorker."""
+        t_window = payload.get("t", float("nan"))
+        self._cup_last_window_t = t_window
         channels = payload.get("channels", {})
         fio_entry = channels.get("FIO_STATE")
         if fio_entry is None:
@@ -182,7 +186,6 @@ class CupActuationLinkMixin:
         self._cup_stale = False
 
         # Extract timing
-        t_window = payload.get("t", float("nan"))
         window_samples = payload.get("window_samples") or 750
         sample_period = payload.get("sample_period") or (1.0 / 7500.0)
 

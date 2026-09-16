@@ -28,7 +28,7 @@ from rbl.gui.faraday_cup_tab import FaradayCupTab
 from rbl.hardware.current_monitor import format_current
 from rbl.services.cup_session_writer import CupSessionWriter
 from rbl.state.beamline import Beamline
-from tests.payloads import CupFeed, window_payload
+from tests.payloads import CupActuationFeed, CupFeed, window_payload
 
 
 @pytest.fixture(scope="session")
@@ -562,5 +562,212 @@ class TestFaradayCupTabLivePlot:
 
         assert "—" in tab.lbl_current.text()
         assert not tab.plot.redraw_timer.isActive()
+
+
+RAW_STATUS_IN = 1 << 3   # Bit 3 (OUT) open, Bit 2 (IN) closed (0), Bit 4 (AUTO) closed (0)
+RAW_STATUS_OUT = 1 << 2  # Bit 2 (IN) open, Bit 3 (OUT) closed (0), Bit 4 (AUTO) closed (0)
+RAW_STATUS_TRANSIT = (1 << 2) | (1 << 3)  # Both open (1), neither asserted
+RAW_STATUS_INDETERMINATE = 0  # Both closed (0), both asserted (fault)
+RAW_STATUS_NOT_AUTO = (1 << 3) | (1 << 4)  # IN closed (0), AUTO open (1)
+
+
+class TestFaradayCupActuationUI:
+    """Tests for Faraday cup actuation controls and indicators on FaradayCupTab (Ticket 05)."""
+
+    def test_actuation_initial_disconnected_state(self, qapp):
+        beamline = Beamline()
+        tab = FaradayCupTab(beamline=beamline)
+        tab.show()
+        qapp.processEvents()
+
+        # Both indicators must be visible and distinct, showing disconnected / "—"
+        assert tab.lbl_commanded.isVisible()
+        assert tab.lbl_confirmed.isVisible()
+        assert "—" in tab.lbl_commanded.text()
+        assert "—" in tab.lbl_confirmed.text()
+
+        # Insert and Retract buttons disabled when LabJack is not connected
+        assert not tab.btn_insert.isEnabled()
+        assert not tab.btn_retract.isEnabled()
+
+    def test_actuation_buttons_enabled_when_labjack_connected(self, qapp):
+        beamline = Beamline()
+        beamline.lj.handle = 1
+        tab = FaradayCupTab(beamline=beamline)
+        feed = CupActuationFeed(tab, beamline=beamline)
+        tab.show()
+        qapp.processEvents()
+
+        feed.send_fio_state(RAW_STATUS_IN, t=1.0)
+        qapp.processEvents()
+
+        assert tab.btn_insert.isEnabled()
+        assert tab.btn_retract.isEnabled()
+
+    def test_actuation_confirming_move_updates_both_indicators(self, qapp):
+        beamline = Beamline()
+        beamline.lj.handle = 1
+        tab = FaradayCupTab(beamline=beamline)
+        feed = CupActuationFeed(tab, beamline=beamline)
+        tab.show()
+        qapp.processEvents()
+
+        # Initially IN
+        feed.send_fio_state(RAW_STATUS_IN, t=1.0)
+        qapp.processEvents()
+        assert "IN" in tab.lbl_commanded.text()
+        assert "IN" in tab.lbl_confirmed.text()
+
+        # Command OUT via tab Retract button
+        tab.btn_retract.click()
+        qapp.processEvents()
+
+        # Commanded updates immediately to OUT; Confirmed remains IN
+        assert "OUT" in tab.lbl_commanded.text()
+        assert "IN" in tab.lbl_confirmed.text()
+
+        # Feed sends in-transit status word
+        feed.send_fio_state(RAW_STATUS_TRANSIT, t=1.1)
+        qapp.processEvents()
+        assert "OUT" in tab.lbl_commanded.text()
+        confirmed_text = tab.lbl_confirmed.text().upper()
+        assert "IN TRANSIT" in confirmed_text or "TRANSIT" in confirmed_text
+
+        # Status contacts confirm OUT
+        feed.send_fio_state(RAW_STATUS_OUT, t=1.2)
+        qapp.processEvents()
+
+        # Both indicators now show OUT
+        assert "OUT" in tab.lbl_commanded.text()
+        assert "OUT" in tab.lbl_confirmed.text()
+        assert not tab.lbl_fault.isVisible()
+
+    def test_actuation_non_confirming_move_raises_timeout_fault(self, qapp):
+        beamline = Beamline()
+        beamline.lj.handle = 1
+        tab = FaradayCupTab(beamline=beamline)
+        feed = CupActuationFeed(tab, beamline=beamline)
+        tab.show()
+        qapp.processEvents()
+
+        feed.send_fio_state(RAW_STATUS_IN, t=1.0)
+        qapp.processEvents()
+
+        # Command OUT at t=1.0
+        tab.btn_retract.click()
+        qapp.processEvents()
+        assert "OUT" in tab.lbl_commanded.text()
+        assert "IN" in tab.lbl_confirmed.text()
+
+        # Advance window to t=1.5 (0.5 s elapsed < 2.0 s timeout)
+        feed.send_fio_state(RAW_STATUS_IN, t=1.5)
+        qapp.processEvents()
+        assert not tab.lbl_fault.isVisible()
+        assert "IN" in tab.lbl_confirmed.text()
+
+        # Advance window to t=3.2 (2.2 s elapsed >= 2.0 s timeout)
+        feed.send_fio_state(RAW_STATUS_IN, t=3.2)
+        qapp.processEvents()
+
+        # Move failed to confirm: confirmed unchanged, timeout fault raised naming move OUT
+        assert "IN" in tab.lbl_confirmed.text()
+        assert tab.lbl_fault.isVisible()
+        fault_text = tab.lbl_fault.text()
+        assert "OUT" in fault_text
+        lower = fault_text.lower()
+        assert "confirm" in lower or "timeout" in lower or "2.0" in lower
+
+    def test_actuation_controller_not_in_auto_warning(self, qapp):
+        beamline = Beamline()
+        beamline.lj.handle = 1
+        tab = FaradayCupTab(beamline=beamline)
+        feed = CupActuationFeed(tab, beamline=beamline)
+        tab.show()
+        qapp.processEvents()
+
+        feed.send_fio_state(RAW_STATUS_NOT_AUTO, t=1.0)
+        qapp.processEvents()
+
+        # Not in AUTO warning should state plainly that commands will be ignored
+        assert tab.lbl_auto_mode.isVisible()
+        auto_text = tab.lbl_auto_mode.text().lower()
+        assert "auto" in auto_text or "local" in auto_text
+        assert "ignore" in auto_text
+
+    def test_actuation_indeterminate_status_presents_as_fault(self, qapp):
+        beamline = Beamline()
+        beamline.lj.handle = 1
+        tab = FaradayCupTab(beamline=beamline)
+        feed = CupActuationFeed(tab, beamline=beamline)
+        tab.show()
+        qapp.processEvents()
+
+        feed.send_fio_state(RAW_STATUS_INDETERMINATE, t=1.0)
+        qapp.processEvents()
+
+        # Indeterminate reading presented as a fault, not as a normal position
+        confirmed_text = tab.lbl_confirmed.text().lower()
+        assert "fault" in confirmed_text or "indeterminate" in confirmed_text
+        assert tab.lbl_fault.isVisible()
+
+    def test_actuation_move_in_flight_prevents_second_command(self, qapp, monkeypatch):
+        beamline = Beamline()
+        beamline.lj.handle = 1
+        tab = FaradayCupTab(beamline=beamline)
+        feed = CupActuationFeed(tab, beamline=beamline)
+        tab.show()
+        qapp.processEvents()
+
+        feed.send_fio_state(RAW_STATUS_OUT, t=1.0)
+        qapp.processEvents()
+
+        commands_sent = []
+        monkeypatch.setattr(beamline, "command_cup", lambda pos: commands_sent.append(pos))
+        monkeypatch.setattr(beamline, "command_cup_in", lambda: commands_sent.append("IN"))
+        monkeypatch.setattr(beamline, "command_cup_out", lambda: commands_sent.append("OUT"))
+
+        # Click Insert -> move in flight to IN
+        tab.btn_insert.click()
+        qapp.processEvents()
+        assert len(commands_sent) == 1
+
+        # While move is in flight, click Insert again
+        tab.btn_insert.click()
+        qapp.processEvents()
+        # No second command queued!
+        assert len(commands_sent) == 1
+
+    def test_actuation_stale_reading_distinct_from_disconnected(self, qapp):
+        beamline = Beamline()
+        beamline.lj.handle = 1
+        tab = FaradayCupTab(beamline=beamline)
+        feed = CupActuationFeed(tab, beamline=beamline)
+        tab.show()
+        qapp.processEvents()
+
+        # Send non-FULL profile window (FIO_STATE is None)
+        feed.send_fio_state(None, t=1.0, profile="WAVEFORM")
+        qapp.processEvents()
+
+        assert tab.lbl_stale.isVisible()
+        stale_text = tab.lbl_stale.text().lower()
+        assert "stale" in stale_text
+        # Distinguishable from disconnected
+        assert tab.btn_insert.isEnabled()
+
+    def test_main_window_wiring_cup_actuation(self, win, qapp):
+        # Verify that MainWindow wires beamline.cup_actuation_changed to faraday_cup_tab
+        tab = win.faraday_cup_tab
+        win.beamline.lj.handle = 1
+        feed = CupActuationFeed(beamline=win.beamline)
+        feed.send_fio_state(RAW_STATUS_OUT, t=1.0)
+        feed.command_cup_out()
+        qapp.processEvents()
+
+        assert "OUT" in tab.lbl_commanded.text()
+        assert "OUT" in tab.lbl_confirmed.text()
+        assert tab.btn_insert.isEnabled()
+
+
 
 
