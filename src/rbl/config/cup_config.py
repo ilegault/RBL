@@ -49,8 +49,20 @@ TIMING AND DEBOUNCE (ADR 0003)
   this window, a fault is raised and the sampling cycle is disarmed.
 - Contact debounce: 0.05 s (50 ms). Sized for mechanical relay and microswitch bounce,
   applied to confirmed transitions.
-Do NOT reuse or lower CUP_ARM_DEBOUNCE_S or CUP_RELEASE_INTERVAL_S for this path:
-those own the current-inference path and are sized for manual insertions lasting minutes.
+
+TWO CONSTANT SETS — DO NOT MERGE (ADR 0003 Decision 4)
+-------------------------------------------------------
+CUP_ARM_DEBOUNCE_S and CUP_RELEASE_INTERVAL_S own the CURRENT-INFERENCE path.
+They are sized for a manual insertion lasting minutes: 1.0 s to confirm the cup is
+in the beam, 3.0 s to confirm it has left. Hand insertions still happen and still
+need that hysteresis. Do NOT reuse or lower these for the confirmed-position path.
+
+CUP_CONTACT_DEBOUNCE_S owns the CONFIRMED-POSITION path. It is sized for mechanical
+relay and microswitch bounce (50 ms), not for insertion duration. CupPositionDetector
+uses only this constant; CupDetector uses only the inference constants above. Using
+one set of numbers for both mechanisms is how the next person inadvertently breaks
+both: a hand insertion debounced at 50 ms would fire on every contact chatter,
+while a sampling insertion debounced at 1.0 s would never produce a run at all.
 """
 
 
