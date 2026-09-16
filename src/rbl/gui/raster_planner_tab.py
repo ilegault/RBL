@@ -207,6 +207,7 @@ class RasterPlannerTab(QWidget):
 
     slit_targets_ready = Signal(dict)   # {"X+": mm, "X-": mm, "Y+": mm, "Y-": mm}
     patch_dimensions_changed = Signal(float, float)   # (patch_width_x_mm, patch_height_y_mm)
+    species_changed = Signal(str, float, int)   # (species_name, energy_ev, charge_state)
 
     def __init__(self, beamline=None, profiler=None, parent=None):
         super().__init__(parent)
@@ -798,6 +799,7 @@ class RasterPlannerTab(QWidget):
         name, _mass, energy_ev, charge = species
         self.lbl_design_species.setText(
             f"{name} — {energy_ev / 1e6:g} MeV, charge state {charge}+")
+        self.species_changed.emit(name, energy_ev, charge)
 
         planes, z_slit, d_slit, d_sample, d_alumina = self._planes_and_drifts()
 
@@ -1632,6 +1634,14 @@ class RasterPlannerTab(QWidget):
         rows = self.tbl_species.selectionModel().selectedRows()
         row = rows[0].row() if rows else DEFAULT_SPECIES_ROW
         return row, self._species_row(row)
+
+    def selected_species_info(self) -> tuple[str, float, int] | None:
+        """Return (name, energy_ev, charge) for the currently selected species, or None."""
+        _, sp = self._selected_species()
+        if sp is not None:
+            name, _mass, energy_ev, charge = sp
+            return name, energy_ev, charge
+        return None
 
     def _load_species(self):
         data = load_config().get(_SPECIES_CFG_KEY)

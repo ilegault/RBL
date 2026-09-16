@@ -394,6 +394,17 @@ class MainWindow(QMainWindow):
             self.raster_planner_tab.sb_patch_y_mm.value(),
         )
 
+        # Species information from Raster Planner to Faraday Cup tab for dose
+        # traceability (ADR 0003). Connects active ion species, beam energy, and charge
+        # state to ensure dose chain records and session file headers trace back to the
+        # selected species without duplicate manual entry.
+        self.raster_planner_tab.species_changed.connect(
+            self.faraday_cup_tab.on_species_changed
+        )
+        _species_info = self.raster_planner_tab.selected_species_info()
+        if _species_info is not None:
+            self.faraday_cup_tab.on_species_changed(*_species_info)
+
         # Start on Overview.  It is the screen that answers "what is this
         # beamline doing right now" without pressing anything, and it is
         # where Connect All lives - so it is the first thing an operator

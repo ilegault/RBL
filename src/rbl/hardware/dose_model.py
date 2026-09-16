@@ -262,6 +262,7 @@ class DoseAccumulator:
         self._insertion_count: int = 0
         self._last_out_t: float | None = None
         self._last_current_a: float | None = None
+        self._last_beam_on_s: float = 0.0
 
     @property
     def total_charge_c(self) -> float:
@@ -272,6 +273,11 @@ class DoseAccumulator:
     def total_beam_on_s(self) -> float:
         """Total accumulated beam-on exposure time in seconds."""
         return self._total_beam_on_s
+
+    @property
+    def last_beam_on_s(self) -> float:
+        """Beam-on duration in seconds preceding the most recent insertion."""
+        return self._last_beam_on_s
 
     @property
     def insertion_count(self) -> int:
@@ -321,12 +327,14 @@ class DoseAccumulator:
             Delta charge in Coulombs accumulated for the preceding beam-on interval.
         """
         dq = 0.0
+        dt = 0.0
         if self._last_out_t is not None and self._last_current_a is not None:
             dt = max(0.0, t_in - self._last_out_t)
             dq = compute_charge(self._last_current_a, dt)
             self._total_charge_c += dq
             self._total_beam_on_s += dt
 
+        self._last_beam_on_s = dt
         self._last_out_t = t_out
         self._last_current_a = mean_current_a
         self._insertion_count += 1
@@ -347,3 +355,4 @@ class DoseAccumulator:
         self._insertion_count = 0
         self._last_out_t = None
         self._last_current_a = None
+        self._last_beam_on_s = 0.0

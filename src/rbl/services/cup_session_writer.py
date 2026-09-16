@@ -18,13 +18,26 @@ FIO4 = AUTO). The session file now logs:
    - Controller not in AUTO (LOCAL mode).
    - Impossible status combination (both contacts asserted / indeterminate).
    - Position-versus-current disagreement (carrying both readings).
+4. Per-insertion summary rows (Ticket 11):
+   - One summary row per insertion written when the run closes.
+   - Commanded and confirmed timestamps (measuring mechanical lag).
+   - Dwell, post-settle sample count, mean current, and sample standard deviation.
+   - Elapsed beam-on seconds since previous insertion (excluding cup-in-beam time).
+   - Running dose chain stages (Q, fluence, dpa), each in its own column so
+     the arithmetic can be reconstructed by hand from the file alone.
+5. Session header:
+   - Self-describing comment header carrying species, beam energy, ion charge state,
+     irradiated area, displacement damage coefficient (k) with its damage depth,
+     SRIM version, entry date, and cycle period and dwell in force.
+   - Absent provenance fields are recorded with explicit markers (NOT_SPECIFIED),
+     never as blanks or zeroes that could be misread.
 
 TIMING AND CLOCK CONSISTENCY
 ----------------------------
-The logging is consistent or it is useless. A transition marker's timestamp and a
-sample row's timestamp must be the same clock and the same format, so a reader can
-interleave them chronologically without guessing. Transition markers, fault rows,
-and sample rows share the exact same host_timestamp format (f"{t_host:.6f}") and
+The logging is consistent or it is useless. A transition marker's timestamp, an
+insertion summary row's timestamp, and a sample row's timestamp must be the same
+clock and the same format, so a reader can interleave them chronologically without
+guessing. All host timestamps share the exact same format (f"{t_host:.6f}") and
 UTC ISO timestamp.
 
 ONE FILE PER APPLICATION SESSION
@@ -45,8 +58,8 @@ are recorded as marker rows.
 
 CRASH RESILIENCE
 ----------------
-The CSV file is flushed after every row (sample, transition, fault, or marker). An 11-hour
-drift run that dies at hour 11 leaves 11 hours of usable data on disk.
+The CSV file is flushed after every row (sample, transition, fault, marker, or summary).
+An 11-hour drift run that dies at hour 11 leaves 11 hours of usable data on disk.
 """
 from __future__ import annotations
 
@@ -65,11 +78,20 @@ from rbl.config.cup_config import (
     CUP_ARM_THRESHOLD_A,
     CUP_RELEASE_INTERVAL_S,
     CUP_RELEASE_THRESHOLD_A,
+    CUP_SETTLE_WINDOW_S,
 )
 from rbl.config.paths import FARADAY_CUP_DIR
 from rbl.hardware.cup_status import CupPosition
+from rbl.hardware.dose_model import (
+    InsertionCurrentStats,
+    compute_dpa,
+    compute_fluence,
+    compute_insertion_current,
+)
 
 log = logging.getLogger(__name__)
+
+PROVENANCE_ABSENT: str = "NOT_SPECIFIED"
 
 
 @dataclass(frozen=True)
@@ -82,6 +104,10 @@ class CupRunStats:
     valid_samples: int
     over_range_samples: int
     average_current_a: float | None
+    post_settle_samples: int = 0
+    post_settle_mean_a: float | None = None
+    post_settle_std_a: float | None = None
+    excluded_settle_samples: int = 0
 
 
 # Column schema for the Faraday cup session CSV
@@ -96,6 +122,19 @@ CSV_COLUMNS: list[str] = [
     "run_id",
     "details",
     "position",
+    "commanded_timestamp",
+    "confirmed_timestamp",
+    "dwell",
+    "sample_count",
+    "mean_current_a",
+    "std_current_a",
+    "beam_on_seconds",
+    "charge",
+    "charge_state",
+    "area",
+    "k",
+    "fluence",
+    "dpa",
 ]
 
 
@@ -115,14 +154,38 @@ def _safe_float(v: float | None, fmt: str = ".8e") -> str:
     return f"{v:{fmt}}"
 
 
+def _format_header_val(v: Any, fmt: str | None = None) -> str:
+    """Format session header value, substituting PROVENANCE_ABSENT if blank, zero, or None."""
+    if v is None:
+        return PROVENANCE_ABSENT
+    if isinstance(v, (int, float)):
+        if v <= 0 or math.isnan(v) or math.isinf(v):
+            return PROVENANCE_ABSENT
+        if fmt is not None:
+            return f"{v:{fmt}}"
+        return f"{v}"
+    s = str(v).strip()
+    return s if s else PROVENANCE_ABSENT
+
+
 class CupSessionWriter:
-    """Writes Faraday cup acquisition samples and lifecycle markers to CSV + JSON sidecar.
+    """Writes Faraday cup acquisition samples, lifecycle markers, and dose summary rows.
 
     Parameters
     ----------
-    session_id : Optional unique session identifier string.
-    output_dir : Directory to store CSV and JSON files (default: FARADAY_CUP_DIR).
-    metadata   : Extra metadata fields for the JSON sidecar.
+    session_id     : Optional unique session identifier string.
+    output_dir     : Directory to store CSV and JSON files (default: FARADAY_CUP_DIR).
+    metadata       : Extra metadata fields for the JSON sidecar.
+    species        : Ion species name (e.g. 'Fe56').
+    energy         : Beam energy (e.g. '5.0 MeV').
+    charge_state   : Ion charge state q (positive integer >= 1).
+    area_cm2       : Irradiated sample area in cm².
+    k              : Displacement damage coefficient in dpa / (ions/cm²).
+    k_depth        : Damage depth for SRIM calculation in nanometers.
+    srim_version   : SRIM calculation version string.
+    entry_date     : Date coefficient was derived or entered (YYYY-MM-DD).
+    cycle_period_s : Sampling cycle period in seconds.
+    cycle_dwell_s  : Sampling cycle dwell in seconds.
     """
 
     def __init__(
@@ -130,6 +193,16 @@ class CupSessionWriter:
         session_id: str | None = None,
         output_dir: Path | str | None = None,
         metadata: dict[str, Any] | None = None,
+        species: str | None = None,
+        energy: str | float | None = None,
+        charge_state: int | None = None,
+        area_cm2: float | None = None,
+        k: float | None = None,
+        k_depth: str | float | None = None,
+        srim_version: str | None = None,
+        entry_date: str | None = None,
+        cycle_period_s: float | None = None,
+        cycle_dwell_s: float | None = None,
     ) -> None:
         self.session_id: str = session_id or _new_session_id()
         self.output_dir: Path = Path(output_dir) if output_dir is not None else FARADAY_CUP_DIR
@@ -138,6 +211,17 @@ class CupSessionWriter:
         self._csv_path: Path = self.output_dir / f"{self.session_id}.csv"
         self._meta_path: Path = self.output_dir / f"{self.session_id}.json"
 
+        self._species: str | None = species
+        self._energy: str | float | None = energy
+        self._charge_state: int | None = charge_state
+        self._area_cm2: float | None = area_cm2
+        self._k: float | None = k
+        self._k_depth: str | float | None = k_depth
+        self._srim_version: str | None = srim_version
+        self._entry_date: str | None = entry_date
+        self._cycle_period_s: float | None = cycle_period_s
+        self._cycle_dwell_s: float | None = cycle_dwell_s
+
         self._metadata: dict[str, Any] = dict(metadata or {})
         self._metadata.setdefault("session_id", self.session_id)
         self._metadata.setdefault("start_timestamp_iso", _now_iso())
@@ -145,6 +229,16 @@ class CupSessionWriter:
         self._metadata.setdefault("release_threshold_a", CUP_RELEASE_THRESHOLD_A)
         self._metadata.setdefault("arm_debounce_s", CUP_ARM_DEBOUNCE_S)
         self._metadata.setdefault("release_interval_s", CUP_RELEASE_INTERVAL_S)
+        self._metadata.setdefault("species", self._species)
+        self._metadata.setdefault("energy", self._energy)
+        self._metadata.setdefault("charge_state", self._charge_state)
+        self._metadata.setdefault("area_cm2", self._area_cm2)
+        self._metadata.setdefault("k", self._k)
+        self._metadata.setdefault("k_depth", self._k_depth)
+        self._metadata.setdefault("srim_version", self._srim_version)
+        self._metadata.setdefault("entry_date", self._entry_date)
+        self._metadata.setdefault("cycle_period_s", self._cycle_period_s)
+        self._metadata.setdefault("cycle_dwell_s", self._cycle_dwell_s)
 
         self._file = open(self._csv_path, "w", newline="", encoding="utf-8")
         self._writer = csv.DictWriter(self._file, fieldnames=CSV_COLUMNS)
@@ -159,7 +253,7 @@ class CupSessionWriter:
         self._sample_count: int = 0
         self._runs_recorded: set[int] = set()
 
-        # Active run statistics (computed strictly from logged samples)
+        # Active run statistics & sample tracking (computed strictly from logged samples)
         self._active_run_id: int | None = None
         self._active_run_t_start: float = 0.0
         self._active_run_t_last: float = 0.0
@@ -167,7 +261,9 @@ class CupSessionWriter:
         self._active_run_valid_samples: int = 0
         self._active_run_over_range_samples: int = 0
         self._active_run_current_sum: float = 0.0
+        self._active_run_samples: list[tuple[float, float | None]] = []
         self._last_run_stats: CupRunStats | None = None
+        self._last_insertion_stats: InsertionCurrentStats | None = None
 
     def _write_header_comments(self) -> None:
         """Write self-describing comments at the top of the CSV file."""
@@ -178,12 +274,30 @@ class CupSessionWriter:
             f"arm_debounce={CUP_ARM_DEBOUNCE_S:.1f} s  "
             f"release_interval={CUP_RELEASE_INTERVAL_S:.1f} s\n"
         )
+        species_str = _format_header_val(self._species)
+        energy_str = _format_header_val(self._energy)
+        cs_str = _format_header_val(self._charge_state)
+        area_str = _format_header_val(self._area_cm2, ".4f")
+        k_str = _format_header_val(self._k, ".4e")
+        depth_str = _format_header_val(self._k_depth)
+        srim_str = _format_header_val(self._srim_version)
+        entry_date_str = _format_header_val(self._entry_date)
+        period_str = _format_header_val(self._cycle_period_s, ".1f")
+        dwell_str = _format_header_val(self._cycle_dwell_s, ".1f")
+
+        self._file.write(
+            f"# session_header: species={species_str}  energy={energy_str}  "
+            f"charge_state={cs_str}  area={area_str}  "
+            f"k={k_str}  k_depth={depth_str}  "
+            f"srim_version={srim_str}  entry_date={entry_date_str}  "
+            f"cycle_period={period_str}  cycle_dwell={dwell_str}\n"
+        )
         self._file.write(
             "# record types: sample, run_opened, run_closed, idle_heartbeat, "
             "connected, disconnected, position_transition, "
             "fault_move_not_confirmed, fault_controller_not_in_auto, "
             "fault_impossible_status, fault_disagreement, "
-            "cycle_insertion_skipped\n"
+            "cycle_insertion_skipped, insertion_summary\n"
         )
         self._file.write("# columns: " + ", ".join(CSV_COLUMNS) + "\n")
 
@@ -229,9 +343,13 @@ class CupSessionWriter:
             self._active_run_t_last = t_host
             if over_range:
                 self._active_run_over_range_samples += 1
+                self._active_run_samples.append((t_host, None))
             elif current is not None and not math.isnan(current) and not math.isinf(current):
                 self._active_run_valid_samples += 1
                 self._active_run_current_sum += current
+                self._active_run_samples.append((t_host, current))
+            else:
+                self._active_run_samples.append((t_host, None))
 
     def write_run_opened(
         self,
@@ -270,7 +388,9 @@ class CupSessionWriter:
         self._active_run_valid_samples = 0
         self._active_run_over_range_samples = 0
         self._active_run_current_sum = 0.0
+        self._active_run_samples = []
         self._last_run_stats = None
+        self._last_insertion_stats = None
 
     def write_run_closed(
         self,
@@ -291,6 +411,12 @@ class CupSessionWriter:
                 if self._active_run_valid_samples > 0
                 else None
             )
+            insertion_stats = compute_insertion_current(
+                self._active_run_samples,
+                start_t=self._active_run_t_start,
+                settle_window_s=CUP_SETTLE_WINDOW_S,
+            )
+            self._last_insertion_stats = insertion_stats
             self._last_run_stats = CupRunStats(
                 run_id=run_id,
                 duration_s=dur,
@@ -298,6 +424,10 @@ class CupSessionWriter:
                 valid_samples=self._active_run_valid_samples,
                 over_range_samples=self._active_run_over_range_samples,
                 average_current_a=avg,
+                post_settle_samples=insertion_stats.sample_count,
+                post_settle_mean_a=insertion_stats.mean_a,
+                post_settle_std_a=insertion_stats.std_a,
+                excluded_settle_samples=insertion_stats.excluded_count,
             )
             sample_count = cnt
             duration_s = dur
@@ -552,7 +682,148 @@ class CupSessionWriter:
         }
         self._write_row(row)
 
+    def write_insertion_summary(
+        self,
+        run_id: int,
+        commanded_timestamp: float | None,
+        confirmed_timestamp: float,
+        dwell: float,
+        sample_count: int,
+        mean_current_a: float,
+        std_current_a: float,
+        beam_on_seconds: float,
+        charge: float,
+        charge_state: int | None = None,
+        area: float | None = None,
+        k: float | None = None,
+        fluence: float | None = None,
+        dpa: float | None = None,
+        t_host: float | None = None,
+        details: str = "",
+    ) -> None:
+        """Write a per-insertion summary row to the CSV archive and flush immediately.
+
+        WHY THIS EXISTS (ADR 0003 Decision 7, Ticket 11)
+        ------------------------------------------------
+        An irradiation leaves an archive of periodic sampling insertions. One summary
+        row per insertion records the post-settle mean current, sample standard deviation,
+        mechanical lag (commanded vs confirmed timestamps), dwell, preceding beam-on
+        interval (between insertions), and the running dose chain (Q, fluence, dpa).
+
+        Each stage of the dose chain is recorded in its own column so the arithmetic
+        can be recomputed and traced by hand from the file alone.
+        """
+        cs = charge_state if charge_state is not None else self._charge_state
+        a = area if area is not None else self._area_cm2
+        k_val = k if k is not None else self._k
+
+        calc_fluence = fluence
+        if calc_fluence is None:
+            calc_fluence = (
+                compute_fluence(charge, cs, a)
+                if (cs is not None and cs > 0 and a is not None and a > 0.0)
+                else 0.0
+            )
+
+        calc_dpa = dpa
+        if calc_dpa is None:
+            calc_dpa = (
+                compute_dpa(calc_fluence, k_val)
+                if (k_val is not None and k_val > 0.0)
+                else 0.0
+            )
+
+        cmd_ts_str = (
+            f"{commanded_timestamp:.6f}"
+            if (commanded_timestamp is not None and not math.isnan(commanded_timestamp))
+            else ""
+        )
+        conf_ts_str = f"{confirmed_timestamp:.6f}"
+        host_ts_str = f"{t_host:.6f}" if t_host is not None else conf_ts_str
+
+        row = {
+            "record_type": "insertion_summary",
+            "iso_timestamp": _now_iso(),
+            "host_timestamp": host_ts_str,
+            "inst_timestamp": "",
+            "current_a": _safe_float(mean_current_a, ".8e"),
+            "status_word": "",
+            "over_range": "",
+            "run_id": str(run_id),
+            "details": details,
+            "position": "IN",
+            "commanded_timestamp": cmd_ts_str,
+            "confirmed_timestamp": conf_ts_str,
+            "dwell": f"{dwell:.3f}",
+            "sample_count": str(sample_count),
+            "mean_current_a": _safe_float(mean_current_a, ".8e"),
+            "std_current_a": _safe_float(std_current_a, ".8e"),
+            "beam_on_seconds": f"{beam_on_seconds:.3f}",
+            "charge": _safe_float(charge, ".8e"),
+            "charge_state": str(cs) if (cs is not None and cs > 0) else "",
+            "area": _safe_float(a, ".6f") if (a is not None and a > 0.0) else "",
+            "k": _safe_float(k_val, ".8e") if (k_val is not None and k_val > 0.0) else "",
+            "fluence": _safe_float(calc_fluence, ".8e"),
+            "dpa": _safe_float(calc_dpa, ".8e"),
+        }
+        self._write_row(row)
+
     # ── Metadata and Lifecycle ────────────────────────────────────────────────
+
+    def update_session_parameters(
+        self,
+        species: str | None = None,
+        energy: str | float | None = None,
+        charge_state: int | None = None,
+        area_cm2: float | None = None,
+        k: float | None = None,
+        k_depth: str | float | None = None,
+        srim_version: str | None = None,
+        entry_date: str | None = None,
+        cycle_period_s: float | None = None,
+        cycle_dwell_s: float | None = None,
+    ) -> None:
+        """Update session parameters and rewrite header comments if no data rows written yet."""
+        if species is not None:
+            self._species = species
+        if energy is not None:
+            self._energy = energy
+        if charge_state is not None:
+            self._charge_state = charge_state
+        if area_cm2 is not None:
+            self._area_cm2 = area_cm2
+        if k is not None:
+            self._k = k
+        if k_depth is not None:
+            self._k_depth = k_depth
+        if srim_version is not None:
+            self._srim_version = srim_version
+        if entry_date is not None:
+            self._entry_date = entry_date
+        if cycle_period_s is not None:
+            self._cycle_period_s = cycle_period_s
+        if cycle_dwell_s is not None:
+            self._cycle_dwell_s = cycle_dwell_s
+
+        self.update_metadata(
+            species=self._species,
+            energy=self._energy,
+            charge_state=self._charge_state,
+            area_cm2=self._area_cm2,
+            k=self._k,
+            k_depth=self._k_depth,
+            srim_version=self._srim_version,
+            entry_date=self._entry_date,
+            cycle_period_s=self._cycle_period_s,
+            cycle_dwell_s=self._cycle_dwell_s,
+        )
+
+        if not self._closed and self._row_count == 0:
+            self._file.seek(0)
+            self._file.truncate(0)
+            self._write_header_comments()
+            self._writer.writeheader()
+            self._file.flush()
 
     def update_metadata(self, **fields: Any) -> None:
         """Merge additional metadata into the session sidecar."""
@@ -587,6 +858,18 @@ class CupSessionWriter:
     @property
     def csv_path(self) -> str:
         return str(self._csv_path)
+
+    @property
+    def species(self) -> str | None:
+        return self._species
+
+    @property
+    def energy(self) -> str | float | None:
+        return self._energy
+
+    @property
+    def charge_state(self) -> int | None:
+        return self._charge_state
 
     @property
     def meta_path(self) -> str:
@@ -636,3 +919,26 @@ class CupSessionWriter:
             over_range_samples=0,
             average_current_a=None,
         )
+
+    @property
+    def last_insertion_stats(self) -> InsertionCurrentStats:
+        """Return post-settle insertion current statistics of the last completed run."""
+        if self._last_insertion_stats is not None:
+            return self._last_insertion_stats
+        return InsertionCurrentStats(
+            mean_a=0.0,
+            std_a=0.0,
+            sample_count=0,
+            excluded_count=0,
+        )
+
+    @property
+    def active_run_insertion_stats(self) -> InsertionCurrentStats:
+        """Return post-settle insertion current statistics for the current run (or last)."""
+        if self._active_run_id is not None:
+            return compute_insertion_current(
+                self._active_run_samples,
+                start_t=self._active_run_t_start,
+                settle_window_s=CUP_SETTLE_WINDOW_S,
+            )
+        return self.last_insertion_stats
