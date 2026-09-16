@@ -6,6 +6,29 @@ Reads single-ended analog inputs. AIN0-AIN3 are the NEC log amps (on the T7 body
 screw terminals); AIN6-AIN13 are the EEL5000 HV amplifier voltage/current monitors
 (on a CB37 terminal board). All channels are configured +/-10 V, single-ended.
 
+WHY THIS EXISTS — DIGITAL PATH (ADR 0003)
+-----------------------------------------
+The T7 also drives and reads the Faraday Cup Controller through digital I/O lines
+on the CB37 terminal board. FIO0 (enable) and FIO1 (command-out) control external
+relays via an LJTick-RelayDriver. FIO2 (cup IN), FIO3 (cup OUT), and FIO4 (AUTO mode)
+read back isolated status contacts.
+
+Closed is zero:
+A status contact that is closed pulls its FIO line to ground and therefore reads as
+bit value 0 in FIO_STATE. The status decoding function inverts.
+
+Fails-into-the-beam:
+Cup OUT requires both contact closures (relay 1 enable and relay 2 command). Any
+loss of drive — crash, disconnect, or power loss — opens both relays, and the
+cup returns IN where it safely intercepts the beam ahead of the specimen. The
+absence of drive is the safe state. Therefore, no software path drives the cup
+on shutdown, on disconnect, or in an exception handler; the fail-safe belongs to
+the physical wiring.
+
+Single-line writes:
+Digital outputs are commanded line-by-line rather than by full-bank bitmasks,
+guaranteeing that writing one line (e.g. FIO1) cannot accidentally clear another (e.g. FIO0).
+
 IMPORTANT: only ONE LabJackT7 instance may exist per physical device. LJM will
 happily hand out a second handle to the same T7, but concurrent eReadNames calls
 from two threads corrupt each other. MainWindow owns the single instance and the
@@ -23,6 +46,7 @@ except Exception as _e:
     LJM_AVAILABLE = False
     _LJM_IMPORT_ERROR = str(_e)
 
+from rbl.config.cup_config import CUP_COMMAND_OUT_LINE, CUP_ENABLE_LINE
 
 # Number of AINs to configure on connect. AIN0-3 = log amps, AIN6-13 = HV amp
 # monitors. AIN4-5 are left unconfigured (spare).
@@ -79,6 +103,22 @@ class LabJackT7:
             # reaching the target aggregate rate.
             ljm.eWriteName(self.handle, f"AIN{ch}_RESOLUTION_INDEX", 1)
 
+        # Configure digital I/O lines for Faraday cup actuation and status.
+        # FIO0 (enable) and FIO1 (command-out) are outputs.
+        # FIO2 (IN status), FIO3 (OUT status), FIO4 (AUTO status) are inputs.
+        # FIO_DIRECTION: lower byte sets direction (1=output, 0=input).
+        # Upper byte is inhibit mask (1=inhibit, 0=modify).
+        # Lines 0-4 are modified (inhibit=0), lines 5-7 are left untouched (inhibit=1).
+        # Inhibit: 0xE000 ((1<<13)|(1<<14)|(1<<15)).
+        # Direction: bit 0=1, bit 1=1, bits 2..4=0 -> 0x0003.
+        ljm.eWriteName(self.handle, "FIO_DIRECTION", 0xE003)
+
+        # Ensure both outputs start de-asserted (0).
+        # Absence of drive is the safe state (cup fails into the beam).
+        ljm.eWriteName(self.handle, CUP_ENABLE_LINE, 0)
+        ljm.eWriteName(self.handle, CUP_COMMAND_OUT_LINE, 0)
+
+
     def stop_stream(self):
         """Force any active hardware stream to stop.
 
@@ -128,6 +168,26 @@ class LabJackT7:
             return str(int(ljm.eReadName(self.handle, "SERIAL_NUMBER")))
         except Exception:
             return "?"
+
+    def write_digital(self, line: str, state: int | bool) -> None:
+        """Write a single named digital line to a state (0 or 1).
+
+        Uses single-line write (eWriteName) so no other line is disturbed.
+        """
+        if not self.connected:
+            raise LabJackError("LabJack not connected")
+        val = 1 if state else 0
+        ljm.eWriteName(self.handle, line, val)
+
+    def read_fio_state(self) -> int:
+        """Read and return the raw FIO_STATE integer register.
+
+        FIO_STATE (address 2500) returns the digital state of FIO lines.
+        """
+        if not self.connected:
+            raise LabJackError("LabJack not connected")
+        return int(ljm.eReadName(self.handle, "FIO_STATE"))
+
 
 
 # --- Self-test ---------------------------------------------------------------

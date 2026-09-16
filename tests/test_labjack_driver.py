@@ -33,7 +33,7 @@ class TestConnect:
         assert lj.connected
         assert lj.connection_type == "USB"
 
-    def test_connect_configures_fourteen_ains(self, mock_ljm):
+    def test_connect_configures_fourteen_ains_and_digital_io(self, mock_ljm):
         lj = LabJackT7()
         lj.connect("ETHERNET", "192.168.1.5")
         # AIN0..AIN13 each get range, single-ended negative-ch, and resolution.
@@ -43,7 +43,11 @@ class TestConnect:
             assert f"AIN{ch}_RANGE" in names_written
             assert f"AIN{ch}_NEGATIVE_CH" in names_written
             assert f"AIN{ch}_RESOLUTION_INDEX" in names_written
-        assert len(mock_ljm.eWriteName.call_args_list) == 42   # 14 x 3
+        # Digital I/O configuration: FIO_DIRECTION, FIO0, FIO1
+        assert "FIO_DIRECTION" in names_written
+        assert "FIO0" in names_written
+        assert "FIO1" in names_written
+        assert len(mock_ljm.eWriteName.call_args_list) == 45   # 14 x 3 + 3 digital
 
     def test_connect_sets_pm10v_range(self, mock_ljm):
         lj = LabJackT7()
@@ -172,3 +176,72 @@ class TestSerialAndDisconnect:
         lj = LabJackT7()
         lj.stop_stream()          # must not raise with no handle
         assert not lj.connected
+
+
+class TestDigitalIO:
+    """Verify digital I/O configuration, single-line writes, and FIO_STATE reading."""
+
+    def test_connect_configures_digital_outputs_and_inputs(self, mock_ljm):
+        lj = LabJackT7()
+        lj.connect()
+        dir_calls = [
+            c.args for c in mock_ljm.eWriteName.call_args_list
+            if c.args[1] == "FIO_DIRECTION"
+        ]
+        assert len(dir_calls) == 1
+        # Direction value 0xE003: lower byte has bits 0,1 set (output) and 2..4 cleared (input)
+        assert dir_calls[0][2] == 0xE003
+
+        # Check outputs initialised to 0 (de-asserted)
+        fio0_calls = [c.args for c in mock_ljm.eWriteName.call_args_list if c.args[1] == "FIO0"]
+        fio1_calls = [c.args for c in mock_ljm.eWriteName.call_args_list if c.args[1] == "FIO1"]
+        assert len(fio0_calls) == 1
+        assert fio0_calls[0][2] == 0
+        assert len(fio1_calls) == 1
+        assert fio1_calls[0][2] == 0
+
+    def test_write_digital_single_line(self, mock_ljm):
+        lj = LabJackT7()
+        lj.connect()
+        mock_ljm.eWriteName.reset_mock()
+
+        lj.write_digital("FIO1", 1)
+        mock_ljm.eWriteName.assert_called_once_with(42, "FIO1", 1)
+
+        mock_ljm.eWriteName.reset_mock()
+        lj.write_digital("FIO0", 0)
+        mock_ljm.eWriteName.assert_called_once_with(42, "FIO0", 0)
+
+        # bool state
+        mock_ljm.eWriteName.reset_mock()
+        lj.write_digital("FIO1", True)
+        mock_ljm.eWriteName.assert_called_once_with(42, "FIO1", 1)
+
+    def test_write_digital_requires_connection(self):
+        lj = LabJackT7()
+        with pytest.raises(LabJackError):
+            lj.write_digital("FIO0", 1)
+
+    def test_read_fio_state(self, mock_ljm):
+        lj = LabJackT7()
+        lj.connect()
+        mock_ljm.eReadName.return_value = 25.0
+        val = lj.read_fio_state()
+        mock_ljm.eReadName.assert_called_with(42, "FIO_STATE")
+        assert val == 25
+        assert isinstance(val, int)
+
+    def test_read_fio_state_requires_connection(self):
+        lj = LabJackT7()
+        with pytest.raises(LabJackError):
+            lj.read_fio_state()
+
+    def test_disconnect_does_not_drive_cup(self, mock_ljm):
+        """Disconnection must not write to digital outputs or command cup positions."""
+        lj = LabJackT7()
+        lj.connect()
+        mock_ljm.eWriteName.reset_mock()
+        lj.disconnect()
+        # No eWriteName calls during disconnect
+        assert mock_ljm.eWriteName.call_count == 0
+

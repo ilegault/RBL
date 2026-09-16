@@ -10,7 +10,7 @@ cup itself is not commanded in this ticket and no beamline is involved.
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Read `docs/adr/0003-commanded-and-confirmed-cup-position.md` first.**
 `docs/adr/0001-tests-first-and-no-muted-failures.md` is binding.
@@ -67,24 +67,34 @@ Use the existing naming style in that file. Do **not** reuse or lower
 and are sized for hand insertions lasting minutes. One set of numbers serving two
 mechanisms is how the next person breaks both.
 
-- [ ] `labjack_driver.py` configures FIO0 and FIO1 as outputs and FIO2-FIO4 as inputs at
+- [x] `labjack_driver.py` configures FIO0 and FIO1 as outputs and FIO2-FIO4 as inputs at
       connect, leaving both outputs de-asserted
-- [ ] A method writes one named digital line to a state without disturbing any other line
-- [ ] A method reads and returns the raw `FIO_STATE` integer
-- [ ] A new pure module under `rbl/hardware/` decodes a raw `FIO_STATE` int into a typed
+- [x] A method writes one named digital line to a state without disturbing any other line
+- [x] A method reads and returns the raw `FIO_STATE` integer
+- [x] A new pure module under `rbl/hardware/` decodes a raw `FIO_STATE` int into a typed
       position (`IN` / `OUT` / `IN_TRANSIT` / `INDETERMINATE`) plus an AUTO-mode boolean
-- [ ] That module imports nothing from `labjack` and nothing from Qt
-- [ ] Decode tests, fed raw integers, cover: cup IN; cup OUT; in transit with neither
+- [x] That module imports nothing from `labjack` and nothing from Qt
+- [x] Decode tests, fed raw integers, cover: cup IN; cup OUT; in transit with neither
       asserted; both asserted returning `INDETERMINATE`; AUTO asserted; AUTO not
       asserted; and an explicit inversion case asserting that a **closed** contact reads
       as bit value **0**
-- [ ] A test asserts that decoding an all-ones word (every contact open) returns
+- [x] A test asserts that decoding an all-ones word (every contact open) returns
       `IN_TRANSIT` and AUTO false, not a silently defaulted position
-- [ ] The new `cup_config.py` constants exist with their rationale in the module
+- [x] The new `cup_config.py` constants exist with their rationale in the module
       docstring, and the existing four inference constants are untouched
-- [ ] `labjack_driver.py`'s module docstring gains a `WHY THIS EXISTS` paragraph on the
+- [x] `labjack_driver.py`'s module docstring gains a `WHY THIS EXISTS` paragraph on the
       digital path, stating the closed-is-zero rule and the fails-into-the-beam property
-- [ ] Nothing in this ticket drives the cup on shutdown, on disconnect, or in an
+- [x] Nothing in this ticket drives the cup on shutdown, on disconnect, or in an
       exception handler
-- [ ] `ruff check .`, `python scripts/check_tests_first.py`, `python tools/type_gate.py`
+- [x] `ruff check .`, `python scripts/check_tests_first.py`, `python tools/type_gate.py`
       and `pytest --tb=short -q -n auto --dist loadfile` all pass
+
+## Comments
+
+### 2026-09-15 — Implementation Complete
+- Added digital I/O lines and actuation/status constants to `rbl/config/cup_config.py` (`CUP_ENABLE_LINE`, `CUP_COMMAND_OUT_LINE`, `CUP_ENABLE_OUT_LINE`, `CUP_STATUS_BIT_IN`, `CUP_STATUS_BIT_OUT`, `CUP_STATUS_BIT_AUTO`, `CUP_MOVE_CONFIRMATION_TIMEOUT_S`, `CUP_CONTACT_DEBOUNCE_S`), leaving existing inference constants untouched and documenting rationale in the module docstring.
+- Built pure status decoder in `rbl/hardware/cup_status.py` with `CupPosition`, `CupStatus`, and `decode_cup_status()`, implementing the closed-is-zero inversion and handling `IN_TRANSIT` and `INDETERMINATE` states without Qt or LabJack imports.
+- Updated `rbl/hardware/labjack_driver.py` to configure FIO0/FIO1 as outputs and FIO2-FIO4 as inputs via `FIO_DIRECTION` with inhibit masking and de-assert outputs at connect. Added single-line write method `write_digital()` and `read_fio_state()`. Added `WHY THIS EXISTS` documentation for the digital path, closed-is-zero rule, and fail-safe wiring.
+- Added comprehensive unit tests in `tests/test_cup_status.py` and `tests/test_labjack_driver.py`.
+- Verified all 4 gate checks locally: ruff clean, check_tests_first clean, type_gate passing (0 hard errors, ratchet maintained), and full test suite passing (1756 tests passed).
+
