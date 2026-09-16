@@ -84,6 +84,7 @@ from rbl.gui.widgets.live_plot import LivePlotPanel
 from rbl.hardware.current_monitor import RollingBuffer, format_current
 from rbl.services.cup_acquisition import (
     CupAcquisitionStateMachine,
+    CupReading,
     RunClosed,
     RunOpened,
 )
@@ -543,12 +544,13 @@ class FaradayCupTab(QWidget):
             self._last_heartbeat_t = t_sample
 
         # Update acquisition state machine
-        transition = self.acquisition.update(
-            current=state.current,
+        reading = CupReading(
             t=t_sample,
+            current=state.current,
             over_range=state.over_range,
             connected=True,
         )
+        transition = self.acquisition.update(reading)
 
         if transition is not None:
             if isinstance(transition, RunOpened):
