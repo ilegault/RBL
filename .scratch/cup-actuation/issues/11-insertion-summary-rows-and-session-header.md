@@ -10,7 +10,7 @@ After this ticket the feature is complete in software and ready for bench bring-
 
 **Blocked by:** 07, 10
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Read `docs/adr/0003-commanded-and-confirmed-cup-position.md` decision 7 first.**
 `docs/adr/0001-tests-first-and-no-muted-failures.md` is binding.
@@ -52,22 +52,34 @@ be traced to the number that produced it, and a dpa figure that cannot be traced
 result. If *k*'s provenance fields are absent the header says so explicitly rather than
 writing a blank that reads as zero.
 
-- [ ] One summary row per insertion, written at run close, with every field above
-- [ ] Running *Q*, fluence and dpa are three separate columns, each recomputable by hand
+- [x] One summary row per insertion, written at run close, with every field above
+- [x] Running *Q*, fluence and dpa are three separate columns, each recomputable by hand
       from the other columns in the file
-- [ ] Beam-on seconds measures the interval **between** insertions and excludes time the
+- [x] Beam-on seconds measures the interval **between** insertions and excludes time the
       cup spent in the beam, asserted by a test over a multi-insertion sequence
-- [ ] The session header carries species, energy, charge state, area, *k*, *k*'s depth,
+- [x] The session header carries species, energy, charge state, area, *k*, *k*'s depth,
       SRIM version, entry date, cycle period and dwell
-- [ ] Absent provenance is written as an explicit marker, never as a blank or a zero
-- [ ] Every row flushes immediately, like every other row in this writer
-- [ ] A test builds a three-insertion sequence at known currents and intervals and
+- [x] Absent provenance is written as an explicit marker, never as a blank or a zero
+- [x] Every row flushes immediately, like every other row in this writer
+- [x] A test builds a three-insertion sequence at known currents and intervals and
       asserts the running *Q*, fluence and dpa columns match values computed by hand in
       the test, using ticket 08's worked example as one of them
-- [ ] A test asserts the standard deviation column reflects the post-settle samples only,
+- [x] A test asserts the standard deviation column reflects the post-settle samples only,
       matching the mean's sample set
-- [ ] A test reads a completed session file back and reconstructs the dpa from the
+- [x] A test reads a completed session file back and reconstructs the dpa from the
       charge, charge state, area and *k* columns alone, asserting it matches the recorded
       dpa
-- [ ] `ruff check .`, `python scripts/check_tests_first.py`, `python tools/type_gate.py`
+- [x] `ruff check .`, `python scripts/check_tests_first.py`, `python tools/type_gate.py`
       and `pytest --tb=short -q -n auto --dist loadfile` all pass
+
+## Comments
+
+### Implementation summary
+- Implemented `write_insertion_summary(...)` in `CupSessionWriter` writing one `insertion_summary` row per insertion with all 13 columns, flushed immediately after writing.
+- Exposed `last_beam_on_s` on `DoseAccumulator` to record the interval between insertions excluding cup-in dwell.
+- Updated session header formatting with `# session_header:` carrying species, energy, charge_state, area, k, k_depth, srim_version, entry_date, cycle_period, cycle_dwell. Absent fields default to `"NOT_SPECIFIED"` (never blank or zero).
+- Added `update_session_parameters(...)` to `CupSessionWriter` allowing parameter updates during operation and header rewrites before rows are written.
+- Added `species_changed = Signal(str, float, int)` to `RasterPlannerTab` and wired it in `MainWindow` to `FaradayCupTab.on_species_changed` to propagate active species, energy, and charge state.
+- Verified post-settle sample collection (excluding 1.0s settle window) for computing mean and sample standard deviation (`InsertionCurrentStats`).
+- Verified reconstructibility of dpa directly from CSV columns alone (`charge`, `charge_state`, `area`, `k`).
+- All quality gates pass: `ruff check .` clean, `scripts/check_tests_first.py` passed, `tools/type_gate.py` passed, `scripts/check_layers.py` passed with ratchet maintained at 462, and all 1915 pytest test cases passed.

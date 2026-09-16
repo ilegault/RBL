@@ -208,6 +208,9 @@ class FaradayCupTab(QWidget):
         # Dose accumulator and run-open timestamp for zero-order hold (ADR 0003 Decision 7)
         self._accumulator: DoseAccumulator = DoseAccumulator()
         self._current_run_start_t: float = float("nan")
+        self._last_commanded_in_t: float | None = None
+        self._species: str = "NOT_SPECIFIED"
+        self._beam_energy: str = "NOT_SPECIFIED"
 
         # Cycle fault message — set on arming refusal or cycle disarm; cleared on arm
         self._cycle_fault: str = ""
@@ -804,6 +807,51 @@ class FaradayCupTab(QWidget):
                 run_id=transition.run_id,
                 reason=transition.reason,
             )
+            stats = self.session_writer.last_insertion_stats
+            mean_current = stats.mean_a
+            std_current = stats.std_a
+            cnt = stats.sample_count
+            conf_t = (
+                self._current_run_start_t
+                if not math.isnan(self._current_run_start_t)
+                else t_now
+            )
+            dwell = max(0.0, t_now - conf_t)
+            self._accumulator.record_insertion(
+                t_in=conf_t,
+                t_out=t_now,
+                mean_current_a=mean_current,
+            )
+            beam_on_s = self._accumulator.last_beam_on_s
+            q = self._accumulator.total_charge_c
+            cs = self.charge_state
+            area = self._area_cm2
+            k = self.displacement_coeff
+            fluence = self._accumulator.fluence(cs, area)
+            dpa = self._accumulator.dpa(cs, area, k)
+
+            cmd_t = self._last_commanded_in_t
+            self.session_writer.write_insertion_summary(
+                run_id=transition.run_id,
+                commanded_timestamp=cmd_t,
+                confirmed_timestamp=conf_t,
+                dwell=dwell,
+                sample_count=cnt,
+                mean_current_a=mean_current,
+                std_current_a=std_current,
+                beam_on_seconds=beam_on_s,
+                charge=q,
+                charge_state=cs,
+                area=area,
+                k=k,
+                fluence=fluence,
+                dpa=dpa,
+                t_host=t_now,
+                details="force_stop",
+            )
+            self._last_commanded_in_t = None
+            self._current_run_start_t = float("nan")
+            self._update_dose_view()
             if self.beamline is not None:
                 self.beamline.set_cup_acquiring(False)
         self._update_acquisition_view()
@@ -976,19 +1024,49 @@ class FaradayCupTab(QWidget):
                     reason=transition.reason,
                     t_inst=state.timestamp,
                 )
-                # Zero-order hold: previous current held over beam-on interval
-                # between last retract and this insertion.  active_run_stats now
-                # reflects the just-closed run via _last_run_stats.
-                stats = self.session_writer.active_run_stats
-                if (
-                    not math.isnan(self._current_run_start_t)
-                    and stats.average_current_a is not None
-                ):
-                    self._accumulator.record_insertion(
-                        t_in=self._current_run_start_t,
-                        t_out=t_sample,
-                        mean_current_a=stats.average_current_a,
-                    )
+                stats = self.session_writer.last_insertion_stats
+                mean_current = stats.mean_a
+                std_current = stats.std_a
+                cnt = stats.sample_count
+                conf_t = (
+                    self._current_run_start_t
+                    if not math.isnan(self._current_run_start_t)
+                    else t_sample
+                )
+                dwell = max(0.0, t_sample - conf_t)
+
+                self._accumulator.record_insertion(
+                    t_in=conf_t,
+                    t_out=t_sample,
+                    mean_current_a=mean_current,
+                )
+                beam_on_s = self._accumulator.last_beam_on_s
+                q = self._accumulator.total_charge_c
+                cs = self.charge_state
+                area = self._area_cm2
+                k = self.displacement_coeff
+                fluence = self._accumulator.fluence(cs, area)
+                dpa = self._accumulator.dpa(cs, area, k)
+
+                cmd_t = self._last_commanded_in_t
+                self.session_writer.write_insertion_summary(
+                    run_id=transition.run_id,
+                    commanded_timestamp=cmd_t,
+                    confirmed_timestamp=conf_t,
+                    dwell=dwell,
+                    sample_count=cnt,
+                    mean_current_a=mean_current,
+                    std_current_a=std_current,
+                    beam_on_seconds=beam_on_s,
+                    charge=q,
+                    charge_state=cs,
+                    area=area,
+                    k=k,
+                    fluence=fluence,
+                    dpa=dpa,
+                    t_host=t_sample,
+                )
+                self._last_commanded_in_t = None
                 self._current_run_start_t = float("nan")
                 self._update_dose_view()
             if self.beamline is not None:
@@ -1236,6 +1314,8 @@ class FaradayCupTab(QWidget):
         self._move_target = target
         start_t = self._last_state_t if not math.isnan(self._last_state_t) else time.time()
         self._move_start_t = start_t
+        if target == CupPosition.IN:
+            self._last_commanded_in_t = start_t
         self._move_fault = ""
         self._commanded = target
         self._update_actuation_view()
@@ -1270,6 +1350,18 @@ class FaradayCupTab(QWidget):
             return
 
         self._cycle_fault = ""
+        self.session_writer.update_session_parameters(
+            species=self.species,
+            energy=self.beam_energy,
+            charge_state=self.charge_state,
+            area_cm2=self.irradiated_area_cm2,
+            k=self.displacement_coeff,
+            k_depth=self.damage_depth,
+            srim_version=self.srim_version,
+            entry_date=self.entry_date,
+            cycle_period_s=self.cycle_period,
+            cycle_dwell_s=self.cycle_dwell,
+        )
         self.cycle.arm(t=t_now)
         self._update_cycle_view(t_now)
 
@@ -1690,6 +1782,38 @@ class FaradayCupTab(QWidget):
         return self.spn_depth.value()
 
     @property
+    def damage_depth(self) -> float:
+        """Operator-entered damage depth in nanometers."""
+        return self.spn_depth.value()
+
+    @property
+    def species(self) -> str:
+        """Active beam species name."""
+        return self._species
+
+    @property
+    def beam_energy(self) -> str:
+        """Active beam energy description."""
+        return self._beam_energy
+
+    @property
+    def irradiated_area_cm2(self) -> float:
+        """Irradiated sample area in cm² from Raster Planner."""
+        return self._area_cm2
+
+    def on_species_changed(self, name: str, energy_ev: float, charge: int) -> None:
+        """Handle active species update from the Raster Planner tab (ADR 0003)."""
+        self._species = name
+        self._beam_energy = f"{energy_ev / 1e6:.3f} MeV"
+        if charge > 0:
+            self.spn_charge_state.setValue(charge)
+        self.session_writer.update_session_parameters(
+            species=self._species,
+            energy=self._beam_energy,
+            charge_state=self.charge_state,
+        )
+
+    @property
     def srim_version(self) -> str:
         """Operator-entered SRIM calculation version."""
         return self.le_srim_version.text().strip()
@@ -1704,7 +1828,18 @@ class FaradayCupTab(QWidget):
         """Operator-entered ion charge state q (positive integer; 0 = not configured)."""
         return int(self.spn_charge_state.value())
 
+    @property
+    def cycle_period(self) -> float:
+        """Configured sampling cycle period in seconds."""
+        return self.spn_cycle_period.value()
+
+    @property
+    def cycle_dwell(self) -> float:
+        """Configured sampling cycle dwell time in seconds."""
+        return self.spn_cycle_dwell.value()
+
     def _update_dose_view(self) -> None:
+
         """Refresh running Q, fluence, and dpa labels from the dose accumulator.
 
         WHY THIS IS CALLED ON RUN CLOSE, NOT ON EVERY SAMPLE

@@ -703,3 +703,419 @@ class TestWriteCycleInsertionSkipped:
         assert sw.sample_count == 0
         sw.close()
 
+
+class TestInsertionSummaryRowsAndSessionHeader:
+    """Ticket 11: One summary row per insertion, and a header that makes dpa traceable."""
+
+    def test_header_comments_carry_all_parameters_and_provenance(self, tmp_path):
+        """The session header carries species, energy, charge state, area, k,
+
+        k's depth, SRIM version, entry date, cycle period and dwell.
+        """
+        writer = CupSessionWriter(
+            session_id="test_header_full",
+            output_dir=tmp_path,
+            species="Fe56",
+            energy="5.0 MeV",
+            charge_state=3,
+            area_cm2=0.5,
+            k=1.0e-15,
+            k_depth="100.0 nm",
+            srim_version="SRIM-2013.00",
+            entry_date="2026-09-16",
+            cycle_period_s=300.0,
+            cycle_dwell_s=3.0,
+        )
+        writer.close()
+
+        with open(writer.csv_path, encoding="utf-8") as f:
+            header_lines = [line.strip() for line in f if line.startswith("#")]
+
+        session_line = next(line for line in header_lines if "session_header:" in line)
+        assert "species=Fe56" in session_line
+        assert "energy=5.0 MeV" in session_line
+        assert "charge_state=3" in session_line
+        assert "area=0.5000" in session_line
+        assert "k=1.0000e-15" in session_line
+        assert "k_depth=100.0 nm" in session_line
+        assert "srim_version=SRIM-2013.00" in session_line
+        assert "entry_date=2026-09-16" in session_line
+        assert "cycle_period=300.0" in session_line
+        assert "cycle_dwell=3.0" in session_line
+
+    def test_absent_provenance_written_as_explicit_marker(self, tmp_path):
+        """Absent provenance is written as an explicit marker, never as a blank or a zero."""
+        writer = CupSessionWriter(
+            session_id="test_header_absent",
+            output_dir=tmp_path,
+            species=None,
+            energy=None,
+            charge_state=None,
+            area_cm2=None,
+            k=None,
+            k_depth=None,
+            srim_version="",
+            entry_date="   ",
+            cycle_period_s=None,
+            cycle_dwell_s=None,
+        )
+        writer.close()
+
+        with open(writer.csv_path, encoding="utf-8") as f:
+            header_lines = [line.strip() for line in f if line.startswith("#")]
+
+        session_line = next(line for line in header_lines if "session_header:" in line)
+        assert "k_depth=NOT_SPECIFIED" in session_line
+        assert "srim_version=NOT_SPECIFIED" in session_line
+        assert "entry_date=NOT_SPECIFIED" in session_line
+        # Ensure no blanks or zeroes for absent provenance
+        assert "k_depth=0" not in session_line
+        assert "k_depth= " not in session_line
+        assert "srim_version= " not in session_line
+        assert "entry_date= " not in session_line
+
+    def test_summary_row_flushed_immediately(self, tmp_path):
+        """Every row flushes immediately, including the insertion summary row."""
+        writer = CupSessionWriter(
+            session_id="test_summary_flush",
+            output_dir=tmp_path,
+            charge_state=3,
+            area_cm2=0.5,
+            k=1.0e-15,
+        )
+        writer.write_insertion_summary(
+            run_id=1,
+            commanded_timestamp=10.0,
+            confirmed_timestamp=10.25,
+            dwell=3.0,
+            sample_count=20,
+            mean_current_a=1.0e-9,
+            std_current_a=5.0e-11,
+            beam_on_seconds=0.0,
+            charge=0.0,
+        )
+        # Read from disk WITHOUT calling close()
+        with open(writer.csv_path, encoding="utf-8") as f:
+            lines = [line.strip() for line in f if not line.startswith("#")]
+        reader = csv.DictReader(lines)
+        rows = list(reader)
+        assert len(rows) == 1
+        r = rows[0]
+        assert r["record_type"] == "insertion_summary"
+        assert r["run_id"] == "1"
+        assert float(r["commanded_timestamp"]) == pytest.approx(10.0)
+        assert float(r["confirmed_timestamp"]) == pytest.approx(10.25)
+        assert float(r["dwell"]) == pytest.approx(3.0)
+        assert r["sample_count"] == "20"
+        assert float(r["mean_current_a"]) == pytest.approx(1.0e-9)
+        assert float(r["std_current_a"]) == pytest.approx(5.0e-11)
+        assert float(r["beam_on_seconds"]) == pytest.approx(0.0)
+        writer.close()
+
+    def test_three_insertion_sequence_matches_worked_example(self, tmp_path):
+        """A test builds a three-insertion sequence at known currents and intervals
+
+        and asserts the running Q, fluence and dpa columns match values computed by hand,
+        using ticket 08's worked example as one of them:
+        I = 1.0e-9 A held for 300.0 s gives Q = 3.0e-7 C; patch 5.0 mm x 10.0 mm gives
+        A = 0.5 cm^2; q = 3 and e = 1.602176634e-19 C give phi = 1.248302e12 ions/cm^2;
+        k = 1.0e-15 gives dpa = 1.248302e-3
+        """
+        from rbl.hardware.dose_model import DoseAccumulator
+
+        writer = CupSessionWriter(
+            session_id="test_worked_chain",
+            output_dir=tmp_path,
+            species="Fe56",
+            energy="5.0 MeV",
+            charge_state=3,
+            area_cm2=0.5,
+            k=1.0e-15,
+            k_depth="100 nm",
+            srim_version="SRIM-2013",
+            entry_date="2026-09-16",
+            cycle_period_s=300.0,
+            cycle_dwell_s=3.0,
+        )
+        acc = DoseAccumulator()
+
+        # Insertion 1: t_in=10.0, t_out=13.0, measured I = 1.0e-9 A
+        t_in_1 = 10.0
+        t_out_1 = 13.0
+        I_1 = 1.0e-9
+        acc.record_insertion(t_in=t_in_1, t_out=t_out_1, mean_current_a=I_1)
+        writer.write_insertion_summary(
+            run_id=1,
+            commanded_timestamp=9.8,
+            confirmed_timestamp=t_in_1,
+            dwell=t_out_1 - t_in_1,
+            sample_count=30,
+            mean_current_a=I_1,
+            std_current_a=1.0e-11,
+            beam_on_seconds=acc.last_beam_on_s,
+            charge=acc.total_charge_c,
+            fluence=acc.fluence(3, 0.5),
+            dpa=acc.dpa(3, 0.5, 1.0e-15),
+        )
+
+        # Insertion 2: after 300.0 s beam-on (t_in = 13.0 + 300.0 = 313.0, t_out = 316.0)
+        # Measured I = 2.0e-9 A
+        t_in_2 = 313.0
+        t_out_2 = 316.0
+        I_2 = 2.0e-9
+        acc.record_insertion(t_in=t_in_2, t_out=t_out_2, mean_current_a=I_2)
+        writer.write_insertion_summary(
+            run_id=2,
+            commanded_timestamp=312.8,
+            confirmed_timestamp=t_in_2,
+            dwell=t_out_2 - t_in_2,
+            sample_count=30,
+            mean_current_a=I_2,
+            std_current_a=2.0e-11,
+            beam_on_seconds=acc.last_beam_on_s,
+            charge=acc.total_charge_c,
+            fluence=acc.fluence(3, 0.5),
+            dpa=acc.dpa(3, 0.5, 1.0e-15),
+        )
+
+        # Insertion 3: after 600.0 s beam-on (t_in = 316.0 + 600.0 = 916.0, t_out = 919.0)
+        # Measured I = 1.5e-9 A
+        t_in_3 = 916.0
+        t_out_3 = 919.0
+        I_3 = 1.5e-9
+        acc.record_insertion(t_in=t_in_3, t_out=t_out_3, mean_current_a=I_3)
+        writer.write_insertion_summary(
+            run_id=3,
+            commanded_timestamp=915.8,
+            confirmed_timestamp=t_in_3,
+            dwell=t_out_3 - t_in_3,
+            sample_count=30,
+            mean_current_a=I_3,
+            std_current_a=1.5e-11,
+            beam_on_seconds=acc.last_beam_on_s,
+            charge=acc.total_charge_c,
+            fluence=acc.fluence(3, 0.5),
+            dpa=acc.dpa(3, 0.5, 1.0e-15),
+        )
+        writer.close()
+
+        # Read CSV back and verify hand-calculated values
+        with open(writer.csv_path, encoding="utf-8") as f:
+            reader = csv.DictReader([line for line in f if not line.startswith("#")])
+            rows = [r for r in reader if r["record_type"] == "insertion_summary"]
+
+        assert len(rows) == 3
+
+        # Row 1: First insertion (no preceding interval)
+        assert float(rows[0]["beam_on_seconds"]) == pytest.approx(0.0)
+        assert float(rows[0]["charge"]) == pytest.approx(0.0)
+        assert float(rows[0]["fluence"]) == pytest.approx(0.0)
+        assert float(rows[0]["dpa"]) == pytest.approx(0.0)
+
+        # Row 2: Ticket 08 worked example!
+        # I=1.0e-9 A held for 300.0 s -> Q = 3.0e-7 C
+        assert float(rows[1]["beam_on_seconds"]) == pytest.approx(300.0)
+        assert float(rows[1]["charge"]) == pytest.approx(3.0e-7)
+        # phi = 3.0e-7 / (3 * 1.602176634e-19 * 0.5) = 1.248302e12 ions/cm^2
+        assert float(rows[1]["fluence"]) == pytest.approx(1.248302e12, rel=1e-5)
+        # dpa = phi * 1.0e-15 = 1.248302e-3 dpa
+        assert float(rows[1]["dpa"]) == pytest.approx(1.248302e-3, rel=1e-5)
+
+        # Row 3: Preceding 600.0 s at 2.0e-9 A -> delta Q = 1.2e-6 C, total Q = 1.5e-6 C
+        assert float(rows[2]["beam_on_seconds"]) == pytest.approx(600.0)
+        assert float(rows[2]["charge"]) == pytest.approx(1.5e-6)
+        expected_fluence_3 = 1.5e-6 / (3 * 1.602176634e-19 * 0.5)
+        expected_dpa_3 = expected_fluence_3 * 1.0e-15
+        assert float(rows[2]["fluence"]) == pytest.approx(expected_fluence_3, rel=1e-5)
+        assert float(rows[2]["dpa"]) == pytest.approx(expected_dpa_3, rel=1e-5)
+
+    def test_standard_deviation_reflects_post_settle_samples_only(self, tmp_path):
+        """A test asserts the standard deviation column reflects the post-settle samples only,
+
+        matching the mean's sample set and excluding autorange settling window samples.
+        """
+        writer = CupSessionWriter(output_dir=tmp_path)
+        # Open run at t=100.0 (settle window is [100.0, 101.0])
+        writer.write_run_opened(
+            t_host=100.0, run_id=1, arm_threshold=1e-9, release_threshold=0.5e-9
+        )
+
+        # Samples inside settle window [100.0, 101.0] with wild readings
+        for t_h, t_i, cur in [
+            (100.1, 0.1, 50.0e-9),
+            (100.5, 0.5, 80.0e-9),
+            (100.9, 0.9, 120.0e-9),
+        ]:
+            writer.write_sample(
+                t_host=t_h, t_inst=t_i, current=cur, status_word=0, over_range=False, run_id=1
+            )
+
+        # Post-settle samples (t >= 101.0): [1.0e-9, 1.1e-9, 0.9e-9]
+        # Mean = 1.0e-9, Sample Std (ddof=1) = 0.1e-9
+        for t_h, t_i, cur in [
+            (101.2, 1.2, 1.0e-9),
+            (101.8, 1.8, 1.1e-9),
+            (102.5, 2.5, 0.9e-9),
+        ]:
+            writer.write_sample(
+                t_host=t_h, t_inst=t_i, current=cur, status_word=0, over_range=False, run_id=1
+            )
+
+        writer.write_run_closed(t_host=103.0, run_id=1, reason="dwell_expired")
+
+        stats = writer.last_insertion_stats
+        assert stats.sample_count == 3
+        assert stats.excluded_count == 3
+        assert stats.mean_a == pytest.approx(1.0e-9)
+        assert stats.std_a == pytest.approx(0.1e-9)
+
+        writer.write_insertion_summary(
+            run_id=1,
+            commanded_timestamp=99.8,
+            confirmed_timestamp=100.0,
+            dwell=3.0,
+            sample_count=stats.sample_count,
+            mean_current_a=stats.mean_a,
+            std_current_a=stats.std_a,
+            beam_on_seconds=0.0,
+            charge=0.0,
+        )
+        writer.close()
+
+        with open(writer.csv_path, encoding="utf-8") as f:
+            reader = csv.DictReader([line for line in f if not line.startswith("#")])
+            summary_row = next(r for r in reader if r["record_type"] == "insertion_summary")
+
+        assert summary_row["sample_count"] == "3"
+        assert float(summary_row["mean_current_a"]) == pytest.approx(1.0e-9)
+        assert float(summary_row["std_current_a"]) == pytest.approx(0.1e-9)
+        # If the pre-settle samples were included, std would be > 40e-9
+        assert float(summary_row["std_current_a"]) < 1.0e-9
+
+    def test_reconstruct_dpa_from_columns_alone(self, tmp_path):
+        """A test reads a completed session file back and reconstructs the dpa from
+
+        the charge, charge state, area and k columns alone, asserting it matches the
+        recorded dpa.
+        """
+        from rbl.config.cup_config import ELEMENTARY_CHARGE_C
+
+        writer = CupSessionWriter(
+            output_dir=tmp_path,
+            charge_state=3,
+            area_cm2=0.5,
+            k=1.23e-15,
+        )
+        # Write two insertion summaries with known charges
+        writer.write_insertion_summary(
+            run_id=1,
+            commanded_timestamp=0.0,
+            confirmed_timestamp=0.2,
+            dwell=3.0,
+            sample_count=25,
+            mean_current_a=1.5e-9,
+            std_current_a=1e-11,
+            beam_on_seconds=0.0,
+            charge=0.0,
+        )
+        writer.write_insertion_summary(
+            run_id=2,
+            commanded_timestamp=300.0,
+            confirmed_timestamp=300.2,
+            dwell=3.0,
+            sample_count=25,
+            mean_current_a=1.5e-9,
+            std_current_a=1e-11,
+            beam_on_seconds=300.0,
+            charge=4.5e-7,
+        )
+        writer.close()
+
+        # Read back using DictReader and reconstruct dpa solely from row columns
+        with open(writer.csv_path, encoding="utf-8") as f:
+            reader = csv.DictReader([line for line in f if not line.startswith("#")])
+            summary_rows = [r for r in reader if r["record_type"] == "insertion_summary"]
+
+        assert len(summary_rows) == 2
+        for row in summary_rows:
+            q_c = float(row["charge"])
+            cs = int(row["charge_state"])
+            area = float(row["area"])
+            k_val = float(row["k"])
+            recorded_dpa = float(row["dpa"])
+
+            if q_c > 0.0:
+                reconstructed_fluence = q_c / (cs * ELEMENTARY_CHARGE_C * area)
+                reconstructed_dpa = reconstructed_fluence * k_val
+            else:
+                reconstructed_dpa = 0.0
+
+            assert reconstructed_dpa == pytest.approx(recorded_dpa, rel=1e-6)
+
+    def test_beam_on_seconds_excludes_cup_in_beam_time(self, tmp_path):
+        """Beam-on seconds measures the interval between insertions and excludes
+
+        time the cup spent in the beam, asserted by a test over a multi-insertion sequence.
+        """
+        from rbl.hardware.dose_model import DoseAccumulator
+
+        acc = DoseAccumulator()
+        writer = CupSessionWriter(output_dir=tmp_path, charge_state=1, area_cm2=1.0, k=1e-15)
+
+        # Insertion 1: cup in beam from t=10.0 to t=15.0 (5.0 s dwell)
+        acc.record_insertion(t_in=10.0, t_out=15.0, mean_current_a=1.0e-9)
+        writer.write_insertion_summary(
+            run_id=1,
+            commanded_timestamp=9.9,
+            confirmed_timestamp=10.0,
+            dwell=5.0,
+            sample_count=20,
+            mean_current_a=1.0e-9,
+            std_current_a=1e-11,
+            beam_on_seconds=acc.last_beam_on_s,
+            charge=acc.total_charge_c,
+        )
+
+        # Insertion 2: cup in beam from t=65.0 to t=70.0 (5.0 s dwell)
+        # Interval between retract (15.0) and next insert (65.0) = 50.0 s
+        acc.record_insertion(t_in=65.0, t_out=70.0, mean_current_a=1.0e-9)
+        writer.write_insertion_summary(
+            run_id=2,
+            commanded_timestamp=64.9,
+            confirmed_timestamp=65.0,
+            dwell=5.0,
+            sample_count=20,
+            mean_current_a=1.0e-9,
+            std_current_a=1e-11,
+            beam_on_seconds=acc.last_beam_on_s,
+            charge=acc.total_charge_c,
+        )
+
+        # Insertion 3: cup in beam from t=170.0 to t=175.0 (5.0 s dwell)
+        # Interval between retract (70.0) and next insert (170.0) = 100.0 s
+        acc.record_insertion(t_in=170.0, t_out=175.0, mean_current_a=1.0e-9)
+        writer.write_insertion_summary(
+            run_id=3,
+            commanded_timestamp=169.9,
+            confirmed_timestamp=170.0,
+            dwell=5.0,
+            sample_count=20,
+            mean_current_a=1.0e-9,
+            std_current_a=1e-11,
+            beam_on_seconds=acc.last_beam_on_s,
+            charge=acc.total_charge_c,
+        )
+        writer.close()
+
+        with open(writer.csv_path, encoding="utf-8") as f:
+            reader = csv.DictReader([line for line in f if not line.startswith("#")])
+            summary_rows = [r for r in reader if r["record_type"] == "insertion_summary"]
+
+        assert len(summary_rows) == 3
+        # Insertion 1: 0.0 s preceding beam-on
+        assert float(summary_rows[0]["beam_on_seconds"]) == pytest.approx(0.0)
+        # Insertion 2: 50.0 s (65 - 15), excluding the 5 s dwell of insertion 1
+        assert float(summary_rows[1]["beam_on_seconds"]) == pytest.approx(50.0)
+        # Insertion 3: 100.0 s (170 - 70), excluding the 5 s dwell of insertion 2
+        assert float(summary_rows[2]["beam_on_seconds"]) == pytest.approx(100.0)
+

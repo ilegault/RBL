@@ -847,6 +847,30 @@ class TestFaradayCupDoseParameters:
         assert "8.000 × 12.000 mm" in cup_tab.lbl_area.text()
         assert "Raster Planner" in cup_tab.lbl_area_source.text()
 
+    def test_main_window_signal_wiring_species(self, win, qapp):
+        """Assert changing planner species emits species_changed and updates cup tab
+        through real signal path.
+        """
+        planner = win.raster_planner_tab
+        cup_tab = win.faraday_cup_tab
+        qapp.processEvents()
+
+        # Check initial seeded species from app.py
+        info = planner.selected_species_info()
+        if info is not None:
+            name, energy_ev, charge = info
+            assert cup_tab.species == name
+            assert cup_tab.charge_state == charge
+
+        # Emit species_changed from planner
+        planner.species_changed.emit("He4", 3.0e6, 2)
+        qapp.processEvents()
+
+        assert cup_tab.species == "He4"
+        assert "3.000 MeV" in cup_tab.beam_energy
+        assert cup_tab.charge_state == 2
+
+
 
 class TestSamplingCycleTab:
     """Tab integration tests for the Sampling Cycle panel (ticket 09).
@@ -1375,6 +1399,78 @@ class TestCycleArmingPreconditions:
         assert hasattr(tab, "spn_charge_state")
         tab.spn_charge_state.setValue(2)
         assert tab.charge_state == 2
+        sw.close()
+        tab.close()
+
+    def test_insertion_run_writes_summary_row_to_session_file(self, qapp, tmp_path):
+        """When an insertion run completes on the tab, a summary row is written to
+        the session file.
+        """
+        import csv
+
+        from rbl.hardware.cup_status import CupPosition
+        from rbl.snapshots import CupActuationState, CupState
+
+        tab, sw = self.make_base_tab(qapp, tmp_path)
+        self.configure_full_dose_chain(tab, qapp)
+
+        # Trigger commanded move IN
+        tab.btn_insert.click()
+        qapp.processEvents()
+
+        # Confirm IN at t=1.0
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True, commanded=CupPosition.IN, confirmed=CupPosition.IN,
+            auto_mode=True, stale=False, last_transition_t=1.0, t=1.0,
+        ))
+        qapp.processEvents()
+
+        # Stream samples: t=1.2 is in settle window (1.2 to 2.2); t=2.5, 3.0 are post-settle
+        tab.on_cup_state(CupState(connected=True, current=1.0e-6, valid=True, t_host=1.2))
+        qapp.processEvents()
+        tab.on_cup_state(CupState(connected=True, current=1.0e-6, valid=True, t_host=2.5))
+        qapp.processEvents()
+        tab.on_cup_state(CupState(connected=True, current=1.0e-6, valid=True, t_host=3.0))
+        qapp.processEvents()
+
+        # Confirm OUT at t=3.5 (dwell = 3.5 - 1.2 = 2.3)
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True, commanded=CupPosition.OUT, confirmed=CupPosition.OUT,
+            auto_mode=True, stale=False, last_transition_t=3.5, t=3.5,
+        ))
+        qapp.processEvents()
+        tab.on_cup_state(CupState(connected=True, current=0.0, valid=True, t_host=4.0))
+        qapp.processEvents()
+
+        sw.close()
+
+        with open(sw.csv_path, encoding="utf-8") as f:
+            reader = csv.DictReader([line for line in f if not line.startswith("#")])
+            summary_rows = [r for r in reader if r["record_type"] == "insertion_summary"]
+
+        assert len(summary_rows) == 1
+        s = summary_rows[0]
+        assert s["run_id"] == "1"
+        assert len(s["commanded_timestamp"]) > 0
+        assert float(s["confirmed_timestamp"]) == pytest.approx(1.2)
+        assert float(s["dwell"]) == pytest.approx(2.8)
+        assert s["sample_count"] == "2"  # 2 post-settle samples (2.5, 3.0)
+        assert float(s["mean_current_a"]) == pytest.approx(1.0e-6)
+        assert float(s["charge"]) == pytest.approx(0.0)  # First insertion: 0 preceding beam-on
+        tab.close()
+
+    def test_species_changed_signal_updates_tab_and_session_parameters(self, qapp, tmp_path):
+        """on_species_changed updates tab properties and syncs session writer."""
+        tab, sw = self.make_base_tab(qapp, tmp_path)
+        tab.on_species_changed("Ar40", 4.5e6, 2)
+        qapp.processEvents()
+
+        assert tab.species == "Ar40"
+        assert "4.500 MeV" in tab.beam_energy
+        assert tab.charge_state == 2
+        assert sw.species == "Ar40"
+        assert "4.500 MeV" in str(sw.energy)
+        assert sw.charge_state == 2
         sw.close()
         tab.close()
 
