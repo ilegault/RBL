@@ -159,6 +159,10 @@ class FaradayCupTab(QWidget):
         self._move_start_t: float = float("nan")
         self._last_state_t: float = float("nan")
         self._move_fault: str = ""
+        self._last_logged_confirmed: CupPosition | None = None
+        self._last_logged_indeterminate: bool = False
+        self._disagreement_logged: bool = False
+        self._was_auto_mode: bool | None = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -712,6 +716,21 @@ class FaradayCupTab(QWidget):
             if self.beamline is not None:
                 self.beamline.set_cup_acquiring(self.acquisition.is_acquiring)
 
+        # Log disagreement fault when authority detector reports disagreement
+        authority_det = self.acquisition.detector
+        if isinstance(authority_det, AuthorityDetector):
+            if authority_det.disagreement:
+                if not self._disagreement_logged:
+                    self.session_writer.write_fault_disagreement(
+                        t_host=t_sample,
+                        position=actuation_confirmed or CupPosition.INDETERMINATE,
+                        current=state.current,
+                        t_inst=state.timestamp,
+                    )
+                    self._disagreement_logged = True
+            else:
+                self._disagreement_logged = False
+
         # Log sample if acquiring, or periodic heartbeat if idle
         if self.acquisition.is_acquiring:
             run_id = self.acquisition.current_run_id or 1
@@ -978,7 +997,48 @@ class FaradayCupTab(QWidget):
                         f"Move Fault: Command {target_name} did not confirm "
                         f"within {CUP_MOVE_CONFIRMATION_TIMEOUT_S:.1f} s"
                     )
+                    self.session_writer.write_fault_move_not_confirmed(
+                        t_host=t_now,
+                        commanded=self._move_target,
+                        timeout_s=CUP_MOVE_CONFIRMATION_TIMEOUT_S,
+                        details=self._move_fault,
+                    )
                     self._move_target = None
+
+        # Log confirmed position transitions (IN / OUT) and indeterminate faults
+        if state.confirmed in (CupPosition.IN, CupPosition.OUT):
+            if state.confirmed != self._last_logged_confirmed:
+                t_trans = (
+                    state.last_transition_t
+                    if not math.isnan(state.last_transition_t)
+                    else t_now
+                )
+                self.session_writer.write_position_transition(
+                    t_host=t_trans,
+                    position=state.confirmed,
+                    details=f"confirmed_{state.confirmed.value.lower()}",
+                )
+                self._last_logged_confirmed = state.confirmed
+                self._last_logged_indeterminate = False
+        elif state.confirmed == CupPosition.INDETERMINATE:
+            if not self._last_logged_indeterminate:
+                self.session_writer.write_fault_impossible_status(
+                    t_host=t_now,
+                    details="both IN and OUT contacts asserted",
+                )
+                self._last_logged_indeterminate = True
+                self._last_logged_confirmed = state.confirmed
+        elif state.confirmed == CupPosition.IN_TRANSIT:
+            self._last_logged_confirmed = state.confirmed
+            self._last_logged_indeterminate = False
+
+        # Log transition into LOCAL mode (not AUTO)
+        if self._was_auto_mode is not None and self._was_auto_mode and not state.auto_mode:
+            self.session_writer.write_fault_controller_not_in_auto(
+                t_host=t_now,
+                details="controller switched to LOCAL mode; remote commands ignored",
+            )
+        self._was_auto_mode = state.auto_mode
 
         self._commanded = state.commanded
         self._confirmed = state.confirmed

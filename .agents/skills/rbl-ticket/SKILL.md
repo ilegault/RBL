@@ -30,6 +30,17 @@ Before selecting or starting work on a new ticket:
    ```
 3. **Check the frontier** from the freshly updated `master`.
 
+**If `git pull` or your IDE's "Update Project" says `master has no tracked branch`:**
+the local `master` has no upstream configured. Ticket branches get one automatically
+because they are pushed with `git push -u`; a `master` created without it never does.
+Fix it once, permanently — do not work around it with a manual fetch+merge:
+
+```powershell
+git branch --set-upstream-to=origin/master master
+git remote set-head origin -a
+```
+
+
 ### Orientation steps
 
 Read, in this order:
