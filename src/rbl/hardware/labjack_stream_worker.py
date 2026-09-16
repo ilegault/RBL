@@ -60,6 +60,7 @@ Log-amp channels and FIO_STATE absent from the active scan list receive a None
 entry so consumers can show a "paused" state rather than displaying stale numbers.
 """
 
+import threading
 import time
 
 import numpy as np
@@ -124,6 +125,8 @@ class LabJackStreamWorker(QThread):
 
     window_ready = Signal(dict)
     error        = Signal(str)
+    digital_output_written = Signal(str, int)
+    output_state_changed   = Signal(dict)
 
     def __init__(self, handle, profile_name: str = DEFAULT_PROFILE,
                  channel_override: str = None, t0: float = None, parent=None):
@@ -161,6 +164,32 @@ class LabJackStreamWorker(QThread):
         self._t0               = t0
         self._running          = True
         self._stream_active    = False
+        self._write_lock       = threading.Lock()
+        self._pending_writes: list[tuple[str, int]] = []
+        self._output_state: dict[str, int] = {}
+
+    def queue_digital_write(self, line: str, state: int | bool) -> None:
+        """Queue a single named digital line write to be drained on the worker thread."""
+        val = 1 if state else 0
+        with self._write_lock:
+            self._pending_writes.append((line, val))
+
+    def _drain_pending_writes(self) -> None:
+        """Drain any pending digital writes using the worker's LJM handle."""
+        writes: list[tuple[str, int]] = []
+        with self._write_lock:
+            if self._pending_writes:
+                writes = self._pending_writes[:]
+                self._pending_writes.clear()
+        for line, val in writes:
+            try:
+                if _LJM_AVAILABLE and _ljm is not None and self._handle is not None:
+                    _ljm.eWriteName(self._handle, line, val)
+                self._output_state[line] = val
+                self.digital_output_written.emit(line, val)
+                self.output_state_changed.emit(dict(self._output_state))
+            except Exception as exc:
+                self.error.emit(f"Digital write failed [{line}={val}]: {exc}")
 
     def stop(self):
         """Signal the read loop to exit.  Call wait(ms) afterwards."""
@@ -251,6 +280,7 @@ class LabJackStreamWorker(QThread):
             # --- Start stream -------------------------------------------------
             # eStreamStart returns the actual scan rate the device settled on
             # (hardware rounds to the nearest achievable value).
+            self._drain_pending_writes()
             actual_rate = _ljm.eStreamStart(
                 self._handle, scans_per_read, n_ch, scan_addresses, scan_rate
             )
@@ -296,9 +326,11 @@ class LabJackStreamWorker(QThread):
 
             # --- Read loop ----------------------------------------------------
             while self._running:
+                self._drain_pending_writes()
                 # eStreamRead blocks until scans_per_read scans are ready.
                 # Returns: (flat_data_list, device_scan_backlog, ljm_scan_backlog)
                 ret         = _ljm.eStreamRead(self._handle)
+                self._drain_pending_writes()
                 flat        = np.asarray(ret[0], dtype=float)
                 dev_backlog = int(ret[1])
 
@@ -383,6 +415,7 @@ class LabJackStreamWorker(QThread):
             if self._running:   # suppress error noise on intentional stop
                 self.error.emit(f"Stream error [{self._profile_name}]: {exc}")
         finally:
+            self._drain_pending_writes()
             # Always stop the stream before this thread exits.
             # Guard against double-stop (e.g. if eStreamStart itself failed).
             if self._stream_active:
@@ -391,6 +424,7 @@ class LabJackStreamWorker(QThread):
                 except Exception:
                     pass
                 self._stream_active = False
+            self._drain_pending_writes()
 
     # ------------------------------------------------------------------
     # Private helpers

@@ -35,6 +35,7 @@ import atexit
 from PySide6.QtCore import QObject, Signal
 
 from rbl.hardware import beam_reconstruction as BR
+from rbl.state.cup_actuation_link import CupActuationLinkMixin
 from rbl.state.funcgen_control import FuncGenControlMixin
 from rbl.state.hv_interlock_link import HvInterlockLinkMixin
 from rbl.state.labjack_link import LabJackLinkMixin
@@ -45,8 +46,10 @@ from rbl.state.vacuum_link import VacuumLinkMixin
 from rbl.util import best_effort
 
 
-class Beamline(LabJackLinkMixin, FuncGenControlMixin, MotorControlMixin, VacuumLinkMixin,
-               ScopeLinkMixin, PicoammeterLinkMixin, HvInterlockLinkMixin, QObject):
+class Beamline(
+    LabJackLinkMixin, CupActuationLinkMixin, FuncGenControlMixin, MotorControlMixin,
+    VacuumLinkMixin, ScopeLinkMixin, PicoammeterLinkMixin, HvInterlockLinkMixin, QObject
+):
     motors_changed   = Signal(object)   # MotorState
     logamps_changed  = Signal(object)   # LogAmpState
     amps_changed     = Signal(object)   # AmpState
@@ -61,6 +64,8 @@ class Beamline(LabJackLinkMixin, FuncGenControlMixin, MotorControlMixin, VacuumL
     cup_error        = Signal(str)
     cup_connected    = Signal(str)
     cup_disconnected_evt = Signal()
+    cup_actuation_changed = Signal(object)  # CupActuationState
+    cup_position_changed  = Signal(object)  # alias for cup_actuation_changed
 
     # Vacuum <-> HV interlock (hv_interlock_link.py). dict:
     # {"state": "ok"|"warn"|"block", "reason": str, "pressure_torr": float,
@@ -91,6 +96,7 @@ class Beamline(LabJackLinkMixin, FuncGenControlMixin, MotorControlMixin, VacuumL
     def __init__(self, parent=None):
         super().__init__(parent)
         self._init_labjack()
+        self._init_cup_actuation()
         self._init_funcgens()
         self._init_motors()
         self._init_vacuum()
@@ -131,12 +137,17 @@ class Beamline(LabJackLinkMixin, FuncGenControlMixin, MotorControlMixin, VacuumL
     def shutdown(self):
         """Full hardware teardown, in the required order, for app close.
 
-        Order matters: stop the LabJack stream before closing its handle
-        (disconnect_labjack already guarantees this), abort Galil motion
-        before disconnecting it, and NEVER disable the function generators'
-        outputs here — they are meant to retain state after the app exits
-        (see FuncGenTab.close_session's docstring; this mirrors it).
+        Order matters:
+        1. Release cup actuation drive (open relays, cup fails into beam) BEFORE
+           disconnecting LabJack and closing the T7 handle.
+        2. Stop the LabJack stream before closing its handle (disconnect_labjack
+           already guarantees this).
+        3. Abort Galil motion before disconnecting it.
+        4. Shutdown vacuum, scope, and picoammeter links.
+        5. NEVER disable function generator outputs on exit — they retain state
+           (see FuncGenTab.close_session's docstring; this mirrors it).
         """
+        best_effort("cup.release",           self._release_cup_drive)
         best_effort("disconnect_labjack",   self.disconnect_labjack)
         best_effort("galil.abort",           lambda: self.galil.connected and self.galil.abort())
         best_effort("galil.disconnect",      self.galil.disconnect)

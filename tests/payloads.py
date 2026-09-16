@@ -189,3 +189,55 @@ class CupFeed:
         return self.send_raw(raw, protocol_mode=protocol_mode, t_host=t_host)
 
 
+class CupActuationFeed:
+    """A real Beamline wired to Faraday cup actuation consumers / tabs, as MainWindow wires it.
+
+    Injects raw FIO_STATE integers or transition payloads into Beamline and exposes
+    the commanded-move entry points, exercising the full path through status decoding,
+    debounce, snapshot construction, and snapshot emission.
+    """
+
+    def __init__(self, *tabs, beamline: Beamline = None):
+        self.beamline = beamline or Beamline()
+        for tab in tabs:
+            if hasattr(tab, "on_cup_actuation_state"):
+                self.beamline.cup_actuation_changed.connect(tab.on_cup_actuation_state)
+            if hasattr(tab, "on_cup_position_state"):
+                self.beamline.cup_position_changed.connect(tab.on_cup_position_state)
+
+    def command_cup(self, position):
+        """Command the cup to a position (IN or OUT) through Beamline."""
+        return self.beamline.command_cup(position)
+
+    def command_cup_in(self):
+        """Command the cup IN through Beamline."""
+        return self.beamline.command_cup_in()
+
+    def command_cup_out(self):
+        """Command the cup OUT through Beamline."""
+        return self.beamline.command_cup_out()
+
+    def send_fio_state(
+        self,
+        fio_state: int | dict | list | tuple | None,
+        t: float = 1.0,
+        profile: str = "FULL",
+        sample_period: float = 1.0 / 7500.0,
+        samples: int = 750,
+        **kwargs,
+    ):
+        """Inject a raw FIO_STATE integer or transition payload into Beamline."""
+        payload = window_payload(
+            FULL_READING,
+            t=t,
+            profile=profile,
+            fio_state=fio_state,
+            sample_period=sample_period,
+            samples=samples,
+            **kwargs,
+        )
+        self.beamline.raw_window_ready.emit(payload)
+        self.beamline.ingest_labjack_window(payload, active_profile=profile)
+
+
+
