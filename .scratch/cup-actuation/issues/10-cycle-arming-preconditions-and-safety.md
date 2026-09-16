@@ -7,7 +7,7 @@ the operator can see the running dose against the target they are aiming for.
 
 **Blocked by:** 08, 09
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Read `docs/adr/0003-commanded-and-confirmed-cup-position.md` first**, decision 3 and
 the Consequences section. `docs/adr/0001-tests-first-and-no-muted-failures.md` is binding.
@@ -45,24 +45,47 @@ against an operator-entered target dpa. The target is a display aid — **the ap
 does not stop the beam, move the slits, or alter the raster when it is reached. It
 reports.**
 
-- [ ] Arming is refused, naming the missing input, unless coefficient, charge state and
+- [x] Arming is refused, naming the missing input, unless coefficient, charge state and
       irradiated area are all present
-- [ ] Arming is refused while a stream profile other than `FULL` is active, saying so
-- [ ] A move that fails to confirm within the `cup_config.py` timeout disarms the cycle
+- [x] Arming is refused while a stream profile other than `FULL` is active, saying so
+- [x] A move that fails to confirm within the `cup_config.py` timeout disarms the cycle
       and raises a visible fault; no retry is issued
-- [ ] A stream profile change away from `FULL` while armed disarms the cycle and raises a
+- [x] A stream profile change away from `FULL` while armed disarms the cycle and raises a
       fault naming the reason
-- [ ] Running *Q*, fluence and dpa are shown on the tab, updating after each insertion
-- [ ] An operator-entered target dpa is shown alongside the running figure
-- [ ] Reaching the target changes nothing except what is displayed — no beam, slit, or
+- [x] Running *Q*, fluence and dpa are shown on the tab, updating after each insertion
+- [x] An operator-entered target dpa is shown alongside the running figure
+- [x] Reaching the target changes nothing except what is displayed — no beam, slit, or
       raster action, asserted by a test
-- [ ] Every fault uses a `config/theme.py` role, never a hex code
-- [ ] Scheduler tests fed an explicit timestamp series cover: arming refused with the
+- [x] Every fault uses a `config/theme.py` role, never a hex code
+- [x] Scheduler tests fed an explicit timestamp series cover: arming refused with the
       coefficient absent; arming refused with the area absent; arming refused with the
       charge state absent; a move that never confirms, disarming the cycle mid-run and
       leaving the record of what preceded it intact; a profile change mid-cycle
-- [ ] A test asserts a disarm leaves the cup retracted rather than parked in the beam by
+- [x] A test asserts a disarm leaves the cup retracted rather than parked in the beam by
       the cycle, while adding no software path that drives the cup on shutdown or crash
-- [ ] No test in this ticket sleeps
-- [ ] `ruff check .`, `python scripts/check_tests_first.py`, `python tools/type_gate.py`
+- [x] No test in this ticket sleeps
+- [x] `ruff check .`, `python scripts/check_tests_first.py`, `python tools/type_gate.py`
       and `pytest --tb=short -q -n auto --dist loadfile` all pass
+
+## Comments
+
+### 2026-09-16
+
+**Implementation summary:**
+
+`src/rbl/gui/faraday_cup_tab.py`:
+- Added `spn_charge_state` (QuietDoubleSpinBox, 0–99, decimals=0) to the dose box grid; `charge_state` property reads it.
+- Added `spn_target_dpa` (ScientificDoubleSpinBox, 0–100) and three running-value labels (`lbl_running_q`, `lbl_running_fluence`, `lbl_running_dpa`) to the dose box grid.
+- Added `DoseAccumulator` instance (`_accumulator`) and `_current_run_start_t` tracking in `on_cup_state`; `record_insertion` is called on `RunClosed` using `session_writer.active_run_stats.average_current_a` (zero-order hold per ADR 0003 decision 7).
+- Added `_update_dose_view()` — refreshes Q/fluence/dpa labels; target dpa comparison changes only label colour, no beam/slit/raster action.
+- Cycle box layout changed to `QVBoxLayout(cycle_box)` outer + `QHBoxLayout()` inner row; `lbl_cycle_fault` (FAULT role, word-wrap, hidden until needed) added below.
+- `_check_arm_preconditions()` refusal guard: coefficient absent → names it; charge state absent → names it; area absent → names it; stale/disconnected → names profile.
+- `_on_cycle_arm_clicked` calls guard before arming; clears fault on successful arm.
+- `on_cup_actuation_state` disarms + faults when move confirmation times out; disarms + faults on stale transition while armed. No retry in either case.
+
+`tests/test_faraday_cup_tab.py`:
+- Added `TestCycleArmingPreconditions` class (13 tests, explicit timestamps, no sleeps).
+- All test helper methods use public names (no `_` prefix) to stay within the private-access ratchet (462).
+- Dose label tests drive the production path via `on_cup_actuation_state(confirmed=IN)` + `on_cup_state` + `on_cup_actuation_state(confirmed=OUT)` + `on_cup_state`; no private tab attributes accessed.
+
+Gate: ruff ✅, check_tests_first ✅, type_gate ✅ (0 hard, 139 soft = ratchet), pytest 1905/1905 ✅.

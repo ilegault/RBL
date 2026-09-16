@@ -129,7 +129,7 @@ from rbl.gui.widgets.inputs import (
 from rbl.gui.widgets.live_plot import LivePlotPanel
 from rbl.hardware.cup_status import CupPosition
 from rbl.hardware.current_monitor import RollingBuffer, format_current
-from rbl.hardware.dose_model import patch_area_cm2
+from rbl.hardware.dose_model import DoseAccumulator, patch_area_cm2
 from rbl.services.cup_acquisition import (
     AuthorityDetector,
     CupAcquisitionStateMachine,
@@ -204,6 +204,13 @@ class FaradayCupTab(QWidget):
         self._patch_height_y_mm: float = 0.0
         self._area_cm2: float = 0.0
         self._area_source: str = "Raster Planner"
+
+        # Dose accumulator and run-open timestamp for zero-order hold (ADR 0003 Decision 7)
+        self._accumulator: DoseAccumulator = DoseAccumulator()
+        self._current_run_start_t: float = float("nan")
+
+        # Cycle fault message — set on arming refusal or cycle disarm; cleared on arm
+        self._cycle_fault: str = ""
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -457,9 +464,14 @@ class FaradayCupTab(QWidget):
 
         # ── 2b. Sampling Cycle (ADR 0003, ticket 09) ──────────────────────────
         cycle_box = QGroupBox("Sampling Cycle")
-        cycle_lay = QHBoxLayout(cycle_box)
-        cycle_lay.setContentsMargins(12, 8, 12, 8)
+        # Outer vertical layout so the fault label (ticket 10) occupies a full row
+        # below the controls row without needing a second QGroupBox.
+        _cycle_vlay = QVBoxLayout(cycle_box)
+        _cycle_vlay.setContentsMargins(12, 8, 12, 8)
+        _cycle_vlay.setSpacing(4)
+        cycle_lay = QHBoxLayout()
         cycle_lay.setSpacing(16)
+        _cycle_vlay.addLayout(cycle_lay)
 
         # Period and dwell spinners (uses project input widgets, never bare spinbox)
         cycle_lay.addWidget(QLabel("Period:"))
@@ -512,6 +524,15 @@ class FaradayCupTab(QWidget):
         )
         self.lbl_cycle_state.setMinimumWidth(260)
         cycle_lay.addWidget(self.lbl_cycle_state, stretch=1)
+
+        # Fault label — arming refusal reason or disarm-on-fault reason (ticket 10)
+        # Shown below the control row so the operator cannot dismiss it without fixing
+        # the underlying issue.  Uses FAULT colour role from theme, never a hex code.
+        self.lbl_cycle_fault = QLabel("")
+        self.lbl_cycle_fault.setStyleSheet(theme.status_label(theme.FAULT))
+        self.lbl_cycle_fault.setWordWrap(True)
+        self.lbl_cycle_fault.setVisible(False)
+        _cycle_vlay.addWidget(self.lbl_cycle_fault)
 
         layout.addWidget(cycle_box)
 
@@ -582,6 +603,75 @@ class FaradayCupTab(QWidget):
         self.le_entry_date.setPlaceholderText("YYYY-MM-DD")
         self.le_entry_date.setToolTip("Date coefficient was derived or entered")
         dose_grid.addWidget(self.le_entry_date, 1, 5)
+
+        # Row 2: Ion charge state q (required for arming — ticket 10)
+        lbl_q_title = QLabel("Ion Charge State (q):")
+        lbl_q_title.setStyleSheet(f"font-size: {theme.FS_LABEL}px; color: {theme.NEUTRAL};")
+        dose_grid.addWidget(lbl_q_title, 2, 0)
+
+        self.spn_charge_state = QuietDoubleSpinBox()
+        self.spn_charge_state.setRange(0, 99)
+        self.spn_charge_state.setDecimals(0)
+        self.spn_charge_state.setValue(0)
+        self.spn_charge_state.setToolTip(
+            "Ion charge state q (positive integer; 0 = not configured)"
+        )
+        dose_grid.addLayout(unit_row(self.spn_charge_state, "e"), 2, 1)
+
+        # Row 2 Col 2-5: Running totals (ticket 10)
+        lbl_run_q_title = QLabel("Accumulated Q:")
+        lbl_run_q_title.setStyleSheet(f"font-size: {theme.FS_LABEL}px; color: {theme.NEUTRAL};")
+        dose_grid.addWidget(lbl_run_q_title, 2, 2)
+
+        self.lbl_running_q = QLabel("  —  ")
+        self.lbl_running_q.setStyleSheet(
+            f"font-family: Consolas, 'Courier New', monospace; "
+            f"font-weight: bold; font-size: {theme.FS_LABEL}px; color: {theme.NEUTRAL};"
+        )
+        dose_grid.addWidget(self.lbl_running_q, 2, 3, 1, 3)
+
+        # Row 3: Fluence and dpa
+        lbl_run_fluence_title = QLabel("Accumulated Fluence:")
+        lbl_run_fluence_title.setStyleSheet(
+            f"font-size: {theme.FS_LABEL}px; color: {theme.NEUTRAL};"
+        )
+        dose_grid.addWidget(lbl_run_fluence_title, 3, 2)
+
+        self.lbl_running_fluence = QLabel("  —  ")
+        self.lbl_running_fluence.setStyleSheet(
+            f"font-family: Consolas, 'Courier New', monospace; "
+            f"font-weight: bold; font-size: {theme.FS_LABEL}px; color: {theme.NEUTRAL};"
+        )
+        dose_grid.addWidget(self.lbl_running_fluence, 3, 3, 1, 3)
+
+        # Row 4: dpa and target
+        lbl_run_dpa_title = QLabel("Accumulated dpa:")
+        lbl_run_dpa_title.setStyleSheet(
+            f"font-size: {theme.FS_LABEL}px; color: {theme.NEUTRAL};"
+        )
+        dose_grid.addWidget(lbl_run_dpa_title, 4, 0)
+
+        self.lbl_running_dpa = QLabel("  —  ")
+        self.lbl_running_dpa.setStyleSheet(
+            f"font-family: Consolas, 'Courier New', monospace; "
+            f"font-weight: bold; font-size: {theme.FS_LABEL}px; color: {theme.NEUTRAL};"
+        )
+        dose_grid.addWidget(self.lbl_running_dpa, 4, 1, 1, 2)
+
+        lbl_target_title = QLabel("Target dpa:")
+        lbl_target_title.setStyleSheet(
+            f"font-size: {theme.FS_LABEL}px; color: {theme.NEUTRAL};"
+        )
+        dose_grid.addWidget(lbl_target_title, 4, 3)
+
+        self.spn_target_dpa = ScientificDoubleSpinBox()
+        self.spn_target_dpa.setRange(0.0, 100.0)
+        self.spn_target_dpa.setValue(0.0)
+        self.spn_target_dpa.setToolTip(
+            "Target dpa for this irradiation run (display only — reaching the target "
+            "does not stop the beam, move slits, or alter the raster)"
+        )
+        dose_grid.addLayout(unit_row(self.spn_target_dpa, "dpa"), 4, 4, 1, 2)
 
         layout.addWidget(dose_box)
 
@@ -870,6 +960,7 @@ class FaradayCupTab(QWidget):
 
         if transition is not None:
             if isinstance(transition, RunOpened):
+                self._current_run_start_t = transition.t
                 self.session_writer.write_run_opened(
                     t_host=t_sample,
                     run_id=transition.run_id,
@@ -885,6 +976,21 @@ class FaradayCupTab(QWidget):
                     reason=transition.reason,
                     t_inst=state.timestamp,
                 )
+                # Zero-order hold: previous current held over beam-on interval
+                # between last retract and this insertion.  active_run_stats now
+                # reflects the just-closed run via _last_run_stats.
+                stats = self.session_writer.active_run_stats
+                if (
+                    not math.isnan(self._current_run_start_t)
+                    and stats.average_current_a is not None
+                ):
+                    self._accumulator.record_insertion(
+                        t_in=self._current_run_start_t,
+                        t_out=t_sample,
+                        mean_current_a=stats.average_current_a,
+                    )
+                self._current_run_start_t = float("nan")
+                self._update_dose_view()
             if self.beamline is not None:
                 self.beamline.set_cup_acquiring(self.acquisition.is_acquiring)
 
@@ -1137,13 +1243,52 @@ class FaradayCupTab(QWidget):
     # ── Sampling Cycle (ADR 0003, ticket 09) ─────────────────────────────────
 
     def _on_cycle_arm_clicked(self) -> None:
-        """Arm or disarm the sampling cycle."""
+        """Arm or disarm the sampling cycle.
+
+        WHY THE GUARD EXISTS (ticket 10 / ADR 0003)
+        -------------------------------------------
+        An eight-hour run that produces charge with no dpa attached has failed
+        at its only job: nothing in the archive can recover the coefficient
+        afterwards.  Arming is therefore refused unless the whole dose chain is
+        configured (coefficient, charge state, irradiated area) and position
+        feedback is available (FULL stream profile, T7 connected).
+
+        The refusal is not a warning the operator can dismiss — it names exactly
+        which input is missing and stays visible until the issue is resolved.
+        """
         t_now = self._last_state_t if not math.isnan(self._last_state_t) else time.time()
         if self.cycle.is_armed:
             self.cycle.disarm()
-        else:
-            self.cycle.arm(t=t_now)
+            self._cycle_fault = ""
+            self._update_cycle_view(t_now)
+            return
+
+        reason = self._check_arm_preconditions()
+        if reason:
+            self._cycle_fault = f"Cannot arm: {reason}"
+            self._update_cycle_view(t_now)
+            return
+
+        self._cycle_fault = ""
+        self.cycle.arm(t=t_now)
         self._update_cycle_view(t_now)
+
+    def _check_arm_preconditions(self) -> str:
+        """Return '' if all arming preconditions are met, else the first missing item.
+
+        Checks in order: displacement coefficient, charge state, irradiated area,
+        then position feedback availability.  Returns the first blocking reason so
+        the operator is told exactly one thing to fix at a time.
+        """
+        if self.displacement_coeff == 0.0:
+            return "displacement coefficient (k) is required"
+        if self.charge_state <= 0:
+            return "ion charge state is required"
+        if self._area_cm2 <= 0.0:
+            return "irradiated area is required — configure in Raster Planner"
+        if not self._actuation_connected or self._stale:
+            return "position feedback unavailable — connect T7 and use FULL stream profile"
+        return ""
 
     def _on_cycle_stop_clicked(self) -> None:
         """Stop the cycle; retract the cup if currently inserting."""
@@ -1246,6 +1391,13 @@ class FaradayCupTab(QWidget):
                 f"color: {theme.OK}; font-weight: bold; font-size: {theme.FS_LABEL}px;"
             )
 
+        # Show or hide the cycle fault label (arming refusal or disarm reason)
+        if self._cycle_fault:
+            self.lbl_cycle_fault.setText(self._cycle_fault)
+            self.lbl_cycle_fault.setVisible(True)
+        else:
+            self.lbl_cycle_fault.setVisible(False)
+
     def on_cup_actuation_state(self, state: CupActuationState) -> None:
         """Ingest CupActuationState snapshot published by Beamline (ADR 0003)."""
         if not state.connected:
@@ -1255,6 +1407,7 @@ class FaradayCupTab(QWidget):
         self._actuation_connected = True
         t_now = state.t if not math.isnan(state.t) else time.time()
         self._last_state_t = t_now
+        _was_stale = self._stale
 
         # If commanded position changed externally (e.g. from script or another tab)
         if state.commanded != self._commanded:
@@ -1296,6 +1449,16 @@ class FaradayCupTab(QWidget):
                         details=self._move_fault,
                     )
                     self._move_target = None
+                    # ADR 0003 decision 3: disarm the cycle — a retry loop is exactly
+                    # the failure mode this decision exists to prevent.  The cup is left
+                    # wherever it is; drive release is the wiring's job, not software's.
+                    if self.cycle.is_armed:
+                        self._cycle_fault = (
+                            f"Cycle disarmed: move Command {target_name} did not confirm "
+                            f"within {CUP_MOVE_CONFIRMATION_TIMEOUT_S:.1f} s"
+                        )
+                        self.cycle.disarm()
+                        self._update_cycle_view(t_now)
 
         # Log confirmed position transitions (IN / OUT) and indeterminate faults
         if state.confirmed in (CupPosition.IN, CupPosition.OUT):
@@ -1336,6 +1499,18 @@ class FaradayCupTab(QWidget):
         self._confirmed = state.confirmed
         self._auto_mode = state.auto_mode
         self._stale = state.stale
+
+        # Disarm cycle when FIO_STATE goes stale (profile changed away from FULL).
+        # Ticket 10 / ADR 0003: the inference thresholds cannot bound a 3-second insertion
+        # and position feedback is exactly what prevents the run-boundary failures this
+        # whole effort exists to fix.  Disarm immediately, name the reason.
+        if not _was_stale and self._stale and self.cycle.is_armed:
+            self._cycle_fault = (
+                "Cycle disarmed: position feedback lost "
+                "(stream profile changed from FULL)"
+            )
+            self.cycle.disarm()
+            self._update_cycle_view(t_now)
 
         # Tick the sampling cycle scheduler on every actuation state update
         self._tick_cycle(t_now)
@@ -1523,3 +1698,67 @@ class FaradayCupTab(QWidget):
     def entry_date(self) -> str:
         """Operator-entered provenance date for the displacement coefficient."""
         return self.le_entry_date.text().strip()
+
+    @property
+    def charge_state(self) -> int:
+        """Operator-entered ion charge state q (positive integer; 0 = not configured)."""
+        return int(self.spn_charge_state.value())
+
+    def _update_dose_view(self) -> None:
+        """Refresh running Q, fluence, and dpa labels from the dose accumulator.
+
+        WHY THIS IS CALLED ON RUN CLOSE, NOT ON EVERY SAMPLE
+        ------------------------------------------------------
+        ADR 0003 Decision 7: dose uses a zero-order hold — each insertion's
+        current is held constant across the beam-on interval between insertions.
+        The accumulator is only updated at run close, so refreshing on every
+        sample would show stale values between insertions. The labels update
+        once per insertion, which is the correct resolution for this measurement.
+
+        TARGET DPA IS DISPLAY-ONLY
+        --------------------------
+        Reaching the target dpa changes only label colour.  Nothing in this
+        method stops the beam, moves slits, or alters the raster — doing so
+        would turn a display aid into a safety interlock, which ADR 0003
+        explicitly does not create.
+        """
+        q = self._accumulator.total_charge_c
+        cs = self.charge_state
+        area = self._area_cm2
+        k = self.displacement_coeff
+
+        self.lbl_running_q.setText(f"{q:.6e} C")
+
+        if cs > 0 and area > 0.0:
+            fluence = self._accumulator.fluence(cs, area)
+            self.lbl_running_fluence.setText(f"{fluence:.4e} ions/cm²")
+
+            if k > 0.0:
+                dpa = self._accumulator.dpa(cs, area, k)
+                self.lbl_running_dpa.setText(f"{dpa:.4e} dpa")
+
+                target = self.spn_target_dpa.value()
+                if target > 0.0 and dpa >= target:
+                    self.lbl_running_dpa.setStyleSheet(theme.status_label(theme.OK))
+                else:
+                    self.lbl_running_dpa.setStyleSheet(
+                        f"font-family: Consolas, 'Courier New', monospace; "
+                        f"font-weight: bold; font-size: {theme.FS_LABEL}px; color: {theme.NEUTRAL};"
+                    )
+            else:
+                self.lbl_running_dpa.setText("  —  (k not set)")
+                self.lbl_running_dpa.setStyleSheet(
+                    f"font-family: Consolas, 'Courier New', monospace; "
+                    f"font-weight: bold; font-size: {theme.FS_LABEL}px; color: {theme.MUTED};"
+                )
+        else:
+            self.lbl_running_fluence.setText("  —  (inputs missing)")
+            self.lbl_running_fluence.setStyleSheet(
+                f"font-family: Consolas, 'Courier New', monospace; "
+                f"font-weight: bold; font-size: {theme.FS_LABEL}px; color: {theme.MUTED};"
+            )
+            self.lbl_running_dpa.setText("  —  (inputs missing)")
+            self.lbl_running_dpa.setStyleSheet(
+                f"font-family: Consolas, 'Courier New', monospace; "
+                f"font-weight: bold; font-size: {theme.FS_LABEL}px; color: {theme.MUTED};"
+            )

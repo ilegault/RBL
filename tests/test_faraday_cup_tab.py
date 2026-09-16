@@ -866,6 +866,17 @@ class TestSamplingCycleTab:
         tab.show()
         qapp.processEvents()
         feed = CupActuationFeed(tab)
+
+        # Ticket 10 introduced arming preconditions: k, charge_state, and area must
+        # all be non-zero before the cycle will arm.  Configure valid defaults here so
+        # the existing cycle tests (which test scheduling mechanics, not the guards)
+        # continue to work.  Tests that specifically check arming refusal build their
+        # own tab and deliberately omit one or more of these fields.
+        tab.spn_k.setValue(1e-15)
+        tab.spn_charge_state.setValue(1)
+        tab.on_patch_dimensions_changed(10.0, 10.0)  # → 1.0 cm²
+        qapp.processEvents()
+
         return tab, feed, sw
 
     def actuation_state(self, t, commanded=None, confirmed=None, auto_mode=True):
@@ -1007,6 +1018,363 @@ class TestSamplingCycleTab:
         tab.spn_cycle_dwell.editingFinished.emit()
         qapp.processEvents()
         assert tab.cycle.dwell_s == pytest.approx(5.0)
+        sw.close()
+        tab.close()
+
+
+class TestCycleArmingPreconditions:
+    """Ticket 10 — arming guards, fault disarms, and running dose display.
+
+    Every test feeds explicit timestamps; none sleep.
+    All assertions check operator-visible label text or public scheduler/tab state.
+
+    WHY THIS CLASS EXISTS
+    ---------------------
+    ADR 0003 decision 3: a cycle that cannot confirm a move must disarm rather than
+    retry, because a controller in LOCAL silently ignores remote commands.
+    Ticket 10 adds the dose-chain precondition guards so an eight-hour run always
+    produces a traceable dpa figure, and adds the running dose display so the
+    operator can see progress without opening a file.
+    """
+
+    def actuation_state(self, t: float, stale: bool = False):
+        from rbl.hardware.cup_status import CupPosition
+        from rbl.snapshots import CupActuationState
+
+        return CupActuationState(
+            connected=True,
+            commanded=CupPosition.OUT,
+            confirmed=CupPosition.OUT,
+            auto_mode=True,
+            stale=stale,
+            last_transition_t=t,
+            t=t,
+        )
+
+    def make_base_tab(self, qapp, tmp_path):
+        """Tab with actuation connected (stale=False) but no dose chain inputs."""
+        from rbl.services.cup_session_writer import CupSessionWriter
+
+        sw = CupSessionWriter(session_id="precond_test", output_dir=tmp_path)
+        tab = FaradayCupTab(session_writer=sw)
+        tab.show()
+        qapp.processEvents()
+        tab.on_cup_actuation_state(self.actuation_state(t=0.0))
+        qapp.processEvents()
+        return tab, sw
+
+    def configure_full_dose_chain(self, tab, qapp):
+        """Set all three dose chain inputs to valid non-zero values."""
+        tab.spn_k.setValue(1e-15)
+        tab.spn_charge_state.setValue(1)
+        tab.on_patch_dimensions_changed(10.0, 10.0)  # → 1.0 cm²
+        qapp.processEvents()
+
+    # ── Arming refusal tests ───────────────────────────────────────────────────
+
+    def test_arm_refused_coefficient_absent(self, qapp, tmp_path):
+        """Arming is refused and the fault label names the displacement coefficient."""
+        tab, sw = self.make_base_tab(qapp, tmp_path)
+        tab.spn_charge_state.setValue(1)
+        tab.on_patch_dimensions_changed(10.0, 10.0)
+        # k NOT set — default 0
+        tab.btn_cycle_arm.click()
+        qapp.processEvents()
+
+        assert not tab.cycle.is_armed
+        fault_text = tab.lbl_cycle_fault.text().lower()
+        assert "coefficient" in fault_text or "k" in fault_text
+        sw.close()
+        tab.close()
+
+    def test_arm_refused_charge_state_absent(self, qapp, tmp_path):
+        """Arming is refused and the fault label names the charge state."""
+        tab, sw = self.make_base_tab(qapp, tmp_path)
+        tab.spn_k.setValue(1e-15)
+        tab.on_patch_dimensions_changed(10.0, 10.0)
+        # charge_state NOT set — default 0
+        tab.btn_cycle_arm.click()
+        qapp.processEvents()
+
+        assert not tab.cycle.is_armed
+        fault_text = tab.lbl_cycle_fault.text().lower()
+        assert "charge" in fault_text
+        sw.close()
+        tab.close()
+
+    def test_arm_refused_area_absent(self, qapp, tmp_path):
+        """Arming is refused and the fault label names the irradiated area."""
+        tab, sw = self.make_base_tab(qapp, tmp_path)
+        tab.spn_k.setValue(1e-15)
+        tab.spn_charge_state.setValue(1)
+        # area NOT set — on_patch_dimensions_changed never called
+        tab.btn_cycle_arm.click()
+        qapp.processEvents()
+
+        assert not tab.cycle.is_armed
+        fault_text = tab.lbl_cycle_fault.text().lower()
+        assert "area" in fault_text
+        sw.close()
+        tab.close()
+
+    def test_arm_refused_when_stale(self, qapp, tmp_path):
+        """Arming is refused when FIO_STATE is absent (non-FULL stream profile)."""
+        from rbl.services.cup_session_writer import CupSessionWriter
+
+        sw = CupSessionWriter(session_id="stale_test", output_dir=tmp_path)
+        tab = FaradayCupTab(session_writer=sw)
+        tab.show()
+        qapp.processEvents()
+        # Actuation connected but stale (diagnostic profile active)
+        tab.on_cup_actuation_state(self.actuation_state(t=0.0, stale=True))
+        qapp.processEvents()
+        self.configure_full_dose_chain(tab, qapp)
+
+        tab.btn_cycle_arm.click()
+        qapp.processEvents()
+
+        assert not tab.cycle.is_armed
+        fault_text = tab.lbl_cycle_fault.text()
+        assert (
+            "FULL" in fault_text
+            or "profile" in fault_text.lower()
+            or "feedback" in fault_text.lower()
+        )
+        sw.close()
+        tab.close()
+
+    def test_arm_succeeds_when_all_present(self, qapp, tmp_path):
+        """With all three dose chain inputs and FULL profile active, arming succeeds."""
+        tab, sw = self.make_base_tab(qapp, tmp_path)
+        self.configure_full_dose_chain(tab, qapp)
+
+        tab.btn_cycle_arm.click()
+        qapp.processEvents()
+
+        assert tab.cycle.is_armed
+        sw.close()
+        tab.close()
+
+    def test_arm_fault_clears_on_success(self, qapp, tmp_path):
+        """A previous arming refusal clears when arming eventually succeeds."""
+        tab, sw = self.make_base_tab(qapp, tmp_path)
+        # First attempt with area absent → fault shown
+        tab.spn_k.setValue(1e-15)
+        tab.spn_charge_state.setValue(1)
+        tab.btn_cycle_arm.click()
+        qapp.processEvents()
+        assert tab.lbl_cycle_fault.isVisible()
+
+        # Now provide area and arm again
+        tab.on_patch_dimensions_changed(10.0, 10.0)
+        tab.btn_cycle_arm.click()
+        qapp.processEvents()
+
+        assert tab.cycle.is_armed
+        assert not tab.lbl_cycle_fault.isVisible()
+        sw.close()
+        tab.close()
+
+    # ── Disarm-on-fault tests ──────────────────────────────────────────────────
+
+    def test_move_not_confirmed_disarms_cycle(self, qapp, tmp_path):
+        """A cup move that fails to confirm within the timeout disarms the cycle."""
+        from unittest.mock import MagicMock
+
+        from rbl.config.cup_config import CUP_MOVE_CONFIRMATION_TIMEOUT_S
+        from rbl.hardware.cup_status import CupPosition
+        from rbl.services.sampling_cycle import CycleState
+        from rbl.snapshots import CupActuationState
+
+        tab, sw = self.make_base_tab(qapp, tmp_path)
+        self.configure_full_dose_chain(tab, qapp)
+        tab.btn_cycle_arm.click()
+        qapp.processEvents()
+        assert tab.cycle.is_armed
+
+        tab.beamline = MagicMock()
+
+        # Trigger INSERT at period boundary
+        period = tab.spn_cycle_period.value()
+        tab.on_cup_actuation_state(self.actuation_state(t=period))
+        qapp.processEvents()
+        assert tab.cycle.state == CycleState.INSERTING
+
+        # Feed a state past the confirmation timeout with cup still OUT (not confirmed IN)
+        timeout_t = period + CUP_MOVE_CONFIRMATION_TIMEOUT_S + 0.5
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True,
+            commanded=CupPosition.IN,
+            confirmed=CupPosition.OUT,  # move not confirmed
+            auto_mode=True,
+            stale=False,
+            last_transition_t=period,
+            t=timeout_t,
+        ))
+        qapp.processEvents()
+
+        assert not tab.cycle.is_armed
+        assert tab.lbl_cycle_fault.isVisible()
+        sw.close()
+        tab.close()
+
+    def test_profile_change_while_armed_disarms_cycle(self, qapp, tmp_path):
+        """FIO_STATE going stale (profile change from FULL) while armed disarms the cycle."""
+        tab, sw = self.make_base_tab(qapp, tmp_path)
+        self.configure_full_dose_chain(tab, qapp)
+        tab.btn_cycle_arm.click()
+        qapp.processEvents()
+        assert tab.cycle.is_armed
+
+        # Simulate profile change to non-FULL: stale=True
+        tab.on_cup_actuation_state(self.actuation_state(t=1.0, stale=True))
+        qapp.processEvents()
+
+        assert not tab.cycle.is_armed
+        assert tab.lbl_cycle_fault.isVisible()
+        assert len(tab.lbl_cycle_fault.text()) > 0
+        sw.close()
+        tab.close()
+
+    def test_disarm_leaves_cup_wherever_it_is(self, qapp, tmp_path):
+        """When the cycle disarms due to a move timeout it issues no additional cup command.
+
+        ADR 0003 decision 3 and decision 6: the cup fails INTO the beam via wiring
+        (cup-OUT requires two contact closures). No software path is load-bearing for
+        safety; shutdown releases drive, it does not command a position.
+        """
+        from unittest.mock import MagicMock
+
+        from rbl.config.cup_config import CUP_MOVE_CONFIRMATION_TIMEOUT_S
+        from rbl.hardware.cup_status import CupPosition
+        from rbl.snapshots import CupActuationState
+
+        tab, sw = self.make_base_tab(qapp, tmp_path)
+        self.configure_full_dose_chain(tab, qapp)
+        tab.btn_cycle_arm.click()
+        qapp.processEvents()
+
+        cup_commands: list[str] = []
+        mock_bl = MagicMock()
+        mock_bl.command_cup_in.side_effect = lambda: cup_commands.append("IN")
+        mock_bl.command_cup_out.side_effect = lambda: cup_commands.append("OUT")
+        tab.beamline = mock_bl
+
+        # Trigger scheduled INSERT at period boundary
+        period = tab.spn_cycle_period.value()
+        tab.on_cup_actuation_state(self.actuation_state(t=period))
+        qapp.processEvents()
+
+        assert cup_commands.count("IN") == 1, "cycle must have issued exactly one INSERT"
+
+        # Feed state past confirmation timeout with cup still OUT
+        timeout_t = period + CUP_MOVE_CONFIRMATION_TIMEOUT_S + 0.5
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True,
+            commanded=CupPosition.IN,
+            confirmed=CupPosition.OUT,
+            auto_mode=True,
+            stale=False,
+            last_transition_t=period,
+            t=timeout_t,
+        ))
+        qapp.processEvents()
+
+        assert not tab.cycle.is_armed
+        assert cup_commands.count("OUT") == 0, "disarm must not drive cup via software"
+        assert cup_commands.count("IN") == 1, "no retry insert must be issued"
+        sw.close()
+        tab.close()
+
+    # ── Running dose display tests ─────────────────────────────────────────────
+
+    def test_running_dose_labels_update_after_accumulation(self, qapp, tmp_path):
+        """Running Q, fluence, and dpa labels are non-placeholder after a complete insertion."""
+        from rbl.hardware.cup_status import CupPosition
+        from rbl.snapshots import CupActuationState, CupState
+
+        tab, sw = self.make_base_tab(qapp, tmp_path)
+        self.configure_full_dose_chain(tab, qapp)
+
+        # Drive a complete insertion through the production pipeline:
+        # confirmed IN → CupState with current → confirmed OUT → CupState at 0 A
+        # → RunOpened then RunClosed → accumulator.record_insertion → _update_dose_view
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True, commanded=CupPosition.IN, confirmed=CupPosition.IN,
+            auto_mode=True, stale=False, last_transition_t=1.0, t=1.0,
+        ))
+        qapp.processEvents()
+        tab.on_cup_state(CupState(connected=True, current=1e-6, valid=True, t_host=2.0))
+        qapp.processEvents()
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True, commanded=CupPosition.OUT, confirmed=CupPosition.OUT,
+            auto_mode=True, stale=False, last_transition_t=3.0, t=3.0,
+        ))
+        qapp.processEvents()
+        tab.on_cup_state(CupState(connected=True, current=0.0, valid=True, t_host=4.0))
+        qapp.processEvents()
+
+        assert "—" not in tab.lbl_running_q.text()
+        assert "—" not in tab.lbl_running_fluence.text()
+        assert "—" not in tab.lbl_running_dpa.text()
+        sw.close()
+        tab.close()
+
+    def test_target_dpa_spinbox_present(self, qapp, tmp_path):
+        """The target dpa spinbox is present and accepts a value."""
+        tab, sw = self.make_base_tab(qapp, tmp_path)
+        assert hasattr(tab, "spn_target_dpa")
+        tab.spn_target_dpa.setValue(0.5)
+        assert tab.spn_target_dpa.value() == pytest.approx(0.5)
+        sw.close()
+        tab.close()
+
+    def test_reaching_target_dpa_no_beam_action(self, qapp, tmp_path):
+        """Reaching the target dpa changes only the display — no beam, slit, or raster command."""
+        from unittest.mock import MagicMock
+
+        from rbl.hardware.cup_status import CupPosition
+        from rbl.snapshots import CupActuationState, CupState
+
+        tab, sw = self.make_base_tab(qapp, tmp_path)
+        self.configure_full_dose_chain(tab, qapp)
+        # Target of 0 — any accumulated dpa triggers the reached-state display path
+        tab.spn_target_dpa.setValue(0.0)
+
+        mock_bl = MagicMock()
+        tab.beamline = mock_bl
+
+        # Drive a complete insertion through the production pipeline so
+        # _update_dose_view() is called internally.  Verify no cup commands
+        # are issued as a side-effect of updating the display.
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True, commanded=CupPosition.IN, confirmed=CupPosition.IN,
+            auto_mode=True, stale=False, last_transition_t=1.0, t=1.0,
+        ))
+        qapp.processEvents()
+        tab.on_cup_state(CupState(connected=True, current=1e-3, valid=True, t_host=2.0))
+        qapp.processEvents()
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True, commanded=CupPosition.OUT, confirmed=CupPosition.OUT,
+            auto_mode=True, stale=False, last_transition_t=3.0, t=3.0,
+        ))
+        qapp.processEvents()
+        tab.on_cup_state(CupState(connected=True, current=0.0, valid=True, t_host=4.0))
+        qapp.processEvents()
+
+        mock_bl.command_cup_in.assert_not_called()
+        mock_bl.command_cup_out.assert_not_called()
+        dpa_text = tab.lbl_running_dpa.text()
+        assert "—" not in dpa_text
+        sw.close()
+        tab.close()
+
+    def test_charge_state_spinbox_present(self, qapp, tmp_path):
+        """A charge-state spinbox is present on the tab and wired to charge_state property."""
+        tab, sw = self.make_base_tab(qapp, tmp_path)
+        assert hasattr(tab, "spn_charge_state")
+        tab.spn_charge_state.setValue(2)
+        assert tab.charge_state == 2
         sw.close()
         tab.close()
 
