@@ -11,7 +11,7 @@ than picking a winner.
 
 **Blocked by:** 01, 04
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Read `docs/adr/0003-commanded-and-confirmed-cup-position.md` first**, decisions 1, 4
 and 5, and `docs/adr/0002-cup-acquisition-triggered-by-current.md` decision 6, which this
@@ -45,25 +45,37 @@ disagreement is surfaced as a fault. **It is not resolved, and neither source is
 preferred.** Over one irradiation those rows are the first real evidence anyone will have
 about whether `cup_config.py`'s threshold values are right, which is the point.
 
-- [ ] `CupPositionDetector` exists, takes ticket 01's reading structure, and exposes
+- [x] `CupPositionDetector` exists, takes ticket 01's reading structure, and exposes
       `cup_in_beam` with the same contract as `CupDetector`
-- [ ] It imports no Qt and calls no clock
-- [ ] A run opens on a confirmed IN transition and closes on a confirmed OUT transition,
+- [x] It imports no Qt and calls no clock
+- [x] A run opens on a confirmed IN transition and closes on a confirmed OUT transition,
       subject only to the contact debounce
-- [ ] `git diff` shows zero changes to `CupAcquisitionStateMachine`
-- [ ] A test drives `CupAcquisitionStateMachine` through both detectors against the same
+- [x] `git diff` shows zero changes to `CupAcquisitionStateMachine`
+- [x] A test drives `CupAcquisitionStateMachine` through both detectors against the same
       event series and asserts identical run-id sequencing and identical open/close
       transitions
-- [ ] A test asserts a one-second commanded insertion opens and closes exactly one run —
+- [x] A test asserts a one-second commanded insertion opens and closes exactly one run —
       the case ticket 01 pinned as impossible on the inference path
-- [ ] The authority rule is a pure function or a clearly named branch in the state layer,
+- [x] The authority rule is a pure function or a clearly named branch in the state layer,
       tested directly: position readable and AUTO -> position governs; `FIO_STATE`
       absent -> inference governs; not in AUTO -> inference governs
-- [ ] Disagreement between the two sources is detected and published as a fault in the
+- [x] Disagreement between the two sources is detected and published as a fault in the
       snapshot, carrying both readings; nothing in the code resolves it
-- [ ] The Faraday Cup tab shows which source is currently authoritative
-- [ ] Docstrings in `cup_acquisition.py` and `cup_config.py` record why there are two
+- [x] The Faraday Cup tab shows which source is currently authoritative
+- [x] Docstrings in `cup_acquisition.py` and `cup_config.py` record why there are two
       constant sets and what breaks if they are merged
-- [ ] No test in this ticket sleeps
-- [ ] `ruff check .`, `python scripts/check_tests_first.py`, `python tools/type_gate.py`
+- [x] No test in this ticket sleeps
+- [x] `ruff check .`, `python scripts/check_tests_first.py`, `python tools/type_gate.py`
       and `pytest --tb=short -q -n auto --dist loadfile` all pass
+
+## Comments
+
+- 2026-09-16: Completed ticket 06.
+  - Added `CupPositionDetector` in `rbl/services/cup_acquisition.py`: pure class, no Qt/clock, reacts immediately to `CupPosition.IN` (open) and `CupPosition.OUT` (close); IN_TRANSIT/INDETERMINATE/None leave state unchanged. Contact debounce is already applied upstream by `CupActuationLinkMixin`, so no additional debounce is needed here.
+  - Added `position_authoritative(reading: CupReading) -> bool`: pure function returning True when `confirmed_position is not None` and `auto_mode is True`.
+  - Added `AuthorityDetector(CupDetector)`: composite subclass running both detectors in parallel, selecting the authoritative source, tracking disagreement. Inherits `CupDetector` for structural type compatibility with `CupAcquisitionStateMachine`.
+  - Updated `cup_config.py` docstring with "TWO CONSTANT SETS — DO NOT MERGE" rationale.
+  - `FaradayCupTab`: uses `AuthorityDetector` in its state machine; builds richer `CupReading` in `on_cup_state()` including `confirmed_position` and `auto_mode` from the latest actuation state; displays active source in `lbl_source`; shows disagreement as WARN fault in `lbl_fault`.
+  - `CupAcquisitionStateMachine` body: zero lines changed.
+  - Tests: 26 new test functions in `tests/test_cup_acquisition.py` covering `CupPositionDetector`, `position_authoritative`, `AuthorityDetector`, state machine parity, and the 1-second insertion case.
+  - All local gates passed: ruff (clean), check_tests_first (clean), type_gate (139 soft errors, ratchet 139), pytest (1818 passed, 0 failures).

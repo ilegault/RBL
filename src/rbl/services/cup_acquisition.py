@@ -1,6 +1,6 @@
 """
 cup_acquisition.py
-Pure state machine and detector for Faraday cup threshold-triggered acquisition runs.
+Pure state machine, detectors, and authority rule for Faraday cup acquisition runs.
 
 WHY THIS EXISTS
 ---------------
@@ -28,10 +28,28 @@ The run logic is strictly decoupled from the detection mechanism:
    auto-mode flag). Detectors ignore fields they do not need.
 2. CupDetector: computes and exposes ONE boolean value: `cup_in_beam`. Inferred
    from measured current with debounce and hysteresis.
-3. CupAcquisitionStateMachine: manages run lifecycles (run ID generation, start/stop,
+3. CupPositionDetector: computes cup_in_beam from the confirmed position contacts
+   (IN/OUT) already debounced by CupActuationLinkMixin. Subject only to
+   CUP_CONTACT_DEBOUNCE_S — not to CUP_ARM_DEBOUNCE_S or CUP_RELEASE_INTERVAL_S,
+   which own the current-inference path and are sized for manual insertions lasting
+   minutes, not short sampling cycles.
+4. AuthorityDetector: composite of both detectors. Applies the ADR 0003 Decision 4
+   authority rule — position governs when FIO_STATE is readable and the controller
+   is in AUTO; inference governs otherwise. Both run in parallel so that disagreement
+   is detectable and a source switch does not reset run state.
+5. CupAcquisitionStateMachine: manages run lifecycles (run ID generation, start/stop,
    manual override via force start / force stop, and connection loss handling). It
    takes a CupReading and queries `self.detector.update(reading)` without branching
    on detector type, without hasattr, and without isinstance.
+
+TWO CONSTANT SETS — DO NOT MERGE
+---------------------------------
+CUP_ARM_DEBOUNCE_S and CUP_RELEASE_INTERVAL_S own the current-inference path and
+are sized for manual insertions lasting minutes. CUP_CONTACT_DEBOUNCE_S owns the
+confirmed-position path and is sized for mechanical relay and microswitch bounce.
+Merging them — even by lowering the inference constants to "be consistent" — would
+break hand insertions, which still need hysteresis. cup_config.py documents this
+explicitly; see its module docstring for the full rationale.
 
 PURE OBJECT: NO QT, NO CLOCK
 -----------------------------
@@ -52,6 +70,7 @@ from rbl.config.cup_config import (
     CUP_RELEASE_INTERVAL_S,
     CUP_RELEASE_THRESHOLD_A,
 )
+from rbl.hardware.cup_status import CupPosition
 
 
 @dataclass(frozen=True)
@@ -202,6 +221,182 @@ class CupDetector:
         self._in_beam = False
         self._arm_start_t = None
         self._release_start_t = None
+
+
+class CupPositionDetector:
+    """Detects cup beam presence from confirmed position contacts.
+
+    Uses the confirmed_position field of CupReading (a CupPosition enum value
+    already debounced by CupActuationLinkMixin). Reacts immediately on
+    CupPosition.IN (cup_in_beam → True) and CupPosition.OUT (cup_in_beam → False).
+    IN_TRANSIT, INDETERMINATE, and None leave the current state unchanged.
+
+    WHY THIS EXISTS
+    ---------------
+    ADR 0003 Decision 5: confirmed position satisfies the same one-value
+    cup_in_beam contract as CupDetector so CupAcquisitionStateMachine does
+    not need to know which source produced it.
+
+    CUP_ARM_DEBOUNCE_S and CUP_RELEASE_INTERVAL_S are intentionally NOT applied
+    here — those constants own the current-inference path and are sized for
+    manual insertions lasting minutes. A one-second sampling insertion with the
+    inference detector opens no run at all (see the pinned test); with this
+    detector it opens and closes exactly one run, because the controller's own
+    status contacts are the source of truth and the only debounce applied is the
+    0.05 s contact debounce already applied upstream in CupActuationLinkMixin.
+
+    PURE OBJECT: NO QT, NO CLOCK
+    """
+
+    # These attributes are present for structural compatibility with
+    # CupAcquisitionStateMachine, which reads arm_threshold / release_threshold
+    # from its detector when constructing RunOpened events. The position
+    # detector does not use thresholds; the values carried in RunInfo are from
+    # the inference path and serve as a record of the inference configuration
+    # in force when the run opened, even when position was authoritative.
+    arm_threshold: float = CUP_ARM_THRESHOLD_A
+    release_threshold: float = CUP_RELEASE_THRESHOLD_A
+
+    def __init__(self) -> None:
+        self._in_beam: bool = False
+
+    @property
+    def cup_in_beam(self) -> bool:
+        """True if cup is currently confirmed in the beam."""
+        return self._in_beam
+
+    def update(self, reading: CupReading) -> bool:
+        """Update detector from a CupReading.
+
+        Returns the updated cup_in_beam boolean.
+        """
+        pos = reading.confirmed_position
+        if pos == CupPosition.IN:
+            self._in_beam = True
+        elif pos == CupPosition.OUT:
+            self._in_beam = False
+        # IN_TRANSIT, INDETERMINATE, and None leave state unchanged.
+        return self._in_beam
+
+    def reset(self) -> None:
+        """Reset detector to initial out-of-beam state."""
+        self._in_beam = False
+
+
+def position_authoritative(reading: CupReading) -> bool:
+    """Return True when confirmed position should govern the run boundary.
+
+    Position is authoritative when both conditions hold:
+    - confirmed_position is not None: FIO_STATE was present in this window
+      (the T7 stream is in FULL profile and status contacts are being sampled).
+    - auto_mode is True: the Faraday Cup Controller is in AUTO mode and will
+      act on remote commands.
+
+    WHY: ADR 0003 Decision 4. A hand insertion with the controller in LOCAL, or
+    while a diagnostic stream profile is running (where FIO_STATE is absent),
+    must still record — those are not malfunctions, they are normal operating
+    modes. Position feedback is only meaningful when the controller can act on
+    remote commands and status contacts are actually being sampled.
+    """
+    return reading.confirmed_position is not None and reading.auto_mode is True
+
+
+class AuthorityDetector(CupDetector):
+    """Composite detector applying the ADR 0003 Decision 4 authority rule.
+
+    Holds a CupDetector (current-inference) and a CupPositionDetector, runs
+    both on every CupReading, and returns cup_in_beam from whichever is
+    authoritative according to position_authoritative(). Tracks disagreement
+    when both sources are available and disagree.
+
+    WHY THIS INHERITS CupDetector
+    ------------------------------
+    CupAcquisitionStateMachine's constructor is typed as accepting a
+    CupDetector. Inheriting makes AuthorityDetector structurally compatible
+    without changing that signature. The parent's _in_beam / _arm_start_t /
+    _release_start_t are set by super().__init__() but are never used — all
+    state is carried in self._inference and self._position.
+
+    WHY BOTH DETECTORS RUN IN PARALLEL
+    ------------------------------------
+    1. Disagreement is only observable when both are current; a detector that
+       was dormant when position became authoritative would immediately disagree.
+    2. Switching sources does not reset the acquisition state machine, because
+       the machine sees one continuous cup_in_beam stream. A source switch
+       mid-run would look like a noise spike if the detectors diverged, and
+       running both in parallel is what keeps them in sync.
+    """
+
+    def __init__(
+        self,
+        inference_det: CupDetector | None = None,
+        position_det: CupPositionDetector | None = None,
+    ) -> None:
+        super().__init__()  # sets arm_threshold, release_threshold on parent
+        self._inference: CupDetector = inference_det if inference_det is not None else CupDetector()
+        self._position: CupPositionDetector = (
+            position_det if position_det is not None else CupPositionDetector()
+        )
+        self._using_position: bool = False
+        self._disagreement: bool = False
+
+    # ── Delegation properties ──────────────────────────────────────────────
+
+    @property
+    def cup_in_beam(self) -> bool:
+        """Current cup-in-beam state from the authoritative source."""
+        return self._position.cup_in_beam if self._using_position else self._inference.cup_in_beam
+
+    @property
+    def arm_pending(self) -> bool:
+        return self._inference.arm_pending
+
+    @property
+    def release_pending(self) -> bool:
+        return self._inference.release_pending
+
+    # ── Diagnostics ────────────────────────────────────────────────────────
+
+    @property
+    def using_position(self) -> bool:
+        """True when confirmed position is the current authoritative source."""
+        return self._using_position
+
+    @property
+    def disagreement(self) -> bool:
+        """True when both sources are available and disagree about cup_in_beam."""
+        return self._disagreement
+
+    @property
+    def inference_cup_in_beam(self) -> bool:
+        """Current inference-detector state (always tracked, not just when authoritative)."""
+        return self._inference.cup_in_beam
+
+    @property
+    def position_cup_in_beam(self) -> bool:
+        """Current position-detector state (always tracked, not just when authoritative)."""
+        return self._position.cup_in_beam
+
+    # ── Core interface ─────────────────────────────────────────────────────
+
+    def update(self, reading: CupReading) -> bool:
+        """Update both detectors, apply the authority rule, return cup_in_beam."""
+        self._using_position = position_authoritative(reading)
+        self._inference.update(reading)
+        self._position.update(reading)
+        # Disagreement is only meaningful when FIO_STATE is actually present.
+        if reading.confirmed_position is not None:
+            self._disagreement = (self._inference.cup_in_beam != self._position.cup_in_beam)
+        else:
+            self._disagreement = False
+        return self.cup_in_beam
+
+    def reset(self) -> None:
+        """Reset both inner detectors and all composite state."""
+        self._inference.reset()
+        self._position.reset()
+        self._using_position = False
+        self._disagreement = False
 
 
 class CupAcquisitionStateMachine:

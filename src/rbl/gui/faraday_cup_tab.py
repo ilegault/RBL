@@ -66,6 +66,17 @@ A commanded move that fails to confirm within CUP_MOVE_CONFIRMATION_TIMEOUT_S (2
 raises a visible fault naming which move failed and does not re-command.
 When the controller is not in AUTO mode, the tab clearly informs the operator
 that remote commands will be accepted and ignored.
+
+AUTHORITY RULE (ADR 0003 Decision 4)
+-------------------------------------
+The acquisition state machine uses an AuthorityDetector that runs both
+current-inference (CupDetector) and confirmed-position (CupPositionDetector)
+in parallel. The active source — "confirmed position" or "inference (current)" —
+is shown in the actuation panel. When FIO_STATE is absent (non-FULL profile) or
+the controller is in LOCAL mode, inference governs so hand insertions still record.
+When both sources disagree (position says IN but current is below the arm
+threshold, or vice versa), the disagreement is displayed as a fault carrying both
+readings. Nothing in this code resolves the disagreement.
 """
 from __future__ import annotations
 
@@ -98,6 +109,7 @@ from rbl.gui.widgets.live_plot import LivePlotPanel
 from rbl.hardware.cup_status import CupPosition
 from rbl.hardware.current_monitor import RollingBuffer, format_current
 from rbl.services.cup_acquisition import (
+    AuthorityDetector,
     CupAcquisitionStateMachine,
     CupReading,
     RunClosed,
@@ -129,7 +141,7 @@ class FaradayCupTab(QWidget):
         self.beamline = beamline
         self._connected = False
         self._visible = False
-        self.acquisition = CupAcquisitionStateMachine()
+        self.acquisition = CupAcquisitionStateMachine(detector=AuthorityDetector())
         self.session_writer: CupSessionWriter = (
             session_writer if session_writer is not None else CupSessionWriter()
         )
@@ -293,6 +305,15 @@ class FaradayCupTab(QWidget):
         self.lbl_stale.setWordWrap(True)
         self.lbl_stale.setVisible(False)
         act_lay.addWidget(self.lbl_stale)
+
+        # Active source indicator (ADR 0003 Decision 4)
+        self.lbl_source = QLabel("")
+        self.lbl_source.setStyleSheet(
+            f"color: {theme.NEUTRAL}; font-size: {theme.FS_TINY}px;"
+        )
+        self.lbl_source.setWordWrap(True)
+        self.lbl_source.setVisible(False)
+        act_lay.addWidget(self.lbl_source)
 
         self.lbl_fault = QLabel("")
         self.lbl_fault.setStyleSheet(theme.status_label(theme.FAULT))
@@ -650,12 +671,24 @@ class FaradayCupTab(QWidget):
             )
             self._last_heartbeat_t = t_sample
 
-        # Update acquisition state machine
+        # Build reading including confirmed position and auto_mode from the latest
+        # actuation snapshot so the authority rule can select the right source.
+        # confirmed_position is None when T7 is not connected or status is stale
+        # (non-FULL profile), which causes position_authoritative() to return False
+        # and inference to govern — correct for hand insertions and diagnostic profiles.
+        actuation_confirmed = (
+            self._confirmed
+            if self._actuation_connected and not self._stale
+            else None
+        )
+        actuation_auto = self._auto_mode if self._actuation_connected else None
         reading = CupReading(
             t=t_sample,
             current=state.current,
             over_range=state.over_range,
             connected=True,
+            confirmed_position=actuation_confirmed,
+            auto_mode=actuation_auto,
         )
         transition = self.acquisition.update(reading)
 
@@ -991,12 +1024,41 @@ class FaradayCupTab(QWidget):
             self.lbl_confirmed.setText("  —    ")
             self.lbl_confirmed.setStyleSheet(theme.status_label(theme.MUTED))
 
-        # Fault label
+        # Active source indicator (ADR 0003 Decision 4)
+        authority_det = self.acquisition.detector
+        if isinstance(authority_det, AuthorityDetector):
+            if authority_det.using_position:
+                self.lbl_source.setText("Source: confirmed position (T7 status contacts)")
+                self.lbl_source.setStyleSheet(
+                    f"color: {theme.OK}; font-size: {theme.FS_TINY}px;"
+                )
+            else:
+                self.lbl_source.setText("Source: inference (cup current)")
+                self.lbl_source.setStyleSheet(
+                    f"color: {theme.NEUTRAL}; font-size: {theme.FS_TINY}px;"
+                )
+            self.lbl_source.setVisible(True)
+        else:
+            self.lbl_source.setVisible(False)
+
+        # Fault label — indeterminate contacts, move fault, or source disagreement
+        auth_det: AuthorityDetector | None = (
+            authority_det if isinstance(authority_det, AuthorityDetector) else None
+        )
         if self._confirmed == CupPosition.INDETERMINATE:
             self.lbl_fault.setText(
                 "Fault: Indeterminate status contacts (both IN and OUT asserted)"
             )
             self.lbl_fault.setStyleSheet(theme.status_label(theme.FAULT))
+            self.lbl_fault.setVisible(True)
+        elif auth_det is not None and auth_det.disagreement:
+            inf_in = auth_det.inference_cup_in_beam
+            pos_in = auth_det.position_cup_in_beam
+            self.lbl_fault.setText(
+                f"Disagreement: position says {'IN' if pos_in else 'OUT'} "
+                f"but current inference says {'IN' if inf_in else 'OUT'}"
+            )
+            self.lbl_fault.setStyleSheet(theme.status_label(theme.WARN))
             self.lbl_fault.setVisible(True)
         elif self._move_fault:
             self.lbl_fault.setText(self._move_fault)
@@ -1049,5 +1111,7 @@ class FaradayCupTab(QWidget):
         self.lbl_auto_mode.setVisible(False)
         self.lbl_stale.setText("")
         self.lbl_stale.setVisible(False)
+        self.lbl_source.setText("")
+        self.lbl_source.setVisible(False)
         self.lbl_fault.setText("")
         self.lbl_fault.setVisible(False)
