@@ -50,11 +50,14 @@ Emitted once per GUI refresh window (GUI_REFRESH_HZ = 10 Hz).
           ...                                  # (one entry per log-amp channel)
           "AIN0":  None,                       # absent from WAVEFORM profile
           ...
+          "FIO_STATE": {"first": int, "last": int, "transitions": list[tuple[int, int]]},
+                                               # digital status transitions (FULL profile only)
+          "FIO_STATE": None,                   # absent from diagnostic profiles
       }
     }
 
-Log-amp channels absent from the active scan list receive a None entry so
-consumers can show a "paused" state rather than displaying stale numbers.
+Log-amp channels and FIO_STATE absent from the active scan list receive a None
+entry so consumers can show a "paused" state rather than displaying stale numbers.
 """
 
 import time
@@ -87,15 +90,30 @@ from rbl.config.labjack_stream_config import (
 )
 
 
-def _ain_address(ain_name: str) -> int:
-    """Return the Modbus start address for an AIN channel name.
+def channel_address(name: str) -> int:
+    """Return the Modbus start address for a stream scan-list channel name.
 
-    From the T7 register map: AINs are 32-bit floats (2 Modbus registers each).
-    AIN{n} starts at address n*2.  Valid for n in 0..13.
-
-    Example: AIN0 -> 0, AIN6 -> 12, AIN13 -> 26.
+    For AIN channels (e.g. 'AIN0', 'AIN6'):
+        Computed arithmetically as int(name[3:]) * 2 without requiring LJM.
+        From the T7 register map: AINs are 32-bit floats (2 Modbus registers each).
+        AIN{n} starts at address n*2. Valid for n in 0..13.
+    For non-AIN channels (e.g. 'FIO_STATE'):
+        Resolved via ljm.nameToAddress(name)[0].
+        Raises RuntimeError if LJM is not available.
     """
-    return int(ain_name[3:]) * 2
+    if name.startswith("AIN") and name[3:].isdigit():
+        return int(name[3:]) * 2
+    if not _LJM_AVAILABLE or _ljm is None:
+        raise RuntimeError(
+            f"Cannot resolve Modbus address for non-AIN channel '{name}' "
+            "because labjack-ljm is not available."
+        )
+    return int(_ljm.nameToAddress(name)[0])
+
+
+def _ain_address(ain_name: str) -> int:
+    """Backward-compatible alias for channel_address."""
+    return channel_address(ain_name)
 
 
 class LabJackStreamWorker(QThread):
@@ -209,10 +227,10 @@ class LabJackStreamWorker(QThread):
         n_ch           = len(scan_names)
         scans_per_read = window_samples(self._profile_name)
 
-        # AIN name -> Modbus address.  Computed once; stride = n_ch in the
+        # Channel name -> Modbus address.  Computed once; stride = n_ch in the
         # de-interleave reshape below.  If this list and n_ch ever disagree,
         # the assert inside the read loop will catch it immediately.
-        scan_addresses = [_ain_address(ch) for ch in scan_names]
+        scan_addresses = [channel_address(ch) for ch in scan_names]
 
         # Use the shared epoch when the owner supplied one so timestamps stay
         # continuous across a stop/reconfigure/start cycle; otherwise anchor here.
@@ -220,12 +238,14 @@ class LabJackStreamWorker(QThread):
 
         try:
             # --- Configure each AIN in the active scan list -------------------
-            # Range and single-ended ground must be set per channel.
+            # Range and single-ended ground must be set per AIN channel.
+            # Non-AIN registers (like digital FIO_STATE) have no analog range/ground.
             # STREAM_RESOLUTION_INDEX is a single global T7 register (not per-
             # channel in stream mode); it must be written before eStreamStart.
             for ch in scan_names:
-                _ljm.eWriteName(self._handle, f"{ch}_RANGE",       STREAM_RANGE_VOLTS)
-                _ljm.eWriteName(self._handle, f"{ch}_NEGATIVE_CH", 199)  # GND single-ended
+                if ch.startswith("AIN"):
+                    _ljm.eWriteName(self._handle, f"{ch}_RANGE",       STREAM_RANGE_VOLTS)
+                    _ljm.eWriteName(self._handle, f"{ch}_NEGATIVE_CH", 199)  # GND single-ended
             _ljm.eWriteName(self._handle, "STREAM_RESOLUTION_INDEX", res_index)
 
             # --- Start stream -------------------------------------------------
@@ -395,10 +415,10 @@ class LabJackStreamWorker(QThread):
         """
         channels: dict = {}
 
-        for i, ain in enumerate(scan_names):
+        for i, ch in enumerate(scan_names):
             col = data[:, i]   # one channel, all scans in this window
-            if ain in AMP_CHANNELS:
-                channels[ain] = {
+            if ch in AMP_CHANNELS:
+                channels[ch] = {
                     "waveform": col.copy(),
                     "peak":   float(col[np.argmax(np.abs(col))]),
                     "pk_pk":  float(col.max() - col.min()),
@@ -406,16 +426,40 @@ class LabJackStreamWorker(QThread):
                     "mean":   float(np.mean(col)),
                     "std":    float(np.std(col)),
                 }
+            elif ch == "FIO_STATE":
+                if len(col) == 0:
+                    channels[ch] = {
+                        "first": 0,
+                        "last": 0,
+                        "transitions": [],
+                    }
+                else:
+                    first_val = int(round(col[0]))
+                    last_val = int(round(col[-1]))
+                    transitions = []
+                    prev_val = first_val
+                    for scan_idx in range(1, len(col)):
+                        cur_val = int(round(col[scan_idx]))
+                        if cur_val != prev_val:
+                            transitions.append((scan_idx, cur_val))
+                            prev_val = cur_val
+                    channels[ch] = {
+                        "first": first_val,
+                        "last": last_val,
+                        "transitions": transitions,
+                    }
             else:
                 # Log-amp channel: mean voltage over the window.
                 # (Full waveform not needed; consumers convert mean -> current.)
-                channels[ain] = {"mean": float(col.mean())}
+                channels[ch] = {"mean": float(col.mean())}
 
         # Any channel absent from this profile's scan list -> None.
         # Consumers must display a "paused" state rather than stale numbers.
         for ain in AMP_CHANNELS + LOGAMP_CHANNELS:
             if ain not in scan_names:
                 channels[ain] = None
+        if "FIO_STATE" not in scan_names:
+            channels["FIO_STATE"] = None
 
         return {
             "profile":        self._profile_name,
@@ -454,8 +498,9 @@ if __name__ == "__main__":
         assert abs(p_w["channels"][ain]["std"]   - 0.0) < 1e-9
     for ain in LOGAMP_CHANNELS:
         assert p_w["channels"][ain] is None, f"{ain} should be None in WAVEFORM"
+    assert p_w["channels"]["FIO_STATE"] is None, "FIO_STATE should be None in WAVEFORM"
     print(f"  [OK] WAVEFORM: stride={n_w}, window={win_w}, "
-          f"amp peak=2.0 V, log amps=None")
+          f"amp peak=2.0 V, log amps=None, FIO_STATE=None")
 
     # --- FULL profile ---
     print("Testing FULL profile de-interleave...")
@@ -467,6 +512,8 @@ if __name__ == "__main__":
     for i, ain in enumerate(sl_f):
         if ain in LOGAMP_CHANNELS:
             data_f[:, i] = 4.5
+        elif ain == "FIO_STATE":
+            data_f[:, i] = 0.0
     p_f = w._build_payload(sl_f, data_f, win_f, 0.2)
 
     assert p_f["profile"]        == "FULL"
@@ -479,7 +526,11 @@ if __name__ == "__main__":
         assert "mean" in p_f["channels"][ain]
         assert abs(p_f["channels"][ain]["mean"] - 4.5) < 1e-9, \
             f"{ain} mean={p_f['channels'][ain]['mean']} != 4.5"
-    print(f"  [OK] FULL: stride={n_f}, window={win_f}, logamp mean=4.5 V")
+    assert p_f["channels"]["FIO_STATE"] is not None
+    assert p_f["channels"]["FIO_STATE"]["first"] == 0
+    assert p_f["channels"]["FIO_STATE"]["last"] == 0
+    assert p_f["channels"]["FIO_STATE"]["transitions"] == []
+    print(f"  [OK] FULL: stride={n_f}, window={win_f}, logamp mean=4.5 V, FIO_STATE present")
 
     # --- SINGLE_FAST profile (one amp channel; all others paused) ---
     print("Testing SINGLE_FAST single-channel de-interleave...")
@@ -500,7 +551,8 @@ if __name__ == "__main__":
             assert p_s["channels"][ain] is None, f"{ain} should be paused"
     for ain in LOGAMP_CHANNELS:
         assert p_s["channels"][ain] is None, f"{ain} should be paused"
+    assert p_s["channels"]["FIO_STATE"] is None, "FIO_STATE should be paused"
     print(f"  [OK] SINGLE_FAST: target={target}, window={win_s}, "
-          f"7 amps + 4 log amps paused")
+          f"7 amps + 4 log amps paused, FIO_STATE paused")
 
     print("[OK] labjack_stream_worker self-test passed")

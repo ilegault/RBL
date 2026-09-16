@@ -32,8 +32,8 @@ from rbl.hardware.waveform_period import (
 from rbl.hardware.waveform_ring import AlignedWaveHistory
 from rbl.state.beamline import Beamline
 
-RATE_HZ = 8000.0            # FULL profile, per channel
-WINDOW = 800                # one GUI window at 10 Hz
+RATE_HZ = 7500.0            # FULL profile, per channel
+WINDOW = 750                # one GUI window at 10 Hz
 DT = 1.0 / RATE_HZ
 
 

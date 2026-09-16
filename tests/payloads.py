@@ -32,7 +32,8 @@ FULL_READING = {
 
 def window_payload(volts: dict, t: float = 1.0, samples: int = 8,
                    sample_period: float = None, waveforms: dict = None,
-                   profile: str = "FULL") -> dict:
+                   profile: str = "FULL",
+                   fio_state: int | dict | list | tuple | None = None) -> dict:
     """One LabJackStreamWorker window, built from a flat {AIN: volts} dict.
 
     Log-amp channels carry a window mean; amplifier channels carry the full
@@ -43,6 +44,8 @@ def window_payload(volts: dict, t: float = 1.0, samples: int = 8,
 
     Pass *waveforms* to give an amplifier channel real samples instead of a
     DC level; `samples` sets the window length for the flat case.
+    *fio_state* optionally provides an integer status word, transition dict,
+    or list/series of states for FIO_STATE; defaults to None (absent/paused).
     """
     waveforms = waveforms or {}
     channels = {}
@@ -73,6 +76,43 @@ def window_payload(volts: dict, t: float = 1.0, samples: int = 8,
             "pk_pk": pkpk,
             "rms":   rms,
         }
+
+    if fio_state is not None:
+        if isinstance(fio_state, dict):
+            channels["FIO_STATE"] = fio_state
+        elif isinstance(fio_state, int):
+            channels["FIO_STATE"] = {
+                "first": fio_state,
+                "last": fio_state,
+                "transitions": [],
+            }
+        elif isinstance(fio_state, (list, tuple)):
+            if len(fio_state) == 0:
+                channels["FIO_STATE"] = {"first": 0, "last": 0, "transitions": []}
+            elif isinstance(fio_state[0], tuple):
+                first_w = fio_state[0][1] if fio_state[0][0] == 0 else 0
+                last_w = fio_state[-1][1]
+                trans = [t for t in fio_state if t[0] > 0]
+                channels["FIO_STATE"] = {
+                    "first": first_w,
+                    "last": last_w,
+                    "transitions": trans,
+                }
+            else:
+                first_w = int(fio_state[0])
+                last_w = int(fio_state[-1])
+                trans = [
+                    (idx, int(val))
+                    for idx, val in enumerate(fio_state)
+                    if idx > 0 and val != fio_state[idx - 1]
+                ]
+                channels["FIO_STATE"] = {
+                    "first": first_w,
+                    "last": last_w,
+                    "transitions": trans,
+                }
+    else:
+        channels["FIO_STATE"] = None
 
     payload = {"profile": profile, "window_samples": length, "t": t,
                "channels": channels}

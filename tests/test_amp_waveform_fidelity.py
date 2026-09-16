@@ -69,10 +69,10 @@ def _wave_payload(ain, wave, t_end, sample_period):
 
 class TestSeamlessStitching:
     def test_consecutive_windows_join_without_seams(self, tab, feed):
-        # Three back-to-back 0.1 s windows at 8 kS/s (FULL amp rate).
+        # Three back-to-back 0.1 s windows at 7.5 kS/s (FULL amp rate).
         target = SC.AMP_CHANNEL_MAP["X+"]["voltage"]   # AIN13
-        n  = 800
-        dt = 1.0 / 8000.0
+        n  = 750
+        dt = 1.0 / 7500.0
         window_dur = n * dt                            # 0.1 s
 
         for k in range(3):
@@ -87,7 +87,7 @@ class TestSeamlessStitching:
         assert series is not None
         times, _vals = series
 
-        # All 2400 samples present, strictly increasing in time.
+        # All 2250 samples present, strictly increasing in time.
         assert len(times) == 3 * n
         diffs = np.diff(times)
         assert np.all(diffs > 0)
@@ -99,7 +99,7 @@ class TestSeamlessStitching:
         # Legacy payloads (no sample_period) must still reconstruct a sane,
         # monotonic timeline from the nominal window duration / sample count.
         target = SC.AMP_CHANNEL_MAP["Y+"]["voltage"]   # AIN9
-        n = 800
+        n = 750
         window_dur = tab.WINDOW_DURATION_S
         for k in range(2):
             payload = _wave_payload(target, np.zeros(n), (k + 1) * window_dur, None)

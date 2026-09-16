@@ -211,16 +211,17 @@ STREAM_PROFILES: dict = {
         ),
     },
     "FULL": {
-        # 12 channels × 8 000 Hz = 96 000 S/s  (4 000 S/s margin under ceiling).
-        # All channels live; slightly coarser amp waveforms (~4× oversampling).
+        # 13 channels × 7 500 Hz = 97 500 S/s  (2 500 S/s margin under ceiling).
+        # All channels live; slightly coarser amp waveforms (~3.75× oversampling).
         # Scan list is purely ascending: log amps (AIN0-3) first, then amp
-        # monitors (AIN6-13).  AIN4/5 are spare and intentionally skipped.
-        "scan_list":           LOGAMP_CHANNELS + AMP_CHANNELS,  # AIN0-3, AIN6-13
-        "per_channel_rate_hz": 8_000,
+        # monitors (AIN6-13), then digital status (FIO_STATE).
+        # AIN4/5 are spare and intentionally skipped.
+        "scan_list":           LOGAMP_CHANNELS + AMP_CHANNELS + ["FIO_STATE"],
+        "per_channel_rate_hz": 7_500,
         "resolution_index":    1,
         "description": (
-            "12 channels (4 log amp + 8 amp monitor) — 8 kS/s/ch.  "
-            "~4× oversampling at 2 kHz fast axis.  All channels live."
+            "13 channels (4 log amp + 8 amp monitor + FIO_STATE) — 7.5 kS/s/ch.  "
+            "~3.75× oversampling at 2 kHz fast axis.  All channels live."
         ),
     },
     "SINGLE_FAST": {
@@ -423,8 +424,14 @@ for _pname, _prof in STREAM_PROFILES.items():
         f"{MAX_AGG_RATE_BY_RES[_res]} S/s ceiling at resolution index {_res}"
     )
     for _ch in _prof["scan_list"]:
-        assert _ch in AMP_CHANNELS or _ch in LOGAMP_CHANNELS, (
+        assert _ch in AMP_CHANNELS or _ch in LOGAMP_CHANNELS or _ch == "FIO_STATE", (
             f"Profile '{_pname}': unknown channel '{_ch}'"
+        )
+    if _pname == "FULL":
+        assert "FIO_STATE" in _prof["scan_list"], "FULL profile must contain FIO_STATE"
+    else:
+        assert "FIO_STATE" not in _prof["scan_list"], (
+            f"Profile '{_pname}' must not contain FIO_STATE (FULL profile only)"
         )
 
     # Single-channel profiles must expose a non-empty, valid choice list.
@@ -533,8 +540,11 @@ if __name__ == "__main__":
     assert not (set(LOGAMP_CHANNELS) & set(AMP_CHANNELS)), "Overlap between channel groups"
 
     full_sl = scan_list("FULL")
-    nums = [int(ch[3:]) for ch in full_sl]
+    ain_sl = [ch for ch in full_sl if ch != "FIO_STATE"]
+    nums = [int(ch[3:]) for ch in ain_sl]
     assert nums == sorted(nums), f"FULL scan list not in ascending order: {full_sl}"
+    assert "FIO_STATE" in full_sl
+    assert full_sl[-1] == "FIO_STATE"
 
     print(f"\n[OK] labjack_stream_config self-test passed  "
           f"(FULL window={window_samples('FULL')}, "
