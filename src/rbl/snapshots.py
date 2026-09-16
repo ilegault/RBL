@@ -26,6 +26,8 @@ a different tab. These are that idea generalised, not something new.
 """
 from dataclasses import dataclass, field
 
+from rbl.hardware.cup_status import CupPosition
+
 
 @dataclass(frozen=True)
 class AxisSnapshot:
@@ -447,4 +449,44 @@ class CupState:
     acquiring: bool = False
     run_id: int | None = None
     cup_in_beam: bool = False
+
+
+@dataclass(frozen=True)
+class CupActuationState:
+    """Faraday cup actuation and confirmed position feedback snapshot (ADR 0003).
+
+    WHY THIS EXISTS
+    ---------------
+    ADR 0003: Commanded position and confirmed position are distinct quantities
+    separated by a physical mechanical lag. Only confirmed position (derived from
+    the Faraday Cup Controller's status contacts) opens or closes acquisition runs.
+    A commanded move that fails to confirm within the timeout is a fault.
+
+    Fields:
+    - `connected`: True if LabJack T7 owning the actuation I/O is connected.
+    - `commanded`: Where the application has told the cup to go (CupPosition.IN or OUT).
+    - `confirmed`: Physical position confirmed by status contacts
+      (IN, OUT, IN_TRANSIT, INDETERMINATE).
+    - `auto_mode`: True if Faraday Cup Controller is in AUTO mode (remote actuation enabled).
+    - `stale`: True if FIO_STATE is absent from the active stream window or timed out.
+    - `last_transition_t`: Exact sample timestamp (seconds) of the last confirmed transition.
+    """
+    connected: bool
+    commanded: CupPosition = CupPosition.IN
+    confirmed: CupPosition = CupPosition.IN_TRANSIT
+    auto_mode: bool = False
+    stale: bool = False
+    last_transition_t: float = float("nan")
+
+    @property
+    def commanded_position(self) -> CupPosition:
+        return self.commanded
+
+    @property
+    def confirmed_position(self) -> CupPosition:
+        return self.confirmed
+
+
+CupPositionState = CupActuationState
+
 

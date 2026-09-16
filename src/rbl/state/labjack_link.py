@@ -177,6 +177,8 @@ class LabJackLinkMixin:
             connected=True, channels=amp_channels, active_profile=active_profile,
             t=t, sample_period=payload.get("sample_period"),
         ))
+        if hasattr(self, "ingest_cup_actuation_window"):
+            self.ingest_cup_actuation_window(payload)
 
     def _mark_labjack_disconnected(self):
         self._log_amp_currents = {}
@@ -194,6 +196,8 @@ class LabJackLinkMixin:
         serial = self.lj.serial_number()
         self._stream_t0 = time.monotonic()   # anchor the shared timeline
         self._start_stream_worker(self.active_profile)
+        if hasattr(self, "_on_labjack_connect_cup"):
+            self._on_labjack_connect_cup()
         self.labjack_connected.emit(serial)
 
     def _start_stream_worker(self, profile_name: str):
@@ -400,6 +404,10 @@ class LabJackLinkMixin:
                 pass
             self._lj_worker = None
         self._stream_t0 = None
+        if hasattr(self, "_on_labjack_disconnect_cup"):
+            self._on_labjack_disconnect_cup()
+        elif hasattr(self, "_release_cup_drive"):
+            self._release_cup_drive()
         self.lj.disconnect()   # force-stops the stream, then closes the handle
         self._mark_labjack_disconnected()
         self.labjack_disconnected_evt.emit()
