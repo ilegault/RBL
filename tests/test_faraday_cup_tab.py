@@ -15,6 +15,7 @@ Covers:
   * Assertions check operator-visible text, not private widget attributes.
 """
 import csv
+import math
 import os
 
 import pytest
@@ -767,6 +768,84 @@ class TestFaradayCupActuationUI:
         assert "OUT" in tab.lbl_commanded.text()
         assert "OUT" in tab.lbl_confirmed.text()
         assert tab.btn_insert.isEnabled()
+
+
+class TestFaradayCupDoseParameters:
+    """Tests for dose tracking, irradiated area, and displacement coefficient provenance."""
+
+    def test_dose_fields_exist_and_use_inputs_widgets(self, qapp):
+        from rbl.gui.widgets.inputs import QuietDoubleSpinBox, ScientificDoubleSpinBox
+        tab = FaradayCupTab()
+        tab.show()
+        qapp.processEvents()
+
+        # Check area and source indicators
+        assert hasattr(tab, "lbl_area")
+        assert hasattr(tab, "lbl_area_source")
+        assert "Raster Planner" in tab.lbl_area_source.text()
+
+        # Check k and depth fields use inputs widgets
+        assert isinstance(tab.spn_k, ScientificDoubleSpinBox)
+        assert isinstance(tab.spn_depth, QuietDoubleSpinBox)
+
+        # Check provenance fields exist
+        assert hasattr(tab, "le_srim_version")
+        assert hasattr(tab, "le_entry_date")
+
+    def test_on_patch_dimensions_changed_updates_area(self, qapp):
+        tab = FaradayCupTab()
+        tab.show()
+        qapp.processEvents()
+
+        # Update patch dimensions: 5.0 mm x 10.0 mm -> 0.5 cm²
+        tab.on_patch_dimensions_changed(5.0, 10.0)
+        qapp.processEvents()
+
+        assert math.isclose(tab.area_cm2, 0.5, rel_tol=1e-9)
+        assert "0.5000 cm²" in tab.lbl_area.text()
+        assert "5.000 × 10.000 mm" in tab.lbl_area.text()
+        assert tab.patch_dimensions_mm == (5.0, 10.0)
+
+    def test_operator_enters_k_and_provenance(self, qapp):
+        tab = FaradayCupTab()
+        tab.show()
+        qapp.processEvents()
+
+        tab.spn_k.setValue(1.0e-15)
+        tab.spn_depth.setValue(250.0)
+        tab.le_srim_version.setText("SRIM-2013.00")
+        tab.le_entry_date.setText("2026-09-16")
+        qapp.processEvents()
+
+        assert math.isclose(tab.displacement_coeff, 1.0e-15, rel_tol=1e-9)
+        assert math.isclose(tab.depth_nm, 250.0, rel_tol=1e-9)
+        assert tab.srim_version == "SRIM-2013.00"
+        assert tab.entry_date == "2026-09-16"
+
+    def test_main_window_signal_wiring_patch_dimensions(self, win, qapp):
+        """Assert changing the planner's patch dimensions changes the area the cup tab
+        reports, through the real signal path.
+        """
+        planner = win.raster_planner_tab
+        cup_tab = win.faraday_cup_tab
+
+        # Initial seed check
+        qapp.processEvents()
+        initial_w = planner.sb_patch_x_mm.value()
+        initial_h = planner.sb_patch_y_mm.value()
+        expected_initial_area = (initial_w * initial_h) / 100.0
+        assert math.isclose(cup_tab.area_cm2, expected_initial_area, rel_tol=1e-9)
+
+        # Change planner patch dimensions
+        planner.sb_patch_x_mm.setValue(8.0)
+        planner.sb_patch_y_mm.setValue(12.0)
+        qapp.processEvents()
+
+        # 8.0 mm x 12.0 mm = 96.0 mm² = 0.96 cm²
+        assert math.isclose(cup_tab.area_cm2, 0.96, rel_tol=1e-9)
+        assert "0.9600 cm²" in cup_tab.lbl_area.text()
+        assert "8.000 × 12.000 mm" in cup_tab.lbl_area.text()
+        assert "Raster Planner" in cup_tab.lbl_area_source.text()
 
 
 

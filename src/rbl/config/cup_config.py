@@ -111,4 +111,16 @@ CUP_STATUS_BIT_AUTO: int = 4           # FIO4: controller AUTO mode contact
 CUP_MOVE_CONFIRMATION_TIMEOUT_S: float = 2.0  # Seconds before unconfirmed move raises a fault
 CUP_CONTACT_DEBOUNCE_S: float = 0.05           # Seconds of sustained reading for contact bounce
 
+# ---- Per-insertion settle window & dose chain (ADR 0003) ------------------
+# Time in seconds from confirmed cup insertion during which the Keithley 6482
+# is autoranging and its readings have not yet settled. Samples inside this window
+# are excluded from the post-settle mean current and dose calculations.
+#
+# PLACEHOLDER: 1.0 s is a placeholder pending ticket 13 bench measurements of
+# the Keithley 6482's actual autorange settle time across beam current steps.
+CUP_SETTLE_WINDOW_S: float = 1.0
+
+# Elementary charge e in Coulombs (CODATA 2018 exact value: 1.602176634e-19 C)
+ELEMENTARY_CHARGE_C: float = 1.602176634e-19
+
 

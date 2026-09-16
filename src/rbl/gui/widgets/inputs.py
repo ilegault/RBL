@@ -55,6 +55,7 @@ which are deliberate, aimed at one control, and already committed correctly by
 the keyboardTracking fix above.
 """
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QValidator
 from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
@@ -180,6 +181,52 @@ class QuietDoubleSpinBox(QDoubleSpinBox):
             self._pending_sync = value
             return
         self.setValue(value)
+
+
+class ScientificDoubleSpinBox(QuietDoubleSpinBox):
+    """A QuietDoubleSpinBox formatted for scientific notation (e.g. 1.0e-15).
+
+    WHY THIS EXISTS
+    ---------------
+    Physical coefficients like the displacement damage coefficient k
+    (typically ~ 1.0e-15 dpa / (ions/cm²)) are impossible to type or read in
+    fixed decimal spin boxes with 15 leading zeros.
+
+    This class preserves QuietDoubleSpinBox's anti-autocomplete behavior (keyboard
+    tracking off, wheel ignored, select on focus) while formatting values in
+    scientific notation and accepting scientific strings like '1.0e-15'.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setDecimals(18)
+        self.setRange(0.0, 1.0)
+
+    def textFromValue(self, value: float) -> str:
+        if value == 0.0:
+            return "0.0"
+        return f"{value:.4e}"
+
+    def valueFromText(self, text: str) -> float:
+        try:
+            return float(text.strip())
+        except ValueError:
+            return 0.0
+
+    def validate(self, text: str, pos: int) -> tuple[QValidator.State, str, int]:
+        stripped = text.strip()
+        if not stripped or stripped in ("+", "-", ".", "+.", "-."):
+            return (QValidator.State.Intermediate, text, pos)
+        try:
+            float(stripped)
+            return (QValidator.State.Acceptable, text, pos)
+        except ValueError:
+            low = stripped.lower()
+            if "e" in low:
+                parts = low.split("e")
+                if len(parts) == 2 and parts[1] in ("", "+", "-"):
+                    return (QValidator.State.Intermediate, text, pos)
+            return (QValidator.State.Invalid, text, pos)
 
 
 def unit_row(widget: QWidget, unit: str, spacing: int = 4,

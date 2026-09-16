@@ -382,6 +382,18 @@ class MainWindow(QMainWindow):
         # derived from FIO_STATE; FaradayCupTab renders indicators and issues commands.
         self.beamline.cup_actuation_changed.connect(self.faraday_cup_tab.on_cup_actuation_state)
 
+        # Irradiated area from Raster Planner to Faraday Cup tab for fluence and dose (ADR 0003).
+        # The Raster Planner holds the sample patch dimensions set by the operator. Emitting
+        # them when changed avoids duplicating geometry inputs on the Faraday Cup tab and
+        # ensures dose calculations use the identical irradiated field dimensions.
+        self.raster_planner_tab.patch_dimensions_changed.connect(
+            self.faraday_cup_tab.on_patch_dimensions_changed
+        )
+        self.faraday_cup_tab.on_patch_dimensions_changed(
+            self.raster_planner_tab.sb_patch_x_mm.value(),
+            self.raster_planner_tab.sb_patch_y_mm.value(),
+        )
+
         # Start on Overview.  It is the screen that answers "what is this
         # beamline doing right now" without pressing anything, and it is
         # where Connect All lives - so it is the first thing an operator
