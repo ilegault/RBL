@@ -206,6 +206,7 @@ class RasterPlannerTab(QWidget):
     """
 
     slit_targets_ready = Signal(dict)   # {"X+": mm, "X-": mm, "Y+": mm, "Y-": mm}
+    patch_dimensions_changed = Signal(float, float)   # (patch_width_x_mm, patch_height_y_mm)
 
     def __init__(self, beamline=None, profiler=None, parent=None):
         super().__init__(parent)
@@ -266,6 +267,11 @@ class RasterPlannerTab(QWidget):
 
     def mechanical_blades(self) -> dict:
         return self._mechanical_blades(self._solution)
+
+    @property
+    def patch_dimensions_mm(self) -> tuple[float, float]:
+        """Full width X and full height Y in mm."""
+        return (self.sb_patch_x_mm.value(), self.sb_patch_y_mm.value())
 
     # ------------------------------------------------------------------
     # Input boxes
@@ -801,6 +807,7 @@ class RasterPlannerTab(QWidget):
             "   — a square jaw opening does not paint a square")
 
         want = {"X": self.sb_patch_x_mm.value(), "Y": self.sb_patch_y_mm.value()}
+        self.patch_dimensions_changed.emit(want["X"], want["Y"])
         centre = {"X": self.sb_offset_x_mm.value() if self.chk_jaw_offset.isChecked() else 0.0,
                   "Y": self.sb_offset_y_mm.value() if self.chk_jaw_offset.isChecked() else 0.0}
 

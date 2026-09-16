@@ -11,7 +11,7 @@ is tested against hand-worked values.
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Read `docs/adr/0003-commanded-and-confirmed-cup-position.md` decision 7 first**, and
 `CONTEXT.md`'s "Cup actuation and dose" section for the vocabulary.
@@ -74,29 +74,48 @@ coefficient cannot be traced to a version and a depth is not a result.
 
 Numeric entry uses `gui/widgets/inputs.py`, never a bare spin box.
 
-- [ ] Pure functions in `rbl/hardware/` for: post-settle mean and standard deviation of
+- [x] Pure functions in `rbl/hardware/` for: post-settle mean and standard deviation of
       one insertion's samples; charge from one current and one interval; fluence from
       charge, charge state and area; dpa from fluence and coefficient
-- [ ] A pure accumulator object summing charge across insertions, taking timestamps as
+- [x] A pure accumulator object summing charge across insertions, taking timestamps as
       inputs, with no Qt import and no clock call
-- [ ] Nothing on this path imports PySide6
-- [ ] Tests against hand-worked numbers: one insertion held across a known interval;
+- [x] Nothing on this path imports PySide6
+- [x] Tests against hand-worked numbers: one insertion held across a known interval;
       several insertions at different currents; a zero-current insertion contributing
       zero charge without producing NaN
-- [ ] One full worked chain is tested with its expected values written into the test:
+- [x] One full worked chain is tested with its expected values written into the test:
       I = 1.0e-9 A held for 300.0 s gives Q = 3.0e-7 C; patch 5.0 mm x 10.0 mm gives
       A = 0.5 cm^2; q = 3 and e = 1.602176634e-19 C give phi = 1.248302e12 ions/cm^2;
       k = 1.0e-15 gives dpa = 1.248302e-3
-- [ ] A test asserts samples inside the settle window are excluded from the mean and that
+- [x] A test asserts samples inside the settle window are excluded from the mean and that
       the excluded count is reported rather than silently dropped
-- [ ] The Raster Planner emits its patch X and Y when they change; `MainWindow.__init__`
+- [x] The Raster Planner emits its patch X and Y when they change; `MainWindow.__init__`
       connects it to the Faraday Cup tab with an explanatory comment
-- [ ] `scripts/check_layers.py` reports no new upward import
-- [ ] The Faraday Cup tab shows the area in use and its source, and fields for *k*, its
+- [x] `scripts/check_layers.py` reports no new upward import
+- [x] The Faraday Cup tab shows the area in use and its source, and fields for *k*, its
       depth, its SRIM version and its entry date, all via `gui/widgets/inputs.py`
-- [ ] A test asserts changing the planner's patch dimensions changes the area the cup tab
+- [x] A test asserts changing the planner's patch dimensions changes the area the cup tab
       reports, through the real signal path
-- [ ] The accumulator's module docstring states the zero-order hold's approximation and
+- [x] The accumulator's module docstring states the zero-order hold's approximation and
       that its error is unbounded by anything the application observes
-- [ ] `ruff check .`, `python scripts/check_tests_first.py`, `python tools/type_gate.py`
+- [x] `ruff check .`, `python scripts/check_tests_first.py`, `python tools/type_gate.py`
       and `pytest --tb=short -q -n auto --dist loadfile` all pass
+
+## Comments
+
+### 2026-09-16
+- Implemented pure physics functions in `rbl/hardware/dose_model.py`:
+  - `compute_insertion_current`: computes post-settle mean and sample standard deviation (ddof=1) excluding autorange samples within `CUP_SETTLE_WINDOW_S`, reporting excluded count explicitly.
+  - `compute_charge`: Q = I * dt.
+  - `compute_fluence`: Φ = Q / (q * e * A).
+  - `compute_dpa`: dpa = Φ * k.
+  - `patch_area_cm2`: (width_mm * height_mm) / 100.
+  - `DoseAccumulator`: pure accumulator object tracking charge, beam-on time, and insertions using explicit timestamps without calling the clock or importing Qt.
+- Added `CUP_SETTLE_WINDOW_S = 1.0` (with placeholder docstring) and `ELEMENTARY_CHARGE_C = 1.602176634e-19` to `rbl/config/cup_config.py`.
+- Added `ScientificDoubleSpinBox` to `rbl/gui/widgets/inputs.py` for scientific notation entry of displacement coefficient k.
+- Added `patch_dimensions_changed = Signal(float, float)` to `RasterPlannerTab`, emitted upon recomputation.
+- Added Dose Tracking & Displacement Parameters panel to `FaradayCupTab`, displaying irradiated area in cm² (with source), k (`ScientificDoubleSpinBox`), depth (`QuietDoubleSpinBox`), SRIM version, and entry date.
+- Connected `raster_planner_tab.patch_dimensions_changed` to `faraday_cup_tab.on_patch_dimensions_changed` in `MainWindow.__init__` with rationale comment and startup seed.
+- Created `tests/test_dose_model.py` verifying all pure calculations, settle-window exclusion, worked reference chain numbers, and accumulator methods.
+- Added UI and cross-tab signal tests in `tests/test_faraday_cup_tab.py`.
+- Full gate passed: ruff check (clean), check_tests_first (OK), check_layers (0 violations), type_gate (0 hard errors, ratchet maintained at 139), and pytest (1843 passed).

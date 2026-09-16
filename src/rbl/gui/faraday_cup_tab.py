@@ -105,9 +105,15 @@ from rbl.config.cup_config import (
 )
 from rbl.gui import theme
 from rbl.gui.widgets.connection_bar import StatusPill
+from rbl.gui.widgets.inputs import (
+    QuietDoubleSpinBox,
+    ScientificDoubleSpinBox,
+    unit_row,
+)
 from rbl.gui.widgets.live_plot import LivePlotPanel
 from rbl.hardware.cup_status import CupPosition
 from rbl.hardware.current_monitor import RollingBuffer, format_current
+from rbl.hardware.dose_model import patch_area_cm2
 from rbl.services.cup_acquisition import (
     AuthorityDetector,
     CupAcquisitionStateMachine,
@@ -163,6 +169,12 @@ class FaradayCupTab(QWidget):
         self._last_logged_indeterminate: bool = False
         self._disagreement_logged: bool = False
         self._was_auto_mode: bool | None = None
+
+        # Dose & displacement damage tracking (ADR 0003)
+        self._patch_width_x_mm: float = 0.0
+        self._patch_height_y_mm: float = 0.0
+        self._area_cm2: float = 0.0
+        self._area_source: str = "Raster Planner"
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -413,6 +425,76 @@ class FaradayCupTab(QWidget):
 
         mid_row.addWidget(acq_box, stretch=1)
         layout.addLayout(mid_row)
+
+        # ── 2b. Dose & Displacement Parameters (ADR 0003) ─────────────────────
+        dose_box = QGroupBox("Dose Tracking & Displacement Parameters")
+        dose_grid = QGridLayout(dose_box)
+        dose_grid.setContentsMargins(12, 6, 12, 6)
+        dose_grid.setHorizontalSpacing(12)
+        dose_grid.setVerticalSpacing(4)
+
+        # Col 0-1: Irradiated Area (from Raster Planner)
+        lbl_area_title = QLabel("Irradiated Area:")
+        lbl_area_title.setStyleSheet(f"font-size: {theme.FS_LABEL}px; color: {theme.NEUTRAL};")
+        dose_grid.addWidget(lbl_area_title, 0, 0)
+
+        self.lbl_area = QLabel("  —    ")
+        self.lbl_area.setStyleSheet(
+            f"font-family: Consolas, 'Courier New', monospace; "
+            f"font-weight: bold; font-size: {theme.FS_LABEL}px; color: {theme.NEUTRAL};"
+        )
+        dose_grid.addWidget(self.lbl_area, 0, 1)
+
+        lbl_src_title = QLabel("Area Source:")
+        lbl_src_title.setStyleSheet(f"font-size: {theme.FS_LABEL}px; color: {theme.NEUTRAL};")
+        dose_grid.addWidget(lbl_src_title, 1, 0)
+
+        self.lbl_area_source = QLabel("Raster Planner")
+        self.lbl_area_source.setStyleSheet(f"color: {theme.NEUTRAL}; font-style: italic;")
+        dose_grid.addWidget(self.lbl_area_source, 1, 1)
+
+        # Col 2-3: Displacement Coefficient k & Depth
+        lbl_k_title = QLabel("Displacement Coeff (k):")
+        lbl_k_title.setStyleSheet(f"font-size: {theme.FS_LABEL}px; color: {theme.NEUTRAL};")
+        dose_grid.addWidget(lbl_k_title, 0, 2)
+
+        self.spn_k = ScientificDoubleSpinBox()
+        self.spn_k.setRange(0.0, 1.0)
+        self.spn_k.setValue(0.0)
+        self.spn_k.setToolTip("Displacement damage coefficient k in dpa per (ions/cm²)")
+        dose_grid.addLayout(unit_row(self.spn_k, "dpa/(ions/cm²)"), 0, 3)
+
+        lbl_depth_title = QLabel("Damage Depth:")
+        lbl_depth_title.setStyleSheet(f"font-size: {theme.FS_LABEL}px; color: {theme.NEUTRAL};")
+        dose_grid.addWidget(lbl_depth_title, 1, 2)
+
+        self.spn_depth = QuietDoubleSpinBox()
+        self.spn_depth.setRange(0.0, 1e7)
+        self.spn_depth.setDecimals(1)
+        self.spn_depth.setValue(0.0)
+        self.spn_depth.setToolTip("Sample damage depth for SRIM calculation in nanometers")
+        dose_grid.addLayout(unit_row(self.spn_depth, "nm"), 1, 3)
+
+        # Col 4-5: Provenance (SRIM version & entry date)
+        lbl_srim_title = QLabel("SRIM Version:")
+        lbl_srim_title.setStyleSheet(f"font-size: {theme.FS_LABEL}px; color: {theme.NEUTRAL};")
+        dose_grid.addWidget(lbl_srim_title, 0, 4)
+
+        self.le_srim_version = QLineEdit()
+        self.le_srim_version.setPlaceholderText("e.g. SRIM-2013.00")
+        self.le_srim_version.setToolTip("SRIM calculation code version")
+        dose_grid.addWidget(self.le_srim_version, 0, 5)
+
+        lbl_date_title = QLabel("Entry Date:")
+        lbl_date_title.setStyleSheet(f"font-size: {theme.FS_LABEL}px; color: {theme.NEUTRAL};")
+        dose_grid.addWidget(lbl_date_title, 1, 4)
+
+        self.le_entry_date = QLineEdit()
+        self.le_entry_date.setPlaceholderText("YYYY-MM-DD")
+        self.le_entry_date.setToolTip("Date coefficient was derived or entered")
+        dose_grid.addWidget(self.le_entry_date, 1, 5)
+
+        layout.addWidget(dose_box)
 
         # ── 3. Live Plot Panel ────────────────────────────────────────────────
         plot_box = QGroupBox("Live Current Trace")
@@ -1175,3 +1257,56 @@ class FaradayCupTab(QWidget):
         self.lbl_source.setVisible(False)
         self.lbl_fault.setText("")
         self.lbl_fault.setVisible(False)
+
+    # ── Dose Tracking & Displacement Parameters (ADR 0003) ───────────────────
+
+    def on_patch_dimensions_changed(self, width_x_mm: float, height_y_mm: float) -> None:
+        """Update irradiated area from Raster Planner patch dimensions.
+
+        ADR 0003 Decision 7: The irradiated area comes directly from the Raster
+        Planner tab's patch dimensions to avoid duplicate operator entry and ensure
+        exact consistency between deflection planning and dose accumulation.
+        """
+        self._patch_width_x_mm = float(width_x_mm)
+        self._patch_height_y_mm = float(height_y_mm)
+        self._area_cm2 = patch_area_cm2(self._patch_width_x_mm, self._patch_height_y_mm)
+        if self._area_cm2 > 0.0:
+            dims = f"{self._patch_width_x_mm:.3f} × {self._patch_height_y_mm:.3f} mm"
+            self.lbl_area.setText(f"{self._area_cm2:.4f} cm² ({dims})")
+        else:
+            self.lbl_area.setText("  —    ")
+
+    @property
+    def area_cm2(self) -> float:
+        """Irradiated area in cm² derived from Raster Planner patch dimensions."""
+        return self._area_cm2
+
+    @property
+    def area_source(self) -> str:
+        """Source of the irradiated area calculation (e.g. 'Raster Planner')."""
+        return self._area_source
+
+    @property
+    def patch_dimensions_mm(self) -> tuple[float, float]:
+        """Patch dimensions (width X, height Y) in mm."""
+        return (self._patch_width_x_mm, self._patch_height_y_mm)
+
+    @property
+    def displacement_coeff(self) -> float:
+        """Operator-entered SRIM displacement damage coefficient k in dpa/(ions/cm²)."""
+        return self.spn_k.value()
+
+    @property
+    def depth_nm(self) -> float:
+        """Operator-entered damage depth in nanometers."""
+        return self.spn_depth.value()
+
+    @property
+    def srim_version(self) -> str:
+        """Operator-entered SRIM calculation version."""
+        return self.le_srim_version.text().strip()
+
+    @property
+    def entry_date(self) -> str:
+        """Operator-entered provenance date for the displacement coefficient."""
+        return self.le_entry_date.text().strip()
