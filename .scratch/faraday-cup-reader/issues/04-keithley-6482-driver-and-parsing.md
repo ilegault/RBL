@@ -76,3 +76,34 @@ depends on them:
 2. Verified with 37 dedicated unit tests in `tests/test_keithley6482_driver.py` using mocked PyVISA.
 3. Full test suite (1671 tests), ruff, type gate (0 hard errors, 139 ratchet), and tests-first gates all pass cleanly.
 
+
+### 2026-09-21 — bench verification against a real 6482: FAILS at connect
+
+Planning session, from a developer bench run. Instrument: `KEITHLEY INSTRUMENTS INC.,MODEL 6482,4008420,A01 May 29 2012 09:36:59/A02 /E`,
+GPIB address 2, SCPI protocol, via the 82357B.
+
+The app connects, gets `*IDN?` and `:SYSTem:MEP:STATe?` = 1, then times out 5 s later in
+`_init_instrument`. Each driver command was sent by hand followed by `:SYSTem:ERRor?`:
+
+```
+:SOURce1:STATe OFF                     -> -113,"Undefined header"
+:SOURce2:STATe OFF                     -> -113,"Undefined header"
+:OUTPut1:STATe OFF                     -> 0,"No error"
+:OUTPut2:STATe OFF                     -> 0,"No error"
+:SENSe1:FUNCtion 'CURRent:DC'          -> -113,"Undefined header"
+:SENSe1:CURRent:DC:RANGe:AUTO ON       -> 0,"No error"
+:SENSe1:CURRent:DC:NPLCycles 1         -> 0,"No error"
+:SENSe1:MEDian:STATe OFF               -> 0,"No error"
+:SENSe1:AVERage:STATe OFF              -> 0,"No error"
+:FORMat:ELEMents READing,TIME,STATus   -> -102,"Syntax error"
+:FORMat:ELEMents CURRent1,TIME,STATus  -> 0,"No error"
+:OUTPut1? / :OUTPut2?                  <- '0' / '0'
+:SOURce1:STATe?                        !! VI_ERROR_TMO (no reply; queue gets -113)
+:FORMat:ELEMents?                      <- 'CURR1,TIME,STAT'
+:READ?                                 <- '+4.827434E-11,+1.953328E+03,+0.000000E+00'
+```
+
+The source-off assertion was querying a header the 6482 does not have, so it could never
+have passed on hardware. The mocked fixture accepted every command, which is why 37 tests
+were green. Fix is ticket 11. The bench box above stays unticked until ticket 11 lands and
+the app connects on hardware.

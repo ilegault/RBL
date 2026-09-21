@@ -8,6 +8,14 @@ The Right Beam Line uses a Faraday cup downstream of the four slit jaws to measu
 transmitted beam current landing on the sample position. The Keithley 6482 dual-channel
 picoammeter measures this current with high dynamic range (fA to mA).
 
+BENCH-VERIFIED COMMAND SET (2026-09-21)
+---------------------------------------
+The original command set was written without a 6482 on the bench; ':SOURce<n>:STATe'
+and ':SENSe1:FUNCtion' are undefined headers on the 6482 and 'READing' is not a
+valid FORMat element; an undefined query gets no reply, which surfaces as a VISA
+timeout rather than an error; so every connect-time write is followed by a
+':SYSTem:ERRor?' check that names the rejected command.
+
 SAFETY REQUIREMENT: NEVER SEND THE CONFIGURE COMMAND
 ---------------------------------------------------
 The Keithley 6482 includes two independent +/-30 V bias voltage sources. The SCPI
@@ -18,10 +26,9 @@ directly onto the cup.
 
 Therefore:
 1. The configure command is NEVER sent anywhere in this driver.
-2. The measurement function (':SENSe1:FUNCtion'), range, filters, and formats are
-   configured explicitly with individual SCPI commands.
-3. Both voltage source outputs are explicitly turned OFF (':SOURce1:STATe OFF',
-   ':SOURce2:STATe OFF') and asserted OFF upon connection.
+2. The range, filters, and formats are configured explicitly with individual SCPI commands.
+3. Both voltage source outputs are explicitly turned OFF (':OUTPut1:STATe OFF',
+   ':OUTPut2:STATe OFF') and asserted OFF upon connection (':OUTPut1?', ':OUTPut2?').
 
 MEASUREMENT & PARSING ARCHITECTURE
 ----------------------------------
@@ -31,7 +38,7 @@ MEASUREMENT & PARSING ARCHITECTURE
   filter significantly slows down autoranging.
 - Integration time is set to 1 power-line cycle (NPLC = 1 via
   ':SENSe1:CURRent:DC:NPLCycles 1').
-- Data elements are configured to ':FORMat:ELEMents READing,TIME,STATus'.
+- Data elements are configured to ':FORMat:ELEMents CURRent1,TIME,STATus'.
 - Reading responses are parsed by a pure, standalone function 'parse_reading' outside
   any polling thread or transport.
 - The instrument status word (specifically bit 6, value 0x40 / 64) is the authority on
@@ -107,9 +114,9 @@ def is_unavailable_sentinel(val: float) -> bool:
 def parse_reading(raw: str, protocol_mode: int | None = None) -> Keithley6482Reading:
     """Pure parser converting raw Keithley 6482 SCPI response into Keithley6482Reading.
 
-    Expected format from ':FORMat:ELEMents READing,TIME,STATus' query:
+    Expected format from ':FORMat:ELEMents CURRent1,TIME,STATus' query:
       '<reading_amps>,<timestamp_s>,<status_word>'
-      e.g. '+1.234567E-06,+12.345678,+00000000'
+      e.g. '+4.827434E-11,+1.953328E+03,+0.000000E+00'
 
     Raises:
         ValueError: If input is empty, has fewer than 3 elements, or elements cannot be converted.
@@ -230,7 +237,7 @@ class Keithley6482:
     """PyVISA driver for the Keithley 6482 dual-channel picoammeter.
 
     Lifecycle:
-        pico = Keithley6482("GPIB0::14::INSTR")
+        pico = Keithley6482("GPIB0::2::INSTR")
         reading = pico.read_reading()
         pico.close()
 
@@ -281,39 +288,43 @@ class Keithley6482:
             log.exception("Keithley 6482 on %s: could not query MEP protocol mode", self._resource)
             return None
 
+    def _write_checked(self, cmd: str) -> None:
+        """Send a SCPI write command and verify acceptance via :SYSTem:ERRor?.
+
+        Raises RuntimeError naming the command and the response if rejected.
+        Used only during initialization, never on the polling path.
+        """
+        self.write(cmd)
+        resp = self.query(":SYSTem:ERRor?")
+        try:
+            code = int(resp.split(",", 1)[0].strip())
+        except (ValueError, IndexError):
+            code = -1
+        if code != 0:
+            raise RuntimeError(f"Keithley 6482 rejected {cmd!r}: {resp}")
+
     def _init_instrument(self) -> None:
         """Configure channel 1 for autoranged DC current with filters off, and sources off.
 
         Never sends the configure command.
         """
-        # Safety: Turn off voltage bias sources 1 and 2
-        self.write(":SOURce1:STATe OFF")
-        self.write(":SOURce2:STATe OFF")
+        self.write("*CLS")
+        self._write_checked(":OUTPut1:STATe OFF")
+        self._write_checked(":OUTPut2:STATe OFF")
+        self._write_checked(":SENSe1:CURRent:DC:RANGe:AUTO ON")
+        self._write_checked(":SENSe1:CURRent:DC:NPLCycles 1")
+        self._write_checked(":SENSe1:MEDian:STATe OFF")
+        self._write_checked(":SENSe1:AVERage:STATe OFF")
+        self._write_checked(":FORMat:ELEMents CURRent1,TIME,STATus")
         self.assert_sources_off()
-
-        # Channel 1 measurement function: DC current
-        self.write(":SENSe1:FUNCtion 'CURRent:DC'")
-
-        # Autorange enabled
-        self.write(":SENSe1:CURRent:DC:RANGe:AUTO ON")
-
-        # Integration time: 1 PLC
-        self.write(":SENSe1:CURRent:DC:NPLCycles 1")
-
-        # Disable median filter (slows autoranging) and digital averaging filter
-        self.write(":SENSe1:MEDian:STATe OFF")
-        self.write(":SENSe1:AVERage:STATe OFF")
-
-        # Reading elements: reading, timestamp, status word
-        self.write(":FORMat:ELEMents READing,TIME,STATus")
 
     def assert_sources_off(self) -> None:
         """Assert that both voltage bias source outputs are OFF.
 
         Raises RuntimeError if either voltage source output is active.
         """
-        s1 = self.query(":SOURce1:STATe?").strip()
-        s2 = self.query(":SOURce2:STATe?").strip()
+        s1 = self.query(":OUTPut1?").strip()
+        s2 = self.query(":OUTPut2?").strip()
         s1_on = s1 in ("1", "ON", "+1")
         s2_on = s2 in ("1", "ON", "+1")
         if s1_on or s2_on:
