@@ -227,7 +227,7 @@ class FaradayCupTab(QWidget):
         self.le_resource = QLineEdit(KEITHLEY_6482_DEFAULT_RESOURCE)
         self.le_resource.setMaximumWidth(220)
         self.le_resource.setToolTip(
-            "VISA resource identifier for the Keithley 6482 (e.g. GPIB0::14::INSTR)"
+            "VISA resource identifier for the Keithley 6482 (e.g. GPIB0::2::INSTR)"
         )
         conn_lay.addWidget(self.le_resource)
 

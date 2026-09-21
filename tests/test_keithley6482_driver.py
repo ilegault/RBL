@@ -7,6 +7,7 @@ from inspect import getsource
 from unittest.mock import MagicMock
 
 import pytest
+import pyvisa.errors
 
 import rbl.hardware.keithley6482_driver as k6482_mod
 from rbl.hardware.keithley6482_driver import (
@@ -19,6 +20,60 @@ from rbl.hardware.keithley6482_driver import (
 )
 
 _MOCK_IDN = "KEITHLEY INSTRUMENTS INC.,MODEL 6482,1234567,A01 / 700x"
+
+_ACCEPTED_WRITES: frozenset[str] = frozenset({
+    "*CLS",
+    ":OUTPut1:STATe OFF",
+    ":OUTPut2:STATe OFF",
+    ":SENSe1:CURRent:DC:RANGe:AUTO ON",
+    ":SENSe1:CURRent:DC:NPLCycles 1",
+    ":SENSe1:MEDian:STATe OFF",
+    ":SENSe1:AVERage:STATe OFF",
+    ":FORMat:ELEMents CURRent1,TIME,STATus",
+})
+
+_QUERY_RESPONSES: dict[str, str] = {
+    "*IDN?": _MOCK_IDN,
+    ":SYSTem:MEP:STATe?": "1",
+    ":OUTPut1?": "0",
+    ":OUTPut2?": "0",
+    ":READ?": "+4.827434E-11,+1.953328E+03,+0.000000E+00",
+}
+
+
+class _Fake6482:
+    """Models a real Keithley 6482 on GPIB per bench verification (2026-09-21).
+
+    - Holds an accepted_writes set; unknown writes queue -113,"Undefined header".
+    - Holds a responses dict; unknown queries queue -113 and raise VisaIOError(VI_ERROR_TMO).
+    - :SYSTem:ERRor? pops the oldest error from the queue, returning 0,"No error" if empty.
+    - *CLS clears the error queue.
+    """
+
+    def __init__(self) -> None:
+        self.accepted_writes: set[str] = set(_ACCEPTED_WRITES)
+        self.responses: dict[str, str] = dict(_QUERY_RESPONSES)
+        self.error_queue: list[str] = []
+        self.write = MagicMock(side_effect=self._write_impl)
+        self.query = MagicMock(side_effect=self._query_impl)
+        self.close = MagicMock()
+
+    def _write_impl(self, cmd: str) -> None:
+        if cmd == "*CLS":
+            self.error_queue.clear()
+            return
+        if cmd not in self.accepted_writes:
+            self.error_queue.append('-113,"Undefined header"')
+
+    def _query_impl(self, cmd: str) -> str:
+        if cmd == ":SYSTem:ERRor?":
+            if self.error_queue:
+                return self.error_queue.pop(0)
+            return '0,"No error"'
+        if cmd in self.responses:
+            return self.responses[cmd]
+        self.error_queue.append('-113,"Undefined header"')
+        raise pyvisa.errors.VisaIOError(-1073807339)
 
 
 @pytest.fixture
@@ -33,25 +88,9 @@ def mock_pyvisa(monkeypatch):
 @pytest.fixture
 def mock_inst(mock_pyvisa):
     """Fake PyVISA resource returned by ResourceManager.open_resource()."""
-    inst = MagicMock()
-
-    def _query(cmd: str) -> str:
-        c = cmd.upper()
-        if "*IDN?" in c:
-            return _MOCK_IDN
-        if ":SYSTEM:MEP:STATE?" in c or ":SYST:MEP:STAT?" in c:
-            return "1"  # SCPI mode
-        if ":SOURCE1:STATE?" in c or ":SOUR1:STAT?" in c:
-            return "0"  # Source 1 OFF
-        if ":SOURCE2:STATE?" in c or ":SOUR2:STAT?" in c:
-            return "0"  # Source 2 OFF
-        if ":READ?" in c:
-            return "+1.234567E-06,+0.123456,+00000000"
-        return "0"
-
-    inst.query.side_effect = _query
-    mock_pyvisa.ResourceManager.return_value.open_resource.return_value = inst
-    return inst
+    fake = _Fake6482()
+    mock_pyvisa.ResourceManager.return_value.open_resource.return_value = fake
+    return fake
 
 
 # ── Pure Response Parsing Tests ───────────────────────────────────────────────
@@ -139,6 +178,14 @@ class TestParseReading:
     def test_protocol_mode_passthrough(self):
         reading = parse_reading("+1e-6, 1.0, 0", protocol_mode=1)
         assert reading.protocol_mode == 1
+
+    def test_bench_reading_from_real_6482(self):
+        reading = parse_reading("+4.827434E-11,+1.953328E+03,+0.000000E+00")
+        assert reading.current == pytest.approx(4.827434e-11)
+        assert reading.timestamp == pytest.approx(1953.328)
+        assert reading.status_word == 0
+        assert reading.over_range is False
+        assert reading.valid is True
 
     @pytest.mark.parametrize("bad_input", [
         "",
@@ -234,16 +281,7 @@ class TestKeithley6482Driver:
         assert pico.protocol_mode == 1
 
     def test_init_handles_488_1_protocol_mode(self, mock_inst, mock_pyvisa):
-        def _query(cmd: str) -> str:
-            if ":SYSTEM:MEP:STATE?" in cmd.upper() or ":SYST:MEP:STAT?" in cmd.upper():
-                return "0"
-            if "*IDN?" in cmd.upper():
-                return _MOCK_IDN
-            if "STATE?" in cmd.upper():
-                return "0"
-            return "0"
-
-        mock_inst.query.side_effect = _query
+        mock_inst.responses[":SYSTem:MEP:STATe?"] = "0"
         pico = Keithley6482("GPIB0::14::INSTR")
         assert pico.protocol_mode == 0
 
@@ -251,25 +289,19 @@ class TestKeithley6482Driver:
         Keithley6482("GPIB0::14::INSTR")
         written = [c.args[0] for c in mock_inst.write.call_args_list]
 
-        # Voltage sources turned OFF
-        assert ":SOURce1:STATe OFF" in written
-        assert ":SOURce2:STATe OFF" in written
-
-        # DC current function
-        assert ":SENSe1:FUNCtion 'CURRent:DC'" in written
-
-        # Autorange enabled
+        assert "*CLS" in written
+        assert ":OUTPut1:STATe OFF" in written
+        assert ":OUTPut2:STATe OFF" in written
         assert ":SENSe1:CURRent:DC:RANGe:AUTO ON" in written
-
-        # Integration time: 1 NPLC
         assert ":SENSe1:CURRent:DC:NPLCycles 1" in written
-
-        # Median filter and averaging filter OFF
         assert ":SENSe1:MEDian:STATe OFF" in written
         assert ":SENSe1:AVERage:STATe OFF" in written
+        assert ":FORMat:ELEMents CURRent1,TIME,STATus" in written
 
-        # Data format elements
-        assert ":FORMat:ELEMents READing,TIME,STATus" in written
+        assert ":SOURce1:STATe OFF" not in written
+        assert ":SOURce2:STATe OFF" not in written
+        assert ":SENSe1:FUNCtion 'CURRent:DC'" not in written
+        assert ":FORMat:ELEMents READing,TIME,STATus" not in written
 
     def test_init_verifies_voltage_sources_are_off(self, mock_inst, mock_pyvisa):
         # Normal case: both return "0", no exception
@@ -278,36 +310,27 @@ class TestKeithley6482Driver:
         assert pico.idn() == _MOCK_IDN
 
     def test_init_raises_if_source1_is_active(self, mock_inst, mock_pyvisa):
-        def _query(cmd: str) -> str:
-            if "*IDN?" in cmd.upper():
-                return _MOCK_IDN
-            if ":SYSTEM:MEP:STATE?" in cmd.upper():
-                return "1"
-            if ":SOURCE1:STATE?" in cmd.upper():
-                return "1"  # Hazard!
-            if ":SOURCE2:STATE?" in cmd.upper():
-                return "0"
-            return "0"
-
-        mock_inst.query.side_effect = _query
+        mock_inst.responses[":OUTPut1?"] = "1"
         with pytest.raises(RuntimeError, match="voltage source safety assertion failed"):
             Keithley6482("GPIB0::14::INSTR")
 
     def test_init_raises_if_source2_is_active(self, mock_inst, mock_pyvisa):
-        def _query(cmd: str) -> str:
-            if "*IDN?" in cmd.upper():
-                return _MOCK_IDN
-            if ":SYSTEM:MEP:STATE?" in cmd.upper():
-                return "1"
-            if ":SOURCE1:STATE?" in cmd.upper():
-                return "0"
-            if ":SOURCE2:STATE?" in cmd.upper():
-                return "1"  # Hazard!
-            return "0"
-
-        mock_inst.query.side_effect = _query
+        mock_inst.responses[":OUTPut2?"] = "1"
         with pytest.raises(RuntimeError, match="voltage source safety assertion failed"):
             Keithley6482("GPIB0::14::INSTR")
+
+    def test_init_raises_naming_rejected_command(self, mock_inst, mock_pyvisa):
+        cmd = ":SENSe1:CURRent:DC:NPLCycles 1"
+        mock_inst.accepted_writes.remove(cmd)
+        with pytest.raises(RuntimeError) as exc_info:
+            Keithley6482("GPIB0::14::INSTR")
+        assert cmd in str(exc_info.value)
+        assert "-113" in str(exc_info.value)
+
+    def test_init_clears_stale_errors_first(self, mock_inst, mock_pyvisa):
+        mock_inst.error_queue.append('-420,"Query UNTERMINATED"')
+        pico = Keithley6482("GPIB0::14::INSTR")
+        assert pico.idn() == _MOCK_IDN
 
     def test_configure_command_is_never_used_in_module(self):
         """CRITICAL SAFETY TEST: Verify ':CONFigure' or 'CONF' is NEVER sent in the driver."""
@@ -331,18 +354,7 @@ class TestKeithley6482Driver:
         assert "CONF:" not in code_text
 
     def test_read_reading_queries_read_and_parses(self, mock_inst, mock_pyvisa):
-        def _query(cmd: str) -> str:
-            if "*IDN?" in cmd.upper():
-                return _MOCK_IDN
-            if ":SYSTEM:MEP:STATE?" in cmd.upper():
-                return "1"
-            if "STATE?" in cmd.upper():
-                return "0"
-            if ":READ?" in cmd.upper():
-                return "+3.456700E-07,+5.123456,+00000000"
-            return "0"
-
-        mock_inst.query.side_effect = _query
+        mock_inst.responses[":READ?"] = "+3.456700E-07,+5.123456,+00000000"
         pico = Keithley6482("GPIB0::14::INSTR")
         reading = pico.read_reading()
         assert isinstance(reading, Keithley6482Reading)

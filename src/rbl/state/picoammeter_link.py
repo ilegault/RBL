@@ -71,7 +71,7 @@ class PicoammeterLinkMixin:
         """Start picoammeter polling worker. Non-blocking.
 
         Parameters:
-            resource: VISA resource string (e.g. "GPIB0::14::INSTR") or None
+            resource: VISA resource string (e.g. "GPIB0::2::INSTR") or None
                       for auto-discovery / default.
         """
         if self._picoammeter_worker is not None:

@@ -74,8 +74,8 @@ CUP_POLL_RATE_ACQUIRING_HZ: float = 10.0
 CUP_POLL_INTERVAL_ACQUIRING_S: float = 1.0 / CUP_POLL_RATE_ACQUIRING_HZ  # 0.1 s
 
 # ---- Hardware & VISA defaults --------------------------------------------
-# Standard GPIB primary address 14 on GPIB interface 0
-KEITHLEY_6482_DEFAULT_RESOURCE: str = "GPIB0::14::INSTR"
+# Address set on the bench 6482's front panel (MENU > COMMUNICATION > GPIB); factory default is 25.
+KEITHLEY_6482_DEFAULT_RESOURCE: str = "GPIB0::2::INSTR"
 
 # ---- Reconnect backoff schedule -------------------------------------------
 # Seconds to wait between reconnect attempts after a VISA communication failure.

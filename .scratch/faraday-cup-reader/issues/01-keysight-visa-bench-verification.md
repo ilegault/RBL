@@ -201,3 +201,17 @@ If that returns `('GPIB0::14::INSTR',)`, nothing more is needed. If it returns `
 raises, then `os.add_dll_directory()` on the ktbin folder belongs in the application —
 in the driver preflight rather than scattered through instrument code — and that is a
 scope addition to ticket 04 that should be recorded here first.
+
+### 2026-09-21 — GPIB path confirmed end to end on the real 6482
+
+- The earlier `GPIB0::14::INSTR` responses were from a **6485** at address 14 (the cable was on the
+  wrong picoammeter). The 6482 is at **GPIB address 2**, SCPI protocol, GPIB interface selected.
+- Before Keysight Connection Expert had scanned address 2, the default (NI) `pyvisa.ResourceManager()`
+  gave `VI_ERROR_RSRC_NFOUND` on `GPIB0::2::INSTR`: NI reaches the 82357B only through Keysight's
+  saved instrument table. After a rescan in Connection Expert, both the default ResourceManager and
+  `ktvisa32.dll` (with the ktbin and IO Libraries `bin` dirs added via `os.add_dll_directory`)
+  return the 6482's `*IDN?`.
+- A write timeout seen once in between cleared after exiting the front-panel menu / closing
+  Connection Expert / reseating; cause not isolated.
+- `visa_probe.py` reported "default backend works" and "GPIB 3 found" in runs where nothing
+  answered. Fix is ticket 12.

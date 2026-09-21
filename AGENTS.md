@@ -465,7 +465,7 @@ someone else's bug fix smuggled into it cannot be reviewed.
 <!-- ACTIVE-PLAN:START -->
 ## Active implementation plan
 
-_Written by the planning model on 2026-09-15 19:46. Implement this. If something in it is wrong, say so before changing course._
+_Written by the planning model on 2026-09-21 23:00. Implement this. If something in it is wrong, say so before changing course._
 
 # Active work: Faraday cup actuation, sampling cycle and dose tracking
 
@@ -484,9 +484,19 @@ This is a **pointer**, not the work. The work is a ticket set.
 - Tickets: `.scratch/cup-actuation/issues/01…14`
 - Tracker conventions: `docs/agents/issue-tracker.md`
 
-Previous effort `.scratch/faraday-cup-reader/` is complete except its ticket **10**
-(existing instruments under Keysight VISA), which is a developer bench task and **must
-pass before a build ships**.
+Previous effort `.scratch/faraday-cup-reader/` is complete except:
+
+- **11 — Keithley 6482 driver speaks the 6482's real command set.** `ready-for-agent`,
+  unblocked, **do this first**: the picoammeter cannot connect to real hardware until it
+  lands (bench run 2026-09-21: `:SOURce<n>:STATe` and `:SENSe1:FUNCtion` are undefined
+  headers on the 6482, `READing` is not a FORMat element). Touches only
+  `keithley6482_driver.py`, its test file, and example resource strings.
+- **12 — `visa_probe.py` reports success only when an instrument answers.** `ready-for-agent`,
+  unblocked, `scripts/` only.
+- **10 — existing instruments under Keysight VISA.** Developer bench task; **must pass
+  before a build ships**.
+
+11 and 12 are disjoint from each other and from every cup-actuation ticket below.
 
 ## Next up — four tickets are unblocked and independent
 
