@@ -32,6 +32,16 @@ Foundation ktbin folder. Python 3.8 stopped searching PATH for the dependencies 
 DLL loaded through ctypes, so loading the shim fails with "Could not find module (or
 one of its dependencies)" — which reads like the file is missing when it is right
 there. os.add_dll_directory puts those folders back on the search path.
+
+WHY LISTING IS NOT ENOUGH (THE 2026-09-21 FALSE PASS)
+-----------------------------------------------------
+Listing a GPIB resource proves nothing: Keysight VISA lists remembered addresses from
+its saved instrument table whether or not anything is currently powered or attached,
+and GPIB sessions can open successfully with no listener on the bus. On 2026-09-21 the
+probe printed "USING: default ... The default backend works. Nothing to configure." and
+"GPIB  3 found" in two runs where no backend got an `*IDN?` reply: once with
+VI_ERROR_RSRC_NFOUND on open, and once with VI_ERROR_TMO on the query. The only reliable
+success criterion is a non-empty `*IDN?` reply; listing alone proves nothing.
 """
 import argparse
 import os
@@ -108,14 +118,12 @@ def run_child(spec):
         return 1
 
     print(f"  {len(resources)} resource(s):")
-    for res in resources:
-        print(f"    {FOUND_MARKER} {res}")
-
+    answered = 0
     for res in resources:
         try:
             inst = rm.open_resource(res)
         except Exception as exc:
-            print(f"    {res}: could not open — {exc}")
+            print(f"    {res}: LISTED BUT DID NOT ANSWER ({exc})")
             continue
         try:
             inst.timeout = 5000
@@ -125,9 +133,15 @@ def run_child(spec):
             except Exception:
                 pass
             try:
-                print(f"    {res} *IDN?: {inst.query('*IDN?').strip()}")
+                idn = inst.query("*IDN?").strip()
+                if not idn:
+                    raise RuntimeError("empty *IDN? response")
+                print(f"    {FOUND_MARKER} {res} {idn}")
+                answered += 1
             except Exception as exc:
-                print(f"    {res} *IDN? failed: {exc}")
+                print(f"    {res}: LISTED BUT DID NOT ANSWER ({exc})")
+                continue
+
             if res.upper().startswith("GPIB"):
                 try:
                     mep = inst.query(":SYSTem:MEP:STATe?").strip()
@@ -144,7 +158,22 @@ def run_child(spec):
                 inst.close()
             except Exception:
                 pass
-    return 0
+    return 0 if answered > 0 else 1
+
+
+def parse_child_found(out: str) -> list[str]:
+    """Parse child probe stdout, returning a list of resource names that answered.
+
+    Takes only the first whitespace-separated token after FOUND_MARKER so the appended
+    IDN string does not become part of the resource name.
+    """
+    found = []
+    for ln in out.splitlines():
+        if FOUND_MARKER in ln:
+            tokens = ln.split(FOUND_MARKER, 1)[1].split()
+            if tokens:
+                found.append(tokens[0])
+    return found
 
 
 def main():
@@ -191,25 +220,17 @@ def main():
             print(out)
         if proc.stderr.strip():
             print(f"  stderr: {proc.stderr.strip()[:500]}")
-        found = [ln.split(FOUND_MARKER, 1)[1].strip()
-                 for ln in out.splitlines() if FOUND_MARKER in ln]
+        found = parse_child_found(out)
         if found:
             working.append((label, spec, found))
 
     print("\n" + "=" * 70)
     if not working:
-        print("NO BACKEND SAW ANY INSTRUMENT.")
-        for prefix, what in EXPECTED.items():
-            print(f"  {prefix}*  {what}")
-        print("\nFind ktvisa32.dll with:")
-        print("  Get-ChildItem -Path C:\\ -Filter ktvisa32.dll -Recurse "
-              "-ErrorAction SilentlyContinue")
-        print("then add its full path to BACKEND_CANDIDATES and its FOLDER to")
-        print("KEYSIGHT_DLL_DIRS. A 'could not find module (or one of its")
-        print("dependencies)' error means the path is right and the dependency")
-        print("folder is what is missing.")
+        print("NO BACKEND GOT AN ANSWER. Listed resources did not respond to *IDN?.")
+        print("Check: instrument powered, GPIB selected (not RS-232), GPIB address matches, "
+              "cable seated, instrument not inside a front-panel menu.")
         print("=" * 70)
-        return 1
+        return 2
 
     label, spec, found = working[0]
     print(f"USING: {label}")
@@ -228,11 +249,11 @@ def main():
     print("=" * 70)
 
     print("\n--- Summary ---")
-    all_found = [r for _, _, f in working for r in f]
+    all_found = sorted({r for _, _, f in working for r in f})
     for prefix, what in EXPECTED.items():
         hits = [r for r in all_found if r.upper().startswith(prefix)]
-        print(f"  {prefix:5s} {('%d found' % len(hits)) if hits else 'NONE FOUND':12s}"
-              f" ({what})")
+        count_str = f"{len(hits)} answered" if hits else "NONE ANSWERED"
+        print(f"  {prefix:5s} {count_str:14s} ({what})")
     print("\nRecord these lines in ticket 01's Comments.")
     return 0
 
