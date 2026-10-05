@@ -2,7 +2,7 @@
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Read first:** `src/rbl/gui/widgets/inputs.py` - `QuietDoubleSpinBox`,
 `ScientificDoubleSpinBox`, `sync_value` and `unit_row`, including the module docstring
