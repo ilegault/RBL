@@ -1,6 +1,6 @@
 # 20: The vacuum monitoring log rolls at local midnight
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
