@@ -23,6 +23,7 @@ import rbl.hardware.dose_model as dm
 from rbl.config.cup_config import CUP_SETTLE_WINDOW_S, ELEMENTARY_CHARGE_C
 from rbl.hardware.dose_model import (
     DoseAccumulator,
+    DoseTotals,
     InsertionCurrentStats,
     compute_charge,
     compute_dpa,
@@ -301,3 +302,138 @@ def test_module_and_accumulator_docstrings_state_zero_order_hold_and_unbounded_e
     assert "unbounded" in module_doc.lower()
     assert "zero-order hold" in class_doc.lower()
     assert "unbounded" in class_doc.lower()
+
+
+# ---------------------------------------------------------------------------
+# Ticket 25: exclude_interval and seed (ADR 0003 amendment C2, C4, C5)
+# ---------------------------------------------------------------------------
+
+
+def _two_auto_insertions(acc: DoseAccumulator) -> None:
+    acc.record_insertion(0.0, 10.0, 1e-9)
+    acc.record_insertion(100.0, 110.0, 1e-9)
+
+
+def test_exclude_interval_removes_manual_time_from_hold_interval() -> None:
+    acc = DoseAccumulator()
+    acc.record_insertion(0.0, 10.0, 1e-9)
+    acc.exclude_interval(40.0, 50.0)
+    acc.record_insertion(100.0, 110.0, 1e-9)
+    assert acc.last_beam_on_s == 80.0
+    assert acc.total_beam_on_s == 80.0
+    assert math.isclose(acc.total_charge_c, 1e-9 * 80.0, rel_tol=1e-12)
+
+
+def test_without_exclusion_hold_interval_is_ninety_seconds() -> None:
+    acc = DoseAccumulator()
+    _two_auto_insertions(acc)
+    assert acc.last_beam_on_s == 90.0
+    assert math.isclose(acc.total_charge_c, 1e-9 * 90.0, rel_tol=1e-12)
+
+
+def test_overlapping_exclusions_are_merged_not_double_counted() -> None:
+    acc = DoseAccumulator()
+    acc.record_insertion(0.0, 10.0, 1e-9)
+    acc.exclude_interval(40.0, 50.0)
+    acc.exclude_interval(45.0, 60.0)
+    acc.record_insertion(100.0, 110.0, 1e-9)
+    assert acc.last_beam_on_s == 70.0  # 90 - 20, not 90 - 25
+
+
+def test_exclusion_outside_hold_interval_has_no_effect() -> None:
+    acc = DoseAccumulator()
+    acc.record_insertion(0.0, 10.0, 1e-9)
+    acc.exclude_interval(200.0, 210.0)
+    acc.record_insertion(100.0, 110.0, 1e-9)
+    assert acc.last_beam_on_s == 90.0
+    assert math.isclose(acc.total_charge_c, 1e-9 * 90.0, rel_tol=1e-12)
+
+
+def test_exclusion_partially_overlapping_hold_interval_is_clipped() -> None:
+    acc = DoseAccumulator()
+    acc.record_insertion(0.0, 10.0, 1e-9)
+    acc.exclude_interval(5.0, 20.0)  # only 10..20 lies in the hold interval
+    acc.record_insertion(100.0, 110.0, 1e-9)
+    assert acc.last_beam_on_s == 80.0
+
+
+def test_exclusions_are_cleared_after_each_insertion() -> None:
+    acc = DoseAccumulator()
+    acc.record_insertion(0.0, 10.0, 1e-9)
+    acc.exclude_interval(40.0, 50.0)
+    acc.record_insertion(100.0, 110.0, 1e-9)
+    acc.record_insertion(200.0, 210.0, 1e-9)
+    assert acc.last_beam_on_s == 90.0  # the earlier span does not reapply
+
+
+def test_exclusion_of_the_whole_hold_interval_gives_zero_not_negative() -> None:
+    acc = DoseAccumulator()
+    acc.record_insertion(0.0, 10.0, 1e-9)
+    acc.exclude_interval(0.0, 500.0)
+    acc.record_insertion(100.0, 110.0, 1e-9)
+    assert acc.last_beam_on_s == 0.0
+    assert acc.total_charge_c == 0.0
+
+
+def test_exclude_interval_ignores_reversed_or_empty_span() -> None:
+    acc = DoseAccumulator()
+    acc.record_insertion(0.0, 10.0, 1e-9)
+    acc.exclude_interval(50.0, 40.0)
+    acc.exclude_interval(60.0, 60.0)
+    acc.record_insertion(100.0, 110.0, 1e-9)
+    assert acc.last_beam_on_s == 90.0
+
+
+def test_seeded_accumulator_matches_continuous_one() -> None:
+    a = DoseAccumulator()
+    a.record_insertion(0.0, 10.0, 1e-9)
+    a.record_insertion(100.0, 110.0, 2e-9)
+    totals = DoseTotals(
+        total_charge_c=a.total_charge_c,
+        total_beam_on_s=a.total_beam_on_s,
+        insertion_count=a.insertion_count,
+        last_out_t=a.last_out_t,
+        last_current_a=a.last_current_a,
+        source_path="earlier.csv",
+    )
+    a.record_insertion(300.0, 310.0, 3e-9)
+
+    b = DoseAccumulator()
+    b.seed(totals)
+    b.record_insertion(300.0, 310.0, 3e-9)
+
+    assert b.total_charge_c == a.total_charge_c
+    assert b.total_beam_on_s == a.total_beam_on_s
+    assert b.insertion_count == a.insertion_count == 3
+    assert b.last_out_t == a.last_out_t
+    assert b.last_current_a == a.last_current_a
+
+
+def test_dose_totals_is_frozen_and_carries_source_path() -> None:
+    import dataclasses
+
+    t = DoseTotals(1.0, 2.0, 3, 4.0, 5.0, "x.csv")
+    assert t.source_path == "x.csv"
+    try:
+        t.total_charge_c = 9.0  # type: ignore[misc]
+    except dataclasses.FrozenInstanceError:
+        pass
+    else:
+        raise AssertionError("DoseTotals must be frozen")
+
+
+def test_reset_clears_exclusions_and_seed() -> None:
+    acc = DoseAccumulator()
+    acc.seed(DoseTotals(1e-6, 500.0, 4, 1000.0, 2e-9, "old.csv"))
+    acc.exclude_interval(1100.0, 1200.0)
+    acc.reset()
+    assert acc.total_charge_c == 0.0
+    assert acc.total_beam_on_s == 0.0
+    assert acc.last_beam_on_s == 0.0
+    assert acc.insertion_count == 0
+    assert acc.last_out_t is None
+    assert acc.last_current_a is None
+    # a pending exclusion must not survive reset into a fresh run
+    acc.record_insertion(0.0, 10.0, 1e-9)
+    acc.record_insertion(2000.0, 2010.0, 1e-9)
+    assert acc.last_beam_on_s == 1990.0

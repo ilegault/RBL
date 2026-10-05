@@ -1,6 +1,6 @@
 # 25: The dose accumulator can leave time out and pick up earlier totals
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -38,18 +38,18 @@ Tests may fake: nothing. These are pure functions; use plain floats.
 
 ## Acceptance criteria
 
-- [ ] Automatic insertions at t=0-10 (1 nA) and t=100-110, with
+- [x] Automatic insertions at t=0-10 (1 nA) and t=100-110, with
       `exclude_interval(40, 50)` between them: `last_beam_on_s == 80.0` and total charge
       is `1e-9 * 80`. The same sequence without the exclusion gives 90 s, proving the
       subtraction.
-- [ ] Exclusions (40, 50) and (45, 60) subtract 20 s, not 25.
-- [ ] An exclusion at (200, 210), outside the hold interval, leaves the result identical
+- [x] Exclusions (40, 50) and (45, 60) subtract 20 s, not 25.
+- [x] An exclusion at (200, 210), outside the hold interval, leaves the result identical
       to no exclusion.
-- [ ] Seeded continuity: accumulator A records insertions 1, 2, 3; accumulator B is seeded
+- [x] Seeded continuity: accumulator A records insertions 1, 2, 3; accumulator B is seeded
       from A's state after insertion 2 (a `DoseTotals` built from A's public properties)
       and records insertion 3. B's total charge, total beam-on and insertion count equal
       A's exactly.
-- [ ] `reset()` after `exclude_interval` and `seed` returns every public property to its
+- [x] `reset()` after `exclude_interval` and `seed` returns every public property to its
       fresh value. All existing tests in `tests/test_dose_model.py` pass unchanged.
 
 ## Gate
@@ -62,3 +62,12 @@ Run in CI's order (`.github/workflows/tests.yml`):
     pytest --tb=short -q -n auto --dist loadfile --durations=25
 
 ## Comments
+
+2026-10-05: Added `DoseTotals`, `DoseAccumulator.exclude_interval` and `seed` in
+`src/rbl/hardware/dose_model.py` (pure, no Qt, docstrings updated). `DoseTotals.last_out_t`
+and `last_current_a` are `float | None` so a log with no insertion can be represented.
+Tests in `tests/test_dose_model.py`: criterion 1 (`test_exclude_interval_removes_manual_time...`,
+`test_without_exclusion...`), 2 (`test_overlapping_exclusions...`), 3
+(`test_exclusion_outside_hold_interval...`), 4 (`test_seeded_accumulator_matches_continuous_one`),
+5 (`test_reset_clears_exclusions_and_seed`; existing tests unchanged). Plus clipping,
+clearing-after-insertion, full-cover and empty-span cases. No bench verification needed.
