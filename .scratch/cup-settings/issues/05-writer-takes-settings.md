@@ -2,7 +2,7 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Read first:** `src/rbl/services/cup_session_writer.py`, `CupSessionWriter.__init__`
 and `_write_header_comments`. Note the four `self._metadata.setdefault(...)` calls that
