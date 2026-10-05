@@ -532,3 +532,95 @@ class TestMultipleBoundaries:
         result = s.tick(t=1200.0)
         assert isinstance(result, CycleInsert)
         assert result.t == pytest.approx(1200.0)
+
+
+# ── Queued (pending) period and dwell edits ───────────────────────────────────
+
+
+class TestPendingPeriodAndDwell:
+
+    def test_set_period_queues_and_leaves_period_unchanged(self):
+        s = SamplingCycleScheduler(period_s=300.0, dwell_s=3.0)
+        s.arm(t=0.0)
+        assert s.pending_period_s is None
+        s.set_period(60.0)
+        assert s.period_s == 300.0
+        assert s.pending_period_s == 60.0
+
+    def test_set_dwell_queues_and_leaves_dwell_unchanged(self):
+        s = SamplingCycleScheduler(period_s=300.0, dwell_s=3.0)
+        assert s.pending_dwell_s is None
+        s.set_dwell(10.0)
+        assert s.dwell_s == 3.0
+        assert s.pending_dwell_s == 10.0
+
+    def test_pending_period_applies_at_boundary(self):
+        s = SamplingCycleScheduler(period_s=300.0, dwell_s=3.0)
+        s.arm(t=0.0)
+        s.set_period(60.0)  # at t=10 in the scenario; no clock is read
+        for t in range(10, 300):
+            assert s.tick(float(t)) is None
+        result = s.tick(300.0)
+        assert isinstance(result, CycleInsert)
+        assert result.t == pytest.approx(300.0)
+        assert s.period_s == 60.0
+        assert s.pending_period_s is None
+        assert isinstance(s.tick(303.0), CycleRetract)
+        assert s.tick(359.0) is None
+        nxt = s.tick(360.0)
+        assert isinstance(nxt, CycleInsert)
+        assert nxt.t == pytest.approx(360.0)
+
+    def test_pending_period_applies_when_boundary_is_skipped(self):
+        s = SamplingCycleScheduler(period_s=300.0, dwell_s=3.0)
+        s.arm(t=0.0)
+        s.notify_manual_insert(t=5.0)
+        s.set_period(60.0)
+        assert isinstance(s.tick(300.0), CycleSkipped)
+        assert s.period_s == 60.0
+        assert s.pending_period_s is None
+        assert s.time_to_next_insertion(300.0) == pytest.approx(60.0)
+
+    def test_pending_dwell_applies_at_insertion_start_not_mid_dwell(self):
+        s = SamplingCycleScheduler(period_s=300.0, dwell_s=3.0)
+        s.arm(t=0.0)
+        assert isinstance(s.tick(300.0), CycleInsert)
+        s.set_dwell(10.0)  # mid-dwell
+        assert s.dwell_s == 3.0
+        assert s.tick(302.0) is None
+        retract = s.tick(303.0)
+        assert isinstance(retract, CycleRetract)
+        assert retract.t == pytest.approx(303.0)
+        assert s.pending_dwell_s == 10.0
+        assert isinstance(s.tick(600.0), CycleInsert)
+        assert s.dwell_s == 10.0
+        assert s.pending_dwell_s is None
+        assert s.tick(609.0) is None
+        retract2 = s.tick(610.0)
+        assert isinstance(retract2, CycleRetract)
+        assert retract2.t == pytest.approx(610.0)
+
+    def test_pending_set_while_disarmed_applies_on_arm(self):
+        s = SamplingCycleScheduler(period_s=300.0, dwell_s=3.0)
+        s.arm(t=0.0)
+        s.disarm()
+        s.set_period(60.0)
+        s.set_dwell(8.0)
+        s.arm(t=1000.0)
+        assert s.pending_period_s is None
+        assert s.pending_dwell_s is None
+        assert s.tick(1059.0) is None
+        ins = s.tick(1060.0)
+        assert isinstance(ins, CycleInsert)
+        assert ins.t == pytest.approx(1060.0)
+        assert s.tick(1067.0) is None
+        assert isinstance(s.tick(1068.0), CycleRetract)
+
+    def test_module_source_has_no_clock_or_qt(self):
+        import rbl.services.sampling_cycle as mod
+        src = open(mod.__file__, encoding="utf-8").read()
+        tree = ast.parse(src)
+        code = ast.unparse(tree)  # docstrings excluded below via walk
+        names = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
+        assert not {"time", "monotonic"} & names
+        assert "PySide6" not in code.replace(ast.get_docstring(tree) or "", "")
