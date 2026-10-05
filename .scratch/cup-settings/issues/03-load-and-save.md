@@ -2,7 +2,7 @@
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Read first:** `.scratch/cup-settings/spec.md`, the settings store section.
 `docs/adr/0002-...md` amendment decisions A3, A4 and A5.
