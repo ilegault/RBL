@@ -23,7 +23,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication
 
 from rbl.config.cup_config import (
+    CUP_ARM_DEBOUNCE_S,
     CUP_ARM_THRESHOLD_A,
+    CUP_RELEASE_INTERVAL_S,
     CUP_RELEASE_THRESHOLD_A,
 )
 from rbl.gui.faraday_cup_tab import FaradayCupTab
@@ -37,6 +39,57 @@ from tests.payloads import CupFeed
 @pytest.fixture(scope="session")
 def qapp():
     return QApplication.instance() or QApplication([])
+
+
+def _header_text(writer):
+    with open(writer.csv_path, encoding="utf-8") as f:
+        return "".join(ln for ln in f if ln.startswith("#"))
+
+
+class TestWriterRecordsSettingsInForce:
+    """Ticket 05: the header states the settings in use, not the constants."""
+
+    KEYS = ("arm_threshold_a", "release_threshold_a", "arm_debounce_s", "release_interval_s")
+
+    def test_defaults_carry_the_constants(self, tmp_path):
+        writer = CupSessionWriter(output_dir=tmp_path)
+        writer.close()
+        with open(tmp_path / f"{writer.session_id}.json", encoding="utf-8") as f:
+            meta = json.load(f)
+        assert meta["arm_threshold_a"] == CUP_ARM_THRESHOLD_A
+        assert meta["release_threshold_a"] == CUP_RELEASE_THRESHOLD_A
+        assert meta["arm_debounce_s"] == CUP_ARM_DEBOUNCE_S
+        assert meta["release_interval_s"] == CUP_RELEASE_INTERVAL_S
+
+    def test_supplied_settings_reach_metadata_and_header(self, tmp_path):
+        writer = CupSessionWriter(
+            output_dir=tmp_path,
+            arm_threshold_a=1.0e-7,
+            release_threshold_a=2.0e-8,
+            arm_debounce_s=0.7,
+            release_interval_s=9.0,
+        )
+        writer.close()
+        with open(tmp_path / f"{writer.session_id}.json", encoding="utf-8") as f:
+            meta = json.load(f)
+        assert meta["arm_threshold_a"] == 1.0e-7
+        assert meta["arm_threshold_a"] != CUP_ARM_THRESHOLD_A
+        assert meta["release_threshold_a"] == 2.0e-8
+        assert meta["arm_debounce_s"] == 0.7
+        assert meta["release_interval_s"] == 9.0
+        text = _header_text(writer)
+        assert "1.000e-07" in text
+        assert "2.000e-08" in text
+        assert "0.7 s" in text
+        assert "9.0 s" in text
+
+    def test_metadata_key_names_unchanged(self, tmp_path):
+        writer = CupSessionWriter(output_dir=tmp_path)
+        writer.close()
+        with open(tmp_path / f"{writer.session_id}.json", encoding="utf-8") as f:
+            meta = json.load(f)
+        for key in self.KEYS:
+            assert key in meta
 
 
 class TestCupSessionWriterDirect:
