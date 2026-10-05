@@ -465,106 +465,91 @@ someone else's bug fix smuggled into it cannot be reviewed.
 <!-- ACTIVE-PLAN:START -->
 ## Active implementation plan
 
-_Written by the planning model on 2026-09-21 23:00. Implement this. If something in it is wrong, say so before changing course._
+_Written by the planning model on 2026-09-24 22:31. Implement this. If something in it is wrong, say so before changing course._
 
-# Active work: Faraday cup actuation, sampling cycle and dose tracking
+# Active work: operator-editable acquisition settings for the Faraday cup
 
 This is a **pointer**, not the work. The work is a ticket set.
 
-- Spec: `.scratch/cup-actuation/spec.md`
-- Decision record: `docs/adr/0003-commanded-and-confirmed-cup-position.md` — **read it
-  before any ticket in this set.** It supersedes ADR 0002 decision 6 and records why
-  confirmed position is authoritative over current inference, and why the cup fails to IN.
-- Still in force: `docs/adr/0002-cup-acquisition-triggered-by-current.md` — only decision
-  6 is superseded. Its current-inference detector stays in service for hand insertions
-  and as the cross-check.
+- Spec: `.scratch/cup-settings/spec.md`
+- Decision record: `docs/adr/0002-cup-acquisition-triggered-by-current.md` - read the
+  **amendment dated 2026-09-24** before any ticket in this set. Decisions A1 to A8
+  govern what is editable, what locks, and what is recorded. The original decisions
+  are unchanged and still binding.
+- Still in force: `docs/adr/0003-commanded-and-confirmed-cup-position.md`
 - Binding on all test work: `docs/adr/0001-tests-first-and-no-muted-failures.md`
-- Glossary: `CONTEXT.md`, "Cup actuation and dose" — commanded vs confirmed, in transit
-  vs indeterminate, sampling insertion, settle window, beam-on interval
-- Tickets: `.scratch/cup-actuation/issues/01…14`
+- Glossary: `CONTEXT.md`, "Cup actuation and dose" - acquisition settings, settings
+  file, settings lock, pending change, saved boundary
+- Tickets: `.scratch/cup-settings/issues/01...16`
 - Tracker conventions: `docs/agents/issue-tracker.md`
 
-Previous effort `.scratch/faraday-cup-reader/` is complete except:
+The previous effort `.scratch/cup-actuation/` is complete in software: tickets 01-11
+are `done`. Tickets 12, 13 and 14 are `ready-for-developer` bench tasks and **an agent
+must not claim them**. Ticket 13 (the 6482 autorange settle time) sets the default this
+ticket set makes editable; neither blocks the other.
 
-- **11 — Keithley 6482 driver speaks the 6482's real command set.** `ready-for-agent`,
-  unblocked, **do this first**: the picoammeter cannot connect to real hardware until it
-  lands (bench run 2026-09-21: `:SOURce<n>:STATe` and `:SENSe1:FUNCtion` are undefined
-  headers on the 6482, `READing` is not a FORMat element). Touches only
-  `keithley6482_driver.py`, its test file, and example resource strings.
-- **12 — `visa_probe.py` reports success only when an instrument answers.** `ready-for-agent`,
-  unblocked, `scripts/` only.
-- **10 — existing instruments under Keysight VISA.** Developer bench task; **must pass
-  before a build ships**.
+## Next up - four tickets are unblocked and independent
 
-11 and 12 are disjoint from each other and from every cup-actuation ticket below.
+- **01 - The acquisition settings shape and its file path.** Pure, `rbl/config/`.
+- **04 - One setter for the thresholds.** Pure, `rbl/services/cup_acquisition.py`.
+  Fixes a live defect: `AuthorityDetector` carries the config defaults on itself while
+  the `CupDetector` inside it does the comparing, so the threshold a run records and
+  the threshold it was judged by can differ.
+- **05 - The session writer records the settings in force.** `cup_session_writer.py`.
+- **09 - Period and dwell edits queue.** Pure, `sampling_cycle.py`.
 
-## Next up — four tickets are unblocked and independent
-
-- **01 — One reading structure for the cup detector seam.** Pure refactor of
-  `rbl/services/cup_acquisition.py` plus the one-second-insertion regression test.
-- **02 — T7 digital output drive and pure status decoding.** The first digital I/O this
-  repo has ever had.
-- **08 — The dose chain, and a traceable displacement coefficient.** Pure math in
-  `rbl/hardware/`, plus wiring the irradiated area through from the Raster Planner.
-- **13 — Bench: 6482 autorange settle time.** Developer task. An agent must not claim it.
-
-01, 02 and 08 touch disjoint files and can be worked in parallel.
+01, 04, 05 and 09 touch disjoint files and can be worked in parallel.
 
 ## Dependency order
 
 ```
-01 ─┐
-02 ─┼─ 03 ── 04 ─┬─ 05 ─┬─ 07 ─┐
-    │            └─ 06 ─┘      │
-    │               └── 09 ── 10 ── 11 ── 14
-08 ─────────────────────┘              │
-12 (bench, after 02+03) ───────────────┘
-13 (bench, independent)
+01 ── 02 ─┬─ 03 ─────────────┐
+          └─ 11 ─┐           │
+04 ──────────────┤           │
+05 ─┬─ 06 ───────┤           │
+    ├─ 07 ───────┴── 12 ── 13 ── 14 ── 15 ── 16
+    └─ 08 ──────────────────────────────────┘
+09 ─┬─ 10 ───────────────────────────────────┘
+    └────────────────────────── 15
 ```
 
-- 12 and 14 are developer bench tasks. **An agent must not claim them.**
-- **12 gates the first commanded move on real hardware.** Its wiring and polarity checks
-  must be complete before ticket 05 is exercised against the actual cup.
+- 13, 14, 15 and 16 are chained rather than parallel **on purpose**. All four edit
+  `src/rbl/gui/faraday_cup_tab.py`, which is ~1 900 lines; concurrent branches on it
+  produce merge conflicts that cost more than the wall-clock saved.
 
 ## Rules for working this set
 
 - Do not start a ticket whose `Blocked by:` line names an unfinished ticket. Work the
   frontier: any ticket whose blockers are all done.
-- A failing test is fixed or escalated, never muted. The escalation path — commit to
-  branch, ticket `Status: blocked`, comment on the ticket, draft PR — is ADR 0001
-  decision 3, and the report goes in the ticket file under `.scratch/`, never `.claude/`.
+- A failing test is fixed or escalated, never muted. The escalation path - commit to
+  branch, ticket `Status: blocked`, comment on the ticket, draft PR - is ADR 0001
+  decision 3, and the report goes in the ticket file under `.scratch/`, never
+  `.claude/`.
 
 ## Five requirements that will be quietly violated if read as preferences
 
-1. **The cycle scheduler takes timestamps as inputs and never calls the clock**
-   (ticket 09). An eight-hour cycle with a real clock inside it cannot be tested, and a
-   cycle never tested across a fault will fail silently across one.
-2. **`CupAcquisitionStateMachine` does not change in ticket 06.** Not one line. No
-   `hasattr`, no `isinstance`, no detector-dependent branch. If it must change, ticket
-   01's contract was wrong and that is an escalation, not a workaround.
-3. **Status decoding and the dose arithmetic are pure functions with no Qt on their call
-   path** (tickets 02 and 08). They are the only parts of this feature that can be
-   checked against numbers worked by hand.
-4. **No software path drives the cup as a safety measure.** The cup fails IN because
-   cup-OUT needs two contact closures; that is a property of the wiring and must stay
-   one. Shutdown releases drive, it does not command a position.
-5. **A move that does not confirm disarms the cycle. It never retries.** A controller in
-   LOCAL accepts a closure and does nothing, so a retry loop produces an application that
-   looks busy for hours while the cup never moves.
+1. **Every default stays in `rbl/config/cup_config.py`.** The new settings module
+   imports them; it never restates a number. The settings file holds only what an
+   operator changed.
+2. **The value a run records is the value the detector compared against** (ticket 04).
+   Two attributes named `arm_threshold` exist on the detector in service today. One
+   test must assert the run opens **and** that the recorded threshold is the new one.
+3. **Validation, the settings store and the scheduler are pure, with no Qt on their
+   call path.** They are the parts that can be tested across cases that a GUI test
+   cannot reach, and the scheduler in particular must keep taking timestamps as
+   parameters rather than calling a clock.
+4. **No silent failure anywhere in this feature.** A rejected file value, a refused
+   edit and a failed save are each named on screen with the key, the value and the
+   reason. A locked field is disabled, never a field that accepts typing and discards
+   it.
+5. **The application owns `~/.config/rbl/cup_settings.json` while it runs.** It
+   rewrites the file after every committed edit and never merges a hand edit made
+   while it is open. The file says so in its own `_README` key.
 
-## Two numbers in the spec are guesses
+## Two things this set does not do
 
-The 6482's autorange settle time (ticket 13) and the mechanical lag from relay closure to
-cup movement (ticket 14). Neither blocks the software. `CUP_SETTLE_WINDOW_S = 1.0` is a
-placeholder and its docstring says so.
-
-## One decision made during ticket-writing, recorded here
-
-`FIO_STATE` joins the **`FULL` profile only**. The other four stream profiles are
-amplifier diagnostics, are run during sweeps that never move the cup, and all sit at the
-T7's 100 kS/s aggregate ceiling. `FULL` drops from 8 000 to 7 500 Hz per channel to make
-room for the thirteenth channel — ~3.75x oversampling at the 2 kHz fast axis instead of
-~4x. The consequence is that **position feedback is unavailable in any diagnostic
-profile**, which is why ticket 10 refuses to arm the cycle outside `FULL` and disarms it
-on a profile change.
+The arm debounce and the release interval get no field on the tab: they are
+file-only, edited with the application closed, per amendment decision A2. And nothing
+here changes `CUP_SETTLE_WINDOW_S`'s default value - that is bench ticket 13 of
+`.scratch/cup-actuation/`.
 <!-- ACTIVE-PLAN:END -->

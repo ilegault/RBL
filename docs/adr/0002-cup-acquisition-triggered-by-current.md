@@ -75,3 +75,83 @@ biased toward recording.
 
 The current-based inference is the weakest part of this and is expected to be
 replaced rather than tuned. Decision 6 is what keeps that replacement cheap.
+
+---
+
+## Amendment, 2026-09-24: the acquisition settings are operator-editable
+
+Decision 1 above says both thresholds and both intervals are "configuration, not
+literals". They were constants in `rbl/config/cup_config.py`, which on the control PC
+means they are compiled into the exe: changing one is a code edit and a PyInstaller
+rebuild. That is not configuration in any sense useful at the bench, and the first
+irradiation with a beam current below the arm threshold silently produces no runs at
+all.
+
+This amendment does not change what the detector does or how a run is bounded. It
+changes only who can set the numbers, and when.
+
+A1. **Three values are editable from the Faraday Cup tab**: the arm threshold, the
+    release threshold, and the per-insertion settle window (ADR 0003, the window
+    whose samples are excluded from the post-settle mean and from the dose). The
+    sampling cycle's period and dwell were already editable and remain so.
+
+A2. **Two values are editable in the settings file only**: the arm debounce and the
+    release interval. They have no field on the tab. They exist in the file so a
+    bench session can change them and restart, without a rebuild. The warning in
+    `cup_config.py` about not reusing them for the confirmed-position path is
+    unchanged and still binding.
+
+A3. **Edited values persist across restarts**, in `~/.config/rbl/cup_settings.json`,
+    written after every committed edit. `cup_config.py` keeps the defaults, and a
+    "Reset to defaults" control restores them. A value differing from its default is
+    shown as such on the tab, so a threshold inherited from last week is visible
+    rather than silent.
+
+A4. **The application owns the settings file while it is running.** It rewrites the
+    file on every committed edit, so a hand edit made while the application is open
+    is overwritten without warning. The file says so in its own `_README` key, and
+    the application does not attempt to merge. Hand edits happen with the
+    application closed.
+
+A5. **A value rejected at load falls back to its default, visibly.** Every key is
+    validated when the file is read. A bad value never enters the application and
+    never fails silently: the tab names the key, the value found, the reason, and the
+    default used in its place. Valid keys in the same file still load.
+
+A6. **Values that decide what counts as data are locked while data is being
+    collected.** The arm threshold, release threshold and settle window cannot be
+    edited while an acquisition run is open or while the sampling cycle is armed. The
+    fields are disabled, not merely ignored, and the reason is displayed. To change
+    one mid-irradiation the operator stops the cycle, edits, and re-arms; a
+    "Keep previous schedule" option re-arms onto the boundary the stopped cycle would
+    have hit, so no sampling point is lost.
+
+A7. **Period and dwell stay editable while the cycle is armed.** They are schedule
+    settings and cannot alter an insertion already recorded. An edit is queued and
+    displayed as pending with the time it takes effect, and applies at the next
+    period boundary (period) or the next insertion (dwell). Nothing is applied
+    mid-insertion.
+
+A8. **Every change is in the record.** Decision 4 above already records the
+    thresholds in force at each run. Additionally, a settings-change marker is
+    written to the session file for each of the five editable values, carrying the
+    old value, the new value and the timestamp; cycle disarm and re-arm markers carry
+    the saved boundary and whether the re-arm resumed it or started a fresh
+    countdown; and the two file-only values are written into the session header. A
+    reader looking at two insertions judged by different thresholds can see exactly
+    when and to what the value changed.
+
+### Consequences of the amendment
+
+The cost named in the original Consequences section gets sharper: a threshold set too
+high silently truncates the start of every insertion, and now an operator can set it
+too high from the tab, mid-session, without touching code. The mitigations are the
+lock in A6, the per-run recording in decision 4, and the markers in A8. What the
+application can no longer do is quietly disagree with its own archive.
+
+The settle window is different in kind from the thresholds: it does not decide when a
+run starts, it decides which of a run's samples reach the mean current and the dose.
+Editing it changes a derived number rather than the raw record, and the raw samples
+remain in the file, so any settle window can be re-applied later in analysis. It is
+locked alongside the thresholds anyway, because an insertion whose samples were
+selected by two different rules is not one measurement.
