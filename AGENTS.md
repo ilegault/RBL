@@ -465,91 +465,81 @@ someone else's bug fix smuggled into it cannot be reviewed.
 <!-- ACTIVE-PLAN:START -->
 ## Active implementation plan
 
-_Written by the planning model on 2026-09-24 22:31. Implement this. If something in it is wrong, say so before changing course._
+_Written by the planning model on 2026-10-05 22:37. Implement this. If something in it is wrong, say so before changing course._
 
-# Active work: operator-editable acquisition settings for the Faraday cup
+# Active work: two ticket sets: cup acquisition settings, then logging and sessions
 
-This is a **pointer**, not the work. The work is a ticket set.
+This is a **pointer**, not the work. The work is two ticket sets. Part C of the second is
+blocked by the end of the first.
+
+## Set 1: operator-editable acquisition settings for the Faraday cup (unchanged)
 
 - Spec: `.scratch/cup-settings/spec.md`
-- Decision record: `docs/adr/0002-cup-acquisition-triggered-by-current.md` - read the
-  **amendment dated 2026-09-24** before any ticket in this set. Decisions A1 to A8
-  govern what is editable, what locks, and what is recorded. The original decisions
-  are unchanged and still binding.
-- Still in force: `docs/adr/0003-commanded-and-confirmed-cup-position.md`
-- Binding on all test work: `docs/adr/0001-tests-first-and-no-muted-failures.md`
-- Glossary: `CONTEXT.md`, "Cup actuation and dose" - acquisition settings, settings
-  file, settings lock, pending change, saved boundary
+- ADRs: `docs/adr/0002-cup-acquisition-triggered-by-current.md` (amendment 2026-09-24,
+  A1-A8), `docs/adr/0003-commanded-and-confirmed-cup-position.md`
 - Tickets: `.scratch/cup-settings/issues/01...16`
+- Unblocked: 01, 04, 05, 09 (disjoint files). 13-16 are chained on purpose: all edit
+  `src/rbl/gui/faraday_cup_tab.py`.
+- Its five binding requirements are in `.scratch/cup-settings/spec.md`; read them.
+
+## Set 2: daily vacuum monitoring log, sessions that own their files, an operator-opened cup log
+
+- Spec: `.scratch/logging-and-sessions/spec.md`
+- ADRs: `docs/adr/0004-monitoring-log-and-sessions.md` (new);
+  `docs/adr/0002-...md` amendment 2026-10-05 (B1-B5); `docs/adr/0003-...md` amendment
+  2026-10-05 (C1-C5). Binding on all test work: `docs/adr/0001-tests-first-and-no-muted-failures.md`.
+- Glossary: `CONTEXT.md`, new section "Logging and sessions" (monitoring log, session,
+  cup log, test cup log, not logging, automatic cup insertion, manual insertion, counted
+  insertion, excluded interval, stop gap, dose continuation); "Run start current / run
+  end current"; Known collisions "session" and "arm".
+- Tickets: `.scratch/logging-and-sessions/issues/19...33`
 - Tracker conventions: `docs/agents/issue-tracker.md`
 
-The previous effort `.scratch/cup-actuation/` is complete in software: tickets 01-11
-are `done`. Tickets 12, 13 and 14 are `ready-for-developer` bench tasks and **an agent
-must not claim them**. Ticket 13 (the 6482 autorange settle time) sets the default this
-ticket set makes editable; neither blocks the other.
+## Next
 
-## Next up - four tickets are unblocked and independent
+- **Set 2, ticket 19** first: the rollover helper. It unblocks 20, 22 and 27.
+- **Set 2, ticket 25** (pure `dose_model.py`) can run alongside it.
+- Set 1 tickets 01, 04, 05, 09 can run alongside both. No two of these six touch the
+  same file.
 
-- **01 - The acquisition settings shape and its file path.** Pure, `rbl/config/`.
-- **04 - One setter for the thresholds.** Pure, `rbl/services/cup_acquisition.py`.
-  Fixes a live defect: `AuthorityDetector` carries the config defaults on itself while
-  the `CupDetector` inside it does the comparing, so the threshold a run records and
-  the threshold it was judged by can differ.
-- **05 - The session writer records the settings in force.** `cup_session_writer.py`.
-- **09 - Period and dwell edits queue.** Pure, `sampling_cycle.py`.
-
-01, 04, 05 and 09 touch disjoint files and can be worked in parallel.
-
-## Dependency order
+## Dependency order (set 2)
 
 ```
-01 ── 02 ─┬─ 03 ─────────────┐
-          └─ 11 ─┐           │
-04 ──────────────┤           │
-05 ─┬─ 06 ───────┤           │
-    ├─ 07 ───────┴── 12 ── 13 ── 14 ── 15 ── 16
-    └─ 08 ──────────────────────────────────┘
-09 ─┬─ 10 ───────────────────────────────────┘
-    └────────────────────────── 15
+19 ─┬─ 20 ── 21
+    ├─ 22 ── 23 ── 24 ─────────────────────┐
+    └──────────────┐                       │
+25 ────────────────┼───────────── 30       │
+cup-settings/16 ── 26 ── 27 ── 28 ── 29 ── 30 ── 31 ── 32 ── 33
+                                                        (24)┘
 ```
 
-- 13, 14, 15 and 16 are chained rather than parallel **on purpose**. All four edit
-  `src/rbl/gui/faraday_cup_tab.py`, which is ~1 900 lines; concurrent branches on it
-  produce merge conflicts that cost more than the wall-clock saved.
+- 27 is blocked by 19, 25 and 26. 28 is blocked by 27 and cup-settings/16.
+- 28-33 are chained because each edits `faraday_cup_tab.py`. 32 also needs 24 (both
+  edit session start/stop).
+- No ticket is held or `ready-for-developer`.
 
-## Rules for working this set
+## Requirements that will be quietly treated as preferences
 
-- Do not start a ticket whose `Blocked by:` line names an unfinished ticket. Work the
-  frontier: any ticket whose blockers are all done.
-- A failing test is fixed or escalated, never muted. The escalation path - commit to
-  branch, ticket `Status: blocked`, comment on the ticket, draft PR - is ADR 0001
-  decision 3, and the report goes in the ticket file under `.scratch/`, never
-  `.claude/`.
+1. **No log file is ever overwritten.** Every new file name goes through
+   `log_rollover.unused_path`. A second video run continues segment numbering and
+   appends to `frames.csv` (ticket 23). That's the bug this fixes.
+2. **`log_rollover` and `VacuumMonitorLog` take the time as an argument and never read
+   a clock**, so midnight, month-end and DST are tested by passing times.
+3. **Stop Logging stays stopped**, including through midnight.
+4. **No cup file exists unless an operator opened a cup log**, and automatic cup
+   insertion cannot start without one. Manual insertion always works.
+5. **Only automatic insertions count toward the dose.** Manual cup-in time is
+   *excluded* from the hold interval, not ignored.
+6. **`DoseTotals` lives in `rbl/hardware/dose_model.py`.** `hardware` never imports
+   from `services`.
+7. **Dialogs sit behind replaceable methods** (`_confirm_stop_automatic`,
+   `_ask_restart`, `_ask_continue_dose`), so tests drive them without a modal.
+8. **Renames are text a person reads only.** Python identifiers, CSV column names and
+   settings-file keys keep their names.
 
-## Five requirements that will be quietly violated if read as preferences
+## What set 2 does not do
 
-1. **Every default stays in `rbl/config/cup_config.py`.** The new settings module
-   imports them; it never restates a number. The settings file holds only what an
-   operator changed.
-2. **The value a run records is the value the detector compared against** (ticket 04).
-   Two attributes named `arm_threshold` exist on the detector in service today. One
-   test must assert the run opens **and** that the recorded threshold is the new one.
-3. **Validation, the settings store and the scheduler are pure, with no Qt on their
-   call path.** They are the parts that can be tested across cases that a GUI test
-   cannot reach, and the scheduler in particular must keep taking timestamps as
-   parameters rather than calling a clock.
-4. **No silent failure anywhere in this feature.** A rejected file value, a refused
-   edit and a failed save are each named on screen with the key, the value and the
-   reason. A locked field is disabled, never a field that accepts typing and discards
-   it.
-5. **The application owns `~/.config/rbl/cup_settings.json` while it runs.** It
-   rewrites the file after every committed edit and never merges a hand edit made
-   while it is open. The file says so in its own `_README` key.
-
-## Two things this set does not do
-
-The arm debounce and the release interval get no field on the tab: they are
-file-only, edited with the application closed, per amendment decision A2. And nothing
-here changes `CUP_SETTLE_WINDOW_S`'s default value - that is bench ticket 13 of
-`.scratch/cup-actuation/`.
+No rollover for anything but the monitoring log. No splitting of old log files. No
+video outside a session. No time limit on dose continuation. No change to any cup
+default.
 <!-- ACTIVE-PLAN:END -->

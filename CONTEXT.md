@@ -112,9 +112,11 @@ produces one run.
 is to notice an insertion beginning. It is evidence that the application was
 watching; it is not measurement data.
 
-**Arm threshold** and **release threshold** — the cup currents at which a run
-starts and ends. The release threshold is deliberately the lower of the two, so
-a current sitting near the boundary cannot start and stop runs repeatedly.
+**Run start current** and **run end current** — the cup currents at which a run
+starts and ends. The run end current is deliberately the lower of the two, so
+a current sitting near the boundary cannot start and stop runs repeatedly. ADRs 0002
+and 0003 and the code call these the **arm threshold** and **release threshold**; on
+screen and in prose they are run start current and run end current.
 
 ---
 
@@ -180,8 +182,8 @@ edit; a hand edit made while the application is open is lost. `cup_config.py` ho
 the defaults, and the file holds only what an operator changed.
 
 **Settings lock** - the state in which the arm threshold, release threshold and settle
-window cannot be edited, because an acquisition run is open or the sampling cycle is
-armed. Locked fields are disabled, never silently ignored. Period and dwell are never
+window cannot be edited, because an acquisition run is open or automatic cup insertion
+is running. Locked fields are disabled, never silently ignored. Period and dwell are never
 locked.
 
 **Pending change** - an edit to the cycle period or dwell that has been accepted but
@@ -189,11 +191,57 @@ not yet applied, because applying it would alter an insertion in progress or a
 countdown already running. It is displayed with the time it takes effect: the next
 period boundary for a period change, the next insertion for a dwell change.
 
-**Saved boundary** - the time a stopped or disarmed cycle would have inserted next.
-It is kept so that re-arming can resume the original schedule rather than starting a
-fresh countdown, and it is dropped once the application closes or once a new arm sets
-a boundary of its own. A saved boundary already in the past cannot be resumed and
+**Saved boundary** - the time automatic cup insertion would have inserted next when it
+was stopped. It is kept so that restarting can resume the original schedule rather than
+starting a fresh countdown, and it is dropped once the application closes, once the cup
+log closes, or once a fresh start sets a boundary of its own. A saved boundary already in the past cannot be resumed and
 never produces a catch-up insertion.
+
+---
+
+## Logging and sessions
+
+**Monitoring log** — the continuous vacuum log. It starts when the application opens,
+rolls to a new file at local midnight, and files by month under `data/vacuum/YYYY-MM/`.
+It is the only log that runs without being asked for and the only one that rolls over.
+See ADR 0004.
+
+**Session** — one Start Session to Stop Session on the Overview tab, and one folder.
+Everything recorded for an experiment goes inside it: the beamline CSV, the event log,
+the session's `vacuum.csv`, the session's cup log and any video. Video is optional and
+may start and stop any number of times within a session. A session never rolls over.
+
+**Cup log** — the Faraday cup record for one session or one test. It is open only when
+an operator opened it. A cup log opened with a session lives in the session folder; one
+opened from the Overview cup panel without a session is a **test cup log** and lives
+under `data/faraday_cup/YYYY-MM/`. At most one cup log is open at a time.
+
+**Not logging** — the state with no cup log open. The cup still reads, moves by hand and
+displays, and nothing is written. Shown in the WARN colour wherever cup data is shown.
+
+**Automatic cup insertion** — the sampling cycle running: the application inserting and
+withdrawing the cup on its own schedule. It runs only while a cup log is open. Formerly
+called *arming the cycle*. Starting it is "start automatic cup insertion", never "arm".
+
+**Manual insertion** — any insertion automatic cup insertion did not command: the Insert
+button, a force start, or a hand insertion at the controller. Recorded when a cup log is
+open, never counted toward the dose. Typically a beam check before irradiation begins.
+
+**Counted insertion** — an automatic insertion, the only kind that contributes to the
+accumulated dose.
+
+**Excluded interval** — a span of time removed from the beam-on interval it falls in:
+the cup-in time of a manual insertion, or a stop gap the operator said had no beam on the
+specimen.
+
+**Stop gap** — the time between an operator stopping automatic cup insertion and starting
+it again in the same cup log. On restart the operator says whether the beam was on the
+specimen during it; the answer decides whether it is held at the last current or
+excluded.
+
+**Dose continuation** — carrying the accumulated totals from the previous session's cup
+log into a new session's. Offered at every session start, with no time limit, because an
+irradiation can span more than one session.
 
 ---
 
@@ -211,3 +259,12 @@ and *drift pass* wherever both could be meant.
 
 **"Position" means commanded or confirmed, never both.** They differ by a mechanical
 lag and, when something is wrong, by more than that. Say which one is meant.
+
+**"Session" used to mean two things.** The cup writer (`CupSessionWriter`) and older
+code called one run of the application a session. A session is now only Start Session
+to Stop Session on the Overview tab. The cup's file is a *cup log*. Do not use
+*session* for an application run.
+
+**"Arm" used to mean two things.** The arm threshold (a current) and arming the cycle (an
+action). On screen these are now *run start current* and *start automatic cup
+insertion*. The code identifiers keep the old names.

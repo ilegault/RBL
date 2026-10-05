@@ -155,3 +155,42 @@ Editing it changes a derived number rather than the raw record, and the raw samp
 remain in the file, so any settle window can be re-applied later in analysis. It is
 locked alongside the thresholds anyway, because an insertion whose samples were
 selected by two different rules is not one measurement.
+
+## Amendment, 2026-10-05: the cup log is opened by the operator, not by launch
+
+Until now the cup's session file was opened when the Faraday Cup tab was built and closed
+when the application closed: one file per application run, heartbeats every ten seconds,
+whether or not anything was being irradiated. That file is now a **cup log**, and it
+exists only while the operator has asked for one. See ADR 0004 for what a session is.
+
+B1. **A cup log is open only when the operator opens one.** It opens with a session, in the
+    session folder, or on its own from the Overview cup panel as a **test cup log**, in
+    `data/faraday_cup/YYYY-MM/`. At most one cup log is open at a time. Starting a session
+    closes a test cup log and opens the session's.
+
+B2. **Decision 3 applies within an open cup log.** Markers and idle heartbeats are written
+    while a cup log is open, so a gap inside one file still distinguishes "watching, cup
+    out" from "application not running" from "instrument disconnected". Outside an open
+    cup log nothing is written. The absence of a file is not a gap.
+
+B3. **With no cup log open, readings are displayed and nothing is written.** Detection and
+    actuation keep working, and manual insertion still works. Both the Overview panel and
+    the Faraday Cup tab show **Not logging** in the WARN colour.
+
+B4. **Automatic cup insertion requires an open cup log.** Its start button is disabled,
+    with the reason shown, while no cup log is open. Closing a cup log while automatic
+    insertion runs stops it the way an operator stop does: the cup is withdrawn and the
+    next scheduled boundary is kept.
+
+B5. **Terms on screen.** In this ADR and the code, "arm threshold" and "release threshold"
+    name what operators now see as **run start current** and **run end current**, and
+    "arming the cycle" is **starting automatic cup insertion**. The decisions above are
+    unchanged; only the words on screen changed. See `CONTEXT.md`.
+
+### Consequences of the amendment
+
+An irradiation that nobody opened a cup log for has no cup record at all. That is the
+cost, and it is why automatic insertion refuses to run without one: the application
+will not move the cup on its own schedule while nothing is writing down what happened.
+Manual insertion stays available without a log because the operator is at the bench and
+watching, which is the point of doing it by hand.
