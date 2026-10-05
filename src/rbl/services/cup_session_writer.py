@@ -203,7 +203,23 @@ class CupSessionWriter:
         entry_date: str | None = None,
         cycle_period_s: float | None = None,
         cycle_dwell_s: float | None = None,
+        arm_threshold_a: float = CUP_ARM_THRESHOLD_A,
+        release_threshold_a: float = CUP_RELEASE_THRESHOLD_A,
+        arm_debounce_s: float = CUP_ARM_DEBOUNCE_S,
+        release_interval_s: float = CUP_RELEASE_INTERVAL_S,
     ) -> None:
+        """Open a session file.
+
+        The four acquisition settings are parameters (defaulting to the
+        compiled-in ``cup_config`` constants) because they are operator-editable
+        from the Faraday Cup tab. A header that reports a different number than
+        the detector actually used makes the archive unreadable, so the caller
+        passes the values in force when the file is opened.
+        """
+        self._arm_threshold_a = arm_threshold_a
+        self._release_threshold_a = release_threshold_a
+        self._arm_debounce_s = arm_debounce_s
+        self._release_interval_s = release_interval_s
         self.session_id: str = session_id or _new_session_id()
         self.output_dir: Path = Path(output_dir) if output_dir is not None else FARADAY_CUP_DIR
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -225,10 +241,10 @@ class CupSessionWriter:
         self._metadata: dict[str, Any] = dict(metadata or {})
         self._metadata.setdefault("session_id", self.session_id)
         self._metadata.setdefault("start_timestamp_iso", _now_iso())
-        self._metadata.setdefault("arm_threshold_a", CUP_ARM_THRESHOLD_A)
-        self._metadata.setdefault("release_threshold_a", CUP_RELEASE_THRESHOLD_A)
-        self._metadata.setdefault("arm_debounce_s", CUP_ARM_DEBOUNCE_S)
-        self._metadata.setdefault("release_interval_s", CUP_RELEASE_INTERVAL_S)
+        self._metadata.setdefault("arm_threshold_a", self._arm_threshold_a)
+        self._metadata.setdefault("release_threshold_a", self._release_threshold_a)
+        self._metadata.setdefault("arm_debounce_s", self._arm_debounce_s)
+        self._metadata.setdefault("release_interval_s", self._release_interval_s)
         self._metadata.setdefault("species", self._species)
         self._metadata.setdefault("energy", self._energy)
         self._metadata.setdefault("charge_state", self._charge_state)
@@ -269,10 +285,10 @@ class CupSessionWriter:
         """Write self-describing comments at the top of the CSV file."""
         self._file.write(f"# cup_session_writer RBL {_now_iso()}\n")
         self._file.write(
-            f"# thresholds: arm={CUP_ARM_THRESHOLD_A:.3e} A  "
-            f"release={CUP_RELEASE_THRESHOLD_A:.3e} A  "
-            f"arm_debounce={CUP_ARM_DEBOUNCE_S:.1f} s  "
-            f"release_interval={CUP_RELEASE_INTERVAL_S:.1f} s\n"
+            f"# thresholds: arm={self._arm_threshold_a:.3e} A  "
+            f"release={self._release_threshold_a:.3e} A  "
+            f"arm_debounce={self._arm_debounce_s:.1f} s  "
+            f"release_interval={self._release_interval_s:.1f} s\n"
         )
         species_str = _format_header_val(self._species)
         energy_str = _format_header_val(self._energy)
