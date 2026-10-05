@@ -2,7 +2,7 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Read first:** `src/rbl/services/sampling_cycle.py` in full - `set_period`,
 `set_dwell`, `arm`, `tick`, and the `CycleState` values. The module docstring and
