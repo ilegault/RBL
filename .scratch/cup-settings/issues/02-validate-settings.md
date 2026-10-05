@@ -2,7 +2,7 @@
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Read first:** `.scratch/cup-settings/spec.md`, section "The rules each value must
 satisfy". `docs/adr/0002-...md` amendment decision A5 (a rejected value falls back to
