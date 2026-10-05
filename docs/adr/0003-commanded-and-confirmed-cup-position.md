@@ -114,3 +114,43 @@ have about whether they are right.
 Decision 5 costs something now to save something later: the detectors' input shapes
 differ, and keeping one contract means widening it rather than branching inside the
 state machine. The alternative is two run-logic paths that drift apart.
+
+## Amendment, 2026-10-05: only automatic insertions count toward the dose
+
+Decision 7 fed every closed run into the dose. In practice the cup is also inserted by
+hand before an irradiation begins, with alumina still in front of the specimen, to check
+the beam. Those insertions are measurements, not irradiation, and crediting them to the
+dose overstates it.
+
+C1. **Only automatic cup insertions contribute to the accumulated dose.** An insertion is
+    automatic when automatic cup insertion commanded it. Every other insertion (the Insert
+    button, a force start, a hand insertion at the controller in LOCAL) is recorded in the
+    open cup log with its origin and is marked as not counted.
+
+C2. **Time the cup spent in the beam during a non-counted insertion is excluded from the
+    beam-on interval it falls inside.** The specimen was shadowed for that time, so the
+    zero-order hold must not credit it.
+
+C3. **An operator stop of automatic cup insertion asks for confirmation** and says what it
+    does to the dose record. A stop forced by a fault (decision 3) does not ask.
+
+C4. **Restarting after a stop, in the same cup log, asks whether the beam was on the
+    specimen during the gap.** If yes, the gap is held at the last measured current like
+    any other beam-on interval. If no, the gap is excluded. The answer, the gap's start
+    and end, and whether the previous schedule was resumed are written to the cup log. The
+    totals continue in the same file and nothing is overwritten.
+
+C5. **Every new session asks whether to continue the dose from the previous session**, with
+    no time limit, because an irradiation can span a weekend and more than one session.
+    If continued, the gap between the two cup logs is put to the same question as C4, and
+    the new cup log's header records the file the totals came from and their values. If
+    not continued, the session starts at zero.
+
+### Consequences of the amendment
+
+The accumulated dose is now only as complete as the automatic insertions behind it. An
+irradiation run entirely by hand accumulates nothing, by design.
+
+C4 and C5 make the operator's word part of the dose. The application cannot see whether
+the beam was on while it was not sampling, so it asks and records the answer next to the
+numbers it affects. A reader can then recompute the dose under either answer.

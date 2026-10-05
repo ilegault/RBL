@@ -465,106 +465,81 @@ someone else's bug fix smuggled into it cannot be reviewed.
 <!-- ACTIVE-PLAN:START -->
 ## Active implementation plan
 
-_Written by the planning model on 2026-09-21 23:00. Implement this. If something in it is wrong, say so before changing course._
+_Written by the planning model on 2026-10-05 22:37. Implement this. If something in it is wrong, say so before changing course._
 
-# Active work: Faraday cup actuation, sampling cycle and dose tracking
+# Active work: two ticket sets: cup acquisition settings, then logging and sessions
 
-This is a **pointer**, not the work. The work is a ticket set.
+This is a **pointer**, not the work. The work is two ticket sets. Part C of the second is
+blocked by the end of the first.
 
-- Spec: `.scratch/cup-actuation/spec.md`
-- Decision record: `docs/adr/0003-commanded-and-confirmed-cup-position.md` — **read it
-  before any ticket in this set.** It supersedes ADR 0002 decision 6 and records why
-  confirmed position is authoritative over current inference, and why the cup fails to IN.
-- Still in force: `docs/adr/0002-cup-acquisition-triggered-by-current.md` — only decision
-  6 is superseded. Its current-inference detector stays in service for hand insertions
-  and as the cross-check.
-- Binding on all test work: `docs/adr/0001-tests-first-and-no-muted-failures.md`
-- Glossary: `CONTEXT.md`, "Cup actuation and dose" — commanded vs confirmed, in transit
-  vs indeterminate, sampling insertion, settle window, beam-on interval
-- Tickets: `.scratch/cup-actuation/issues/01…14`
+## Set 1: operator-editable acquisition settings for the Faraday cup (unchanged)
+
+- Spec: `.scratch/cup-settings/spec.md`
+- ADRs: `docs/adr/0002-cup-acquisition-triggered-by-current.md` (amendment 2026-09-24,
+  A1-A8), `docs/adr/0003-commanded-and-confirmed-cup-position.md`
+- Tickets: `.scratch/cup-settings/issues/01...16`
+- Unblocked: 01, 04, 05, 09 (disjoint files). 13-16 are chained on purpose: all edit
+  `src/rbl/gui/faraday_cup_tab.py`.
+- Its five binding requirements are in `.scratch/cup-settings/spec.md`; read them.
+
+## Set 2: daily vacuum monitoring log, sessions that own their files, an operator-opened cup log
+
+- Spec: `.scratch/logging-and-sessions/spec.md`
+- ADRs: `docs/adr/0004-monitoring-log-and-sessions.md` (new);
+  `docs/adr/0002-...md` amendment 2026-10-05 (B1-B5); `docs/adr/0003-...md` amendment
+  2026-10-05 (C1-C5). Binding on all test work: `docs/adr/0001-tests-first-and-no-muted-failures.md`.
+- Glossary: `CONTEXT.md`, new section "Logging and sessions" (monitoring log, session,
+  cup log, test cup log, not logging, automatic cup insertion, manual insertion, counted
+  insertion, excluded interval, stop gap, dose continuation); "Run start current / run
+  end current"; Known collisions "session" and "arm".
+- Tickets: `.scratch/logging-and-sessions/issues/19...33`
 - Tracker conventions: `docs/agents/issue-tracker.md`
 
-Previous effort `.scratch/faraday-cup-reader/` is complete except:
+## Next
 
-- **11 — Keithley 6482 driver speaks the 6482's real command set.** `ready-for-agent`,
-  unblocked, **do this first**: the picoammeter cannot connect to real hardware until it
-  lands (bench run 2026-09-21: `:SOURce<n>:STATe` and `:SENSe1:FUNCtion` are undefined
-  headers on the 6482, `READing` is not a FORMat element). Touches only
-  `keithley6482_driver.py`, its test file, and example resource strings.
-- **12 — `visa_probe.py` reports success only when an instrument answers.** `ready-for-agent`,
-  unblocked, `scripts/` only.
-- **10 — existing instruments under Keysight VISA.** Developer bench task; **must pass
-  before a build ships**.
+- **Set 2, ticket 19** first: the rollover helper. It unblocks 20, 22 and 27.
+- **Set 2, ticket 25** (pure `dose_model.py`) can run alongside it.
+- Set 1 tickets 01, 04, 05, 09 can run alongside both. No two of these six touch the
+  same file.
 
-11 and 12 are disjoint from each other and from every cup-actuation ticket below.
-
-## Next up — four tickets are unblocked and independent
-
-- **01 — One reading structure for the cup detector seam.** Pure refactor of
-  `rbl/services/cup_acquisition.py` plus the one-second-insertion regression test.
-- **02 — T7 digital output drive and pure status decoding.** The first digital I/O this
-  repo has ever had.
-- **08 — The dose chain, and a traceable displacement coefficient.** Pure math in
-  `rbl/hardware/`, plus wiring the irradiated area through from the Raster Planner.
-- **13 — Bench: 6482 autorange settle time.** Developer task. An agent must not claim it.
-
-01, 02 and 08 touch disjoint files and can be worked in parallel.
-
-## Dependency order
+## Dependency order (set 2)
 
 ```
-01 ─┐
-02 ─┼─ 03 ── 04 ─┬─ 05 ─┬─ 07 ─┐
-    │            └─ 06 ─┘      │
-    │               └── 09 ── 10 ── 11 ── 14
-08 ─────────────────────┘              │
-12 (bench, after 02+03) ───────────────┘
-13 (bench, independent)
+19 ─┬─ 20 ── 21
+    ├─ 22 ── 23 ── 24 ─────────────────────┐
+    └──────────────┐                       │
+25 ────────────────┼───────────── 30       │
+cup-settings/16 ── 26 ── 27 ── 28 ── 29 ── 30 ── 31 ── 32 ── 33
+                                                        (24)┘
 ```
 
-- 12 and 14 are developer bench tasks. **An agent must not claim them.**
-- **12 gates the first commanded move on real hardware.** Its wiring and polarity checks
-  must be complete before ticket 05 is exercised against the actual cup.
+- 27 is blocked by 19, 25 and 26. 28 is blocked by 27 and cup-settings/16.
+- 28-33 are chained because each edits `faraday_cup_tab.py`. 32 also needs 24 (both
+  edit session start/stop).
+- No ticket is held or `ready-for-developer`.
 
-## Rules for working this set
+## Requirements that will be quietly treated as preferences
 
-- Do not start a ticket whose `Blocked by:` line names an unfinished ticket. Work the
-  frontier: any ticket whose blockers are all done.
-- A failing test is fixed or escalated, never muted. The escalation path — commit to
-  branch, ticket `Status: blocked`, comment on the ticket, draft PR — is ADR 0001
-  decision 3, and the report goes in the ticket file under `.scratch/`, never `.claude/`.
+1. **No log file is ever overwritten.** Every new file name goes through
+   `log_rollover.unused_path`. A second video run continues segment numbering and
+   appends to `frames.csv` (ticket 23). That's the bug this fixes.
+2. **`log_rollover` and `VacuumMonitorLog` take the time as an argument and never read
+   a clock**, so midnight, month-end and DST are tested by passing times.
+3. **Stop Logging stays stopped**, including through midnight.
+4. **No cup file exists unless an operator opened a cup log**, and automatic cup
+   insertion cannot start without one. Manual insertion always works.
+5. **Only automatic insertions count toward the dose.** Manual cup-in time is
+   *excluded* from the hold interval, not ignored.
+6. **`DoseTotals` lives in `rbl/hardware/dose_model.py`.** `hardware` never imports
+   from `services`.
+7. **Dialogs sit behind replaceable methods** (`_confirm_stop_automatic`,
+   `_ask_restart`, `_ask_continue_dose`), so tests drive them without a modal.
+8. **Renames are text a person reads only.** Python identifiers, CSV column names and
+   settings-file keys keep their names.
 
-## Five requirements that will be quietly violated if read as preferences
+## What set 2 does not do
 
-1. **The cycle scheduler takes timestamps as inputs and never calls the clock**
-   (ticket 09). An eight-hour cycle with a real clock inside it cannot be tested, and a
-   cycle never tested across a fault will fail silently across one.
-2. **`CupAcquisitionStateMachine` does not change in ticket 06.** Not one line. No
-   `hasattr`, no `isinstance`, no detector-dependent branch. If it must change, ticket
-   01's contract was wrong and that is an escalation, not a workaround.
-3. **Status decoding and the dose arithmetic are pure functions with no Qt on their call
-   path** (tickets 02 and 08). They are the only parts of this feature that can be
-   checked against numbers worked by hand.
-4. **No software path drives the cup as a safety measure.** The cup fails IN because
-   cup-OUT needs two contact closures; that is a property of the wiring and must stay
-   one. Shutdown releases drive, it does not command a position.
-5. **A move that does not confirm disarms the cycle. It never retries.** A controller in
-   LOCAL accepts a closure and does nothing, so a retry loop produces an application that
-   looks busy for hours while the cup never moves.
-
-## Two numbers in the spec are guesses
-
-The 6482's autorange settle time (ticket 13) and the mechanical lag from relay closure to
-cup movement (ticket 14). Neither blocks the software. `CUP_SETTLE_WINDOW_S = 1.0` is a
-placeholder and its docstring says so.
-
-## One decision made during ticket-writing, recorded here
-
-`FIO_STATE` joins the **`FULL` profile only**. The other four stream profiles are
-amplifier diagnostics, are run during sweeps that never move the cup, and all sit at the
-T7's 100 kS/s aggregate ceiling. `FULL` drops from 8 000 to 7 500 Hz per channel to make
-room for the thirteenth channel — ~3.75x oversampling at the 2 kHz fast axis instead of
-~4x. The consequence is that **position feedback is unavailable in any diagnostic
-profile**, which is why ticket 10 refuses to arm the cycle outside `FULL` and disarms it
-on a profile change.
+No rollover for anything but the monitoring log. No splitting of old log files. No
+video outside a session. No time limit on dose continuation. No change to any cup
+default.
 <!-- ACTIVE-PLAN:END -->
