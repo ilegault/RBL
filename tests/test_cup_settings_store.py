@@ -92,3 +92,194 @@ def test_module_docstring_why_this_exists():
     doc_lower = doc.lower()
     assert "rebuild" in doc_lower
     assert "beam" in doc_lower
+
+
+# ---------------------------------------------------------------------------
+# Ticket 02: validate_settings
+# ---------------------------------------------------------------------------
+import math  # noqa: E402
+
+from rbl.config.cup_config import CUP_MOVE_CONFIRMATION_TIMEOUT_S  # noqa: E402
+from rbl.config.cup_settings_store import (  # noqa: E402
+    SettingsLoadWarning,
+    validate_settings,
+)
+
+_T2 = 2 * CUP_MOVE_CONFIRMATION_TIMEOUT_S
+_KEYS = (
+    "arm_threshold_a",
+    "release_threshold_a",
+    "cycle_dwell_s",
+    "cycle_period_s",
+    "settle_window_s",
+    "arm_debounce_s",
+    "release_interval_s",
+)
+
+
+def _valid(**over):
+    raw = dataclasses.asdict(CupSettings.defaults())
+    raw.update(over)
+    return raw
+
+
+def _check(over, key, ok):
+    settings, warnings = validate_settings(_valid(**over))
+    default = getattr(CupSettings.defaults(), key)
+    if ok:
+        assert warnings == []
+        assert getattr(settings, key) == over[key]
+    else:
+        assert [w.key for w in warnings] == [key]
+        assert getattr(settings, key) == default
+        assert warnings[0].fallback == default
+        assert warnings[0].reason
+
+
+def test_warning_fields_and_arm_threshold_warning():
+    assert [f.name for f in dataclasses.fields(SettingsLoadWarning)] == [
+        "key", "found", "reason", "fallback",
+    ]
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        SettingsLoadWarning("k", "f", "r", 1.0).key = "x"
+    _, warnings = validate_settings(_valid(arm_threshold_a=5e-3))
+    assert len(warnings) == 1
+    w = warnings[0]
+    assert w.key == "arm_threshold_a"
+    assert w.reason
+    assert w.fallback == CUP_ARM_THRESHOLD_A
+
+
+def test_all_defaults_and_valid_roundtrip():
+    s, w = validate_settings(_valid())
+    assert s == CupSettings.defaults() and w == []
+
+
+@pytest.mark.parametrize("v,ok", [
+    (1e-9, True), (1e-3, True), (0.99e-9, False), (1.01e-3, False),
+])
+def test_arm_threshold_bounds(v, ok):
+    # release must stay below arm for the 'ok' small case
+    over = {"arm_threshold_a": v}
+    if v < CUP_RELEASE_THRESHOLD_A:
+        over["release_threshold_a"] = v / 2
+    s, w = validate_settings(_valid(**over))
+    assert (w == []) is ok
+    assert (s.arm_threshold_a == v) is ok
+
+
+@pytest.mark.parametrize("v,ok", [
+    (CUP_ARM_THRESHOLD_A * 0.999, True),
+    (CUP_ARM_THRESHOLD_A, False),
+    (CUP_ARM_THRESHOLD_A * 1.001, False),
+    (1e-12, True),
+    (0.0, False),
+    (-1e-7, False),
+])
+def test_release_threshold_bounds(v, ok):
+    _check({"release_threshold_a": v}, "release_threshold_a", ok)
+
+
+def test_release_compares_against_accepted_arm_not_raw():
+    # arm invalid -> default arm 0.5 uA accepted; release 0.6 uA is above it
+    s, w = validate_settings(_valid(arm_threshold_a=5.0, release_threshold_a=0.6e-6))
+    assert [x.key for x in w] == ["arm_threshold_a", "release_threshold_a"]
+    assert s.arm_threshold_a == CUP_ARM_THRESHOLD_A
+    assert s.release_threshold_a == CUP_RELEASE_THRESHOLD_A
+
+
+@pytest.mark.parametrize("v,ok", [
+    (3.0 + _T2, True),                      # exactly dwell + 2T
+    (3.0 + _T2 - 1e-6, False),
+    (604800.0, True),
+    (604800.0 + 1e-3, False),
+])
+def test_cycle_period_bounds(v, ok):
+    _check({"cycle_period_s": v}, "cycle_period_s", ok)
+
+
+@pytest.mark.parametrize("v,ok", [
+    (CUP_SETTLE_WINDOW_S + 1e-6, True),
+    (CUP_SETTLE_WINDOW_S, False),
+    (CUP_CYCLE_PERIOD_S - _T2 - 1e-6, True),
+    (CUP_CYCLE_PERIOD_S - _T2, False),
+])
+def test_cycle_dwell_bounds(v, ok):
+    _check({"cycle_dwell_s": v}, "cycle_dwell_s", ok)
+
+
+@pytest.mark.parametrize("v,ok", [
+    (0.0, True), (CUP_CYCLE_DWELL_S - 1e-6, True),
+    (CUP_CYCLE_DWELL_S, False), (-1e-6, False),
+])
+def test_settle_window_bounds(v, ok):
+    _check({"settle_window_s": v}, "settle_window_s", ok)
+
+
+@pytest.mark.parametrize("key", ["arm_debounce_s", "release_interval_s"])
+@pytest.mark.parametrize("v,ok", [
+    (1e-6, True), (60.0, True), (0.0, False), (60.0 + 1e-6, False),
+])
+def test_debounce_and_interval_bounds(key, v, ok):
+    _check({key: v}, key, ok)
+
+
+def test_period_term_uses_imported_constant(monkeypatch):
+    import rbl.config.cup_settings_store as mod
+    monkeypatch.setattr(mod, "CUP_MOVE_CONFIRMATION_TIMEOUT_S", 10.0)
+    _, w = validate_settings(_valid(cycle_dwell_s=3.0, cycle_period_s=3.0 + _T2))
+    assert [x.key for x in w] == ["cycle_period_s"]
+
+
+def test_dwell_and_period_both_invalid_two_warnings():
+    s, w = validate_settings(_valid(cycle_dwell_s=-5.0, cycle_period_s=1.0))
+    assert [x.key for x in w] == ["cycle_dwell_s", "cycle_period_s"]
+    assert s.cycle_dwell_s == CUP_CYCLE_DWELL_S
+    assert s.cycle_period_s == CUP_CYCLE_PERIOD_S
+
+
+def test_warnings_follow_validation_order():
+    bad = {k: -1.0 for k in _KEYS}
+    _, w = validate_settings(bad)
+    assert [x.key for x in w] == list(_KEYS)
+
+
+def test_valid_coupled_pair_lowered_together_is_accepted():
+    s, w = validate_settings(_valid(cycle_dwell_s=0.5, settle_window_s=0.2))
+    assert w == [] and s.cycle_dwell_s == 0.5 and s.settle_window_s == 0.2
+
+
+def test_never_raises_on_hostile_values():
+    for bad in ("abc", None, float("nan"), float("inf"), -float("inf"), -3.0,
+                [1], {}, True, object()):
+        for key in _KEYS:
+            s, w = validate_settings(_valid(**{key: bad}))
+            assert [x.key for x in w] == [key], (key, bad)
+            assert getattr(s, key) == getattr(CupSettings.defaults(), key)
+            assert isinstance(w[0].found, str)
+
+
+def test_never_raises_on_non_dict_inputs():
+    for raw in (None, [], "x", 3, {}):
+        s, w = validate_settings(raw)
+        assert s == CupSettings.defaults()
+
+
+def test_missing_keys_default_without_warning():
+    s, w = validate_settings({})
+    assert s == CupSettings.defaults() and w == []
+    s, w = validate_settings({"arm_threshold_a": 2e-6})
+    assert w == [] and s.arm_threshold_a == 2e-6
+    assert s.release_threshold_a == CUP_RELEASE_THRESHOLD_A
+
+
+def test_unknown_keys_ignored_silently():
+    s, w = validate_settings(_valid(_README="hello", other=1))
+    assert w == [] and s == CupSettings.defaults()
+
+
+def test_ints_accepted_and_nan_found_text():
+    s, w = validate_settings(_valid(cycle_period_s=600))
+    assert w == [] and s.cycle_period_s == 600.0
+    _, w = validate_settings(_valid(arm_debounce_s=float("nan")))
+    assert math.isnan(float(w[0].found))

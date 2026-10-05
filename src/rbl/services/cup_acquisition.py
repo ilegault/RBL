@@ -148,11 +148,7 @@ class CupDetector:
         arm_debounce_s: float = CUP_ARM_DEBOUNCE_S,
         release_interval_s: float = CUP_RELEASE_INTERVAL_S,
     ) -> None:
-        if release_threshold >= arm_threshold:
-            raise ValueError(
-                f"Release threshold ({release_threshold}) must be strictly less than "
-                f"arm threshold ({arm_threshold}) for hysteresis."
-            )
+        self._validate_thresholds(arm_threshold, release_threshold)
         self.arm_threshold = arm_threshold
         self.release_threshold = release_threshold
         self.arm_debounce_s = arm_debounce_s
@@ -161,6 +157,27 @@ class CupDetector:
         self._in_beam: bool = False
         self._arm_start_t: float | None = None
         self._release_start_t: float | None = None
+
+    @staticmethod
+    def _validate_thresholds(arm_threshold: float, release_threshold: float) -> None:
+        if release_threshold >= arm_threshold:
+            raise ValueError(
+                f"Release threshold ({release_threshold}) must be strictly less than "
+                f"arm threshold ({arm_threshold}) for hysteresis."
+            )
+
+    def set_thresholds(self, arm_threshold: float, release_threshold: float) -> None:
+        """Change both thresholds at runtime; the one supported way to do so.
+
+        WHY THIS EXISTS: the thresholds a run records (RunOpened.arm_threshold)
+        must be the ones the detector compared the current against. Editing
+        the attributes directly on a composite left two copies that could
+        disagree (cup-settings ticket 04). Raises ValueError, changing
+        nothing, unless release < arm.
+        """
+        self._validate_thresholds(arm_threshold, release_threshold)
+        self.arm_threshold = arm_threshold
+        self.release_threshold = release_threshold
 
     @property
     def cup_in_beam(self) -> bool:
@@ -254,11 +271,19 @@ class CupPositionDetector:
     # detector does not use thresholds; the values carried in RunInfo are from
     # the inference path and serve as a record of the inference configuration
     # in force when the run opened, even when position was authoritative.
-    arm_threshold: float = CUP_ARM_THRESHOLD_A
-    release_threshold: float = CUP_RELEASE_THRESHOLD_A
+    # Instance attributes (assigned in __init__), not class attributes, so
+    # set_thresholds on one detector cannot leak into another.
 
     def __init__(self) -> None:
+        self.arm_threshold: float = CUP_ARM_THRESHOLD_A
+        self.release_threshold: float = CUP_RELEASE_THRESHOLD_A
         self._in_beam: bool = False
+
+    def set_thresholds(self, arm_threshold: float, release_threshold: float) -> None:
+        """Record the inference thresholds in force (unused for comparing)."""
+        CupDetector._validate_thresholds(arm_threshold, release_threshold)
+        self.arm_threshold = arm_threshold
+        self.release_threshold = release_threshold
 
     @property
     def cup_in_beam(self) -> bool:
@@ -339,6 +364,15 @@ class AuthorityDetector(CupDetector):
         )
         self._using_position: bool = False
         self._disagreement: bool = False
+
+    def set_thresholds(self, arm_threshold: float, release_threshold: float) -> None:
+        """Set thresholds on the inference detector (which compares), the
+        position detector, and this composite (which the state machine reads),
+        in one call. Validation happens first so a bad pair changes nothing."""
+        self._validate_thresholds(arm_threshold, release_threshold)
+        self._inference.set_thresholds(arm_threshold, release_threshold)
+        self._position.set_thresholds(arm_threshold, release_threshold)
+        super().set_thresholds(arm_threshold, release_threshold)
 
     # ── Delegation properties ──────────────────────────────────────────────
 

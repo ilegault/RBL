@@ -58,6 +58,29 @@ from rbl.config.cup_config import CUP_SETTLE_WINDOW_S, ELEMENTARY_CHARGE_C
 
 
 @dataclass(frozen=True)
+class DoseTotals:
+    """Running dose totals read back from an earlier cup log, to continue from.
+
+    WHY THIS EXISTS
+    ---------------
+    ADR 0003 amendment C4/C5: an irradiation can span several cup logs (the app
+    was restarted, the operator opened a new log). Dose continuation seeds a fresh
+    DoseAccumulator from the earlier log's last row so the totals keep counting
+    instead of restarting at zero. It lives here, not in rbl/services/, because
+    rbl/hardware must not import upward; the service that parses the CSV builds one.
+
+    last_out_t / last_current_a are None when the earlier log held no insertion.
+    source_path names the file the totals came from, for display and provenance.
+    """
+    total_charge_c: float
+    total_beam_on_s: float
+    insertion_count: int
+    last_out_t: float | None
+    last_current_a: float | None
+    source_path: str
+
+
+@dataclass(frozen=True)
 class InsertionCurrentStats:
     """Statistics for samples collected during a single Faraday cup insertion.
 
@@ -263,6 +286,7 @@ class DoseAccumulator:
         self._last_out_t: float | None = None
         self._last_current_a: float | None = None
         self._last_beam_on_s: float = 0.0
+        self._excluded: list[tuple[float, float]] = []
 
     @property
     def total_charge_c(self) -> float:
@@ -311,12 +335,63 @@ class DoseAccumulator:
         self._total_beam_on_s += dt
         return dq
 
+    def exclude_interval(self, start_t: float, end_t: float) -> None:
+        """Record a span during which the specimen was NOT irradiated.
+
+        WHY THIS EXISTS: a manual cup insertion blocks the beam but is not a
+        counted (automatic) insertion, so its cup-in time must be EXCLUDED from the
+        hold interval rather than credited at the held current (ADR 0003 C2/C4).
+        At the next record_insertion, the part of all recorded spans overlapping
+        [last_out_t, t_in] is subtracted from the hold interval; overlapping spans
+        are merged first so nothing is subtracted twice. Spans outside that
+        interval have no effect. Recorded spans are cleared after each
+        record_insertion and by reset(). Empty or reversed spans are ignored.
+        """
+        if end_t > start_t:
+            self._excluded.append((start_t, end_t))
+
+    def _excluded_overlap_s(self, lo: float, hi: float) -> float:
+        """Total length of the merged excluded spans that lies within [lo, hi]."""
+        clipped = sorted(
+            (max(a, lo), min(b, hi)) for a, b in self._excluded if b > lo and a < hi
+        )
+        total = 0.0
+        cur_start: float | None = None
+        cur_end = 0.0
+        for a, b in clipped:
+            if cur_start is None or a > cur_end:
+                if cur_start is not None:
+                    total += cur_end - cur_start
+                cur_start, cur_end = a, b
+            else:
+                cur_end = max(cur_end, b)
+        if cur_start is not None:
+            total += cur_end - cur_start
+        return total
+
+    def seed(self, totals: DoseTotals) -> None:
+        """Continue from an earlier log's totals (ADR 0003 C5, dose continuation).
+
+        Sets total charge, total beam-on, insertion count, last_out_t and
+        last_current_a so the next insertion's hold interval runs from the earlier
+        log's last withdrawal. Pending exclusions and last_beam_on_s are cleared:
+        they belonged to whatever run preceded the seed.
+        """
+        self._total_charge_c = totals.total_charge_c
+        self._total_beam_on_s = totals.total_beam_on_s
+        self._insertion_count = totals.insertion_count
+        self._last_out_t = totals.last_out_t
+        self._last_current_a = totals.last_current_a
+        self._last_beam_on_s = 0.0
+        self._excluded.clear()
+
     def record_insertion(self, t_in: float, t_out: float, mean_current_a: float) -> float:
         """Record an insertion run, holding the previous current over the elapsed beam-on interval.
 
         Between the previous retraction (`last_out_t`) and this insertion's entry (`t_in`),
         the beam was on and the specimen received dose at the previously measured current.
         The cup is IN between `t_in` and `t_out`, during which the specimen is NOT irradiated.
+        Spans passed to exclude_interval() that overlap the hold interval are removed from it.
 
         Parameters:
             t_in: Confirmed insertion timestamp (cup enters beam).
@@ -330,10 +405,12 @@ class DoseAccumulator:
         dt = 0.0
         if self._last_out_t is not None and self._last_current_a is not None:
             dt = max(0.0, t_in - self._last_out_t)
+            dt = max(0.0, dt - self._excluded_overlap_s(self._last_out_t, t_in))
             dq = compute_charge(self._last_current_a, dt)
             self._total_charge_c += dq
             self._total_beam_on_s += dt
 
+        self._excluded.clear()
         self._last_beam_on_s = dt
         self._last_out_t = t_out
         self._last_current_a = mean_current_a
@@ -356,3 +433,4 @@ class DoseAccumulator:
         self._last_out_t = None
         self._last_current_a = None
         self._last_beam_on_s = 0.0
+        self._excluded.clear()
