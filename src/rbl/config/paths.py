@@ -45,3 +45,4 @@ DYNAMIC_ADJUSTMENT_HISTORY_PATH: Path = DATA_DIR / "dynamic_adjustment_history.j
 CONFIG_DIR:       Path = Path.home() / ".config" / "rbl"
 FUNCGEN_CONFIG:   Path = CONFIG_DIR / "funcgen.json"
 LOAD_CAL_STORE:   Path = CONFIG_DIR / "load_calibration.json"
+CUP_SETTINGS_STORE: Path = CONFIG_DIR / "cup_settings.json"
