@@ -2,7 +2,7 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Read first:** `src/rbl/services/cup_acquisition.py` in full, in particular
 `CupDetector.__init__`, `CupDetector.update`, `CupPositionDetector`,
