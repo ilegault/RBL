@@ -1,6 +1,6 @@
 # 22: Each session writes its own 1 Hz vacuum.csv
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
