@@ -1031,7 +1031,8 @@ class TestSamplingCycleTab:
         tab.spn_cycle_period.setValue(120.0)
         tab.spn_cycle_period.editingFinished.emit()
         qapp.processEvents()
-        assert tab.cycle.period_s == pytest.approx(120.0)
+        # Ticket 09: an edit is queued until the next period boundary.
+        assert tab.cycle.pending_period_s == pytest.approx(120.0)
         sw.close()
         tab.close()
 
@@ -1041,7 +1042,8 @@ class TestSamplingCycleTab:
         tab.spn_cycle_dwell.setValue(5.0)
         tab.spn_cycle_dwell.editingFinished.emit()
         qapp.processEvents()
-        assert tab.cycle.dwell_s == pytest.approx(5.0)
+        # Ticket 09: an edit is queued until the next insertion begins.
+        assert tab.cycle.pending_dwell_s == pytest.approx(5.0)
         sw.close()
         tab.close()
 

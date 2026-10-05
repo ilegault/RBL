@@ -145,6 +145,10 @@ class SamplingCycleScheduler:
         self._current_insertion_t: float = float("inf")  # nominal start of active insertion
         self._dwell_end_t: float = float("inf")
         self._manual_run_open: bool = False
+        # Edits queue here until the next boundary (period) or insertion start
+        # (dwell); None means nothing is queued.
+        self._pending_period_s: float | None = None
+        self._pending_dwell_s: float | None = None
 
     # ── Read-only properties ───────────────────────────────────────────────
 
@@ -168,6 +172,16 @@ class SamplingCycleScheduler:
         """Current dwell duration in seconds."""
         return self._dwell_s
 
+    @property
+    def pending_period_s(self) -> float | None:
+        """Queued period not yet in force, or None."""
+        return self._pending_period_s
+
+    @property
+    def pending_dwell_s(self) -> float | None:
+        """Queued dwell not yet in force, or None."""
+        return self._pending_dwell_s
+
     # ── Configuration setters ──────────────────────────────────────────────
 
     def set_period(self, period_s: float) -> None:
@@ -182,16 +196,35 @@ class SamplingCycleScheduler:
         a ticket requirement. Resetting the countdown on a period change would
         cause a period-10 operator who accidentally typed a wrong value to see
         an immediate insertion, which is surprising and wastes beam time.
+
+        The value is QUEUED, not assigned: `period_s` keeps returning the old
+        value and `pending_period_s` returns the new one, so the tab can show
+        the operator why their number is not in force yet. `tick` applies it
+        when it crosses a period boundary (insertion or skip); `arm` applies
+        it when the cycle is (re)armed.
         """
-        self._period_s = period_s
+        self._pending_period_s = period_s
 
     def set_dwell(self, dwell_s: float) -> None:
         """Update the dwell duration.
 
         Takes effect at the next insertion. A dwell change during an active
         dwell does NOT shorten or lengthen the current insertion.
+
+        Queued like `set_period`: `tick` applies it when an insertion begins,
+        never during one; `arm` applies it too.
         """
-        self._dwell_s = dwell_s
+        self._pending_dwell_s = dwell_s
+
+    def _apply_pending_period(self) -> None:
+        if self._pending_period_s is not None:
+            self._period_s = self._pending_period_s
+            self._pending_period_s = None
+
+    def _apply_pending_dwell(self) -> None:
+        if self._pending_dwell_s is not None:
+            self._dwell_s = self._pending_dwell_s
+            self._pending_dwell_s = None
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
@@ -201,6 +234,8 @@ class SamplingCycleScheduler:
         Arming is always an explicit operator action — this method is never
         called on construction, on connect, or on restoring saved state.
         """
+        self._apply_pending_period()
+        self._apply_pending_dwell()
         self._state = CycleState.WAITING
         self._next_insertion_t = t + self._period_s
         self._current_insertion_t = float("inf")
@@ -304,12 +339,15 @@ class SamplingCycleScheduler:
         if self._state == CycleState.WAITING:
             if t >= self._next_insertion_t:
                 due_t = self._next_insertion_t
+                # A period boundary is crossed: queued edits take effect now.
+                self._apply_pending_period()
                 if self._manual_run_open:
                     # Manual run is open — skip this insertion, advance schedule.
                     self._next_insertion_t += self._period_s
                     return CycleSkipped(insertion_due_t=due_t)
                 else:
                     # Start the scheduled insertion.
+                    self._apply_pending_dwell()
                     self._state = CycleState.INSERTING
                     self._current_insertion_t = due_t
                     self._dwell_end_t = due_t + self._dwell_s
@@ -327,6 +365,9 @@ class SamplingCycleScheduler:
                 # 95 insertions per 8 hours instead of 96.
                 # set_period() may have changed _period_s since we entered INSERTING;
                 # this is the "next period boundary" where that change takes effect.
+                # A period set during the dwell lands here: this is the
+                # boundary that schedules the next insertion.
+                self._apply_pending_period()
                 self._state = CycleState.WAITING
                 self._next_insertion_t = self._current_insertion_t + self._period_s
                 self._current_insertion_t = float("inf")
