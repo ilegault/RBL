@@ -1,6 +1,6 @@
 # 19: The rollover helper, and vacuum files that never overwrite
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
