@@ -167,6 +167,34 @@ version and a depth is not a result.
 **Fails into the beam** — the property that any loss of drive returns the cup to the
 beam path. It belongs to the wiring, not to any code path, and must stay that way.
 
+**Acquisition settings** - the five values an operator can change on the Faraday Cup
+tab that decide how a run is bounded and which of its samples count: arm threshold,
+release threshold, settle window, cycle period, cycle dwell. Two further values, the
+arm debounce and the release interval, are settings but not operator-editable: they
+change in the settings file only, with the application closed. See ADR 0002,
+amendment 2026-09-24.
+
+**Settings file** - `~/.config/rbl/cup_settings.json`, the stored acquisition
+settings. The application owns it while running and rewrites it after every committed
+edit; a hand edit made while the application is open is lost. `cup_config.py` holds
+the defaults, and the file holds only what an operator changed.
+
+**Settings lock** - the state in which the arm threshold, release threshold and settle
+window cannot be edited, because an acquisition run is open or the sampling cycle is
+armed. Locked fields are disabled, never silently ignored. Period and dwell are never
+locked.
+
+**Pending change** - an edit to the cycle period or dwell that has been accepted but
+not yet applied, because applying it would alter an insertion in progress or a
+countdown already running. It is displayed with the time it takes effect: the next
+period boundary for a period change, the next insertion for a dwell change.
+
+**Saved boundary** - the time a stopped or disarmed cycle would have inserted next.
+It is kept so that re-arming can resume the original schedule rather than starting a
+fresh countdown, and it is dropped once the application closes or once a new arm sets
+a boundary of its own. A saved boundary already in the past cannot be resumed and
+never produces a catch-up insertion.
+
 ---
 
 ## Known collisions
