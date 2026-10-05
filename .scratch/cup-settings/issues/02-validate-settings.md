@@ -2,7 +2,7 @@
 
 **Blocked by:** 01
 
-**Status:** in-progress
+**Status:** done
 
 **Read first:** `.scratch/cup-settings/spec.md`, section "The rules each value must
 satisfy". `docs/adr/0002-...md` amendment decision A5 (a rejected value falls back to
@@ -14,13 +14,13 @@ numbers is written. It is used both when the settings file is read and when an
 operator commits an edit on the tab, so the two can never disagree about what is
 allowed.
 
-- [ ] `cup_settings_store.py` defines a frozen dataclass `SettingsLoadWarning` with
+- [x] `cup_settings_store.py` defines a frozen dataclass `SettingsLoadWarning` with
       exactly the fields `key: str`, `found: str`, `reason: str`, `fallback: float`,
       and a function `validate_settings(raw: dict) -> tuple[CupSettings,
       list[SettingsLoadWarning]]`. A test asserts the field names and that a returned
       warning for a bad `arm_threshold_a` has `key == "arm_threshold_a"`, a non-empty
       `reason`, and `fallback == CUP_ARM_THRESHOLD_A`.
-- [ ] The rules are exactly these, and a value failing its rule is replaced by that
+- [x] The rules are exactly these, and a value failing its rule is replaced by that
       field's default and produces one warning:
       `arm_threshold_a`: `1e-9 <= v <= 1e-3`.
       `release_threshold_a`: `0 < v < arm_threshold_a`.
@@ -35,18 +35,18 @@ allowed.
       **The term `2 * CUP_MOVE_CONFIRMATION_TIMEOUT_S` is computed from that constant
       imported from `rbl.config.cup_config`, never written as `4.0`**: it is the
       insert and the retract move that must both fit inside one period.
-- [ ] Fields are validated in exactly this order, and each cross-field rule compares
+- [x] Fields are validated in exactly this order, and each cross-field rule compares
       against the values already accepted earlier in that order: `arm_threshold_a`,
       `release_threshold_a`, `cycle_dwell_s`, `cycle_period_s`, `settle_window_s`,
       `arm_debounce_s`, `release_interval_s`. A test asserts that a dict whose dwell
       and period are both invalid produces exactly two warnings and a `CupSettings`
       holding both defaults, rather than one rule masking the other.
-- [ ] `validate_settings` never raises, for any input. A test passes a dict whose
+- [x] `validate_settings` never raises, for any input. A test passes a dict whose
       values are a string, `None`, `float("nan")`, `float("inf")`, a negative number,
       and a missing key, and asserts the call returns and every affected key carries
       its default and one warning. A missing key produces its default and **no**
       warning: absent is not the same as wrong.
-- [ ] Keys in `raw` that are not one of the seven are ignored silently and produce no
+- [x] Keys in `raw` that are not one of the seven are ignored silently and produce no
       warning. A test asserts a dict with an extra `"_README"` key and seven valid
       values returns zero warnings.
 
@@ -56,3 +56,14 @@ here calls it directly. No Qt, no filesystem.
 **Out of scope:** reading or writing the file, rendering warnings anywhere, and
 changing `CupDetector`'s own `ValueError` when its release threshold is not below its
 arm threshold (that stays exactly as it is).
+
+## Comments
+
+2026-10-05: `SettingsLoadWarning` and `validate_settings` added to `cup_settings_store.py`;
+tests in `tests/test_cup_settings_store.py` cover each criterion (fields/warning, each
+bound just inside and outside, order and two-warning case, never-raises incl. non-dict
+input, missing key silent, unknown keys silent). Judgement calls: a partner not yet judged
+is read as its raw finite value, else its default; the dwell (two partners) also passes if
+it fits the default partners, so a bad settle/period does not condemn a good dwell. The
+spec's period rule (`>=`) and dwell rule (`<`) disagree at exact equality; each rule is
+implemented as written. No bench verification needed.
