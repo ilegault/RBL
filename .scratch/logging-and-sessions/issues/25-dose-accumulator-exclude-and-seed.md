@@ -1,6 +1,6 @@
 # 25: The dose accumulator can leave time out and pick up earlier totals
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
