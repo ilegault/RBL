@@ -2204,6 +2204,698 @@ class TestCyclePeriodAndDwellRulesAndPending:
         tab.close()
 
 
+class TestKeepPreviousScheduleAndCycleLifecycleRows:
+    """Ticket 16 — Re-arming can keep previous schedule, and file says which happened."""
+
+    def test_checkbox_initial_state_and_tooltip(self, qapp):
+        """chk_keep_schedule is unchecked on construction, disabled with no saved boundary,
+        and its tooltip explains why it is unavailable."""
+        tab, _ = make_connected_cup_tab(qapp)
+        assert hasattr(tab, "chk_keep_schedule")
+        assert tab.chk_keep_schedule.text() == "Keep previous schedule"
+        assert tab.chk_keep_schedule.isChecked() is False
+        assert tab.chk_keep_schedule.isEnabled() is False
+        tooltip = tab.chk_keep_schedule.toolTip()
+        assert "no saved" in tooltip.lower() or "unavailable" in tooltip.lower()
+        tab.close()
+
+    def test_checkbox_enabled_after_stop_and_disabled_once_boundary_passes(self, qapp, tmp_path):
+        """chk_keep_schedule is enabled after stop with future boundary, and greys out on its own
+        once the boundary passes, with an explanatory tooltip."""
+        from rbl.hardware.cup_status import CupPosition
+        from rbl.services.cup_session_writer import CupSessionWriter
+        from rbl.snapshots import CupActuationState
+
+        sw = CupSessionWriter(session_id="test_chk_stop", output_dir=tmp_path)
+        tab = FaradayCupTab(session_writer=sw)
+        tab.show()
+        qapp.processEvents()
+
+        # Satisfy arm preconditions and send actuation state at t=0.0
+        tab.spn_k.setValue(1e-15)
+        tab.spn_charge_state.setValue(1)
+        tab.on_patch_dimensions_changed(10.0, 10.0)
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True,
+            commanded=CupPosition.OUT,
+            confirmed=CupPosition.OUT,
+            auto_mode=True,
+            stale=False,
+            last_transition_t=0.0,
+            t=0.0,
+        ))
+        qapp.processEvents()
+
+        # Arm cycle at t=0.0 with period=300.0 (boundary is 300.0)
+        tab.btn_cycle_arm.click()
+        qapp.processEvents()
+        assert tab.cycle.is_armed is True
+
+        # Advance to t=10.0 and stop cycle
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True,
+            commanded=CupPosition.OUT,
+            confirmed=CupPosition.OUT,
+            auto_mode=True,
+            stale=False,
+            last_transition_t=0.0,
+            t=10.0,
+        ))
+        qapp.processEvents()
+        tab.btn_cycle_stop.click()
+        qapp.processEvents()
+
+        assert tab.cycle.is_armed is False
+        assert tab.cycle.saved_boundary_t == pytest.approx(300.0)
+        assert tab.chk_keep_schedule.isEnabled() is True
+
+        # Advance time to t=305.0 (boundary 300.0 has passed)
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True,
+            commanded=CupPosition.OUT,
+            confirmed=CupPosition.OUT,
+            auto_mode=True,
+            stale=False,
+            last_transition_t=0.0,
+            t=305.0,
+        ))
+        qapp.processEvents()
+
+        assert tab.chk_keep_schedule.isEnabled() is False
+        tooltip = tab.chk_keep_schedule.toolTip()
+        assert "passed" in tooltip.lower() or "unavailable" in tooltip.lower()
+
+        sw.close()
+        tab.close()
+
+    def test_arming_passes_resume_at_only_when_checked_and_enabled(self, qapp, tmp_path):
+        """Arming lands on saved boundary when checkbox is checked and enabled,
+        and lands at now + period when unchecked."""
+        from rbl.hardware.cup_status import CupPosition
+        from rbl.services.cup_session_writer import CupSessionWriter
+        from rbl.services.sampling_cycle import CycleState
+        from rbl.snapshots import CupActuationState
+
+        sw = CupSessionWriter(session_id="test_resume_at", output_dir=tmp_path)
+        tab = FaradayCupTab(session_writer=sw)
+        tab.show()
+        qapp.processEvents()
+
+        tab.spn_k.setValue(1e-15)
+        tab.spn_charge_state.setValue(1)
+        tab.on_patch_dimensions_changed(10.0, 10.0)
+
+        # 1. Arm at t=0, stop at t=10 -> saved boundary is 300.0
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True,
+            commanded=CupPosition.OUT,
+            confirmed=CupPosition.OUT,
+            auto_mode=True,
+            stale=False,
+            last_transition_t=0.0,
+            t=0.0,
+        ))
+        qapp.processEvents()
+        tab.btn_cycle_arm.click()
+        qapp.processEvents()
+
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True,
+            commanded=CupPosition.OUT,
+            confirmed=CupPosition.OUT,
+            auto_mode=True,
+            stale=False,
+            last_transition_t=0.0,
+            t=10.0,
+        ))
+        qapp.processEvents()
+        tab.btn_cycle_stop.click()
+        qapp.processEvents()
+
+        assert tab.chk_keep_schedule.isEnabled() is True
+
+        # Check the checkbox and re-arm at t=20.0
+        tab.chk_keep_schedule.setChecked(True)
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True,
+            commanded=CupPosition.OUT,
+            confirmed=CupPosition.OUT,
+            auto_mode=True,
+            stale=False,
+            last_transition_t=0.0,
+            t=20.0,
+        ))
+        qapp.processEvents()
+        tab.btn_cycle_arm.click()
+        qapp.processEvents()
+
+        # Next insertion lands on saved boundary (300.0, not 20+300=320.0)
+        assert tab.cycle.time_to_next_insertion(20.0) == pytest.approx(280.0)
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True,
+            commanded=CupPosition.OUT,
+            confirmed=CupPosition.OUT,
+            auto_mode=True,
+            stale=False,
+            last_transition_t=0.0,
+            t=299.0,
+        ))
+        qapp.processEvents()
+        assert tab.cycle.state == CycleState.WAITING
+
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True,
+            commanded=CupPosition.OUT,
+            confirmed=CupPosition.OUT,
+            auto_mode=True,
+            stale=False,
+            last_transition_t=0.0,
+            t=300.0,
+        ))
+        qapp.processEvents()
+        assert tab.cycle.state == CycleState.INSERTING
+
+        # Confirm IN move
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True,
+            commanded=CupPosition.IN,
+            confirmed=CupPosition.IN,
+            auto_mode=True,
+            stale=False,
+            last_transition_t=300.0,
+            t=300.2,
+        ))
+        qapp.processEvents()
+
+        # Complete insertion at t=303.0 -> next boundary is 600.0
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True,
+            commanded=CupPosition.IN,
+            confirmed=CupPosition.IN,
+            auto_mode=True,
+            stale=False,
+            last_transition_t=300.0,
+            t=303.0,
+        ))
+        qapp.processEvents()
+        assert tab.cycle.state == CycleState.WAITING
+
+        # Confirm OUT move
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True,
+            commanded=CupPosition.OUT,
+            confirmed=CupPosition.OUT,
+            auto_mode=True,
+            stale=False,
+            last_transition_t=303.0,
+            t=303.2,
+        ))
+        qapp.processEvents()
+
+        # Stop at t=350.0 -> saved boundary is 600.0
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True,
+            commanded=CupPosition.OUT,
+            confirmed=CupPosition.OUT,
+            auto_mode=True,
+            stale=False,
+            last_transition_t=303.2,
+            t=350.0,
+        ))
+        qapp.processEvents()
+        tab.btn_cycle_stop.click()
+        qapp.processEvents()
+
+        # Re-arm at t=360.0 with checkbox UNCHECKED
+        tab.chk_keep_schedule.setChecked(False)
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True,
+            commanded=CupPosition.OUT,
+            confirmed=CupPosition.OUT,
+            auto_mode=True,
+            stale=False,
+            last_transition_t=303.2,
+            t=360.0,
+        ))
+        qapp.processEvents()
+        tab.btn_cycle_arm.click()
+        qapp.processEvents()
+
+        # Next insertion lands at now + period = 360 + 300 = 660.0 (not 600.0)
+        assert tab.cycle.time_to_next_insertion(360.0) == pytest.approx(300.0)
+
+        sw.close()
+        tab.close()
+
+    def test_both_exits_write_cycle_disarmed_with_saved_boundary(self, qapp, tmp_path):
+        """Arm button acting as Disarm writes reason 'disarm';
+        Stop Cycle writes reason 'stop', each with the right boundary value."""
+        from rbl.hardware.cup_status import CupPosition
+        from rbl.services.cup_session_writer import CupSessionWriter
+        from rbl.snapshots import CupActuationState
+
+        sw = CupSessionWriter(session_id="test_disarm_rows", output_dir=tmp_path)
+        tab = FaradayCupTab(session_writer=sw)
+        tab.show()
+        qapp.processEvents()
+
+        tab.spn_k.setValue(1e-15)
+        tab.spn_charge_state.setValue(1)
+        tab.on_patch_dimensions_changed(10.0, 10.0)
+
+        # 1. Arm at t=0.0
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True,
+            commanded=CupPosition.OUT,
+            confirmed=CupPosition.OUT,
+            auto_mode=True,
+            stale=False,
+            last_transition_t=0.0,
+            t=0.0,
+        ))
+        qapp.processEvents()
+        tab.btn_cycle_arm.click()
+        qapp.processEvents()
+
+        # Exit 1: Disarm via Arm button at t=10.0
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True,
+            commanded=CupPosition.OUT,
+            confirmed=CupPosition.OUT,
+            auto_mode=True,
+            stale=False,
+            last_transition_t=0.0,
+            t=10.0,
+        ))
+        qapp.processEvents()
+        tab.btn_cycle_arm.click()
+        qapp.processEvents()
+
+        # 2. Re-arm at t=20.0 (fresh arm -> boundary 20+300=320.0)
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True,
+            commanded=CupPosition.OUT,
+            confirmed=CupPosition.OUT,
+            auto_mode=True,
+            stale=False,
+            last_transition_t=0.0,
+            t=20.0,
+        ))
+        qapp.processEvents()
+        tab.btn_cycle_arm.click()
+        qapp.processEvents()
+
+        # Exit 2: Stop Cycle at t=30.0
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True,
+            commanded=CupPosition.OUT,
+            confirmed=CupPosition.OUT,
+            auto_mode=True,
+            stale=False,
+            last_transition_t=0.0,
+            t=30.0,
+        ))
+        qapp.processEvents()
+        tab.btn_cycle_stop.click()
+        qapp.processEvents()
+
+        sw.close()
+        with open(sw.csv_path, encoding="utf-8") as f:
+            reader = csv.DictReader([line for line in f if not line.startswith("#")])
+            disarm_rows = [r for r in reader if r["record_type"] == "cycle_disarmed"]
+
+        assert len(disarm_rows) == 2
+        # Exit 1: disarm
+        assert "reason=disarm" in disarm_rows[0]["details"]
+        assert float(disarm_rows[0]["commanded_timestamp"]) == pytest.approx(300.0)
+
+        # Exit 2: stop
+        assert "reason=stop" in disarm_rows[1]["details"]
+        assert float(disarm_rows[1]["commanded_timestamp"]) == pytest.approx(320.0)
+
+        tab.close()
+
+    def test_arming_writes_cycle_armed_with_mode_matching_scheduler(self, qapp, tmp_path):
+        """Arming writes cycle_armed with mode matching scheduler ('fresh' or 'resumed')."""
+        from rbl.hardware.cup_status import CupPosition
+        from rbl.services.cup_session_writer import CupSessionWriter
+        from rbl.snapshots import CupActuationState
+
+        sw = CupSessionWriter(session_id="test_armed_modes", output_dir=tmp_path)
+        tab = FaradayCupTab(session_writer=sw)
+        tab.show()
+        qapp.processEvents()
+
+        tab.spn_k.setValue(1e-15)
+        tab.spn_charge_state.setValue(1)
+        tab.on_patch_dimensions_changed(10.0, 10.0)
+
+        # 1. Fresh arm at t=10.0
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True,
+            commanded=CupPosition.OUT,
+            confirmed=CupPosition.OUT,
+            auto_mode=True,
+            stale=False,
+            last_transition_t=0.0,
+            t=10.0,
+        ))
+        qapp.processEvents()
+        tab.btn_cycle_arm.click()
+        qapp.processEvents()
+
+        # Stop at t=20.0 -> boundary is 310.0
+        tab.btn_cycle_stop.click()
+        qapp.processEvents()
+
+        # 2. Resumed arm at t=30.0
+        tab.chk_keep_schedule.setChecked(True)
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True,
+            commanded=CupPosition.OUT,
+            confirmed=CupPosition.OUT,
+            auto_mode=True,
+            stale=False,
+            last_transition_t=0.0,
+            t=30.0,
+        ))
+        qapp.processEvents()
+        tab.btn_cycle_arm.click()
+        qapp.processEvents()
+
+        sw.close()
+        with open(sw.csv_path, encoding="utf-8") as f:
+            reader = csv.DictReader([line for line in f if not line.startswith("#")])
+            armed_rows = [r for r in reader if r["record_type"] == "cycle_armed"]
+
+        assert len(armed_rows) == 2
+        # Fresh row
+        assert "mode=fresh" in armed_rows[0]["details"]
+        assert float(armed_rows[0]["commanded_timestamp"]) == pytest.approx(310.0)
+
+        # Resumed row
+        assert "mode=resumed" in armed_rows[1]["details"]
+        assert float(armed_rows[1]["commanded_timestamp"]) == pytest.approx(310.0)
+
+        tab.close()
+
+    def test_full_operator_sequence_and_row_ordering(self, qapp, tmp_path):
+        """Walks full operator sequence: arm at known time, run past one insertion, stop,
+        change threshold, re-arm with checkbox ticked, assert insertion lands on original
+        boundary with no burst, and assert row order in session file."""
+        from rbl.hardware.cup_status import CupPosition
+        from rbl.services.cup_session_writer import CupSessionWriter
+        from rbl.services.sampling_cycle import CycleState
+        from rbl.snapshots import CupActuationState
+
+        sw = CupSessionWriter(session_id="test_full_sequence", output_dir=tmp_path)
+        tab = FaradayCupTab(session_writer=sw)
+        tab.show()
+        qapp.processEvents()
+
+        tab.spn_k.setValue(1e-15)
+        tab.spn_charge_state.setValue(1)
+        tab.on_patch_dimensions_changed(10.0, 10.0)
+
+        # Arm at t=0.0 (period=300.0, dwell=3.0)
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True,
+            commanded=CupPosition.OUT,
+            confirmed=CupPosition.OUT,
+            auto_mode=True,
+            stale=False,
+            last_transition_t=0.0,
+            t=0.0,
+        ))
+        qapp.processEvents()
+        tab.btn_cycle_arm.click()
+        qapp.processEvents()
+
+        # Run past one insertion (insertion at t=300.0, retract at t=303.0)
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True,
+            commanded=CupPosition.OUT,
+            confirmed=CupPosition.OUT,
+            auto_mode=True,
+            stale=False,
+            last_transition_t=0.0,
+            t=300.0,
+        ))
+        qapp.processEvents()
+        assert tab.cycle.state == CycleState.INSERTING
+
+        # Move confirms IN at t=300.2
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True,
+            commanded=CupPosition.IN,
+            confirmed=CupPosition.IN,
+            auto_mode=True,
+            stale=False,
+            last_transition_t=300.2,
+            t=300.2,
+        ))
+        qapp.processEvents()
+        assert tab.cycle.state == CycleState.INSERTING
+
+        # Dwell completes at t=303.0, triggering retract
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True,
+            commanded=CupPosition.IN,
+            confirmed=CupPosition.IN,
+            auto_mode=True,
+            stale=False,
+            last_transition_t=300.2,
+            t=303.0,
+        ))
+        qapp.processEvents()
+        assert tab.cycle.state == CycleState.WAITING
+
+        # Retract confirms OUT at t=303.2
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True,
+            commanded=CupPosition.OUT,
+            confirmed=CupPosition.OUT,
+            auto_mode=True,
+            stale=False,
+            last_transition_t=303.2,
+            t=303.2,
+        ))
+        qapp.processEvents()
+        assert tab.cycle.state == CycleState.WAITING
+
+        # Stop at t=350.0 (saved boundary should be 600.0)
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True,
+            commanded=CupPosition.OUT,
+            confirmed=CupPosition.OUT,
+            auto_mode=True,
+            stale=False,
+            last_transition_t=303.2,
+            t=350.0,
+        ))
+        qapp.processEvents()
+        tab.btn_cycle_stop.click()
+        qapp.processEvents()
+
+        assert tab.cycle.saved_boundary_t == pytest.approx(600.0)
+        assert tab.chk_keep_schedule.isEnabled() is True
+
+        # Change threshold through settings group (arm threshold 1.0e-6 > release threshold 2.5e-7)
+        tab.settings_group.spn_arm_threshold.setValue(1.0e-6)
+        tab.settings_group.spn_arm_threshold.editingFinished.emit()
+        qapp.processEvents()
+
+        # Re-arm with checkbox ticked at t=400.0
+        tab.chk_keep_schedule.setChecked(True)
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True,
+            commanded=CupPosition.OUT,
+            confirmed=CupPosition.OUT,
+            auto_mode=True,
+            stale=False,
+            last_transition_t=303.2,
+            t=400.0,
+        ))
+        qapp.processEvents()
+        tab.btn_cycle_arm.click()
+        qapp.processEvents()
+
+        assert tab.cycle.is_armed is True
+
+        # Assert next insertion falls on original boundary (t=600.0)
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True,
+            commanded=CupPosition.OUT,
+            confirmed=CupPosition.OUT,
+            auto_mode=True,
+            stale=False,
+            last_transition_t=303.2,
+            t=599.0,
+        ))
+        qapp.processEvents()
+        assert tab.cycle.state == CycleState.WAITING
+
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True,
+            commanded=CupPosition.OUT,
+            confirmed=CupPosition.OUT,
+            auto_mode=True,
+            stale=False,
+            last_transition_t=303.2,
+            t=600.0,
+        ))
+        qapp.processEvents()
+        assert tab.cycle.state == CycleState.INSERTING
+
+        # Move confirms IN at t=600.2
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True,
+            commanded=CupPosition.IN,
+            confirmed=CupPosition.IN,
+            auto_mode=True,
+            stale=False,
+            last_transition_t=600.2,
+            t=600.2,
+        ))
+        qapp.processEvents()
+        # Assert exactly one insertion occurs there rather than a catch-up burst
+        assert tab.cycle.state == CycleState.INSERTING
+
+        # Dwell completes at t=603.0, triggering retract
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True,
+            commanded=CupPosition.IN,
+            confirmed=CupPosition.IN,
+            auto_mode=True,
+            stale=False,
+            last_transition_t=600.2,
+            t=603.0,
+        ))
+        qapp.processEvents()
+        assert tab.cycle.state == CycleState.WAITING
+
+        # Retract confirms OUT at t=603.2
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True,
+            commanded=CupPosition.OUT,
+            confirmed=CupPosition.OUT,
+            auto_mode=True,
+            stale=False,
+            last_transition_t=603.2,
+            t=603.2,
+        ))
+        qapp.processEvents()
+        assert tab.cycle.state == CycleState.WAITING
+
+        # Check row ordering in the CSV file: disarm, settings-change, re-arm
+        sw.close()
+        with open(sw.csv_path, encoding="utf-8") as f:
+            reader = csv.DictReader([line for line in f if not line.startswith("#")])
+            lifecycle_rows = [
+                r for r in reader
+                if r["record_type"] in ("cycle_disarmed", "settings_changed", "cycle_armed")
+            ]
+
+        types = [r["record_type"] for r in lifecycle_rows]
+        # Initial arm is index 0: cycle_armed (fresh)
+        assert types[0] == "cycle_armed"
+        # Then disarmed (stop)
+        assert types[1] == "cycle_disarmed"
+        assert "reason=stop" in lifecycle_rows[1]["details"]
+        # Then settings_changed
+        assert types[2] == "settings_changed"
+        assert "arm_threshold_a" in lifecycle_rows[2]["details"]
+        # Then cycle_armed (resumed)
+        assert types[3] == "cycle_armed"
+        assert "mode=resumed" in lifecycle_rows[3]["details"]
+
+        tab.close()
+
+    def test_stop_cycle_retracts_cup_during_insertion(self, qapp, tmp_path):
+        """Stop Cycle retracts the cup when called during an insertion."""
+        from rbl.hardware.cup_status import CupPosition
+        from rbl.services.cup_session_writer import CupSessionWriter
+        from rbl.services.sampling_cycle import CycleState
+        from rbl.snapshots import CupActuationState
+
+        beamline = Beamline()
+        commands: list[str] = []
+        beamline.command_cup_in = lambda: commands.append("IN")
+        beamline.command_cup_out = lambda: commands.append("OUT")
+
+        sw = CupSessionWriter(session_id="test_stop_retract", output_dir=tmp_path)
+        tab = FaradayCupTab(beamline=beamline, session_writer=sw)
+        tab.show()
+        qapp.processEvents()
+
+        tab.spn_k.setValue(1e-15)
+        tab.spn_charge_state.setValue(1)
+        tab.on_patch_dimensions_changed(10.0, 10.0)
+
+        # Arm at t=0.0
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True,
+            commanded=CupPosition.OUT,
+            confirmed=CupPosition.OUT,
+            auto_mode=True,
+            stale=False,
+            last_transition_t=0.0,
+            t=0.0,
+        ))
+        qapp.processEvents()
+        tab.btn_cycle_arm.click()
+        qapp.processEvents()
+
+        # Advance to insertion at t=300.0
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True,
+            commanded=CupPosition.OUT,
+            confirmed=CupPosition.OUT,
+            auto_mode=True,
+            stale=False,
+            last_transition_t=0.0,
+            t=300.0,
+        ))
+        qapp.processEvents()
+        assert "IN" in commands
+        assert tab.cycle.state == CycleState.INSERTING
+
+        # Confirm IN
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True,
+            commanded=CupPosition.IN,
+            confirmed=CupPosition.IN,
+            auto_mode=True,
+            stale=False,
+            last_transition_t=300.0,
+            t=300.2,
+        ))
+        qapp.processEvents()
+
+        # Stop cycle mid-insertion at t=301.0
+        commands.clear()
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True,
+            commanded=CupPosition.IN,
+            confirmed=CupPosition.IN,
+            auto_mode=True,
+            stale=False,
+            last_transition_t=300.0,
+            t=301.0,
+        ))
+        qapp.processEvents()
+        tab.btn_cycle_stop.click()
+        qapp.processEvents()
+
+        # Retract command must be issued!
+        assert "OUT" in commands
+        assert tab.cycle.state == CycleState.DISARMED
+
+        sw.close()
+        tab.close()
+
+
+
 
 
 
