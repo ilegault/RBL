@@ -2,7 +2,7 @@
 
 **Blocked by:** 04, 06, 07, 11
 
-**Status:** in-progress
+**Status:** done
 
 **Read first:** `src/rbl/gui/faraday_cup_tab.py` - the constructor where
 `self.acquisition = CupAcquisitionStateMachine(detector=AuthorityDetector())` and
@@ -18,28 +18,28 @@ samples the post-settle statistics use, and each change is recorded in the sessi
 file. Values still return to their defaults when the application restarts - ticket 13
 adds persistence.
 
-- [ ] `AcquisitionSettingsGroup` is constructed in `FaradayCupTab.__init__` and added
+- [x] `AcquisitionSettingsGroup` is constructed in `FaradayCupTab.__init__` and added
       to the layout directly below the Sampling Cycle group box. A test asserts the
       widget exists as an attribute of the tab and that the tab still builds with no
       hardware connected - every tab in this application must work with nothing
       connected.
-- [ ] The tab connects `settings_changed` to a handler that, for key
+- [x] The tab connects `settings_changed` to a handler that, for key
       `arm_threshold_a` or `release_threshold_a`, calls `set_thresholds` on
       `self.acquisition.detector` with both current values, and for key
       `settle_window_s` calls `self.session_writer.set_settle_window`. A test emits
       each key and asserts the detector attributes and the writer's settle window hold
       the new numbers.
-- [ ] The same handler calls `self.session_writer.write_settings_changed` once per
+- [x] The same handler calls `self.session_writer.write_settings_changed` once per
       change with the key, old value and new value. A test emits one threshold change
       and asserts exactly one row appears in the CSV carrying both values.
-- [ ] One end-to-end test proves the edit reached the thing that decides: using
+- [x] One end-to-end test proves the edit reached the thing that decides: using
       `tests/payloads.py` to drive real stream windows through a real `Beamline` as
       the repo requires for anything that puts a value on screen, lower the arm
       threshold through the widget, feed a current above the new threshold and below
       the old one, and assert a run opens **and** that the run's opening row records
       the new threshold. If the row shows the old number, ticket 04's fix is not
       wired up.
-- [ ] `MainWindow` is not modified and no cross-tab connection is added. This feature
+- [x] `MainWindow` is not modified and no cross-tab connection is added. This feature
       is contained in the Faraday Cup tab. A reviewer should see a diff in
       `faraday_cup_tab.py` of roughly a constructor line, a layout line and one
       handler.
@@ -50,3 +50,15 @@ session file must be real.
 
 **Out of scope:** loading or saving the settings file (ticket 13), locking the fields
 (ticket 14), period and dwell (ticket 15).
+
+## Comments
+
+### 2026-10-06 00:28 - Landed
+- Constructed `AcquisitionSettingsGroup` in `FaradayCupTab.__init__`, added directly below Sampling Cycle group box, and assigned to attributes `settings_group` and `acquisition_settings`.
+- Connected `settings_changed` signal to `_on_settings_changed`, dispatching `set_thresholds` on `self.acquisition.detector`, `set_settle_window` on `self.session_writer`, and logging with `write_settings_changed`.
+- Added test class `TestFaradayCupTabAcquisitionSettingsWiring` covering all criteria in `tests/test_faraday_cup_tab.py`:
+  - `test_settings_group_constructed_and_added_below_cycle_box`
+  - `test_settings_changed_updates_detector_and_writer`
+  - `test_settings_changed_writes_csv_row`
+  - `test_e2e_lowered_arm_threshold_opens_run_and_records_new_threshold`
+- All gates green (ruff, check_tests_first, type_gate, full test suite: 2060 passed).

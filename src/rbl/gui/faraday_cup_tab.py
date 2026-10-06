@@ -91,6 +91,13 @@ construction and after every application start; arming is always an explicit
 operator action. A manual insert or retract calls notify_manual_insert /
 notify_manual_retract immediately, so the next scheduled boundary that falls
 while a manual run is open is skipped and recorded in the session file.
+
+OPERATOR-EDITABLE ACQUISITION SETTINGS (ADR 0002 AMENDMENT A1, TICKET 12)
+--------------------------------------------------------------------------
+The Acquisition Settings group allows the operator to adjust the arm threshold,
+release threshold, and autorange settle window. Edits are handled by the tab:
+threshold changes update both values on the acquisition detector, settle window
+changes update the session writer, and every change is recorded in the session file.
 """
 from __future__ import annotations
 
@@ -120,6 +127,7 @@ from rbl.config.cup_config import (
     KEITHLEY_6482_DEFAULT_RESOURCE,
 )
 from rbl.gui import theme
+from rbl.gui.widgets.acquisition_settings import AcquisitionSettingsGroup
 from rbl.gui.widgets.connection_bar import StatusPill
 from rbl.gui.widgets.inputs import (
     QuietDoubleSpinBox,
@@ -538,6 +546,12 @@ class FaradayCupTab(QWidget):
         _cycle_vlay.addWidget(self.lbl_cycle_fault)
 
         layout.addWidget(cycle_box)
+
+        # ── 2c. Acquisition Settings (ADR 0002 amendment A1, ticket 12) ────────
+        self.settings_group = AcquisitionSettingsGroup(self)
+        self.acquisition_settings = self.settings_group
+        self.settings_group.settings_changed.connect(self._on_settings_changed)
+        layout.addWidget(self.settings_group)
 
         # ── 2d. Dose & Displacement Parameters (ADR 0003) ─────────────────────
         dose_box = QGroupBox("Dose Tracking & Displacement Parameters")
@@ -1399,6 +1413,21 @@ class FaradayCupTab(QWidget):
     def _on_cycle_dwell_changed(self) -> None:
         """Apply updated dwell from the spinner to the scheduler."""
         self.cycle.set_dwell(self.spn_cycle_dwell.value())
+
+    def _on_settings_changed(self, key: str, old_value: float, new_value: float) -> None:
+        """Apply acquisition settings changes to detector, writer, and session log."""
+        if key == "arm_threshold_a":
+            self.acquisition.detector.set_thresholds(
+                new_value, self.acquisition.detector.release_threshold
+            )
+        elif key == "release_threshold_a":
+            self.acquisition.detector.set_thresholds(
+                self.acquisition.detector.arm_threshold, new_value
+            )
+        elif key == "settle_window_s":
+            self.session_writer.set_settle_window(new_value)
+
+        self.session_writer.write_settings_changed(time.time(), key, old_value, new_value)
 
     def _tick_cycle(self, t: float) -> None:
         """Advance the cycle scheduler to time t and act on the result.
