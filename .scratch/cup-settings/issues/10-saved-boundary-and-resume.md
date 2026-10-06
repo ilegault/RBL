@@ -2,7 +2,7 @@
 
 **Blocked by:** 09
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Read first:** `src/rbl/services/sampling_cycle.py`, `arm`, `disarm`, `stop` and the
 `_next_insertion_t` field. `.scratch/cup-settings/spec.md`, "The scheduler owns pending
