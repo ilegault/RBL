@@ -1482,7 +1482,7 @@ class TestFaradayCupTabAcquisitionSettingsWiring:
     """Tests for AcquisitionSettingsGroup wiring into FaradayCupTab (Ticket 12)."""
 
     def test_settings_group_constructed_and_added_below_cycle_box(self, qapp):
-        """AcquisitionSettingsGroup is constructed as an attribute and placed below Sampling Cycle."""
+        """AcquisitionSettingsGroup is constructed as attribute below Sampling Cycle."""
         tab = FaradayCupTab()
         assert hasattr(tab, "settings_group")
         assert isinstance(tab.settings_group, AcquisitionSettingsGroup)
@@ -1541,7 +1541,7 @@ class TestFaradayCupTabAcquisitionSettingsWiring:
         tab.close()
 
     def test_e2e_lowered_arm_threshold_opens_run_and_records_new_threshold(self, qapp, tmp_path):
-        """End-to-end: lowering arm threshold via widget triggers run at current below old default."""
+        """End-to-end: lowering arm threshold via widget opens run below old default."""
         beamline = Beamline()
         sw = CupSessionWriter(output_dir=tmp_path)
         tab = FaradayCupTab(beamline=beamline, session_writer=sw)
