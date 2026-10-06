@@ -2,7 +2,7 @@
 
 **Blocked by:** 05
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Read first:** `src/rbl/services/cup_session_writer.py`, the existing `write_*`
 family - in particular `write_cycle_insertion_skipped` and `write_position_transition`
