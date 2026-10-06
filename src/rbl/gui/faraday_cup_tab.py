@@ -103,6 +103,14 @@ Every committed edit (or reset to defaults) updates the detector/writer, records
 a settings_changed row in the session file, and calls save_settings(). If a save
 fails, a visible message in the FAULT role names the target file path while
 preserving the in-memory update for the active session.
+
+SETTINGS LOCK (ADR 0002 AMENDMENT A6, TICKET 14)
+-----------------------------------------------
+The arm threshold, release threshold, and settle window cannot be edited while an
+acquisition run is open or while the sampling cycle is armed. When either condition holds,
+the fields are disabled via set_locked(True) and an explanatory message is displayed.
+Edits unlock immediately when the run ends or the cycle disarms. Schedule parameters
+(period and dwell) are never locked.
 """
 from __future__ import annotations
 
@@ -584,6 +592,7 @@ class FaradayCupTab(QWidget):
         self.settings_group.set_load_warnings(self._load_warnings)
         self.settings_group.settings_changed.connect(self._on_settings_changed)
         layout.addWidget(self.settings_group)
+        self._update_settings_lock()
 
         # ── 2d. Dose & Displacement Parameters (ADR 0003) ─────────────────────
         dose_box = QGroupBox("Dose Tracking & Displacement Parameters")
@@ -902,8 +911,14 @@ class FaradayCupTab(QWidget):
                 self.beamline.set_cup_acquiring(False)
         self._update_acquisition_view()
 
+    def _update_settings_lock(self) -> None:
+        """Lock acquisition settings while an acquisition run is open or cycle is armed."""
+        locked = bool(self.acquisition.is_acquiring or self.cycle.is_armed)
+        self.settings_group.set_locked(locked)
+
     def _update_acquisition_view(self) -> None:
         """Update run status, duration, sample count, and running average."""
+        self._update_settings_lock()
         if not self._connected:
             self.lbl_run_status.setText("Disconnected")
             self.lbl_run_status.setStyleSheet(theme.status_label(theme.MUTED))
@@ -1117,6 +1132,7 @@ class FaradayCupTab(QWidget):
                 self._update_dose_view()
             if self.beamline is not None:
                 self.beamline.set_cup_acquiring(self.acquisition.is_acquiring)
+            self._update_settings_lock()
 
         # Log disagreement fault when authority detector reports disagreement
         authority_det = self.acquisition.detector
@@ -1586,6 +1602,8 @@ class FaradayCupTab(QWidget):
         else:
             self.lbl_cycle_fault.setVisible(False)
 
+        self._update_settings_lock()
+
     def on_cup_actuation_state(self, state: CupActuationState) -> None:
         """Ingest CupActuationState snapshot published by Beamline (ADR 0003)."""
         if not state.connected:
@@ -1704,6 +1722,7 @@ class FaradayCupTab(QWidget):
         self._tick_cycle(t_now)
 
         self._update_actuation_view()
+        self._update_settings_lock()
 
     def _update_actuation_view(self) -> None:
         """Update actuation buttons, commanded/confirmed indicators, and warning labels."""
@@ -1833,6 +1852,7 @@ class FaradayCupTab(QWidget):
         self.lbl_source.setVisible(False)
         self.lbl_fault.setText("")
         self.lbl_fault.setVisible(False)
+        self._update_settings_lock()
 
     # ── Dose Tracking & Displacement Parameters (ADR 0003) ───────────────────
 

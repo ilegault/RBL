@@ -1750,6 +1750,238 @@ class TestFaradayCupTabSettingsPersistence:
         tab.close()
 
 
+def make_connected_cup_tab(qapp: QApplication) -> tuple[FaradayCupTab, CupFeed]:
+    """Create a FaradayCupTab connected via a real Beamline and CupFeed."""
+    beamline = Beamline()
+    tab = FaradayCupTab(beamline=beamline)
+    feed = CupFeed(tab, beamline=beamline)
+    tab.show()
+    qapp.processEvents()
+    feed.send_reading(0.0, timestamp=0.0, t_host=0.0)
+    qapp.processEvents()
+    return tab, feed
+
+
+def arm_cycle_helper(tab: FaradayCupTab, qapp: QApplication) -> None:
+    """Satisfy arming preconditions and arm the sampling cycle via public interface."""
+    tab.spn_k.setValue(1e-15)
+    tab.spn_charge_state.setValue(1)
+    tab.on_patch_dimensions_changed(10.0, 10.0)
+    from rbl.hardware.cup_status import CupPosition
+    from rbl.snapshots import CupActuationState
+    tab.on_cup_actuation_state(
+        CupActuationState(
+            connected=True,
+            commanded=CupPosition.OUT,
+            confirmed=CupPosition.OUT,
+            auto_mode=True,
+            stale=False,
+            last_transition_t=0.0,
+        )
+    )
+    qapp.processEvents()
+    tab.btn_cycle_arm.click()
+    qapp.processEvents()
+    assert tab.cycle.is_armed
+
+
+class TestFaradayCupTabSettingsLock:
+    """Tests for acquisition settings lock during runs or armed cycle (Ticket 14)."""
+
+    def test_set_locked_called_in_all_three_locking_situations(self, qapp, monkeypatch):
+        """Assert set_locked(True) reaches widget in each of the three locking situations:
+
+        1. run open with cycle disarmed
+        2. cycle armed with no run
+        3. both run open and cycle armed
+        """
+        tab, feed = make_connected_cup_tab(qapp)
+
+        calls: list[bool] = []
+        original_set_locked = tab.settings_group.set_locked
+
+        def spy_set_locked(locked: bool) -> None:
+            calls.append(locked)
+            original_set_locked(locked)
+
+        monkeypatch.setattr(tab.settings_group, "set_locked", spy_set_locked)
+
+        # 1. Run open with cycle disarmed
+        calls.clear()
+        tab.btn_force_start.click()
+        qapp.processEvents()
+        assert tab.acquisition.is_acquiring
+        assert not tab.cycle.is_armed
+        assert True in calls
+
+        # Disarm/close run
+        calls.clear()
+        tab.btn_force_stop.click()
+        qapp.processEvents()
+        assert not tab.acquisition.is_acquiring
+        assert False in calls
+
+        # 2. Cycle armed with no run
+        calls.clear()
+        arm_cycle_helper(tab, qapp)
+        assert tab.cycle.is_armed
+        assert not tab.acquisition.is_acquiring
+        assert True in calls
+
+        # 3. Both cycle armed and run open
+        calls.clear()
+        tab.btn_force_start.click()
+        qapp.processEvents()
+        assert tab.cycle.is_armed
+        assert tab.acquisition.is_acquiring
+        assert True in calls
+
+        tab.close()
+
+    def test_lock_releases_after_run_closes_and_fields_enabled(self, qapp):
+        """With neither condition true, the three fields report isEnabled() is True.
+
+        Proves the lock releases after run closes rather than latching.
+        """
+        tab, feed = make_connected_cup_tab(qapp)
+
+        # Open run
+        tab.btn_force_start.click()
+        qapp.processEvents()
+        assert tab.acquisition.is_acquiring
+        assert not tab.settings_group.spn_arm_threshold.isEnabled()
+        assert not tab.settings_group.spn_release_threshold.isEnabled()
+        assert not tab.settings_group.spn_settle_window.isEnabled()
+
+        # Close run
+        tab.btn_force_stop.click()
+        qapp.processEvents()
+        assert not tab.acquisition.is_acquiring
+        assert not tab.cycle.is_armed
+        assert tab.settings_group.spn_arm_threshold.isEnabled() is True
+        assert tab.settings_group.spn_release_threshold.isEnabled() is True
+        assert tab.settings_group.spn_settle_window.isEnabled() is True
+        assert tab.settings_group.lbl_lock.isVisible() is False
+
+        tab.close()
+
+    def test_cycle_period_and_dwell_remain_enabled_in_all_four_combinations(self, qapp):
+        """Sampling Cycle period and dwell spin boxes stay enabled in all 4 combinations."""
+        tab, feed = make_connected_cup_tab(qapp)
+
+        # (1) Run closed, cycle disarmed
+        assert not tab.acquisition.is_acquiring
+        assert not tab.cycle.is_armed
+        assert tab.spn_cycle_period.isEnabled() is True
+        assert tab.spn_cycle_dwell.isEnabled() is True
+
+        # (2) Run open, cycle disarmed
+        tab.btn_force_start.click()
+        qapp.processEvents()
+        assert tab.acquisition.is_acquiring
+        assert not tab.cycle.is_armed
+        assert tab.spn_cycle_period.isEnabled() is True
+        assert tab.spn_cycle_dwell.isEnabled() is True
+
+        # Close run
+        tab.btn_force_stop.click()
+        qapp.processEvents()
+
+        # (3) Run closed, cycle armed
+        arm_cycle_helper(tab, qapp)
+        assert not tab.acquisition.is_acquiring
+        assert tab.cycle.is_armed
+        assert tab.spn_cycle_period.isEnabled() is True
+        assert tab.spn_cycle_dwell.isEnabled() is True
+
+        # (4) Run open, cycle armed
+        tab.btn_force_start.click()
+        qapp.processEvents()
+        assert tab.acquisition.is_acquiring
+        assert tab.cycle.is_armed
+        assert tab.spn_cycle_period.isEnabled() is True
+        assert tab.spn_cycle_dwell.isEnabled() is True
+
+        tab.close()
+
+    def test_lock_label_text_and_visibility(self, qapp):
+        """Lock line text is exact and visible only while locked."""
+        tab, feed = make_connected_cup_tab(qapp)
+
+        expected_text = (
+            "Locked while a run is open or the cycle is armed. Edits apply to the next run."
+        )
+        assert tab.settings_group.lbl_lock.text() == expected_text
+
+        # Unlocked initially
+        assert tab.settings_group.lbl_lock.isVisible() is False
+
+        # Open run -> locked
+        tab.btn_force_start.click()
+        qapp.processEvents()
+        assert tab.settings_group.lbl_lock.isVisible() is True
+        assert tab.settings_group.lbl_lock.text() == expected_text
+
+        # Close run -> unlocked
+        tab.btn_force_stop.click()
+        qapp.processEvents()
+        assert tab.settings_group.lbl_lock.isVisible() is False
+
+        # Arm cycle -> locked
+        arm_cycle_helper(tab, qapp)
+        assert tab.settings_group.lbl_lock.isVisible() is True
+
+        # Disarm cycle -> unlocked
+        tab.btn_cycle_arm.click()
+        qapp.processEvents()
+        assert tab.settings_group.lbl_lock.isVisible() is False
+
+        tab.close()
+
+    def test_e2e_pipeline_current_locks_and_unlocks_settings(self, qapp, tmp_path):
+        """Drives real pipeline via tests/payloads.py:
+
+        Current opens run -> disable; closes -> enable.
+        """
+        beamline = Beamline()
+        sw = CupSessionWriter(output_dir=tmp_path)
+        tab = FaradayCupTab(beamline=beamline, session_writer=sw)
+        feed = CupFeed(tab, beamline=beamline)
+        tab.show()
+        qapp.processEvents()
+
+        # Initial state: unlocked
+        assert tab.settings_group.spn_arm_threshold.isEnabled() is True
+        assert tab.settings_group.spn_release_threshold.isEnabled() is True
+        assert tab.settings_group.spn_settle_window.isEnabled() is True
+        assert tab.settings_group.lbl_lock.isVisible() is False
+
+        # Feed 1.0 uA to open run (arm threshold default is 0.5 uA, 1.0s debounce)
+        feed.send_reading(1.0e-6, timestamp=1.0, t_host=1.0)
+        feed.send_reading(1.0e-6, timestamp=2.1, t_host=2.1)
+        qapp.processEvents()
+
+        assert tab.acquisition.is_acquiring is True
+        assert tab.settings_group.spn_arm_threshold.isEnabled() is False
+        assert tab.settings_group.spn_release_threshold.isEnabled() is False
+        assert tab.settings_group.spn_settle_window.isEnabled() is False
+        assert tab.settings_group.lbl_lock.isVisible() is True
+
+        # Feed 0.0 A to close run (release threshold default 0.25 uA, 3.0s release interval)
+        feed.send_reading(0.0, timestamp=10.0, t_host=10.0)
+        feed.send_reading(0.0, timestamp=13.5, t_host=13.5)
+        qapp.processEvents()
+
+        assert tab.acquisition.is_acquiring is False
+        assert tab.settings_group.spn_arm_threshold.isEnabled() is True
+        assert tab.settings_group.spn_release_threshold.isEnabled() is True
+        assert tab.settings_group.spn_settle_window.isEnabled() is True
+        assert tab.settings_group.lbl_lock.isVisible() is False
+
+        sw.close()
+        tab.close()
+
+
 
 
 
