@@ -36,6 +36,10 @@ FIO4 = AUTO). The session file now logs:
      set_settle_window so the operator can adjust it without rebuilding.
    - Both compute_insertion_current call sites use the live settle window, and
      insertion_summary rows record the window in force.
+7. Settings-change markers (Ticket 07):
+   - Whenever an editable acquisition setting changes mid-session, a
+     settings_changed row records the key, old value, and new value so a
+     reader can trace which thresholds applied to which insertions.
 
 TIMING AND CLOCK CONSISTENCY
 ----------------------------
@@ -97,6 +101,14 @@ from rbl.hardware.dose_model import (
 log = logging.getLogger(__name__)
 
 PROVENANCE_ABSENT: str = "NOT_SPECIFIED"
+
+ALLOWED_SETTINGS_CHANGE_KEYS: frozenset[str] = frozenset({
+    "arm_threshold_a",
+    "release_threshold_a",
+    "settle_window_s",
+    "cycle_period_s",
+    "cycle_dwell_s",
+})
 
 
 @dataclass(frozen=True)
@@ -323,7 +335,7 @@ class CupSessionWriter:
             "fault_move_not_confirmed, fault_controller_not_in_auto, "
             "fault_impossible_status, fault_disagreement, "
             "cycle_insertion_skipped, insertion_summary, "
-            "cycle_disarmed, cycle_armed\n"
+            "cycle_disarmed, cycle_armed, settings_changed\n"
         )
         self._file.write("# columns: " + ", ".join(CSV_COLUMNS) + "\n")
 
@@ -702,6 +714,46 @@ class CupSessionWriter:
         det = f"{desc}; {details}" if details else desc
         row = {
             "record_type": "cycle_insertion_skipped",
+            "iso_timestamp": _now_iso(),
+            "host_timestamp": f"{t_host:.6f}",
+            "inst_timestamp": "",
+            "current_a": "",
+            "status_word": "",
+            "over_range": "",
+            "run_id": str(self._active_run_id) if self._active_run_id is not None else "",
+            "details": det,
+        }
+        self._write_row(row)
+
+    def write_settings_changed(
+        self,
+        t_host: float,
+        key: str,
+        old_value: float,
+        new_value: float,
+    ) -> None:
+        """Write a marker recording that an acquisition setting changed mid-session.
+
+        WHY THIS EXISTS (ADR 0002 Amendment A8, Ticket 07)
+        ---------------------------------------------------
+        A reader uses this row to see which thresholds or timing parameters applied
+        to which insertions when the values were edited while the application was
+        running. Without it, a reader comparing two insertions judged by different
+        thresholds can see that the numbers differ but not when or why the change
+        occurred.
+        """
+        if key not in ALLOWED_SETTINGS_CHANGE_KEYS:
+            raise ValueError(
+                f"Invalid settings change key: {key!r}. "
+                f"Allowed keys: {sorted(ALLOWED_SETTINGS_CHANGE_KEYS)}"
+            )
+
+        det = (
+            f"key={key}, old_value={_safe_float(old_value)}, "
+            f"new_value={_safe_float(new_value)}"
+        )
+        row = {
+            "record_type": "settings_changed",
             "iso_timestamp": _now_iso(),
             "host_timestamp": f"{t_host:.6f}",
             "inst_timestamp": "",

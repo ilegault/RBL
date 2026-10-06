@@ -1296,6 +1296,151 @@ class TestInsertionSummaryRowsAndSessionHeader:
         assert "settle_window_s=2.5" in rows[1]["details"]
 
 
+# ── Settings Changed Marker Rows (Ticket 07) ───────────────────────────────────
+
+
+class TestWriteSettingsChanged:
+    """Ticket 07: A session-file row for every settings change."""
+
+    def test_write_settings_changed_appears_in_csv_with_readable_values(self, tmp_path):
+        writer = CupSessionWriter(output_dir=tmp_path)
+        writer.write_settings_changed(
+            t_host=123.456789,
+            key="arm_threshold_a",
+            old_value=5.0e-7,
+            new_value=1.0e-7,
+        )
+        writer.close()
+
+        with open(writer.csv_path, encoding="utf-8") as f:
+            reader = csv.DictReader([line for line in f if not line.startswith("#")])
+            rows = [r for r in reader if r["record_type"] == "settings_changed"]
+
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["host_timestamp"] == "123.456789"
+        assert "arm_threshold_a" in row["details"]
+        assert "5.00000000e-07" in row["details"]
+        assert "1.00000000e-07" in row["details"]
+
+    def test_key_restricted_to_five_accepted_keys(self, tmp_path):
+        writer = CupSessionWriter(output_dir=tmp_path)
+        valid_keys = [
+            "arm_threshold_a",
+            "release_threshold_a",
+            "settle_window_s",
+            "cycle_period_s",
+            "cycle_dwell_s",
+        ]
+        for key in valid_keys:
+            writer.write_settings_changed(t_host=10.0, key=key, old_value=1.0, new_value=2.0)
+
+        # File-only setting arm_debounce_s must raise ValueError naming the key
+        with pytest.raises(ValueError, match="arm_debounce_s"):
+            writer.write_settings_changed(
+                t_host=20.0, key="arm_debounce_s", old_value=1.0, new_value=2.0
+            )
+
+        # File-only setting release_interval_s must also raise ValueError naming the key
+        with pytest.raises(ValueError, match="release_interval_s"):
+            writer.write_settings_changed(
+                t_host=20.0, key="release_interval_s", old_value=3.0, new_value=4.0
+            )
+
+        # Arbitrary key must raise ValueError naming the key
+        with pytest.raises(ValueError, match="invalid_key"):
+            writer.write_settings_changed(
+                t_host=20.0, key="invalid_key", old_value=0.0, new_value=1.0
+            )
+
+        writer.close()
+
+    def test_settings_changed_does_not_disturb_open_run(self, tmp_path):
+        writer = CupSessionWriter(output_dir=tmp_path)
+        writer.write_run_opened(
+            t_host=10.0,
+            run_id=1,
+            arm_threshold=5.0e-7,
+            release_threshold=2.5e-7,
+        )
+
+        for i in range(3):
+            writer.write_sample(
+                t_host=10.0 + i * 0.1,
+                t_inst=float(i),
+                current=1.0e-6,
+                status_word=0,
+                over_range=False,
+                run_id=1,
+            )
+
+        # Write settings change in the middle of the run
+        writer.write_settings_changed(
+            t_host=10.5,
+            key="settle_window_s",
+            old_value=1.0,
+            new_value=1.5,
+        )
+
+        for i in range(3, 6):
+            writer.write_sample(
+                t_host=10.0 + i * 0.1,
+                t_inst=float(i),
+                current=1.0e-6,
+                status_word=0,
+                over_range=False,
+                run_id=1,
+            )
+
+        writer.write_run_closed(t_host=11.0, run_id=1, reason="dwell_expired")
+        writer.close()
+
+        assert writer.run_count == 1
+        assert writer.sample_count == 6
+        assert writer.active_run_stats is not None
+        assert writer.active_run_stats.total_samples == 6
+
+        with open(writer.csv_path, encoding="utf-8") as f:
+            reader = csv.DictReader([line for line in f if not line.startswith("#")])
+            rows = list(reader)
+
+        run_opened_rows = [r for r in rows if r["record_type"] == "run_opened"]
+        run_closed_rows = [r for r in rows if r["record_type"] == "run_closed"]
+        settings_rows = [r for r in rows if r["record_type"] == "settings_changed"]
+
+        assert len(run_opened_rows) == 1
+        assert "arm=5.000e-07" in run_opened_rows[0]["details"]
+        assert len(run_closed_rows) == 1
+        assert len(settings_rows) == 1
+        assert settings_rows[0]["run_id"] == "1"
+
+    def test_row_count_and_flush_policy(self, tmp_path):
+        writer = CupSessionWriter(output_dir=tmp_path)
+        initial_count = writer.row_count
+
+        writer.write_settings_changed(
+            t_host=50.0,
+            key="cycle_period_s",
+            old_value=300.0,
+            new_value=600.0,
+        )
+
+        assert writer.row_count == initial_count + 1
+
+        # Assert row is readable on disk BEFORE close() is called
+        with open(writer.csv_path, encoding="utf-8") as f:
+            content = f.read()
+
+        assert "settings_changed" in content
+        assert "cycle_period_s" in content
+        writer.close()
+
+    def test_docstring_explains_purpose(self):
+        doc = CupSessionWriter.write_settings_changed.__doc__
+        assert doc is not None
+        assert "threshold" in doc.lower() or "setting" in doc.lower()
+
+
 class TestWriteCycleLifecycleRows:
     """write_cycle_disarmed and write_cycle_armed record cycle lifecycle markers (Ticket 08)."""
 
