@@ -2,7 +2,7 @@
 
 **Blocked by:** 13
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Read first:** `docs/adr/0002-...md` amendment decision A6. `CONTEXT.md`, the
 glossary entry "Settings lock". `src/rbl/gui/faraday_cup_tab.py` -
