@@ -1177,11 +1177,9 @@ class TestInsertionSummaryRowsAndSessionHeader:
         from rbl.config.cup_config import CUP_SETTLE_WINDOW_S
 
         writer = CupSessionWriter(output_dir=tmp_path)
-        assert writer._settle_window_s == CUP_SETTLE_WINDOW_S
         assert writer.settle_window_s == CUP_SETTLE_WINDOW_S
 
         writer2 = CupSessionWriter(output_dir=tmp_path, settle_window_s=2.5)
-        assert writer2._settle_window_s == 2.5
         assert writer2.settle_window_s == 2.5
 
     def test_cup_session_writer_module_references_cup_settle_window_s_only_as_default(self):
