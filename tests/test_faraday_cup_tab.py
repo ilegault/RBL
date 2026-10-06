@@ -26,6 +26,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from rbl.gui.app import MainWindow
 from rbl.gui.faraday_cup_tab import FaradayCupTab
+from rbl.gui.widgets.acquisition_settings import AcquisitionSettingsGroup
 from rbl.hardware.current_monitor import format_current
 from rbl.services.cup_session_writer import CupSessionWriter
 from rbl.state.beamline import Beamline
@@ -1475,6 +1476,102 @@ class TestCycleArmingPreconditions:
         assert sw.charge_state == 2
         sw.close()
         tab.close()
+
+
+class TestFaradayCupTabAcquisitionSettingsWiring:
+    """Tests for AcquisitionSettingsGroup wiring into FaradayCupTab (Ticket 12)."""
+
+    def test_settings_group_constructed_and_added_below_cycle_box(self, qapp):
+        """AcquisitionSettingsGroup is constructed as attribute below Sampling Cycle."""
+        tab = FaradayCupTab()
+        assert hasattr(tab, "settings_group")
+        assert isinstance(tab.settings_group, AcquisitionSettingsGroup)
+
+        # Check layout order: settings_group directly follows cycle_box
+        layout = tab.layout()
+        idx_cycle = -1
+        idx_settings = -1
+        for i in range(layout.count()):
+            item = layout.itemAt(i)
+            widget = item.widget()
+            if widget is not None and getattr(widget, "title", lambda: "")() == "Sampling Cycle":
+                idx_cycle = i
+            elif widget is tab.settings_group:
+                idx_settings = i
+
+        assert idx_cycle != -1
+        assert idx_settings == idx_cycle + 1
+        tab.close()
+
+    def test_settings_changed_updates_detector_and_writer(self, qapp, tmp_path):
+        """Emitting settings_changed updates detector thresholds and writer settle window."""
+        sw = CupSessionWriter(output_dir=tmp_path)
+        tab = FaradayCupTab(session_writer=sw)
+
+        # Update arm threshold
+        tab.settings_group.settings_changed.emit("arm_threshold_a", 0.5e-6, 0.4e-6)
+        assert tab.acquisition.detector.arm_threshold == pytest.approx(0.4e-6)
+
+        # Update release threshold
+        tab.settings_group.settings_changed.emit("release_threshold_a", 0.25e-6, 0.2e-6)
+        assert tab.acquisition.detector.release_threshold == pytest.approx(0.2e-6)
+
+        # Update settle window
+        tab.settings_group.settings_changed.emit("settle_window_s", 1.0, 2.5)
+        assert tab.session_writer.settle_window_s == pytest.approx(2.5)
+        sw.close()
+        tab.close()
+
+    def test_settings_changed_writes_csv_row(self, qapp, tmp_path):
+        """Settings change emits exactly one settings_changed row in the session CSV."""
+        sw = CupSessionWriter(output_dir=tmp_path)
+        tab = FaradayCupTab(session_writer=sw)
+
+        tab.settings_group.settings_changed.emit("arm_threshold_a", 0.5e-6, 0.35e-6)
+        sw.close()
+
+        with open(sw.csv_path, encoding="utf-8") as f:
+            reader = csv.DictReader([line for line in f if not line.startswith("#")])
+            rows = [r for r in reader if r["record_type"] == "settings_changed"]
+
+        assert len(rows) == 1
+        assert "key=arm_threshold_a" in rows[0]["details"]
+        assert "old_value=5.00000000e-07" in rows[0]["details"] or "5.000e-07" in rows[0]["details"]
+        assert "new_value=3.50000000e-07" in rows[0]["details"] or "3.500e-07" in rows[0]["details"]
+        tab.close()
+
+    def test_e2e_lowered_arm_threshold_opens_run_and_records_new_threshold(self, qapp, tmp_path):
+        """End-to-end: lowering arm threshold via widget opens run below old default."""
+        beamline = Beamline()
+        sw = CupSessionWriter(output_dir=tmp_path)
+        tab = FaradayCupTab(beamline=beamline, session_writer=sw)
+        feed = CupFeed(tab, beamline=beamline)
+        tab.show()
+        qapp.processEvents()
+
+        # Lower arm threshold to 0.35e-6 (default is 0.5e-6, release is 0.25e-6)
+        tab.settings_group.spn_arm_threshold.setValue(0.35e-6)
+        tab.settings_group.spn_arm_threshold.editingFinished.emit()
+        qapp.processEvents()
+
+        # Feed 0.4e-6 (between new 0.35e-6 and old 0.5e-6)
+        feed.send_reading(0.4e-6, timestamp=0.0, t_host=0.0)
+        feed.send_reading(0.4e-6, timestamp=1.1, t_host=1.1)
+        qapp.processEvents()
+
+        assert tab.acquisition.is_acquiring
+        assert "ACQUIRING" in tab.lbl_run_status.text()
+
+        sw.close()
+        with open(sw.csv_path, encoding="utf-8") as f:
+            reader = csv.DictReader([line for line in f if not line.startswith("#")])
+            open_rows = [r for r in reader if r["record_type"] == "run_opened"]
+
+        assert len(open_rows) == 1
+        assert "arm=3.500e-07 A" in open_rows[0]["details"]
+        assert "5.000e-07" not in open_rows[0]["details"]
+        tab.close()
+
 
 
 
