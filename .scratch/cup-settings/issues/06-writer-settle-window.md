@@ -2,7 +2,7 @@
 
 **Blocked by:** 05
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Read first:** `src/rbl/services/cup_session_writer.py`, the two calls to
 `compute_insertion_current(..., settle_window_s=CUP_SETTLE_WINDOW_S)` - one inside
