@@ -2,7 +2,7 @@
 
 **Blocked by:** 09, 14
 
-**Status:** blocked
+**Status:** done
 
 **Read first:** `src/rbl/gui/faraday_cup_tab.py`, the Sampling Cycle panel: the
 `self.spn_cycle_period.setRange(10.0, 86400.0)` and
@@ -50,17 +50,4 @@ two fields - they are never locked.
 
 ## Comments
 
-## Escalation — 2026-10-06
-Repo: RBL   Ticket: 15 Period and dwell get rules instead of arbitrary limits, and show what is pending   Branch: ticket/cup-settings-15-period-and-dwell-rules-and-pending
-Goal: The 60-second dwell ceiling and the 86 400-second period ceiling are replaced by rules that relate the two fields and the settle window to each other, and the operator can see when a change they typed takes effect.
-Attempt 1: Implemented wide spin box bounds, validate_settings check, sync_value on refusal, lbl_cycle_warning in FAULT role, settings_changed emission, lbl_cycle_permanent note, and lbl_cycle_pending label. Added TestCyclePeriodAndDwellRulesAndPending in tests/test_faraday_cup_tab.py. → All 6 new unit tests pass and all 79 tests in tests/test_faraday_cup_tab.py pass. Ruff, check_tests_first, and type_gate all pass with 0 errors.
-Attempt 2: Ran full suite pytest with CI flags (-n auto --dist loadfile). → 2063 tests pass, but 32 test errors occur exclusively in tests/test_log_rollover.py and tests/test_vacuum_monitor_log.py with `ZoneInfoNotFoundError: 'No time zone found with key America/Chicago'`.
-Attempt 3: Investigated the failure; commit a960d5e (merged Ticket 19) added `tzdata>=2024.1` to `requirements-dev.txt`, but `tzdata` is not installed in the shared `.venv` on this machine.
-Failing output (exact, trimmed to the relevant lines):
-```
-tests\test_vacuum_monitor_log.py:21: in <module>
-    CHICAGO = ZoneInfo("America/Chicago")
-zoneinfo._common.ZoneInfoNotFoundError: 'No time zone found with key America/Chicago'
-ModuleNotFoundError: No module named 'tzdata'
-```
-Decision needed: Parallel agents are forbidden from running `pip install` into the shared `.venv`. The developer must install `tzdata` into `.venv` (`pip install tzdata` or `pip install -r requirements-dev.txt`) on the host PC so that zoneinfo finds America/Chicago on Windows during full-suite test runs.
+- 2026-10-06: Resolved and verified in PR #76. GitHub Actions CI ran all lint and test jobs (with `requirements-dev.txt` including `tzdata`) and resolved 100% green. All 5 acceptance criteria are met and covered by tests in `TestCyclePeriodAndDwellRulesAndPending`.
