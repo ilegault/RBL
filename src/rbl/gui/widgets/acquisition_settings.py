@@ -135,6 +135,28 @@ class AcquisitionSettingsGroup(QGroupBox):
         self.lbl_load_warnings.setVisible(False)
         vlay.addWidget(self.lbl_load_warnings)
 
+        self.lbl_save_error = QLabel("")
+        self.lbl_save_error.setStyleSheet(theme.status_label(theme.FAULT))
+        self.lbl_save_error.setWordWrap(True)
+        self.lbl_save_error.setVisible(False)
+        vlay.addWidget(self.lbl_save_error)
+
+    def set_save_error(self, message: str | None) -> None:
+        """Display an error message in FAULT role when save_settings fails, or hide it."""
+        if message:
+            self.lbl_save_error.setText(message)
+            self.lbl_save_error.setStyleSheet(theme.status_label(theme.FAULT))
+            self.lbl_save_error.setVisible(True)
+            self.lbl_warning.setText(message)
+            self.lbl_warning.setStyleSheet(theme.status_label(theme.FAULT))
+            self.lbl_warning.setVisible(True)
+        else:
+            self.lbl_save_error.setText("")
+            self.lbl_save_error.setVisible(False)
+            if "Failed to save" in self.lbl_warning.text():
+                self.lbl_warning.setText("")
+                self.lbl_warning.setVisible(False)
+
     def set_values(self, settings: CupSettings) -> None:
         """Fill all three spin boxes without emitting edit signals."""
         self._last_arm = settings.arm_threshold_a
@@ -243,22 +265,27 @@ class AcquisitionSettingsGroup(QGroupBox):
 
     def _on_reset_defaults_clicked(self) -> None:
         defaults = CupSettings.defaults()
-        if self._last_arm != defaults.arm_threshold_a:
-            old_val = self._last_arm
+        arm_diff = (self._last_arm != defaults.arm_threshold_a)
+        rel_diff = (self._last_release != defaults.release_threshold_a)
+        settle_diff = (self._last_settle != defaults.settle_window_s)
+
+        old_arm, old_rel, old_settle = self._last_arm, self._last_release, self._last_settle
+
+        if arm_diff:
             self._last_arm = defaults.arm_threshold_a
             self.spn_arm_threshold.sync_value(defaults.arm_threshold_a)
-            self.settings_changed.emit("arm_threshold_a", old_val, defaults.arm_threshold_a)
-
-        if self._last_release != defaults.release_threshold_a:
-            old_val = self._last_release
+        if rel_diff:
             self._last_release = defaults.release_threshold_a
             self.spn_release_threshold.sync_value(defaults.release_threshold_a)
-            self.settings_changed.emit("release_threshold_a", old_val, defaults.release_threshold_a)
-
-        if self._last_settle != defaults.settle_window_s:
-            old_val = self._last_settle
+        if settle_diff:
             self._last_settle = defaults.settle_window_s
             self.spn_settle_window.sync_value(defaults.settle_window_s)
-            self.settings_changed.emit("settle_window_s", old_val, defaults.settle_window_s)
+
+        if arm_diff:
+            self.settings_changed.emit("arm_threshold_a", old_arm, defaults.arm_threshold_a)
+        if rel_diff:
+            self.settings_changed.emit("release_threshold_a", old_rel, defaults.release_threshold_a)
+        if settle_diff:
+            self.settings_changed.emit("settle_window_s", old_settle, defaults.settle_window_s)
 
         self.lbl_warning.setVisible(False)

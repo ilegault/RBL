@@ -92,12 +92,17 @@ operator action. A manual insert or retract calls notify_manual_insert /
 notify_manual_retract immediately, so the next scheduled boundary that falls
 while a manual run is open is skipped and recorded in the session file.
 
-OPERATOR-EDITABLE ACQUISITION SETTINGS (ADR 0002 AMENDMENT A1, TICKET 12)
---------------------------------------------------------------------------
+OPERATOR-EDITABLE ACQUISITION SETTINGS (ADR 0002 AMENDMENT A1, TICKETS 12 & 13)
+-------------------------------------------------------------------------------
 The Acquisition Settings group allows the operator to adjust the arm threshold,
-release threshold, and autorange settle window. Edits are handled by the tab:
-threshold changes update both values on the acquisition detector, settle window
-changes update the session writer, and every change is recorded in the session file.
+release threshold, and autorange settle window. At construction, the tab loads
+persisted settings from ~/.config/rbl/cup_settings.json via load_settings(),
+applies thresholds to the detector, settle window to the writer, period and dwell
+to the scheduler, and renders any load warnings.
+Every committed edit (or reset to defaults) updates the detector/writer, records
+a settings_changed row in the session file, and calls save_settings(). If a save
+fails, a visible message in the FAULT role names the target file path while
+preserving the in-memory update for the active session.
 """
 from __future__ import annotations
 
@@ -119,13 +124,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from rbl.config import cup_settings_store
 from rbl.config.cup_config import (
-    CUP_CYCLE_DWELL_S,
-    CUP_CYCLE_PERIOD_S,
     CUP_IDLE_HEARTBEAT_INTERVAL_S,
     CUP_MOVE_CONFIRMATION_TIMEOUT_S,
     KEITHLEY_6482_DEFAULT_RESOURCE,
 )
+from rbl.config.cup_settings_store import CupSettings
 from rbl.gui import theme
 from rbl.gui.widgets.acquisition_settings import AcquisitionSettingsGroup
 from rbl.gui.widgets.connection_bar import StatusPill
@@ -179,9 +184,31 @@ class FaradayCupTab(QWidget):
         self._connected = False
         self._visible = False
         self.acquisition = CupAcquisitionStateMachine(detector=AuthorityDetector())
-        self.session_writer: CupSessionWriter = (
-            session_writer if session_writer is not None else CupSessionWriter()
+
+        loaded_settings, load_warnings = cup_settings_store.load_settings()
+        self._settings: CupSettings = loaded_settings
+        self._load_warnings = load_warnings
+
+        # Apply thresholds to detector (Ticket 13)
+        self.acquisition.detector.set_thresholds(
+            loaded_settings.arm_threshold_a,
+            loaded_settings.release_threshold_a,
         )
+
+        self.session_writer: CupSessionWriter = (
+            session_writer
+            if session_writer is not None
+            else CupSessionWriter(
+                arm_threshold_a=loaded_settings.arm_threshold_a,
+                release_threshold_a=loaded_settings.release_threshold_a,
+                arm_debounce_s=loaded_settings.arm_debounce_s,
+                release_interval_s=loaded_settings.release_interval_s,
+                settle_window_s=loaded_settings.settle_window_s,
+                cycle_period_s=loaded_settings.cycle_period_s,
+                cycle_dwell_s=loaded_settings.cycle_dwell_s,
+            )
+        )
+        self.session_writer.set_settle_window(loaded_settings.settle_window_s)
         self._last_heartbeat_t: float = 0.0
         self.buffer = RollingBuffer(self.BUFFER_CAPACITY)
 
@@ -203,9 +230,11 @@ class FaradayCupTab(QWidget):
 
         # Sampling cycle scheduler (ADR 0003, ticket 09)
         self.cycle = SamplingCycleScheduler(
-            period_s=CUP_CYCLE_PERIOD_S,
-            dwell_s=CUP_CYCLE_DWELL_S,
+            period_s=loaded_settings.cycle_period_s,
+            dwell_s=loaded_settings.cycle_dwell_s,
         )
+        self.cycle.set_period(loaded_settings.cycle_period_s)
+        self.cycle.set_dwell(loaded_settings.cycle_dwell_s)
 
         # Dose & displacement damage tracking (ADR 0003)
         self._patch_width_x_mm: float = 0.0
@@ -489,7 +518,7 @@ class FaradayCupTab(QWidget):
         self.spn_cycle_period = QuietDoubleSpinBox()
         self.spn_cycle_period.setRange(10.0, 86400.0)
         self.spn_cycle_period.setDecimals(0)
-        self.spn_cycle_period.setValue(CUP_CYCLE_PERIOD_S)
+        self.spn_cycle_period.setValue(self._settings.cycle_period_s)
         self.spn_cycle_period.setToolTip(
             "Seconds between successive scheduled cup insertions (10 – 86400 s)"
         )
@@ -500,7 +529,7 @@ class FaradayCupTab(QWidget):
         self.spn_cycle_dwell = QuietDoubleSpinBox()
         self.spn_cycle_dwell.setRange(1.0, 60.0)
         self.spn_cycle_dwell.setDecimals(1)
-        self.spn_cycle_dwell.setValue(CUP_CYCLE_DWELL_S)
+        self.spn_cycle_dwell.setValue(self._settings.cycle_dwell_s)
         self.spn_cycle_dwell.setToolTip(
             "Seconds the cup stays in the beam per scheduled insertion (1 – 60 s)"
         )
@@ -550,6 +579,9 @@ class FaradayCupTab(QWidget):
         # ── 2c. Acquisition Settings (ADR 0002 amendment A1, ticket 12) ────────
         self.settings_group = AcquisitionSettingsGroup(self)
         self.acquisition_settings = self.settings_group
+        self.lbl_save_error = self.settings_group.lbl_save_error
+        self.settings_group.set_values(self._settings)
+        self.settings_group.set_load_warnings(self._load_warnings)
         self.settings_group.settings_changed.connect(self._on_settings_changed)
         layout.addWidget(self.settings_group)
 
@@ -1414,20 +1446,55 @@ class FaradayCupTab(QWidget):
         """Apply updated dwell from the spinner to the scheduler."""
         self.cycle.set_dwell(self.spn_cycle_dwell.value())
 
+    def _save_current_settings(self) -> bool:
+        """Construct CupSettings from current tab state and save to disk."""
+        settings = CupSettings(
+            arm_threshold_a=self.acquisition.detector.arm_threshold,
+            release_threshold_a=self.acquisition.detector.release_threshold,
+            settle_window_s=self.session_writer.settle_window_s,
+            cycle_period_s=(
+                self.cycle.pending_period_s
+                if self.cycle.pending_period_s is not None
+                else self.cycle.period_s
+            ),
+            cycle_dwell_s=(
+                self.cycle.pending_dwell_s
+                if self.cycle.pending_dwell_s is not None
+                else self.cycle.dwell_s
+            ),
+            arm_debounce_s=self._settings.arm_debounce_s,
+            release_interval_s=self._settings.release_interval_s,
+        )
+        ok = cup_settings_store.save_settings(settings)
+        if not ok:
+            msg = f"Failed to save acquisition settings to {cup_settings_store.STORE_PATH}"
+            self.settings_group.set_save_error(msg)
+        else:
+            self._settings = settings
+            self.settings_group.set_save_error(None)
+        return ok
+
     def _on_settings_changed(self, key: str, old_value: float, new_value: float) -> None:
         """Apply acquisition settings changes to detector, writer, and session log."""
         if key == "arm_threshold_a":
-            self.acquisition.detector.set_thresholds(
-                new_value, self.acquisition.detector.release_threshold
-            )
+            rel = self.acquisition.detector.release_threshold
+            if rel >= new_value:
+                widget_rel = self.settings_group.spn_release_threshold.value()
+                if widget_rel < new_value:
+                    rel = widget_rel
+            self.acquisition.detector.set_thresholds(new_value, rel)
         elif key == "release_threshold_a":
-            self.acquisition.detector.set_thresholds(
-                self.acquisition.detector.arm_threshold, new_value
-            )
+            arm = self.acquisition.detector.arm_threshold
+            if new_value >= arm:
+                widget_arm = self.settings_group.spn_arm_threshold.value()
+                if new_value < widget_arm:
+                    arm = widget_arm
+            self.acquisition.detector.set_thresholds(arm, new_value)
         elif key == "settle_window_s":
             self.session_writer.set_settle_window(new_value)
 
         self.session_writer.write_settings_changed(time.time(), key, old_value, new_value)
+        self._save_current_settings()
 
     def _tick_cycle(self, t: float) -> None:
         """Advance the cycle scheduler to time t and act on the result.
