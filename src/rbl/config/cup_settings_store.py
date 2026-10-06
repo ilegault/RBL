@@ -39,9 +39,23 @@ does not also condemn a good dwell, while two coupled values lowered together (a
 dwell with a shorter settle window) are accepted as the pair the operator meant.
 The period must hold the dwell plus two confirmed moves (insert and retract), each
 allowed CUP_MOVE_CONFIRMATION_TIMEOUT_S.
+
+WHY load_settings AND save_settings DO NOT SILENTLY SWALLOW OR MERGE
+--------------------------------------------------------------------
+Unlike persistence.py which swallows exceptions and returns empty dicts,
+load_settings reports rejected keys or corrupt files explicitly so the
+operator is informed of any fallback. Writing is atomic via os.replace
+on a temporary file in the same directory, guaranteeing that crashes or
+power losses never leave corrupted partial JSON on the control PC.
 """
+import dataclasses
+import json
+import logging
 import math
+import os
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 
 from rbl.config.cup_config import (
     CUP_ARM_DEBOUNCE_S,
@@ -55,7 +69,13 @@ from rbl.config.cup_config import (
 )
 from rbl.config.paths import CUP_SETTINGS_STORE
 
+logger = logging.getLogger(__name__)
+
 STORE_PATH = CUP_SETTINGS_STORE
+README_TEXT = (
+    "RBL rewrites this file whenever a setting changes on the Faraday Cup tab. "
+    "Edit it only while RBL is closed."
+)
 
 
 @dataclass(frozen=True)
@@ -167,3 +187,77 @@ def validate_settings(raw: dict) -> tuple[CupSettings, list[SettingsLoadWarning]
           else "must be above 0 and at most 60 s")
 
     return CupSettings(**accepted), warnings
+
+
+def load_settings(path: Path | None = None) -> tuple[CupSettings, list[SettingsLoadWarning]]:
+    """Load settings from disk and validate them. Never raises.
+
+    Returns:
+        (CupSettings, list[SettingsLoadWarning]): The parsed and validated settings
+        and a list of warnings for any rejected keys. If the file is missing,
+        returns CupSettings.defaults() and an empty warning list. If the file is
+        not valid JSON, returns CupSettings.defaults() and one warning with key "_file".
+    """
+    target = Path(path if path is not None else STORE_PATH)
+    if not target.exists():
+        return CupSettings.defaults(), []
+
+    try:
+        content = target.read_text(encoding="utf-8")
+        data = json.loads(content)
+    except Exception as err:
+        return CupSettings.defaults(), [
+            SettingsLoadWarning(
+                key="_file",
+                found="<invalid>",
+                reason=f"Failed to read or parse JSON from {target}: {err}",
+                fallback=float("nan"),
+            )
+        ]
+
+    if not isinstance(data, dict):
+        return CupSettings.defaults(), [
+            SettingsLoadWarning(
+                key="_file",
+                found=repr(data),
+                reason=f"Root of {target} is not a JSON object",
+                fallback=float("nan"),
+            )
+        ]
+
+    return validate_settings(data)
+
+
+def save_settings(settings: CupSettings, path: Path | None = None) -> bool:
+    """Atomically save CupSettings to disk. Never raises.
+
+    Writes to a temporary file in the target directory and moves it into place with
+    os.replace, preventing half-written files if interrupted. Includes a _README
+    instruction key.
+
+    Returns:
+        bool: True on success, False on any failure (logged).
+    """
+    target = Path(path if path is not None else STORE_PATH)
+    data = dataclasses.asdict(settings)
+    data["_README"] = README_TEXT
+
+    tmp_path: Path | None = None
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(
+            dir=target.parent, prefix="cup_settings_", suffix=".tmp"
+        )
+        os.close(fd)
+        tmp_path = Path(tmp_name)
+        tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        os.replace(tmp_path, target)
+        return True
+    except Exception:
+        logger.exception("Failed to save Faraday cup settings to %s", target)
+        if tmp_path is not None and tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except Exception:
+                pass
+        return False
