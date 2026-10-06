@@ -2,7 +2,7 @@
 
 **Blocked by:** 03, 12
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Read first:** `.scratch/cup-settings/spec.md`, "The settings store" and "Where the
 numbers come from at start". `docs/adr/0002-...md` amendment decisions A3, A4 and A5.
