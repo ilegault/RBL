@@ -90,6 +90,16 @@ def _gauge_columns(gauge_labels: list[str]) -> list[str]:
     return cols
 
 
+def gauge_labels(state) -> list[str]:
+    """Ordered list of gauge label strings extracted from a VacuumState snapshot."""
+    labels = []
+    for r in getattr(state, "xgs_readings", []):
+        labels.append(f"xgs600:{r.channel.label}")
+    for r in getattr(state, "vgc_readings", []):
+        labels.append(f"vgc083:{r.channel}")
+    return labels
+
+
 # ---------------------------------------------------------------------------
 # Logger
 # ---------------------------------------------------------------------------

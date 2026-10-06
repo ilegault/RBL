@@ -19,7 +19,7 @@ from collections import deque
 
 import matplotlib
 
-from rbl.services.vacuum_logger import VacuumLogger
+from rbl.services.vacuum_logger import VacuumLogger, gauge_labels
 
 matplotlib.use("QtAgg")
 # The Figure/Canvas pair now lives inside LivePlotPanel; this module only
@@ -656,12 +656,7 @@ class VacuumTab(QWidget):
 
     @staticmethod
     def _build_gauge_labels(state) -> list[str]:
-        labels = []
-        for r in state.xgs_readings:
-            labels.append(f"xgs600:{r.channel.label}")
-        for r in state.vgc_readings:
-            labels.append(f"vgc083:{r.channel}")
-        return labels
+        return gauge_labels(state)
 
     @staticmethod
     def _build_comment_lines(state) -> list[str]:
