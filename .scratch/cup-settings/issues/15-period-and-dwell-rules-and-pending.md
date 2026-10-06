@@ -2,7 +2,7 @@
 
 **Blocked by:** 09, 14
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Read first:** `src/rbl/gui/faraday_cup_tab.py`, the Sampling Cycle panel: the
 `self.spn_cycle_period.setRange(10.0, 86400.0)` and
