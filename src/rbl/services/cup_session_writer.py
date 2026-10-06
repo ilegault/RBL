@@ -31,7 +31,12 @@ FIO4 = AUTO). The session file now logs:
      SRIM version, entry date, and cycle period and dwell in force.
    - Absent provenance fields are recorded with explicit markers (NOT_SPECIFIED),
      never as blanks or zeroes that could be misread.
-6. Settings-change markers (Ticket 07):
+6. Live settle window (Ticket 06):
+   - The autorange settle window is writer state, not a constant read twice, with
+     set_settle_window so the operator can adjust it without rebuilding.
+   - Both compute_insertion_current call sites use the live settle window, and
+     insertion_summary rows record the window in force.
+7. Settings-change markers (Ticket 07):
    - Whenever an editable acquisition setting changes mid-session, a
      settings_changed row records the key, old value, and new value so a
      reader can trace which thresholds applied to which insertions.
@@ -219,11 +224,12 @@ class CupSessionWriter:
         release_threshold_a: float = CUP_RELEASE_THRESHOLD_A,
         arm_debounce_s: float = CUP_ARM_DEBOUNCE_S,
         release_interval_s: float = CUP_RELEASE_INTERVAL_S,
+        settle_window_s: float = CUP_SETTLE_WINDOW_S,
     ) -> None:
         """Open a session file.
 
-        The four acquisition settings are parameters (defaulting to the
-        compiled-in ``cup_config`` constants) because they are operator-editable
+        The four acquisition settings and the settle window are parameters (defaulting
+        to the compiled-in ``cup_config`` constants) because they are operator-editable
         from the Faraday Cup tab. A header that reports a different number than
         the detector actually used makes the archive unreadable, so the caller
         passes the values in force when the file is opened.
@@ -232,6 +238,7 @@ class CupSessionWriter:
         self._release_threshold_a = release_threshold_a
         self._arm_debounce_s = arm_debounce_s
         self._release_interval_s = release_interval_s
+        self._settle_window_s: float = float(settle_window_s)
         self.session_id: str = session_id or _new_session_id()
         self.output_dir: Path = Path(output_dir) if output_dir is not None else FARADAY_CUP_DIR
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -257,6 +264,7 @@ class CupSessionWriter:
         self._metadata.setdefault("release_threshold_a", self._release_threshold_a)
         self._metadata.setdefault("arm_debounce_s", self._arm_debounce_s)
         self._metadata.setdefault("release_interval_s", self._release_interval_s)
+        self._metadata.setdefault("settle_window_s", self._settle_window_s)
         self._metadata.setdefault("species", self._species)
         self._metadata.setdefault("energy", self._energy)
         self._metadata.setdefault("charge_state", self._charge_state)
@@ -300,7 +308,8 @@ class CupSessionWriter:
             f"# thresholds: arm={self._arm_threshold_a:.3e} A  "
             f"release={self._release_threshold_a:.3e} A  "
             f"arm_debounce={self._arm_debounce_s:.1f} s  "
-            f"release_interval={self._release_interval_s:.1f} s\n"
+            f"release_interval={self._release_interval_s:.1f} s  "
+            f"settle_window={self._settle_window_s:.1f} s\n"
         )
         species_str = _format_header_val(self._species)
         energy_str = _format_header_val(self._energy)
@@ -443,7 +452,7 @@ class CupSessionWriter:
             insertion_stats = compute_insertion_current(
                 self._active_run_samples,
                 start_t=self._active_run_t_start,
-                settle_window_s=CUP_SETTLE_WINDOW_S,
+                settle_window_s=self._settle_window_s,
             )
             self._last_insertion_stats = insertion_stats
             self._last_run_stats = CupRunStats(
@@ -467,6 +476,11 @@ class CupSessionWriter:
             close_info += f", samples={sample_count}"
         if duration_s > 0.0:
             close_info += f", duration_s={duration_s:.3f}"
+        if self._last_run_stats is not None:
+            close_info += f", post_settle_samples={self._last_run_stats.post_settle_samples}"
+            if self._last_run_stats.post_settle_mean_a is not None:
+                mean_str = _safe_float(self._last_run_stats.post_settle_mean_a, ".8e")
+                close_info += f", post_settle_mean_a={mean_str}"
         det = f"{close_info}; {details}" if details else close_info
         row = {
             "record_type": "run_closed",
@@ -885,6 +899,9 @@ class CupSessionWriter:
         conf_ts_str = f"{confirmed_timestamp:.6f}"
         host_ts_str = f"{t_host:.6f}" if t_host is not None else conf_ts_str
 
+        settle_info = f"settle_window_s={self._settle_window_s}"
+        det = f"{settle_info}; {details}" if details else settle_info
+
         row = {
             "record_type": "insertion_summary",
             "iso_timestamp": _now_iso(),
@@ -894,7 +911,7 @@ class CupSessionWriter:
             "status_word": "",
             "over_range": "",
             "run_id": str(run_id),
-            "details": details,
+            "details": det,
             "position": "IN",
             "commanded_timestamp": cmd_ts_str,
             "confirmed_timestamp": conf_ts_str,
@@ -1077,12 +1094,22 @@ class CupSessionWriter:
         )
 
     @property
+    def settle_window_s(self) -> float:
+        """Current settle window duration in seconds."""
+        return self._settle_window_s
+
+    def set_settle_window(self, value: float) -> None:
+        """Assign the settle window duration in seconds."""
+        self._settle_window_s = float(value)
+        self._metadata["settle_window_s"] = self._settle_window_s
+
+    @property
     def active_run_insertion_stats(self) -> InsertionCurrentStats:
         """Return post-settle insertion current statistics for the current run (or last)."""
         if self._active_run_id is not None:
             return compute_insertion_current(
                 self._active_run_samples,
                 start_t=self._active_run_t_start,
-                settle_window_s=CUP_SETTLE_WINDOW_S,
+                settle_window_s=self._settle_window_s,
             )
         return self.last_insertion_stats
