@@ -36,3 +36,16 @@ def _never_touch_the_real_calibration_store(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "STORE_PATH",
                         Path(tmp_path) / "load_calibration.json")
     yield
+
+
+@pytest.fixture(autouse=True)
+def _never_touch_the_real_cup_settings_store(tmp_path, monkeypatch):
+    """Point the Faraday cup acquisition settings store at a temp file, always.
+
+    Matches the pattern of _never_touch_the_real_calibration_store above,
+    preventing any test from writing to ~/.config/rbl/cup_settings.json.
+    """
+    from rbl.config import cup_settings_store as store
+    monkeypatch.setattr(store, "STORE_PATH",
+                        Path(tmp_path) / "cup_settings.json")
+    yield
