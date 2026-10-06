@@ -123,6 +123,16 @@ displayed as pending in the MUTED role with their activation time, and applied a
 next boundary. Refused edits restore the previous value via sync_value() and display
 the refusal reason in the FAULT role. Accepted edits write a settings_changed row
 and persist to ~/.config/rbl/cup_settings.json.
+
+KEEP PREVIOUS SCHEDULE AND CYCLE LIFECYCLE ROWS (ADR 0002 AMENDMENT A6, A8, TICKET 16)
+--------------------------------------------------------------------------------------
+An operator who stops an armed cycle to edit locked settings can re-arm onto the boundary
+the cycle would have hit via the "Keep previous schedule" checkbox, rather than waiting a
+fresh period. The checkbox is enabled only while a saved boundary is in the future and greys
+out with explanatory tooltip once it passes.
+Both cycle exits (disarm and stop) write cycle_disarmed rows carrying the saved boundary,
+and arming writes cycle_armed rows recording whether the countdown was fresh or resumed,
+ensuring gaps in the insertion archive are fully explained.
 """
 from __future__ import annotations
 
@@ -134,6 +144,7 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
+    QCheckBox,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -566,6 +577,13 @@ class FaradayCupTab(QWidget):
         )
         self.btn_cycle_arm.clicked.connect(self._on_cycle_arm_clicked)
         cycle_lay.addWidget(self.btn_cycle_arm)
+
+        # Keep previous schedule checkbox (ADR 0002 amendment A6, ticket 16)
+        self.chk_keep_schedule = QCheckBox("Keep previous schedule")
+        self.chk_keep_schedule.setChecked(False)
+        self.chk_keep_schedule.setEnabled(False)
+        self.chk_keep_schedule.setToolTip("No saved schedule boundary to resume")
+        cycle_lay.addWidget(self.chk_keep_schedule)
 
         # Stop button
         self.btn_cycle_stop = QPushButton("Stop Cycle")
@@ -1438,6 +1456,16 @@ class FaradayCupTab(QWidget):
         t_now = self._last_state_t if not math.isnan(self._last_state_t) else time.time()
         if self.cycle.is_armed:
             self.cycle.disarm()
+            saved_b = (
+                self.cycle.saved_boundary_t
+                if self.cycle.saved_boundary_t is not None
+                else 0.0
+            )
+            self.session_writer.write_cycle_disarmed(
+                t_host=t_now,
+                reason="disarm",
+                saved_boundary_t=saved_b,
+            )
             self._cycle_fault = ""
             self._update_cycle_view(t_now)
             return
@@ -1461,7 +1489,22 @@ class FaradayCupTab(QWidget):
             cycle_period_s=self.cycle_period,
             cycle_dwell_s=self.cycle_dwell,
         )
-        self.cycle.arm(t=t_now)
+        resume_at = (
+            self.cycle.saved_boundary_t
+            if (self.chk_keep_schedule.isChecked() and self.chk_keep_schedule.isEnabled())
+            else None
+        )
+        mode = self.cycle.arm(t=t_now, resume_at=resume_at)
+        next_ins_t = (
+            self.cycle.next_insertion_t
+            if self.cycle.next_insertion_t is not None
+            else 0.0
+        )
+        self.session_writer.write_cycle_armed(
+            t_host=t_now,
+            mode=mode,
+            next_insertion_t=next_ins_t,
+        )
         self._update_cycle_view(t_now)
 
     def _check_arm_preconditions(self) -> str:
@@ -1484,8 +1527,20 @@ class FaradayCupTab(QWidget):
     def _on_cycle_stop_clicked(self) -> None:
         """Stop the cycle; retract the cup if currently inserting."""
         t_now = self._last_state_t if not math.isnan(self._last_state_t) else time.time()
+        was_armed = self.cycle.is_armed
         retract_action = self.cycle.stop(t=t_now)
-        if retract_action is not None and not self._move_in_flight and self._actuation_connected:
+        if was_armed:
+            saved_b = (
+                self.cycle.saved_boundary_t
+                if self.cycle.saved_boundary_t is not None
+                else 0.0
+            )
+            self.session_writer.write_cycle_disarmed(
+                t_host=t_now,
+                reason="stop",
+                saved_boundary_t=saved_b,
+            )
+        if retract_action is not None and self._actuation_connected:
             self._start_move(CupPosition.OUT)
             if self.beamline is not None:
                 self.beamline.command_cup_out()
@@ -1614,6 +1669,7 @@ class FaradayCupTab(QWidget):
         and calls no clock; t comes from the T7 window timestamp.
         """
         if not self.cycle.is_armed:
+            self._update_cycle_view(t)
             return
 
         result = self.cycle.tick(t)
@@ -1714,6 +1770,18 @@ class FaradayCupTab(QWidget):
         else:
             self.lbl_cycle_pending.setText("")
             self.lbl_cycle_pending.setVisible(False)
+
+        # Update keep-previous-schedule checkbox (ADR 0002 amendment A6, ticket 16)
+        saved_t = self.cycle.saved_boundary_t
+        if saved_t is None:
+            self.chk_keep_schedule.setEnabled(False)
+            self.chk_keep_schedule.setToolTip("No saved schedule boundary to resume")
+        elif saved_t <= t:
+            self.chk_keep_schedule.setEnabled(False)
+            self.chk_keep_schedule.setToolTip("Saved schedule boundary has already passed")
+        else:
+            self.chk_keep_schedule.setEnabled(True)
+            self.chk_keep_schedule.setToolTip("Resume previous schedule at saved boundary")
 
         self._update_settings_lock()
 

@@ -194,6 +194,15 @@ class SamplingCycleScheduler:
         """Next scheduled insertion time saved at disarm/stop, or None."""
         return self._saved_boundary_t
 
+    @property
+    def next_insertion_t(self) -> float | None:
+        """Next scheduled insertion timestamp, or None if not scheduled."""
+        if self._state == CycleState.WAITING and self._next_insertion_t != float("inf"):
+            return self._next_insertion_t
+        if self._state == CycleState.INSERTING and self._current_insertion_t != float("inf"):
+            return self._current_insertion_t + self._period_s
+        return None
+
     # ── Configuration setters ──────────────────────────────────────────────
 
     def set_period(self, period_s: float) -> None:
@@ -279,7 +288,9 @@ class SamplingCycleScheduler:
         The cup is left wherever it is. Callers that need a retract should
         use `stop(t)` instead.
         """
-        if self._next_insertion_t != float("inf"):
+        if self._state == CycleState.INSERTING and self._current_insertion_t != float("inf"):
+            self._saved_boundary_t = self._current_insertion_t + self._period_s
+        elif self._next_insertion_t != float("inf"):
             self._saved_boundary_t = self._next_insertion_t
         self._state = CycleState.DISARMED
         self._next_insertion_t = float("inf")
