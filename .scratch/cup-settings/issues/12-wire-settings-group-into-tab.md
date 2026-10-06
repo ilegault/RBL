@@ -2,7 +2,7 @@
 
 **Blocked by:** 04, 06, 07, 11
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Read first:** `src/rbl/gui/faraday_cup_tab.py` - the constructor where
 `self.acquisition = CupAcquisitionStateMachine(detector=AuthorityDetector())` and
