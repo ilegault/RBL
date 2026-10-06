@@ -1,6 +1,6 @@
 # 20: The vacuum monitoring log rolls at local midnight
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -41,18 +41,18 @@ Tests may fake: the `VacuumState` (use the `_Fake*` stand-ins in
 
 ## Acceptance criteria
 
-- [ ] New `tests/test_vacuum_monitor_log.py`: 10 states at 23:59:50-23:59:59 and 10 at
+- [x] New `tests/test_vacuum_monitor_log.py`: 10 states at 23:59:50-23:59:59 and 10 at
       00:00:00-00:00:09 the next day produce exactly two CSVs, one in each correct
       `YYYY-MM` folder. Read back, the total data-row count is 20, the second file's first
       data row has the `unix_time` of the 00:00:00 state, and each file begins with the
       `#` header lines.
-- [ ] A crossing from the last day of a month to the first creates the second month's
+- [x] A crossing from the last day of a month to the first creates the second month's
       folder and puts the post-midnight rows there.
-- [ ] After `stop()`, 5 more writes, including one after midnight, create no new file and
+- [x] After `stop()`, 5 more writes, including one after midnight, create no new file and
       add no row to the closed one. `stop()` returns the closed file's path.
-- [ ] After `stop()` then `start()`, the next write opens a new file named from that
+- [x] After `stop()` then `start()`, the next write opens a new file named from that
       write's time.
-- [ ] A state with a different gauge set at the same time of day closes the file and
+- [x] A state with a different gauge set at the same time of day closes the file and
       opens a second one in the same folder (a `_2` suffix if the second has the same
       stem), with its own header.
 
@@ -66,3 +66,8 @@ Run in CI's order (`.github/workflows/tests.yml`):
     pytest --tb=short -q -n auto --dist loadfile --durations=25
 
 ## Comments
+
+### Landed 2026-10-05
+- Created `VacuumMonitorLog` in `src/rbl/services/vacuum_monitor_log.py` enforcing local midnight rollover, month folders, gauge-change rollover, and stop/start lifecycle.
+- Extracted `gauge_labels` to `src/rbl/services/vacuum_logger.py` and delegated from `VacuumTab._build_gauge_labels`.
+- Added unit tests in `tests/test_vacuum_monitor_log.py` covering all acceptance criteria.
