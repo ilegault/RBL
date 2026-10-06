@@ -90,6 +90,29 @@ def _gauge_columns(gauge_labels: list[str]) -> list[str]:
     return cols
 
 
+def gauge_labels(state) -> list[str]:
+    """Ordered list of gauge label strings extracted from a VacuumState snapshot."""
+    labels = []
+    for r in getattr(state, "xgs_readings", []):
+        labels.append(f"xgs600:{r.channel.label}")
+    for r in getattr(state, "vgc_readings", []):
+        labels.append(f"vgc083:{r.channel}")
+    return labels
+
+
+def vacuum_comment_lines(state, utc_now: datetime | None = None) -> list[str]:
+    """Build standard # comment header lines for vacuum log files (ADR 0004)."""
+    if utc_now is None:
+        utc_now = datetime.now(timezone.utc)
+    utc_str = utc_now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    lines = [f"vacuum_logger RBL {utc_str}"]
+    if getattr(state, "xgs_connected", False):
+        lines.append(f"xgs600: units={getattr(state, 'units_xgs', '')}")
+    if getattr(state, "vgc_connected", False):
+        lines.append(f"vgc083: units={getattr(state, 'units_vgc', '')}")
+    return lines
+
+
 # ---------------------------------------------------------------------------
 # Logger
 # ---------------------------------------------------------------------------

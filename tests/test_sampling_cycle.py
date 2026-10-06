@@ -624,3 +624,125 @@ class TestPendingPeriodAndDwell:
         names = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
         assert not {"time", "monotonic"} & names
         assert "PySide6" not in code.replace(ast.get_docstring(tree) or "", "")
+
+
+# ── Saved boundary and resume ─────────────────────────────────────────────────
+
+
+class TestSavedBoundaryAndResume:
+    """Ticket 10: A stopped cycle remembers its boundary, and re-arming can resume it."""
+
+    def test_saved_boundary_none_on_construction(self):
+        s = SamplingCycleScheduler()
+        assert s.saved_boundary_t is None
+
+    def test_disarm_saves_boundary(self):
+        s = SamplingCycleScheduler(period_s=300.0)
+        s.arm(t=0.0)
+        s.tick(t=10.0)
+        s.disarm()
+        assert s.saved_boundary_t == pytest.approx(300.0)
+
+    def test_stop_saves_boundary(self):
+        s = SamplingCycleScheduler(period_s=300.0)
+        s.arm(t=0.0)
+        s.tick(t=10.0)
+        s.stop(10.0)
+        assert s.saved_boundary_t == pytest.approx(300.0)
+
+    def test_arm_clears_saved_boundary(self):
+        s = SamplingCycleScheduler(period_s=300.0)
+        s.arm(t=0.0)
+        s.tick(t=10.0)
+        s.disarm()
+        assert s.saved_boundary_t == pytest.approx(300.0)
+        s.arm(t=20.0)
+        assert s.saved_boundary_t is None
+
+    def test_arm_return_value_and_scheduling(self):
+        s = SamplingCycleScheduler(period_s=300.0)
+
+        # 1. No resume_at -> "fresh"
+        res1 = s.arm(t=100.0)
+        assert res1 == "fresh"
+        assert s.time_to_next_insertion(t=100.0) == pytest.approx(300.0)
+        assert s.tick(t=399.0) is None
+        ins1 = s.tick(t=400.0)
+        assert isinstance(ins1, CycleInsert)
+        assert ins1.t == pytest.approx(400.0)
+
+        # 2. resume_at in the future -> "resumed"
+        s.disarm()
+        res2 = s.arm(t=100.0, resume_at=250.0)
+        assert res2 == "resumed"
+        assert s.time_to_next_insertion(t=100.0) == pytest.approx(150.0)
+        assert s.tick(t=249.0) is None
+        ins2 = s.tick(t=250.0)
+        assert isinstance(ins2, CycleInsert)
+        assert ins2.t == pytest.approx(250.0)
+
+        # 3. resume_at in the past -> "fresh"
+        s.disarm()
+        res3 = s.arm(t=100.0, resume_at=50.0)
+        assert res3 == "fresh"
+        assert s.time_to_next_insertion(t=100.0) == pytest.approx(300.0)
+        assert s.tick(t=399.0) is None
+        ins3 = s.tick(t=400.0)
+        assert isinstance(ins3, CycleInsert)
+        assert ins3.t == pytest.approx(400.0)
+
+    def test_resumed_arm_produces_exactly_one_insertion_no_burst(self):
+        s = SamplingCycleScheduler(period_s=300.0, dwell_s=3.0)
+        status = s.arm(t=1000.0, resume_at=1010.0)
+        assert status == "resumed"
+
+        # Ticking once to t=1010 asserts one CycleInsert
+        ins = s.tick(t=1010.0)
+        assert isinstance(ins, CycleInsert)
+        assert ins.t == pytest.approx(1010.0)
+
+        # Ticking to t=1011 asserts None (not a burst)
+        assert s.tick(t=1011.0) is None
+
+        # At dwell expiry t=1013, asserts CycleRetract
+        ret = s.tick(t=1013.0)
+        assert isinstance(ret, CycleRetract)
+        assert ret.t == pytest.approx(1013.0)
+
+        # Next insertion is at 1010 + 300 = 1310
+        assert s.tick(t=1309.0) is None
+        ins2 = s.tick(t=1310.0)
+        assert isinstance(ins2, CycleInsert)
+        assert ins2.t == pytest.approx(1310.0)
+
+    def test_past_resume_at_schedules_fresh_no_early_insertion(self):
+        s = SamplingCycleScheduler(period_s=300.0, dwell_s=3.0)
+        # resume_at is 900 s in the past
+        status = s.arm(t=1000.0, resume_at=100.0)
+        assert status == "fresh"
+
+        # No insertion occurs before t + period_s (1300.0)
+        for t_int in range(1000, 1300):
+            assert s.tick(float(t_int)) is None
+
+        ins = s.tick(t=1300.0)
+        assert isinstance(ins, CycleInsert)
+        assert ins.t == pytest.approx(1300.0)
+
+    def test_stop_retract_behavior_during_insertion_and_otherwise(self):
+        s = SamplingCycleScheduler(period_s=300.0, dwell_s=3.0)
+        s.arm(t=0.0)
+        # Calling stop when WAITING returns None
+        assert s.stop(t=50.0) is None
+        assert s.state == CycleState.DISARMED
+
+        # Calling stop during insertion returns CycleRetract
+        s.arm(t=0.0)
+        ins = s.tick(t=300.0)
+        assert isinstance(ins, CycleInsert)
+        assert s.state == CycleState.INSERTING
+        retract = s.stop(t=301.0)
+        assert isinstance(retract, CycleRetract)
+        assert retract.t == pytest.approx(301.0)
+        assert s.state == CycleState.DISARMED
+

@@ -1318,3 +1318,143 @@ class TestWriteSettingsChanged:
         assert "threshold" in doc.lower() or "setting" in doc.lower()
 
 
+class TestWriteCycleLifecycleRows:
+    """write_cycle_disarmed and write_cycle_armed record cycle lifecycle markers (Ticket 08)."""
+
+    def test_write_cycle_disarmed_valid_reasons(self, tmp_path):
+        from rbl.services.cup_session_writer import CupSessionWriter
+
+        sw = CupSessionWriter(session_id="test_disarm", output_dir=tmp_path)
+        sw.write_cycle_disarmed(t_host=10.0, reason="stop", saved_boundary_t=50.0)
+        sw.write_cycle_disarmed(t_host=20.0, reason="disarm", saved_boundary_t=60.0)
+        sw.close()
+
+        with open(sw.csv_path, encoding="utf-8") as f:
+            reader = csv.DictReader([line for line in f if not line.startswith("#")])
+            rows = list(reader)
+
+        disarm_rows = [r for r in rows if r["record_type"] == "cycle_disarmed"]
+        assert len(disarm_rows) == 2
+        assert float(disarm_rows[0]["host_timestamp"]) == pytest.approx(10.0)
+        assert "stop" in disarm_rows[0]["details"]
+        assert float(disarm_rows[1]["host_timestamp"]) == pytest.approx(20.0)
+        assert "disarm" in disarm_rows[1]["details"]
+
+    def test_write_cycle_disarmed_invalid_reason_raises(self, tmp_path):
+        from rbl.services.cup_session_writer import CupSessionWriter
+
+        sw = CupSessionWriter(session_id="test_disarm_invalid", output_dir=tmp_path)
+        with pytest.raises(ValueError) as excinfo:
+            sw.write_cycle_disarmed(t_host=10.0, reason="abort", saved_boundary_t=50.0)
+        assert "abort" in str(excinfo.value)
+        sw.close()
+
+    def test_write_cycle_armed_valid_modes(self, tmp_path):
+        from rbl.services.cup_session_writer import CupSessionWriter
+
+        sw = CupSessionWriter(session_id="test_arm", output_dir=tmp_path)
+        sw.write_cycle_armed(t_host=10.0, mode="fresh", next_insertion_t=100.0)
+        sw.write_cycle_armed(t_host=20.0, mode="resumed", next_insertion_t=120.0)
+        sw.close()
+
+        with open(sw.csv_path, encoding="utf-8") as f:
+            reader = csv.DictReader([line for line in f if not line.startswith("#")])
+            rows = list(reader)
+
+        armed_rows = [r for r in rows if r["record_type"] == "cycle_armed"]
+        assert len(armed_rows) == 2
+        assert float(armed_rows[0]["host_timestamp"]) == pytest.approx(10.0)
+        assert "fresh" in armed_rows[0]["details"]
+        assert float(armed_rows[0]["commanded_timestamp"]) == pytest.approx(100.0)
+
+        assert float(armed_rows[1]["host_timestamp"]) == pytest.approx(20.0)
+        assert "resumed" in armed_rows[1]["details"]
+        assert float(armed_rows[1]["commanded_timestamp"]) == pytest.approx(120.0)
+
+    def test_write_cycle_armed_invalid_mode_raises(self, tmp_path):
+        from rbl.services.cup_session_writer import CupSessionWriter
+
+        sw = CupSessionWriter(session_id="test_arm_invalid", output_dir=tmp_path)
+        with pytest.raises(ValueError) as excinfo:
+            sw.write_cycle_armed(t_host=10.0, mode="restart", next_insertion_t=100.0)
+        assert "restart" in str(excinfo.value)
+        sw.close()
+
+    def test_boundary_timestamp_round_trip(self, tmp_path):
+        from rbl.services.cup_session_writer import CupSessionWriter
+
+        sw = CupSessionWriter(session_id="test_round_trip", output_dir=tmp_path)
+        sw.write_cycle_disarmed(t_host=10.0, reason="stop", saved_boundary_t=1234.5)
+        sw.write_cycle_armed(t_host=20.0, mode="resumed", next_insertion_t=1234.5)
+        sw.close()
+
+        with open(sw.csv_path, encoding="utf-8") as f:
+            reader = csv.DictReader([line for line in f if not line.startswith("#")])
+            rows = list(reader)
+
+        assert len(rows) == 2
+        assert float(rows[0]["commanded_timestamp"]) == pytest.approx(1234.5)
+        assert float(rows[1]["commanded_timestamp"]) == pytest.approx(1234.5)
+
+    def test_realistic_operator_sequence(self, tmp_path):
+        from rbl.services.cup_session_writer import CupSessionWriter
+
+        sw = CupSessionWriter(session_id="test_sequence", output_dir=tmp_path)
+        # 1. Armed fresh
+        sw.write_cycle_armed(t_host=10.0, mode="fresh", next_insertion_t=300.0)
+        # 2. Disarmed with reason "stop" and a saved boundary
+        sw.write_cycle_disarmed(t_host=50.0, reason="stop", saved_boundary_t=300.0)
+        # 3. Idle marker during operator threshold adjustment
+        sw.write_idle_heartbeat(t_host=55.0, details="operator_adjusting_threshold")
+        # 4. Armed again with mode "resumed" and that same boundary
+        sw.write_cycle_armed(t_host=60.0, mode="resumed", next_insertion_t=300.0)
+        sw.close()
+
+        with open(sw.csv_path, encoding="utf-8") as f:
+            reader = csv.DictReader([line for line in f if not line.startswith("#")])
+            rows = list(reader)
+
+        assert len(rows) == 4
+        assert [r["record_type"] for r in rows] == [
+            "cycle_armed",
+            "cycle_disarmed",
+            "idle_heartbeat",
+            "cycle_armed",
+        ]
+        assert rows[0]["details"].startswith("mode=fresh")
+        assert float(rows[0]["commanded_timestamp"]) == pytest.approx(300.0)
+        assert rows[1]["details"].startswith("reason=stop")
+        assert float(rows[1]["commanded_timestamp"]) == pytest.approx(300.0)
+        assert rows[3]["details"].startswith("mode=resumed")
+        assert float(rows[3]["commanded_timestamp"]) == pytest.approx(300.0)
+
+    def test_lifecycle_rows_do_not_touch_run_state(self, tmp_path):
+        from rbl.services.cup_session_writer import CupSessionWriter
+
+        sw = CupSessionWriter(session_id="test_run_state", output_dir=tmp_path)
+        sw.write_run_opened(t_host=0.0, run_id=1, arm_threshold=1.0e-6, release_threshold=5.0e-7)
+        sw.write_sample(
+            t_host=0.1,
+            t_inst=0.1,
+            current=1.2e-6,
+            status_word=0,
+            over_range=False,
+            run_id=1,
+        )
+
+        initial_run_count = sw.run_count
+        initial_sample_count = sw.sample_count
+        assert initial_run_count == 1
+        assert initial_sample_count == 1
+
+        sw.write_cycle_disarmed(t_host=0.2, reason="stop", saved_boundary_t=50.0)
+        sw.write_cycle_armed(t_host=0.3, mode="resumed", next_insertion_t=50.0)
+
+        assert sw.run_count == initial_run_count
+        assert sw.sample_count == initial_sample_count
+
+        sw.write_run_closed(t_host=0.5, run_id=1, reason="manual_stop")
+        sw.close()
+
+
+

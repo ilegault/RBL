@@ -283,3 +283,133 @@ def test_ints_accepted_and_nan_found_text():
     assert w == [] and s.cycle_period_s == 600.0
     _, w = validate_settings(_valid(arm_debounce_s=float("nan")))
     assert math.isnan(float(w[0].found))
+
+
+# ---------------------------------------------------------------------------
+# Ticket 03: load_settings and save_settings
+# ---------------------------------------------------------------------------
+import json  # noqa: E402
+
+from rbl.config.cup_settings_store import load_settings, save_settings  # noqa: E402
+
+
+def test_autouse_fixture_redirects_store_path():
+    """Ensure autouse fixture in conftest redirects STORE_PATH away from ~/.config/rbl."""
+    assert store.STORE_PATH.name == "cup_settings.json"
+    parent_str = str(store.STORE_PATH.parent).lower()
+    store_str = str(store.STORE_PATH).lower()
+    assert "config" not in parent_str or "tmp" in store_str
+    assert store.STORE_PATH != CUP_SETTINGS_STORE
+
+
+def test_load_settings_missing_file(tmp_path, monkeypatch):
+    p = tmp_path / "nonexistent" / "cup_settings.json"
+    monkeypatch.setattr(store, "STORE_PATH", p)
+    settings, warnings = load_settings()
+    assert settings == CupSettings.defaults()
+    assert warnings == []
+
+
+def test_load_settings_invalid_json(tmp_path, monkeypatch):
+    p = tmp_path / "corrupt.json"
+    p.write_text("not valid json {", encoding="utf-8")
+    monkeypatch.setattr(store, "STORE_PATH", p)
+    settings, warnings = load_settings()
+    assert settings == CupSettings.defaults()
+    assert len(warnings) == 1
+    w = warnings[0]
+    assert w.key == "_file"
+    assert str(p) in w.reason
+
+
+def test_load_settings_partial_valid_and_invalid(tmp_path, monkeypatch):
+    p = tmp_path / "partial.json"
+    data = {
+        "arm_threshold_a": 10e-6,
+        "release_threshold_a": 5e-6,
+        "settle_window_s": 0.5,
+        "cycle_dwell_s": 2.0,
+        "cycle_period_s": 100.0,
+        "arm_debounce_s": -99.0,  # invalid: must be > 0 and <= 60
+    }
+    p.write_text(json.dumps(data), encoding="utf-8")
+    monkeypatch.setattr(store, "STORE_PATH", p)
+    settings, warnings = load_settings()
+    assert settings.arm_threshold_a == 10e-6
+    assert settings.release_threshold_a == 5e-6
+    assert settings.settle_window_s == 0.5
+    assert settings.cycle_dwell_s == 2.0
+    assert settings.cycle_period_s == 100.0
+    assert settings.arm_debounce_s == CUP_ARM_DEBOUNCE_S
+    assert len(warnings) == 1
+    assert warnings[0].key == "arm_debounce_s"
+
+
+def test_load_settings_never_raises(tmp_path, monkeypatch):
+    # Directory path instead of file, causing OS error on read
+    p = tmp_path / "adir"
+    p.mkdir()
+    monkeypatch.setattr(store, "STORE_PATH", p)
+    settings, warnings = load_settings()
+    assert settings == CupSettings.defaults()
+    assert len(warnings) == 1
+    assert warnings[0].key == "_file"
+
+
+def test_save_settings_leaves_exactly_one_file(tmp_path, monkeypatch):
+    store_dir = tmp_path / "settings_dir"
+    store_file = store_dir / "cup_settings.json"
+    monkeypatch.setattr(store, "STORE_PATH", store_file)
+
+    settings = CupSettings.defaults()
+    ok = save_settings(settings)
+    assert ok is True
+
+    # Assert exactly one file in directory (no temporary leftover files)
+    files = list(store_dir.iterdir())
+    assert len(files) == 1
+    assert files[0].name == "cup_settings.json"
+
+
+def test_save_settings_unwritable_location(tmp_path, monkeypatch, caplog):
+    # Point at a path whose parent cannot be created because a regular file is in the way
+    blocking_file = tmp_path / "blocker"
+    blocking_file.write_text("block", encoding="utf-8")
+    unwritable_path = blocking_file / "sub" / "cup_settings.json"
+    monkeypatch.setattr(store, "STORE_PATH", unwritable_path)
+
+    settings = CupSettings.defaults()
+    ok = save_settings(settings)
+    assert ok is False
+
+
+def test_save_and_load_readme_and_roundtrip(tmp_path, monkeypatch):
+    store_file = tmp_path / "test_roundtrip.json"
+    monkeypatch.setattr(store, "STORE_PATH", store_file)
+
+    custom_settings = CupSettings(
+        arm_threshold_a=2e-6,
+        release_threshold_a=1e-6,
+        settle_window_s=0.8,
+        cycle_period_s=200.0,
+        cycle_dwell_s=15.0,
+        arm_debounce_s=2.5,
+        release_interval_s=5.0,
+    )
+    assert save_settings(custom_settings) is True
+
+    # Check written file contents directly
+    raw = json.loads(store_file.read_text(encoding="utf-8"))
+    assert "_README" in raw
+    assert raw["_README"] == (
+        "RBL rewrites this file whenever a setting changes on the Faraday Cup tab. "
+        "Edit it only while RBL is closed."
+    )
+    for field_name in dataclasses.asdict(custom_settings):
+        assert field_name in raw
+        assert raw[field_name] == getattr(custom_settings, field_name)
+
+    # Load back
+    loaded_settings, warnings = load_settings()
+    assert warnings == []
+    assert loaded_settings == custom_settings

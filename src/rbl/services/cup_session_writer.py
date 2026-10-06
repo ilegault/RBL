@@ -325,7 +325,8 @@ class CupSessionWriter:
             "connected, disconnected, position_transition, "
             "fault_move_not_confirmed, fault_controller_not_in_auto, "
             "fault_impossible_status, fault_disagreement, "
-            "cycle_insertion_skipped, insertion_summary\n"
+            "cycle_insertion_skipped, insertion_summary, "
+            "cycle_disarmed, cycle_armed, settings_changed\n"
         )
         self._file.write("# columns: " + ", ".join(CSV_COLUMNS) + "\n")
 
@@ -747,6 +748,81 @@ class CupSessionWriter:
             "over_range": "",
             "run_id": str(self._active_run_id) if self._active_run_id is not None else "",
             "details": det,
+        }
+        self._write_row(row)
+
+    def write_cycle_disarmed(
+        self,
+        t_host: float,
+        reason: str,
+        saved_boundary_t: float,
+        details: str = "",
+    ) -> None:
+        """Write a marker recording that the sampling cycle was disarmed.
+
+        WHY THIS EXISTS (ADR 0002 Amendment A8, Ticket 08)
+        --------------------------------------------------
+        Two different exits leave the armed state: an operator disarm (cup left in place)
+        and an operator stop (cup retracted). Both record the saved period boundary so a
+        reviewer reading the file can tell whether a gap in the insertion series was an
+        intentional operator pause (e.g. to edit thresholds) or an abnormal interruption.
+
+        The saved boundary is stored in the commanded_timestamp column using the standard
+        6-decimal second float format so existing readers can parse it without custom
+        regular expressions.
+        """
+        if reason not in ("stop", "disarm"):
+            raise ValueError(f"Invalid reason {reason!r}; must be 'stop' or 'disarm'")
+        det = f"reason={reason}; {details}" if details else f"reason={reason}"
+        row = {
+            "record_type": "cycle_disarmed",
+            "iso_timestamp": _now_iso(),
+            "host_timestamp": f"{t_host:.6f}",
+            "inst_timestamp": "",
+            "current_a": "",
+            "status_word": "",
+            "over_range": "",
+            "run_id": str(self._active_run_id) if self._active_run_id is not None else "",
+            "details": det,
+            "position": "",
+            "commanded_timestamp": f"{saved_boundary_t:.6f}",
+        }
+        self._write_row(row)
+
+    def write_cycle_armed(
+        self,
+        t_host: float,
+        mode: str,
+        next_insertion_t: float,
+        details: str = "",
+    ) -> None:
+        """Write a marker recording that the sampling cycle was armed.
+
+        WHY THIS EXISTS (ADR 0002 Amendment A8, Ticket 08)
+        --------------------------------------------------
+        Records entering the armed state with mode 'fresh' (countdown started from now)
+        or 'resumed' (re-armed onto a previously saved period boundary). The next scheduled
+        insertion timestamp is recorded so downstream analysis can match the subsequent
+        insertion against the planned schedule.
+
+        The next insertion timestamp is stored in the commanded_timestamp column using the
+        standard 6-decimal second float format so existing readers can parse it directly.
+        """
+        if mode not in ("fresh", "resumed"):
+            raise ValueError(f"Invalid mode {mode!r}; must be 'fresh' or 'resumed'")
+        det = f"mode={mode}; {details}" if details else f"mode={mode}"
+        row = {
+            "record_type": "cycle_armed",
+            "iso_timestamp": _now_iso(),
+            "host_timestamp": f"{t_host:.6f}",
+            "inst_timestamp": "",
+            "current_a": "",
+            "status_word": "",
+            "over_range": "",
+            "run_id": str(self._active_run_id) if self._active_run_id is not None else "",
+            "details": det,
+            "position": "",
+            "commanded_timestamp": f"{next_insertion_t:.6f}",
         }
         self._write_row(row)
 
