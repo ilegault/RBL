@@ -24,6 +24,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication, QMessageBox
 
+from rbl.gui import theme
 from rbl.gui.app import MainWindow
 from rbl.gui.faraday_cup_tab import FaradayCupTab
 from rbl.gui.widgets.acquisition_settings import AcquisitionSettingsGroup
@@ -1571,6 +1572,183 @@ class TestFaradayCupTabAcquisitionSettingsWiring:
         assert "arm=3.500e-07 A" in open_rows[0]["details"]
         assert "5.000e-07" not in open_rows[0]["details"]
         tab.close()
+
+
+class TestFaradayCupTabSettingsPersistence:
+    """Tests for settings persistence and warning handling across restarts (Ticket 13)."""
+
+    def test_init_loads_settings_and_applies_all_five_values(self, qapp, tmp_path, monkeypatch):
+        """FaradayCupTab.__init__ calls load_settings() and applies all five values."""
+        import rbl.config.cup_settings_store as store
+        from rbl.config.cup_settings_store import CupSettings, save_settings
+
+        store_file = tmp_path / "cup_settings.json"
+        monkeypatch.setattr(store, "STORE_PATH", store_file)
+
+        custom = CupSettings(
+            arm_threshold_a=2.0e-6,
+            release_threshold_a=1.0e-6,
+            settle_window_s=2.5,
+            cycle_period_s=600.0,
+            cycle_dwell_s=15.0,
+            arm_debounce_s=2.0,
+            release_interval_s=4.0,
+        )
+        assert save_settings(custom) is True
+
+        sw = CupSessionWriter(output_dir=tmp_path, settle_window_s=1.0)
+        tab = FaradayCupTab(session_writer=sw)
+        tab.show()
+        qapp.processEvents()
+
+        # All five landed in the four places
+        assert tab.acquisition.detector.arm_threshold == pytest.approx(2.0e-6)
+        assert tab.acquisition.detector.release_threshold == pytest.approx(1.0e-6)
+        assert tab.session_writer.settle_window_s == pytest.approx(2.5)
+        assert (
+            tab.cycle.period_s == pytest.approx(600.0)
+            or tab.cycle.pending_period_s == pytest.approx(600.0)
+        )
+        assert (
+            tab.cycle.dwell_s == pytest.approx(15.0)
+            or tab.cycle.pending_dwell_s == pytest.approx(15.0)
+        )
+
+        # Also visual spin boxes reflect values
+        assert tab.settings_group.spn_arm_threshold.value() == pytest.approx(2.0e-6)
+        assert tab.settings_group.spn_release_threshold.value() == pytest.approx(1.0e-6)
+        assert tab.settings_group.spn_settle_window.value() == pytest.approx(2.5)
+        assert tab.spn_cycle_period.value() == pytest.approx(600.0)
+        assert tab.spn_cycle_dwell.value() == pytest.approx(15.0)
+        tab.close()
+
+    def test_committed_edit_saves_settings_and_survives_restart(self, qapp, tmp_path, monkeypatch):
+        """Committed edit calls save_settings; fresh tab instance reads saved value."""
+        import json
+
+        import rbl.config.cup_settings_store as store
+
+        store_file = tmp_path / "cup_settings.json"
+        monkeypatch.setattr(store, "STORE_PATH", store_file)
+
+        tab1 = FaradayCupTab()
+        tab1.show()
+        qapp.processEvents()
+
+        # Edit arm threshold to 3.0e-6
+        tab1.settings_group.spn_arm_threshold.setValue(3.0e-6)
+        tab1.settings_group.spn_arm_threshold.editingFinished.emit()
+        qapp.processEvents()
+
+        # Verify saved to disk
+        assert store_file.exists()
+        raw = json.loads(store_file.read_text(encoding="utf-8"))
+        assert raw["arm_threshold_a"] == pytest.approx(3.0e-6)
+        tab1.close()
+
+        # Fresh tab instance loads saved value
+        tab2 = FaradayCupTab()
+        tab2.show()
+        qapp.processEvents()
+        assert tab2.settings_group.spn_arm_threshold.value() == pytest.approx(3.0e-6)
+        assert tab2.acquisition.detector.arm_threshold == pytest.approx(3.0e-6)
+        tab2.close()
+
+    def test_reset_button_saves_settings_to_disk(self, qapp, tmp_path, monkeypatch):
+        """Clicking reset to defaults calls save_settings with defaults."""
+        import json
+
+        import rbl.config.cup_settings_store as store
+        from rbl.config.cup_config import CUP_ARM_THRESHOLD_A
+        from rbl.config.cup_settings_store import CupSettings, save_settings
+
+        store_file = tmp_path / "cup_settings.json"
+        monkeypatch.setattr(store, "STORE_PATH", store_file)
+
+        custom = CupSettings(
+            arm_threshold_a=3.0e-6,
+            release_threshold_a=1.0e-6,
+            settle_window_s=2.5,
+            cycle_period_s=600.0,
+            cycle_dwell_s=15.0,
+            arm_debounce_s=1.0,
+            release_interval_s=3.0,
+        )
+        assert save_settings(custom) is True
+
+        tab = FaradayCupTab()
+        tab.show()
+        qapp.processEvents()
+
+        # Reset to defaults
+        tab.settings_group.btn_reset_defaults.click()
+        qapp.processEvents()
+
+        raw = json.loads(store_file.read_text(encoding="utf-8"))
+        assert raw["arm_threshold_a"] == pytest.approx(CUP_ARM_THRESHOLD_A)
+        tab.close()
+
+    def test_failed_save_shows_visible_fault_naming_path_and_preserves_edit(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """A save returning False shows FAULT message naming path and keeps detector edit."""
+        import rbl.config.cup_settings_store as store
+
+        store_file = tmp_path / "cup_settings.json"
+        monkeypatch.setattr(store, "STORE_PATH", store_file)
+
+        tab = FaradayCupTab()
+        tab.show()
+        qapp.processEvents()
+
+        # Monkeypatch save_settings to return False
+        monkeypatch.setattr(store, "save_settings", lambda *a, **k: False)
+
+        tab.settings_group.spn_arm_threshold.setValue(4.0e-6)
+        tab.settings_group.spn_arm_threshold.editingFinished.emit()
+        qapp.processEvents()
+
+        # Detector has the new value
+        assert tab.acquisition.detector.arm_threshold == pytest.approx(4.0e-6)
+
+        # Message is visible, names path, in FAULT role
+        err_lbl = (
+            getattr(tab.settings_group, "lbl_save_error", None)
+            or tab.settings_group.lbl_warning
+        )
+        assert err_lbl.isVisible()
+        assert str(store_file) in err_lbl.text() or "cup_settings.json" in err_lbl.text()
+        assert theme.FAULT in err_lbl.styleSheet()
+        tab.close()
+
+    def test_load_warnings_passed_to_widget_and_displayed(self, qapp, tmp_path, monkeypatch):
+        """Warnings from load_settings appear on tab naming key, found, reason, and fallback."""
+        import json
+
+        import rbl.config.cup_settings_store as store
+        from rbl.config.cup_config import CUP_ARM_THRESHOLD_A
+
+        store_file = tmp_path / "cup_settings.json"
+        monkeypatch.setattr(store, "STORE_PATH", store_file)
+
+        # Invalid arm_threshold_a in file
+        store_file.write_text(json.dumps({"arm_threshold_a": -5.0}), encoding="utf-8")
+
+        tab = FaradayCupTab()
+        tab.show()
+        qapp.processEvents()
+
+        lbl = tab.settings_group.lbl_load_warnings
+        assert lbl.isVisible()
+        assert theme.FAULT in lbl.styleSheet()
+        text = lbl.text()
+        assert "arm_threshold_a" in text
+        assert "-5.0" in text
+        assert "must be between 1e-9 A and 1e-3 A" in text
+        assert str(CUP_ARM_THRESHOLD_A) in text
+        assert tab.acquisition.detector.arm_threshold == pytest.approx(CUP_ARM_THRESHOLD_A)
+        tab.close()
+
 
 
 
