@@ -2,7 +2,7 @@
 
 **Blocked by:** 08, 10, 15
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Read first:** `src/rbl/gui/faraday_cup_tab.py`, `_on_cycle_arm_clicked` (note that
 the Arm button doubles as Disarm and leaves the cup where it is) and
