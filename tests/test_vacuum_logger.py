@@ -324,3 +324,25 @@ def _data_rows(csv_path: str) -> list[dict]:
         for row in reader:
             rows.append(dict(row))
     return rows
+
+
+class TestNoOverwrite:
+
+    def test_fixed_stem_never_overwrites(self, tmp_path):
+        """Two loggers with the same file_stem get vacuum.csv and vacuum_2.csv."""
+        states = _make_states(2)
+        first = VacuumLogger(_ALL_LABELS, output_dir=tmp_path, file_stem="vacuum")
+        first.write_header_comment(["first"])
+        first.write_row(states[0])
+        first.close()
+        before = (tmp_path / "vacuum.csv").read_bytes()
+
+        second = VacuumLogger(_ALL_LABELS, output_dir=tmp_path, file_stem="vacuum")
+        second.write_header_comment(["second"])
+        second.write_row(states[1])
+        second.close()
+
+        assert sorted(p.name for p in tmp_path.glob("*.csv")) == [
+            "vacuum.csv", "vacuum_2.csv"]
+        assert (tmp_path / "vacuum.csv").read_bytes() == before
+        assert (tmp_path / "vacuum_2.json").exists()

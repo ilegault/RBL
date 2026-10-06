@@ -8,9 +8,14 @@ Matches calibration_writer.py's conventions exactly so one log format
 convention governs all instrument data in the repo:
 
 - One CSV per session, opened on "start logging", closed on "stop".
-- File name: vacuum_YYYYMMDD_HHMMSS.csv under
+- Logging starts automatically on the first reading (the Vacuum tab does
+  this); it is not an operator action.
+- File name: vacuum_YYYYMMDDTHHMMSS.csv (a caller may pass ``file_stem`` to
+  fix the stem), under ``config.paths.VACUUM_DIR``:
     frozen build : dist/RBL/data/vacuum/
     development  : <repo_root>/data/vacuum/
+- A name collision gets a ``_2``, ``_3`` ... suffix (log_rollover.unused_path)
+  rather than overwriting. The JSON sidecar shares the chosen stem.
 - flush() after every row — an overnight run that dies must leave a
   readable file.
 - Column set is fixed at file-open from the channels discovered at that
@@ -23,6 +28,14 @@ convention governs all instrument data in the repo:
 - A '#' comment block at the top of each file records instrument
   identities, firmware versions, baud rates and units so the file is
   self-describing months later.
+
+WHY THIS EXISTS
+---------------
+One vacuum log was left running for two weeks and became a single 176 MB
+file, and a name reused by a later run could silently replace an earlier
+run's data. Every file name now goes through log_rollover.unused_path so no
+vacuum file is ever overwritten, and the stem can be fixed by the caller (for
+example ``vacuum`` inside a session folder).
 
 HEADER FORMAT
 -------------
@@ -38,6 +51,8 @@ import logging
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+from rbl.services.log_rollover import unused_path
 
 log = logging.getLogger(__name__)
 
@@ -89,18 +104,22 @@ class VacuumLogger:
                    receives after "Start Logging" is clicked.
     metadata     : extra fields written into the JSON sidecar at close.
     output_dir   : override for testing (default: _output_dir()).
+    file_stem    : fixed file stem; default is today's run id. A taken name
+                   gets a _2, _3 ... suffix; nothing is overwritten.
     """
 
     def __init__(self, gauge_labels: list[str], *,
                  metadata: dict = None,
-                 output_dir: Path = None):
+                 output_dir: Path = None,
+                 file_stem: str | None = None):
         self._gauge_labels = list(gauge_labels)
-        self._run_id       = _new_run_id()
         self._output_dir   = Path(output_dir) if output_dir else _output_dir()
         self._output_dir.mkdir(parents=True, exist_ok=True)
 
-        self._csv_path  = self._output_dir / f"{self._run_id}.csv"
-        self._meta_path = self._output_dir / f"{self._run_id}.json"
+        self._csv_path = unused_path(
+            self._output_dir, file_stem or _new_run_id(), ".csv")
+        self._run_id   = self._csv_path.stem   # the stem actually chosen
+        self._meta_path = self._csv_path.with_suffix(".json")
 
         self._metadata: dict = dict(metadata or {})
         self._metadata.setdefault("run_id",              self._run_id)
