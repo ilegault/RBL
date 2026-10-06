@@ -2,7 +2,7 @@
 
 **Blocked by:** 05
 
-**Status:** in-progress
+**Status:** done
 
 **Read first:** `src/rbl/services/cup_session_writer.py`, the two calls to
 `compute_insertion_current(..., settle_window_s=CUP_SETTLE_WINDOW_S)` - one inside
@@ -16,24 +16,24 @@ from the post-settle mean and from the dose can be corrected without a rebuild. 
 value becomes writer state with a setter, and both places that compute insertion
 statistics use that state.
 
-- [ ] `CupSessionWriter.__init__` gains a keyword parameter `settle_window_s`
+- [x] `CupSessionWriter.__init__` gains a keyword parameter `settle_window_s`
       defaulting to `CUP_SETTLE_WINDOW_S`, stored as `self._settle_window_s`. A test
       constructing the writer with no arguments asserts the stored value equals the
       constant.
-- [ ] `CupSessionWriter.set_settle_window(value: float)` assigns it. Both
+- [x] `CupSessionWriter.set_settle_window(value: float)` assigns it. Both
       `compute_insertion_current` call sites pass `self._settle_window_s` instead of
       the constant. A test asserts the module no longer references
       `CUP_SETTLE_WINDOW_S` anywhere except as that default.
-- [ ] A test proves the value is in use, not merely stored: feed one run a fixed set
+- [x] A test proves the value is in use, not merely stored: feed one run a fixed set
       of samples spanning 3 seconds at 10 Hz, close it with a settle window of 1.0,
       record `post_settle_samples` and `post_settle_mean_a` from the written row; then
       repeat with an identical sample set and a settle window of 2.0, and assert the
       sample count is exactly 10 lower and the mean differs. Assert the numbers, not
       that "it changed".
-- [ ] The row written by `write_insertion_summary` records the settle window that was
+- [x] The row written by `write_insertion_summary` records the settle window that was
       applied to it. A test asserts the value appears in the row and changes when
       `set_settle_window` is called between two insertions.
-- [ ] `src/rbl/hardware/dose_model.py` is not modified. `compute_insertion_current`
+- [x] `src/rbl/hardware/dose_model.py` is not modified. `compute_insertion_current`
       keeps its signature and its `CUP_SETTLE_WINDOW_S` default; it is the caller that
       supplies the live value. That module is pure physics and is where the dose
       arithmetic can be checked against numbers worked by hand.
@@ -44,3 +44,7 @@ statistics and the written row must be real.
 **Out of scope:** changing the default value of `CUP_SETTLE_WINDOW_S` - that is bench
 ticket 13 of `.scratch/cup-actuation/` and it is unaffected by this work. Also out of
 scope: the GUI field that calls `set_settle_window` (ticket 12).
+
+## Comments
+- 2026-10-06: Added `settle_window_s` keyword argument to `CupSessionWriter.__init__`, added `set_settle_window()` setter and `settle_window_s` property, updated both `compute_insertion_current` call sites to use `self._settle_window_s`, recorded settle window in `write_insertion_summary` details, and recorded post-settle sample count and mean in `write_run_closed` details. Pure physics in `dose_model.py` left untouched. Verified with 4 new tests in `tests/test_cup_session_writer.py`.
+

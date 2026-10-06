@@ -1172,3 +1172,129 @@ class TestInsertionSummaryRowsAndSessionHeader:
         # Insertion 3: 100.0 s (170 - 70), excluding the 5 s dwell of insertion 2
         assert float(summary_rows[2]["beam_on_seconds"]) == pytest.approx(100.0)
 
+    def test_settle_window_stored_and_defaults_to_constant(self, tmp_path):
+        """CupSessionWriter stores settle_window_s, defaulting to CUP_SETTLE_WINDOW_S."""
+        from rbl.config.cup_config import CUP_SETTLE_WINDOW_S
+
+        writer = CupSessionWriter(output_dir=tmp_path)
+        assert writer._settle_window_s == CUP_SETTLE_WINDOW_S
+        assert writer.settle_window_s == CUP_SETTLE_WINDOW_S
+
+        writer2 = CupSessionWriter(output_dir=tmp_path, settle_window_s=2.5)
+        assert writer2._settle_window_s == 2.5
+        assert writer2.settle_window_s == 2.5
+
+    def test_cup_session_writer_module_references_cup_settle_window_s_only_as_default(self):
+        """CupSessionWriter module references CUP_SETTLE_WINDOW_S only as a default."""
+        import ast
+        import inspect
+
+        import rbl.services.cup_session_writer as mod
+
+        source = inspect.getsource(mod)
+        tree = ast.parse(source)
+
+        name_uses = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name) and node.id == "CUP_SETTLE_WINDOW_S":
+                name_uses.append(node)
+
+        # CUP_SETTLE_WINDOW_S should only appear as the default in __init__
+        assert len(name_uses) == 1, f"Expected 1 use of CUP_SETTLE_WINDOW_S, found {len(name_uses)}"
+
+    def test_settle_window_in_use_different_windows_produce_different_stats(self, tmp_path):
+        """Proves live settle window affects computed stats: 1.0 s vs 2.0 s on 3 s at 10 Hz."""
+        import re
+
+        def run_with_settle(settle_s: float, sub_dir: str):
+            out_dir = tmp_path / sub_dir
+            writer = CupSessionWriter(output_dir=out_dir, settle_window_s=settle_s)
+            writer.write_run_opened(
+                t_host=100.0, run_id=1, arm_threshold=1e-9, release_threshold=0.5e-9
+            )
+            # 30 samples spanning 3.0 s at 10 Hz: t in [100.0, 102.9]
+            # First 10 (100.0 - 100.9): 1.0e-9
+            # Second 10 (101.0 - 101.9): 2.0e-9
+            # Third 10 (102.0 - 102.9): 3.0e-9
+            for i in range(30):
+                t_h = 100.0 + i * 0.1
+                t_i = i * 0.1
+                if i < 10:
+                    val = 1.0e-9
+                elif i < 20:
+                    val = 2.0e-9
+                else:
+                    val = 3.0e-9
+                writer.write_sample(
+                    t_host=t_h, t_inst=t_i, current=val, status_word=0, over_range=False, run_id=1
+                )
+            writer.write_run_closed(t_host=103.0, run_id=1, reason="dwell_expired")
+            writer.close()
+
+            with open(writer.csv_path, encoding="utf-8") as f:
+                reader = csv.DictReader([line for line in f if not line.startswith("#")])
+                closed_row = next(r for r in reader if r["record_type"] == "run_closed")
+
+            m_samples = re.search(r"post_settle_samples=(\d+)", closed_row["details"])
+            m_mean = re.search(r"post_settle_mean_a=([0-9.eE+-]+)", closed_row["details"])
+            assert m_samples is not None
+            assert m_mean is not None
+            samples = int(m_samples.group(1))
+            mean_a = float(m_mean.group(1))
+            return samples, mean_a
+
+        samples_1, mean_1 = run_with_settle(1.0, "settle_1")
+        samples_2, mean_2 = run_with_settle(2.0, "settle_2")
+
+        # With 1.0 s settle window: 10 samples excluded, 20 post-settle samples.
+        # Mean of 10 samples of 2e-9 and 10 samples of 3e-9 = 2.5e-9.
+        assert samples_1 == 20
+        assert mean_1 == pytest.approx(2.5e-9)
+
+        # With 2.0 s settle window: 20 samples excluded, 10 post-settle samples.
+        # Mean of 10 samples of 3e-9 = 3.0e-9.
+        assert samples_2 == 10
+        assert mean_2 == pytest.approx(3.0e-9)
+
+        # Exactly 10 lower, and mean differs
+        assert samples_1 - samples_2 == 10
+        assert mean_1 != mean_2
+
+    def test_write_insertion_summary_records_settle_window(self, tmp_path):
+        """The row written by write_insertion_summary records the settle window applied to it."""
+        writer = CupSessionWriter(output_dir=tmp_path, settle_window_s=1.0)
+        writer.write_insertion_summary(
+            run_id=1,
+            commanded_timestamp=0.0,
+            confirmed_timestamp=0.1,
+            dwell=3.0,
+            sample_count=20,
+            mean_current_a=1e-9,
+            std_current_a=1e-11,
+            beam_on_seconds=0.0,
+            charge=1e-9,
+        )
+
+        writer.set_settle_window(2.5)
+        writer.write_insertion_summary(
+            run_id=2,
+            commanded_timestamp=10.0,
+            confirmed_timestamp=10.1,
+            dwell=3.0,
+            sample_count=20,
+            mean_current_a=1e-9,
+            std_current_a=1e-11,
+            beam_on_seconds=10.0,
+            charge=1e-9,
+        )
+        writer.close()
+
+        with open(writer.csv_path, encoding="utf-8") as f:
+            reader = csv.DictReader([line for line in f if not line.startswith("#")])
+            rows = [r for r in reader if r["record_type"] == "insertion_summary"]
+
+        assert len(rows) == 2
+        assert "settle_window_s=1.0" in rows[0]["details"]
+        assert "settle_window_s=2.5" in rows[1]["details"]
+
+
