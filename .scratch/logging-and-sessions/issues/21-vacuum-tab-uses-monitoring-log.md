@@ -1,6 +1,6 @@
 # 21: The Vacuum tab uses the monitoring log, and Stop Logging stops
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -34,17 +34,17 @@ Tests may fake: nothing below the tab except the gauge readings. Point the log r
 
 ## Acceptance criteria
 
-- [ ] Delivering vacuum states through the tab's real `_on_vacuum_state` path creates one
+- [x] Delivering vacuum states through the tab's real `_on_vacuum_state` path creates one
       CSV under `<root>/YYYY-MM/` and the button reads `Stop Logging`.
-- [ ] Clicking the button (`_on_log_toggle`), then delivering 5 more states, leaves the
+- [x] Clicking the button (`_on_log_toggle`), then delivering 5 more states, leaves the
       file's row count unchanged and creates no other file. The button reads
       `Start Logging` and the label starts with `Saved:`.
-- [ ] Clicking again, then one more state, creates a second file, and the label shows
+- [x] Clicking again, then one more state, creates a second file, and the label shows
       its path.
-- [ ] `grep -n "_start_logging()" src/rbl/gui/vacuum_tab.py` shows no call from
+- [x] `grep -n "_start_logging()" src/rbl/gui/vacuum_tab.py` shows no call from
       `_on_vacuum_state`. A test asserts the behaviour in the second criterion, which
       fails on today's code.
-- [ ] The tab's module docstring describes the monitoring log (ADR 0004) and why Stop
+- [x] The tab's module docstring describes the monitoring log (ADR 0004) and why Stop
       must not auto-restart.
 
 ## Gate
@@ -57,3 +57,11 @@ Run in CI's order (`.github/workflows/tests.yml`):
     pytest --tb=short -q -n auto --dist loadfile --durations=25
 
 ## Comments
+
+Completed 2026-10-06:
+- Replaced `VacuumTab._logger` with `self._monitor_log = VacuumMonitorLog(root=monitor_log_root, comment_lines_fn=self._build_comment_lines)` (ADR 0004).
+- Deleted auto-restart branch and inline reopen block from `_on_vacuum_state`; it now routes all snapshot ingestion to `self._monitor_log.write(state, datetime.now().astimezone())` and refreshes the path label.
+- Updated `_start_logging` and `_stop_logging` to control `_monitor_log` and show `current_path` in `theme.OK` when running and `Saved: <path>` / `Stopped` in `theme.NEUTRAL` when stopped.
+- Updated tab module docstring with ADR 0004 monitoring log design and why Stop must not auto-restart.
+- Added test suite in `tests/test_vacuum_tab.py` covering all acceptance criteria using clean Qt signals and widget interaction with 0 private attribute accesses.
+- Bench verification: run live app, confirm vacuum tab starts logging to month folder automatically, clicking Stop stops and preserves file without restarting.
