@@ -2,9 +2,12 @@
 Tests for SessionRecorder — CSV-only mode (no camera, no ffmpeg required).
 """
 import csv
+import json
 import os
 import time
+from dataclasses import dataclass, field
 from datetime import timedelta
+from typing import Optional
 from unittest.mock import MagicMock
 
 import pytest
@@ -201,3 +204,159 @@ def test_flush_per_row_survives_hard_kill(tmp_path, qapp):
     sess_dir = os.path.join(tmp_path, sessions[-1])
     rows = list(csv.DictReader(open(os.path.join(sess_dir, "data.csv"), encoding="utf-8")))
     assert len(rows) >= 1, "data.csv must have at least the initial row"
+
+
+@dataclass(frozen=True)
+class _FakeChannel:
+    label: str
+
+
+@dataclass(frozen=True)
+class _FakeXgsReading:
+    channel: _FakeChannel
+    pressure: Optional[float]
+    raw: str
+    state: str
+
+
+@dataclass(frozen=True)
+class _FakeVgcReading:
+    channel: str
+    pressure: Optional[float]
+    raw: str
+    state: str
+
+
+@dataclass(frozen=True)
+class _FakeVacuumState:
+    timestamp: float
+    xgs_readings: list = field(default_factory=list)
+    vgc_readings: list = field(default_factory=list)
+    xgs_connected: bool = True
+    vgc_connected: bool = True
+    units_xgs: str = "Torr"
+    units_vgc: str = "Torr"
+
+
+def _make_state(t: float, xgs_p=1e-6, vgc_p=2e-7):
+    return _FakeVacuumState(
+        timestamp=t,
+        xgs_readings=[_FakeXgsReading(_FakeChannel("IG1"), xgs_p, f"{xgs_p:.2e}", "OK")],
+        vgc_readings=[_FakeVgcReading("CG1", vgc_p, f"{vgc_p:.2e}", "OK")],
+    )
+
+
+def test_session_recorder_writes_vacuum_csv_and_json(tmp_path, qapp, monkeypatch):
+    """Start session, deliver 5 states to on_vacuum_state, stop:
+    vacuum.csv with 5 rows and vacuum.json.
+    """
+    monkeypatch.setattr("rbl.services.session_recorder._logs_dir", lambda: str(tmp_path))
+
+    rec, _ = _make_recorder(tmp_path)
+    rec.start()
+    for i in range(5):
+        rec.on_vacuum_state(_make_state(1000.0 + i))
+    rec.stop()
+
+    sessions = [d for d in os.listdir(tmp_path) if d.startswith("session_")]
+    sess_dir = os.path.join(tmp_path, sessions[-1])
+    vac_csv = os.path.join(sess_dir, "vacuum.csv")
+    vac_json = os.path.join(sess_dir, "vacuum.json")
+    sess_json = os.path.join(sess_dir, "session.json")
+
+    assert os.path.exists(vac_csv)
+    assert os.path.exists(vac_json)
+
+    lines = open(vac_csv, encoding="utf-8").readlines()
+    comment_lines = [line for line in lines if line.startswith("#")]
+    assert len(comment_lines) >= 1
+    assert comment_lines[0].startswith("# vacuum_logger RBL")
+
+    data_lines = [line for line in lines if not line.startswith("#")]
+    # First data line is CSV header row
+    assert len(data_lines) == 6  # header + 5 rows
+    rows = list(csv.DictReader(data_lines))
+    assert len(rows) == 5
+
+    manifest = json.loads(open(sess_json, encoding="utf-8").read())
+    assert manifest.get("vacuum") == {"files": ["vacuum.csv"]}
+
+
+def test_session_recorder_ignores_vacuum_states_outside_session(tmp_path, qapp, monkeypatch):
+    """States delivered before start() and after stop() write nothing anywhere."""
+    monkeypatch.setattr("rbl.services.session_recorder._logs_dir", lambda: str(tmp_path))
+
+    rec, _ = _make_recorder(tmp_path)
+    # Deliver before start
+    rec.on_vacuum_state(_make_state(100.0))
+    rec.start()
+    rec.stop()
+    # Deliver after stop
+    rec.on_vacuum_state(_make_state(200.0))
+
+    sessions = [d for d in os.listdir(tmp_path) if d.startswith("session_")]
+    sess_dir = os.path.join(tmp_path, sessions[-1])
+    vac_csv = os.path.join(sess_dir, "vacuum.csv")
+    assert not os.path.exists(vac_csv)
+
+
+def test_session_recorder_gauge_set_change_rolls_vacuum_file(tmp_path, qapp, monkeypatch):
+    """A state with a different gauge set mid-session produces vacuum_2.csv,
+    and session.json lists both.
+    """
+    monkeypatch.setattr("rbl.services.session_recorder._logs_dir", lambda: str(tmp_path))
+
+    rec, _ = _make_recorder(tmp_path)
+    rec.start()
+    rec.on_vacuum_state(_make_state(1000.0))
+
+    # Second state has an additional gauge
+    changed_state = _FakeVacuumState(
+        timestamp=1001.0,
+        xgs_readings=[
+            _FakeXgsReading(_FakeChannel("IG1"), 1e-6, "1e-6", "OK"),
+            _FakeXgsReading(_FakeChannel("IG2"), 2e-6, "2e-6", "OK"),
+        ],
+        vgc_readings=[_FakeVgcReading("CG1", 2e-7, "2e-7", "OK")],
+    )
+    rec.on_vacuum_state(changed_state)
+    rec.stop()
+
+    sessions = [d for d in os.listdir(tmp_path) if d.startswith("session_")]
+    sess_dir = os.path.join(tmp_path, sessions[-1])
+    assert os.path.exists(os.path.join(sess_dir, "vacuum.csv"))
+    assert os.path.exists(os.path.join(sess_dir, "vacuum_2.csv"))
+    assert os.path.exists(os.path.join(sess_dir, "vacuum.json"))
+    assert os.path.exists(os.path.join(sess_dir, "vacuum_2.json"))
+
+    sess_json = os.path.join(sess_dir, "session.json")
+    manifest = json.loads(open(sess_json, encoding="utf-8").read())
+    assert manifest.get("vacuum") == {"files": ["vacuum.csv", "vacuum_2.csv"]}
+
+
+def test_vacuum_comment_lines_header_used_by_both():
+    """vacuum_comment_lines is used by both VacuumTab._build_comment_lines and the recorder."""
+    from rbl.gui.vacuum_tab import VacuumTab
+    from rbl.services.vacuum_logger import vacuum_comment_lines
+
+    state = _make_state(1000.0)
+    lines_fn = vacuum_comment_lines(state)
+    assert len(lines_fn) >= 1
+    assert lines_fn[0].startswith("vacuum_logger RBL")
+
+    tab_lines = getattr(VacuumTab, "_build_comment_lines")(state)
+    assert tab_lines == lines_fn
+
+
+def test_main_window_wires_vacuum_changed_to_session_recorder(qapp, monkeypatch):
+    """MainWindow connects beamline.vacuum_changed to session_recorder.on_vacuum_state
+    (ADR 0004 decision 6).
+    """
+    from rbl.gui.app import MainWindow
+    win = MainWindow()
+    delivered = []
+    monkeypatch.setattr(win.session_recorder, "on_vacuum_state", lambda st: delivered.append(st))
+    st = _make_state(1234.0)
+    win.beamline.vacuum_changed.emit(st)
+    assert delivered == [st]
+    win.close()

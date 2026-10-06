@@ -1,6 +1,6 @@
 # 22: Each session writes its own 1 Hz vacuum.csv
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -40,15 +40,15 @@ existing recorder tests do).
 
 ## Acceptance criteria
 
-- [ ] Start a session, deliver 5 states to `on_vacuum_state`, stop: the session folder
+- [x] Start a session, deliver 5 states to `on_vacuum_state`, stop: the session folder
       contains `vacuum.csv` with the `#` header and 5 data rows, and `vacuum.json`.
-- [ ] States delivered before `start()` and after `stop()` write nothing anywhere.
-- [ ] A state with a different gauge set mid-session produces `vacuum_2.csv`, and
+- [x] States delivered before `start()` and after `stop()` write nothing anywhere.
+- [x] A state with a different gauge set mid-session produces `vacuum_2.csv`, and
       `session.json` `vacuum.files` lists both.
-- [ ] `vacuum_comment_lines` is used by both `VacuumTab._build_comment_lines` and the
+- [x] `vacuum_comment_lines` is used by both `VacuumTab._build_comment_lines` and the
       recorder: a test asserts the session file's first header line starts with
       `# vacuum_logger RBL`.
-- [ ] Every existing test in `tests/test_session_recorder.py` passes unchanged.
+- [x] Every existing test in `tests/test_session_recorder.py` passes unchanged.
 
 ## Gate
 
@@ -60,3 +60,9 @@ Run in CI's order (`.github/workflows/tests.yml`):
     pytest --tb=short -q -n auto --dist loadfile --durations=25
 
 ## Comments
+
+### Landed 2026-10-05
+- Added `on_vacuum_state` slot to `SessionRecorder` in `src/rbl/services/session_recorder.py` writing 1 Hz vacuum data to session folder, handling gauge-set rollover, closing on session stop, and recording vacuum file basenames in `session.json`.
+- Extracted pure `vacuum_comment_lines` and `gauge_labels` to `src/rbl/services/vacuum_logger.py`, delegated `VacuumTab._build_comment_lines` to `vacuum_comment_lines`.
+- Connected `beamline.vacuum_changed` to `session_recorder.on_vacuum_state` in `MainWindow.__init__` citing ADR 0004 decision 6.
+- Added comprehensive unit tests in `tests/test_session_recorder.py` covering all acceptance criteria and app wiring.

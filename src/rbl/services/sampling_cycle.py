@@ -19,6 +19,12 @@ is bounded by two properties this module is required to carry:
    advance time in large steps must call `tick` repeatedly until it returns
    `None`. This keeps the state transitions atomic and testable.
 
+3. **Saved boundary across stop/disarm.** When an operator disarms or stops the
+   cycle, `saved_boundary_t` records when the next insertion would have occurred.
+   Re-arming with `resume_at` resumes onto that boundary if it is still in the
+   future, avoiding losing up to a full period of sampling. Past boundaries are
+   never resumed and produce no catch-up insertions.
+
 STATES
 ------
 - DISARMED: construction default; no insertions happen.
@@ -149,6 +155,7 @@ class SamplingCycleScheduler:
         # (dwell); None means nothing is queued.
         self._pending_period_s: float | None = None
         self._pending_dwell_s: float | None = None
+        self._saved_boundary_t: float | None = None
 
     # ── Read-only properties ───────────────────────────────────────────────
 
@@ -181,6 +188,11 @@ class SamplingCycleScheduler:
     def pending_dwell_s(self) -> float | None:
         """Queued dwell not yet in force, or None."""
         return self._pending_dwell_s
+
+    @property
+    def saved_boundary_t(self) -> float | None:
+        """Next scheduled insertion time saved at disarm/stop, or None."""
+        return self._saved_boundary_t
 
     # ── Configuration setters ──────────────────────────────────────────────
 
@@ -228,26 +240,47 @@ class SamplingCycleScheduler:
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
-    def arm(self, t: float) -> None:
-        """Arm the cycle. First insertion at t + period_s.
+    def arm(self, t: float, resume_at: float | None = None) -> str:
+        """Arm the cycle.
 
-        Arming is always an explicit operator action — this method is never
-        called on construction, on connect, or on restoring saved state.
+        Parameters
+        ----------
+        t:
+            Current timestamp.
+        resume_at:
+            Optional boundary time to resume from. If resume_at is not None
+            and resume_at > t, the next insertion is scheduled at resume_at
+            and this method returns "resumed". Otherwise, the next insertion
+            is scheduled at t + period_s and this method returns "fresh".
+
+        Returns
+        -------
+        "resumed" if resumed onto a future boundary, otherwise "fresh".
         """
         self._apply_pending_period()
         self._apply_pending_dwell()
+        self._saved_boundary_t = None
         self._state = CycleState.WAITING
-        self._next_insertion_t = t + self._period_s
         self._current_insertion_t = float("inf")
         self._dwell_end_t = float("inf")
         self._manual_run_open = False
 
+        if resume_at is not None and resume_at > t:
+            self._next_insertion_t = resume_at
+            return "resumed"
+        else:
+            self._next_insertion_t = t + self._period_s
+            return "fresh"
+
     def disarm(self) -> None:
         """Disarm the cycle without commanding the cup.
 
+        Saves the current `_next_insertion_t` before clearing the schedule.
         The cup is left wherever it is. Callers that need a retract should
         use `stop(t)` instead.
         """
+        if self._next_insertion_t != float("inf"):
+            self._saved_boundary_t = self._next_insertion_t
         self._state = CycleState.DISARMED
         self._next_insertion_t = float("inf")
         self._current_insertion_t = float("inf")
