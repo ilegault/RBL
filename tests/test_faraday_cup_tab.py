@@ -1982,6 +1982,229 @@ class TestFaradayCupTabSettingsLock:
         tab.close()
 
 
+class TestCyclePeriodAndDwellRulesAndPending:
+    """Ticket 15 — Period and dwell rules, refused edits, settings changes, and pending label."""
+
+    def test_spin_box_ranges_are_wide_absolute_bounds(self, qapp):
+        """setRange is 0.1 to 604800.0 on both period and dwell spin boxes; assert maximums."""
+        tab, _ = make_connected_cup_tab(qapp)
+        assert tab.spn_cycle_period.maximum() == pytest.approx(604800.0)
+        assert tab.spn_cycle_dwell.maximum() == pytest.approx(604800.0)
+        tab.close()
+
+    def test_dwell_longer_than_period_minus_two_moves_is_refused(self, qapp, tmp_path):
+        """Entering dwell of 400 with period 300 is refused;
+        value restored, reason in FAULT role."""
+        from rbl.services.cup_session_writer import CupSessionWriter
+
+        sw = CupSessionWriter(session_id="cycle_dwell_refusal", output_dir=tmp_path)
+        tab = FaradayCupTab(session_writer=sw)
+        tab.show()
+        qapp.processEvents()
+
+        assert tab.spn_cycle_period.value() == pytest.approx(300.0)
+        initial_dwell = tab.spn_cycle_dwell.value()
+        assert initial_dwell == pytest.approx(3.0)
+
+        # Operator tries to enter 400.0 s dwell
+        tab.spn_cycle_dwell.setValue(400.0)
+        tab.spn_cycle_dwell.editingFinished.emit()
+        qapp.processEvents()
+
+        # Dwell is restored via sync_value
+        assert tab.spn_cycle_dwell.value() == pytest.approx(initial_dwell)
+        # Reason is shown in FAULT role
+        assert tab.lbl_cycle_warning.isVisible() is True
+        assert theme.FAULT in tab.lbl_cycle_warning.styleSheet()
+        expected_msg = (
+            "must exceed the settle window and fit, with two moves, inside the period"
+        )
+        assert expected_msg in tab.lbl_cycle_warning.text()
+
+        # No settings changed row written
+        sw.close()
+        with open(sw.csv_path, encoding="utf-8") as f:
+            reader = csv.DictReader([line for line in f if not line.startswith("#")])
+            dwell_rows = [
+                r for r in reader
+                if r["record_type"] == "settings_changed" and "key=cycle_dwell_s" in r["details"]
+            ]
+        assert len(dwell_rows) == 0
+
+        tab.close()
+
+    def test_period_shorter_than_dwell_plus_two_moves_is_refused(self, qapp, tmp_path):
+        """Entering period of 5 with dwell 3 is refused;
+        value restored, reason in FAULT role."""
+        from rbl.services.cup_session_writer import CupSessionWriter
+
+        sw = CupSessionWriter(session_id="cycle_period_refusal", output_dir=tmp_path)
+        tab = FaradayCupTab(session_writer=sw)
+        tab.show()
+        qapp.processEvents()
+
+        assert tab.spn_cycle_dwell.value() == pytest.approx(3.0)
+        initial_period = tab.spn_cycle_period.value()
+        assert initial_period == pytest.approx(300.0)
+
+        # Operator enters 5.0 s period (dwell 3.0 + two moves 4.0 = 7.0 > 5.0)
+        tab.spn_cycle_period.setValue(5.0)
+        tab.spn_cycle_period.editingFinished.emit()
+        qapp.processEvents()
+
+        # Period is restored via sync_value
+        assert tab.spn_cycle_period.value() == pytest.approx(initial_period)
+        assert tab.lbl_cycle_warning.isVisible() is True
+        assert theme.FAULT in tab.lbl_cycle_warning.styleSheet()
+        expected_msg = "must hold the dwell plus two moves and be at most one week"
+        assert expected_msg in tab.lbl_cycle_warning.text()
+
+        # No settings changed row written
+        sw.close()
+        with open(sw.csv_path, encoding="utf-8") as f:
+            reader = csv.DictReader([line for line in f if not line.startswith("#")])
+            period_rows = [
+                r for r in reader
+                if r["record_type"] == "settings_changed" and "key=cycle_period_s" in r["details"]
+            ]
+        assert len(period_rows) == 0
+
+        tab.close()
+
+    def test_accepted_edit_calls_scheduler_and_writes_settings_changed_row(self, qapp, tmp_path):
+        """Accepted edits update scheduler pending value and write exactly one row each."""
+        from rbl.services.cup_session_writer import CupSessionWriter
+
+        sw = CupSessionWriter(session_id="cycle_accepted_edits", output_dir=tmp_path)
+        tab = FaradayCupTab(session_writer=sw)
+        tab.show()
+        qapp.processEvents()
+
+        # 1. Edit period to 600.0
+        tab.spn_cycle_period.setValue(600.0)
+        tab.spn_cycle_period.editingFinished.emit()
+        qapp.processEvents()
+
+        assert tab.cycle.pending_period_s == pytest.approx(600.0)
+        assert not tab.lbl_cycle_warning.isVisible()
+
+        # 2. Edit dwell to 20.0
+        tab.spn_cycle_dwell.setValue(20.0)
+        tab.spn_cycle_dwell.editingFinished.emit()
+        qapp.processEvents()
+
+        assert tab.cycle.pending_dwell_s == pytest.approx(20.0)
+        assert not tab.lbl_cycle_warning.isVisible()
+
+        # Check written rows
+        sw.close()
+        with open(sw.csv_path, encoding="utf-8") as f:
+            reader = csv.DictReader([line for line in f if not line.startswith("#")])
+            settings_rows = [r for r in reader if r["record_type"] == "settings_changed"]
+        period_rows = [r for r in settings_rows if "key=cycle_period_s" in r["details"]]
+        dwell_rows = [r for r in settings_rows if "key=cycle_dwell_s" in r["details"]]
+
+        assert len(period_rows) == 1
+        assert "3.00000000e+02" in period_rows[0]["details"]
+        assert "6.00000000e+02" in period_rows[0]["details"]
+
+        assert len(dwell_rows) == 1
+        assert "3.00000000e+00" in dwell_rows[0]["details"]
+        assert "2.00000000e+01" in dwell_rows[0]["details"]
+
+        tab.close()
+
+    def test_pending_label_shows_pending_and_clears_on_boundary_tick_while_armed(
+        self, qapp, tmp_path
+    ):
+        """Pending label displays in MUTED role while armed and clears on boundary tick."""
+        from rbl.hardware.cup_status import CupPosition
+        from rbl.services.cup_session_writer import CupSessionWriter
+        from rbl.snapshots import CupActuationState
+
+        sw = CupSessionWriter(session_id="cycle_pending_label", output_dir=tmp_path)
+        tab = FaradayCupTab(session_writer=sw)
+        tab.show()
+        qapp.processEvents()
+
+        # Arm the cycle at t=0.0
+        tab.spn_k.setValue(1e-15)
+        tab.spn_charge_state.setValue(1)
+        tab.on_patch_dimensions_changed(10.0, 10.0)
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True,
+            commanded=CupPosition.OUT,
+            confirmed=CupPosition.OUT,
+            auto_mode=True,
+            stale=False,
+            last_transition_t=0.0,
+            t=0.0,
+        ))
+        qapp.processEvents()
+        tab.btn_cycle_arm.click()
+        qapp.processEvents()
+        assert tab.cycle.is_armed is True
+
+        # Edit dwell to 20.0 while armed
+        tab.spn_cycle_dwell.setValue(20.0)
+        tab.spn_cycle_dwell.editingFinished.emit()
+        qapp.processEvents()
+
+        assert tab.lbl_cycle_pending.isVisible() is True
+        assert theme.MUTED in tab.lbl_cycle_pending.styleSheet()
+        assert "Dwell 20.0 s pending, applies at next insertion" in tab.lbl_cycle_pending.text()
+
+        # Edit period to 600.0 while armed
+        tab.spn_cycle_period.setValue(600.0)
+        tab.spn_cycle_period.editingFinished.emit()
+        qapp.processEvents()
+
+        assert tab.lbl_cycle_pending.isVisible() is True
+        expected_period_msg = "Period 600 s pending, applies at next period boundary"
+        assert expected_period_msg in tab.lbl_cycle_pending.text()
+        assert "Dwell 20.0 s pending, applies at next insertion" in tab.lbl_cycle_pending.text()
+
+        # Advance to period boundary at t=300.0
+        tab.on_cup_actuation_state(CupActuationState(
+            connected=True,
+            commanded=CupPosition.OUT,
+            confirmed=CupPosition.OUT,
+            auto_mode=True,
+            stale=False,
+            last_transition_t=0.0,
+            t=300.0,
+        ))
+        qapp.processEvents()
+
+        # Pending values applied by scheduler
+        assert tab.cycle.pending_period_s is None
+        assert tab.cycle.pending_dwell_s is None
+        assert tab.lbl_cycle_pending.isVisible() is False
+        assert tab.lbl_cycle_pending.text() == ""
+
+        sw.close()
+        tab.close()
+
+    def test_permanent_label_exact_string_and_role(self, qapp):
+        """Permanent label reads exactly 'Changes apply from the next insertion.' in MUTED role."""
+        tab, _ = make_connected_cup_tab(qapp)
+
+        # Check text and MUTED role when disarmed
+        assert tab.cycle.is_armed is False
+        assert tab.lbl_cycle_permanent.text() == "Changes apply from the next insertion."
+        assert theme.MUTED in tab.lbl_cycle_permanent.styleSheet()
+        assert tab.lbl_cycle_permanent.isVisible() is True
+
+        # Check when armed
+        arm_cycle_helper(tab, qapp)
+        assert tab.cycle.is_armed is True
+        assert tab.lbl_cycle_permanent.text() == "Changes apply from the next insertion."
+        assert tab.lbl_cycle_permanent.isVisible() is True
+
+        tab.close()
+
+
+
 
 
 

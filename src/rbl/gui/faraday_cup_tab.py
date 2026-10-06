@@ -111,6 +111,18 @@ acquisition run is open or while the sampling cycle is armed. When either condit
 the fields are disabled via set_locked(True) and an explanatory message is displayed.
 Edits unlock immediately when the run ends or the cycle disarms. Schedule parameters
 (period and dwell) are never locked.
+
+PERIOD AND DWELL RULES AND PENDING QUEUE (ADR 0002 AMENDMENT A7, TICKET 15)
+---------------------------------------------------------------------------
+The arbitrary 60 s dwell and 86 400 s period ceilings are replaced by wide bounds
+(0.1 to 604 800.0 s) with cross-field consistency enforced by validate_settings()
+on every edit: dwell plus two move timeouts (4.0 s) must fit inside the period,
+and dwell must exceed the settle window.
+Period and dwell never lock: edits while armed are queued in the scheduler,
+displayed as pending in the MUTED role with their activation time, and applied at the
+next boundary. Refused edits restore the previous value via sync_value() and display
+the refusal reason in the FAULT role. Accepted edits write a settings_changed row
+and persist to ~/.config/rbl/cup_settings.json.
 """
 from __future__ import annotations
 
@@ -138,7 +150,7 @@ from rbl.config.cup_config import (
     CUP_MOVE_CONFIRMATION_TIMEOUT_S,
     KEITHLEY_6482_DEFAULT_RESOURCE,
 )
-from rbl.config.cup_settings_store import CupSettings
+from rbl.config.cup_settings_store import CupSettings, validate_settings
 from rbl.gui import theme
 from rbl.gui.widgets.acquisition_settings import AcquisitionSettingsGroup
 from rbl.gui.widgets.connection_bar import StatusPill
@@ -243,6 +255,8 @@ class FaradayCupTab(QWidget):
         )
         self.cycle.set_period(loaded_settings.cycle_period_s)
         self.cycle.set_dwell(loaded_settings.cycle_dwell_s)
+        self._last_cycle_period: float = loaded_settings.cycle_period_s
+        self._last_cycle_dwell: float = loaded_settings.cycle_dwell_s
 
         # Dose & displacement damage tracking (ADR 0003)
         self._patch_width_x_mm: float = 0.0
@@ -524,22 +538,22 @@ class FaradayCupTab(QWidget):
         # Period and dwell spinners (uses project input widgets, never bare spinbox)
         cycle_lay.addWidget(QLabel("Period:"))
         self.spn_cycle_period = QuietDoubleSpinBox()
-        self.spn_cycle_period.setRange(10.0, 86400.0)
+        self.spn_cycle_period.setRange(0.1, 604800.0)
         self.spn_cycle_period.setDecimals(0)
         self.spn_cycle_period.setValue(self._settings.cycle_period_s)
         self.spn_cycle_period.setToolTip(
-            "Seconds between successive scheduled cup insertions (10 – 86400 s)"
+            "Seconds between successive scheduled cup insertions"
         )
         self.spn_cycle_period.editingFinished.connect(self._on_cycle_period_changed)
         cycle_lay.addLayout(unit_row(self.spn_cycle_period, "s"))
 
         cycle_lay.addWidget(QLabel("Dwell:"))
         self.spn_cycle_dwell = QuietDoubleSpinBox()
-        self.spn_cycle_dwell.setRange(1.0, 60.0)
+        self.spn_cycle_dwell.setRange(0.1, 604800.0)
         self.spn_cycle_dwell.setDecimals(1)
         self.spn_cycle_dwell.setValue(self._settings.cycle_dwell_s)
         self.spn_cycle_dwell.setToolTip(
-            "Seconds the cup stays in the beam per scheduled insertion (1 – 60 s)"
+            "Seconds the cup stays in the beam per scheduled insertion"
         )
         self.spn_cycle_dwell.editingFinished.connect(self._on_cycle_dwell_changed)
         cycle_lay.addLayout(unit_row(self.spn_cycle_dwell, "s"))
@@ -572,6 +586,29 @@ class FaradayCupTab(QWidget):
         )
         self.lbl_cycle_state.setMinimumWidth(260)
         cycle_lay.addWidget(self.lbl_cycle_state, stretch=1)
+
+        # Permanent note (ADR 0002 amendment A7, ticket 15)
+        self.lbl_cycle_permanent = QLabel("Changes apply from the next insertion.")
+        self.lbl_cycle_permanent.setStyleSheet(
+            f"color: {theme.MUTED}; font-style: italic; font-size: {theme.FS_LABEL}px;"
+        )
+        _cycle_vlay.addWidget(self.lbl_cycle_permanent)
+
+        # Pending label — queued period/dwell not yet in force (ticket 15)
+        self.lbl_cycle_pending = QLabel("")
+        self.lbl_cycle_pending.setStyleSheet(
+            f"color: {theme.MUTED}; font-style: italic; font-size: {theme.FS_LABEL}px;"
+        )
+        self.lbl_cycle_pending.setWordWrap(True)
+        self.lbl_cycle_pending.setVisible(False)
+        _cycle_vlay.addWidget(self.lbl_cycle_pending)
+
+        # Validation warning label — refused period/dwell edit reason (ticket 15)
+        self.lbl_cycle_warning = QLabel("")
+        self.lbl_cycle_warning.setStyleSheet(theme.status_label(theme.FAULT))
+        self.lbl_cycle_warning.setWordWrap(True)
+        self.lbl_cycle_warning.setVisible(False)
+        _cycle_vlay.addWidget(self.lbl_cycle_warning)
 
         # Fault label — arming refusal reason or disarm-on-fault reason (ticket 10)
         # Shown below the control row so the operator cannot dismiss it without fixing
@@ -1455,12 +1492,70 @@ class FaradayCupTab(QWidget):
         self._update_cycle_view(t_now)
 
     def _on_cycle_period_changed(self) -> None:
-        """Apply updated period from the spinner to the scheduler."""
-        self.cycle.set_period(self.spn_cycle_period.value())
+        """Validate and apply updated period from the spinner to the scheduler."""
+        new_val = self.spn_cycle_period.value()
+        if new_val == self._last_cycle_period:
+            return
+        raw = {
+            "arm_threshold_a": self.acquisition.detector.arm_threshold,
+            "release_threshold_a": self.acquisition.detector.release_threshold,
+            "settle_window_s": self.session_writer.settle_window_s,
+            "cycle_period_s": new_val,
+            "cycle_dwell_s": self.spn_cycle_dwell.value(),
+            "arm_debounce_s": self._settings.arm_debounce_s,
+            "release_interval_s": self._settings.release_interval_s,
+        }
+        _, warnings = validate_settings(raw)
+        period_warn = next((w for w in warnings if w.key == "cycle_period_s"), None)
+        if period_warn is not None:
+            self.spn_cycle_period.sync_value(self._last_cycle_period)
+            self.lbl_cycle_warning.setText(f"Period: {period_warn.reason}")
+            self.lbl_cycle_warning.setStyleSheet(theme.status_label(theme.FAULT))
+            self.lbl_cycle_warning.setVisible(True)
+        else:
+            old_val = self._last_cycle_period
+            self._last_cycle_period = new_val
+            self.lbl_cycle_warning.setText("")
+            self.lbl_cycle_warning.setVisible(False)
+            self.cycle.set_period(new_val)
+            self.session_writer.write_settings_changed(
+                time.time(), "cycle_period_s", old_val, new_val
+            )
+            self._save_current_settings()
+            self._update_cycle_view(time.time())
 
     def _on_cycle_dwell_changed(self) -> None:
-        """Apply updated dwell from the spinner to the scheduler."""
-        self.cycle.set_dwell(self.spn_cycle_dwell.value())
+        """Validate and apply updated dwell from the spinner to the scheduler."""
+        new_val = self.spn_cycle_dwell.value()
+        if new_val == self._last_cycle_dwell:
+            return
+        raw = {
+            "arm_threshold_a": self.acquisition.detector.arm_threshold,
+            "release_threshold_a": self.acquisition.detector.release_threshold,
+            "settle_window_s": self.session_writer.settle_window_s,
+            "cycle_period_s": self.spn_cycle_period.value(),
+            "cycle_dwell_s": new_val,
+            "arm_debounce_s": self._settings.arm_debounce_s,
+            "release_interval_s": self._settings.release_interval_s,
+        }
+        _, warnings = validate_settings(raw)
+        dwell_warn = next((w for w in warnings if w.key == "cycle_dwell_s"), None)
+        if dwell_warn is not None:
+            self.spn_cycle_dwell.sync_value(self._last_cycle_dwell)
+            self.lbl_cycle_warning.setText(f"Dwell: {dwell_warn.reason}")
+            self.lbl_cycle_warning.setStyleSheet(theme.status_label(theme.FAULT))
+            self.lbl_cycle_warning.setVisible(True)
+        else:
+            old_val = self._last_cycle_dwell
+            self._last_cycle_dwell = new_val
+            self.lbl_cycle_warning.setText("")
+            self.lbl_cycle_warning.setVisible(False)
+            self.cycle.set_dwell(new_val)
+            self.session_writer.write_settings_changed(
+                time.time(), "cycle_dwell_s", old_val, new_val
+            )
+            self._save_current_settings()
+            self._update_cycle_view(time.time())
 
     def _save_current_settings(self) -> bool:
         """Construct CupSettings from current tab state and save to disk."""
@@ -1523,6 +1618,7 @@ class FaradayCupTab(QWidget):
 
         result = self.cycle.tick(t)
         if result is None:
+            self._update_cycle_view(t)
             return
 
         if isinstance(result, CycleInsert):
@@ -1601,6 +1697,23 @@ class FaradayCupTab(QWidget):
             self.lbl_cycle_fault.setVisible(True)
         else:
             self.lbl_cycle_fault.setVisible(False)
+
+        # Update pending label from scheduler's pending state (ticket 15)
+        parts = []
+        if self.cycle.pending_period_s is not None:
+            p = self.cycle.pending_period_s
+            p_str = f"{int(p)}" if p.is_integer() else f"{p:.1f}"
+            parts.append(f"Period {p_str} s pending, applies at next period boundary")
+        if self.cycle.pending_dwell_s is not None:
+            d = self.cycle.pending_dwell_s
+            parts.append(f"Dwell {d:.1f} s pending, applies at next insertion")
+
+        if parts:
+            self.lbl_cycle_pending.setText("; ".join(parts))
+            self.lbl_cycle_pending.setVisible(True)
+        else:
+            self.lbl_cycle_pending.setText("")
+            self.lbl_cycle_pending.setVisible(False)
 
         self._update_settings_lock()
 
