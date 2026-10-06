@@ -2,7 +2,7 @@
 
 **Blocked by:** 05
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Read first:** `src/rbl/services/cup_session_writer.py`, the `write_*` family.
 `src/rbl/services/sampling_cycle.py`, `disarm()` and `stop(t)` - note that they are
