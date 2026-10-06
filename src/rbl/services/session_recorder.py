@@ -35,6 +35,7 @@ import shutil
 import sys
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from PySide6.QtCore import (
     QObject,
@@ -60,6 +61,11 @@ from rbl.config.recording_config import (
 from rbl.hardware.camera_source import CameraSource
 from rbl.services.csv_log_writer import CsvLogWriter, flatten
 from rbl.services.snapshot_json import dump_json
+from rbl.services.vacuum_logger import (
+    VacuumLogger,
+    gauge_labels,
+    vacuum_comment_lines,
+)
 from rbl.services.video_recorder import VideoRecorder
 from rbl.services.video_transcoder import TranscodeQueue, ffmpeg_version, find_ffmpeg
 
@@ -137,6 +143,10 @@ class SessionRecorder(QObject):
         self._segment_meta: list[dict] = []
         self._photo_list:   list[str]  = []
         self._notes_count:  int        = 0
+
+        # Vacuum logging (ADR 0004)
+        self._vacuum_logger: VacuumLogger | None = None
+        self._vacuum_files: list[str] = []
 
         # ffmpeg
         self._ffmpeg_path    = find_ffmpeg()
@@ -218,6 +228,8 @@ class SessionRecorder(QObject):
         self._photo_list      = []
         self._notes_count     = 0
         self._photo_index     = 0
+        self._vacuum_logger   = None
+        self._vacuum_files    = []
 
         # Open CSV writer and events.csv.
         self._csv_writer = CsvLogWriter(self._folder, "data")
@@ -292,6 +304,9 @@ class SessionRecorder(QObject):
             self._events_file.close()
             self._events_file   = None
             self._events_writer = None
+        if self._vacuum_logger is not None:
+            self._vacuum_logger.close()
+            self._vacuum_logger = None
 
         self._write_manifest()
         self.state_changed.emit()
@@ -299,6 +314,36 @@ class SessionRecorder(QObject):
 
     def is_recording(self) -> bool:
         return self._recording
+
+    def on_vacuum_state(self, state: object) -> None:
+        """Ingest a 1 Hz VacuumState snapshot into the session's vacuum log (ADR 0004)."""
+        if not self._recording or state is None:
+            return
+
+        if self._vacuum_logger is None:
+            self._open_session_vacuum_logger(state)
+            if self._vacuum_logger is not None:
+                self._vacuum_logger.write_row(state)
+            return
+
+        ok = self._vacuum_logger.write_row(state)
+        if not ok:
+            # Gauge set changed mid-session: close old file and open next part
+            self._vacuum_logger.close()
+            self._open_session_vacuum_logger(state)
+            if self._vacuum_logger is not None:
+                self._vacuum_logger.write_row(state)
+
+    def _open_session_vacuum_logger(self, state: object) -> None:
+        labels = gauge_labels(state)
+        logger = VacuumLogger(labels, output_dir=Path(self._folder), file_stem="vacuum")
+        comment_lines = vacuum_comment_lines(state, datetime.now(timezone.utc))
+        logger.write_header_comment(comment_lines)
+        self._vacuum_logger = logger
+        csv_name = Path(logger.csv_path).name
+        if csv_name not in self._vacuum_files:
+            self._vacuum_files.append(csv_name)
+        self._write_manifest()
 
     # ---- actions -----------------------------------------------------------
 
@@ -606,7 +651,7 @@ class SessionRecorder(QObject):
         if not self._recording and self._t0_wall is not None:
             stopped_utc = self._derive_wall(t_rel)
 
-        manifest = {
+        manifest: dict = {
             "session_id":   self._session_id,
             "started_utc":  self._derive_wall(0.0) if self._t0_wall else None,
             "stopped_utc":  stopped_utc,
@@ -641,6 +686,10 @@ class SessionRecorder(QObject):
             },
             "notes": self._notes_count,
         }
+        if self._vacuum_files or self._vacuum_logger is not None:
+            manifest["vacuum"] = {
+                "files": list(self._vacuum_files),
+            }
         # Strict + atomic: a manifest is rewritten on every segment close, so a
         # crash mid-write used to be able to leave a truncated session.json as
         # the only record of the run.  dump_json writes to a temp name and

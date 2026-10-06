@@ -19,7 +19,7 @@ from collections import deque
 
 import matplotlib
 
-from rbl.services.vacuum_logger import VacuumLogger
+from rbl.services.vacuum_logger import VacuumLogger, vacuum_comment_lines
 
 matplotlib.use("QtAgg")
 # The Figure/Canvas pair now lives inside LivePlotPanel; this module only
@@ -665,12 +665,7 @@ class VacuumTab(QWidget):
 
     @staticmethod
     def _build_comment_lines(state) -> list[str]:
-        lines = [f"vacuum_logger RBL {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}"]
-        if state.xgs_connected:
-            lines.append(f"xgs600: units={state.units_xgs}")
-        if state.vgc_connected:
-            lines.append(f"vgc083: units={state.units_vgc}")
-        return lines
+        return vacuum_comment_lines(state)
 
     def _on_vacuum_error(self, msg: str):
         log.warning("vacuum_tab: error signal: %s", msg)
