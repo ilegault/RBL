@@ -372,6 +372,9 @@ class MainWindow(QMainWindow):
         self.motor_tab.motors_disconnected.connect(self.beamline.motors_disconnected)
         self.beamline.motors_changed.connect(self.current_tab.on_motor_state)
 
+        # Deliver 1 Hz VacuumState snapshots into the session's vacuum log (ADR 0004 decision 6).
+        self.beamline.vacuum_changed.connect(self.session_recorder.on_vacuum_state)
+
         # Faraday Cup: Keithley 6482 picoammeter state snapshots & lifecycle
         self.beamline.cup_changed.connect(self.faraday_cup_tab.on_cup_state)
         self.beamline.cup_error.connect(self.faraday_cup_tab.on_cup_error)
