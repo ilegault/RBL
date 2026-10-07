@@ -29,9 +29,16 @@ def qapp():
 
 
 def test_new_stores_resolve_under_tmp_path_not_home(tmp_path):
+    # Not "under Path.home()": on Windows the temp directory itself lives under
+    # the user's home (AppData/Local/Temp), so that is true even when the
+    # redirect works. What must never be true is being under the operator's
+    # real store locations (the unpatched defaults in rbl.config.paths).
+    real_roots = (Path.home() / ".config" / "rbl",
+                  Path.home() / "Desktop" / "RBL_log")
     for p in (paths.AMPLIFIER_ASSIGNMENTS_STORE, paths.CHARACTERIZATION_DIR):
         assert Path(tmp_path) in Path(p).parents
-        assert Path.home() not in Path(p).parents
+        for real in real_roots:
+            assert real not in Path(p).parents
 
 
 def test_load_condition_values_and_round_trip():
