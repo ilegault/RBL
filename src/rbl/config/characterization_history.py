@@ -114,7 +114,7 @@ def write_result(result: dict, when: datetime) -> Path:
 def _all_results() -> list:
     """Every readable result, oldest first (ties: later file name last)."""
     folder = paths.CHARACTERIZATION_DIR
-    out = []
+    out: list[dict] = []
     if not folder.exists():
         return out
     for path in sorted(folder.glob("*.json")):
