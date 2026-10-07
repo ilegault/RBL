@@ -18,6 +18,10 @@ measurement every later phase consumes, per channel, on demand:
   Mode B - DC leakage vs. voltage. A ramped DC ladder with a long dwell per
            rung, aborting the ladder on rising leakage — a discharge
            starting, not something to climb further into.
+  Clamp test - a triangle at a fixed amplitude with the frequency raised step
+           by step until the voltage fundamental falls below 95 % of the
+           command: the first such step's current fundamental is the clamp
+           current at which this amplifier stops following its input.
   Mode C - Charge integral voltage ladder. A low-frequency square wave
            stepped through MODE_C_LADDER_KV (0.5 to 5 kV), reporting C and the
            edge spike (peak, duration, charge) and the leakage between edges
@@ -111,6 +115,7 @@ from rbl.hardware.amp_monitor import ma_unclamped, monitor_to_kv
 from rbl.hardware.funcgen_safety import _AMP_GAIN, peak_status
 from rbl.hardware.hv_interlock import interlock_status
 from rbl.hardware.load_model import admittance_from_fundamentals, capacitance_from_charge
+from rbl.hardware.regulation import regulation_ratio
 from rbl.services.amp_drive import AmpDrive
 from rbl.services.calibration_writer import now_iso
 
@@ -139,6 +144,21 @@ MODE_C_LADDER_KV = [0.5, 1.0, 2.0, 3.0, 4.0, 5.0]
 # than the monitor and sampling resolve: its measured peak is only a lower
 # bound on the true one (its charge, an integral, is still right).
 EDGE_LOWER_BOUND_US = 100.0
+# --- Clamp test: where does the amplifier stop following its input? ------------
+# A triangle at a fixed amplitude, frequency raised step by step. The current an
+# amplifier can supply is limited (LIMIT mode clamps it and the output stops
+# following the input), and the current a capacitive load draws grows with
+# frequency, so the first frequency at which the output falls short of the
+# command is where the real limit sits - measured, not read from the manual.
+CLAMP_FREQ_LADDER_HZ = [250, 500, 750, 1000, 1500, 2000, 2500, 3000, 4000, 5000]
+# measured / commanded voltage fundamental below this = no longer following.
+CLAMP_RATIO_THRESHOLD = 0.95
+# The fundamental of a symmetric triangle of peak V is (8 / pi^2) V. The voltage
+# monitor's lock-in fundamental must be compared with THAT, not with the peak:
+# against the peak a perfectly healthy amplifier reads 0.81 and the test would
+# "clamp" at the first step.
+_TRIANGLE_FUNDAMENTAL_FRACTION = 8.0 / (math.pi ** 2)
+
 # --- Mode C ladder abort rules (see LoadCharacterizer._ladder_rule) ----------
 # A rung's C may differ from the first rung's by at most this fraction; more
 # means the load is not a linear capacitor at this voltage (incipient discharge).
@@ -159,6 +179,7 @@ class Mode(Enum):
     A = "A"
     B = "B"
     C = "C"
+    CLAMP = "CLAMP"
 
 
 class _State(Enum):
@@ -221,6 +242,7 @@ class LoadCharacterizer(QObject):
         self._csv_rows: list = []
         self._abort_rule: str | None = None   # why the run ended early, if it did
         self._abort_rung_kv: float | None = None
+        self._clamp_result: dict | None = None
 
         self._settle_timer = QTimer(self)
         self._settle_timer.setSingleShot(True)
@@ -254,6 +276,21 @@ class LoadCharacterizer(QObject):
         ]
         self._advance()
 
+    def start_clamp_test(self, amp_label: str, peak_kv: float = 1.0,
+                         freq_list: list = None) -> None:
+        """Triangle at `peak_kv`, frequency stepped up until the output stops
+        following. Stops at the first step whose voltage-fundamental ratio is
+        below CLAMP_RATIO_THRESHOLD; that step's current fundamental is the
+        clamp current."""
+        self._start_common(Mode.CLAMP, amp_label)
+        self._clamp_result = None
+        self._steps = [
+            _Step(freq_hz=float(f), peak_kv=peak_kv,
+                  settle_s=MODE_A_SETTLE_S, collect_s=MODE_A_COLLECT_S)
+            for f in (freq_list or CLAMP_FREQ_LADDER_HZ)
+        ]
+        self._advance()
+
     def start_mode_c(self, amp_label: str, ladder_kv: list = None) -> None:
         self._start_common(Mode.C, amp_label)
         rungs = ladder_kv or MODE_C_LADDER_KV
@@ -261,6 +298,12 @@ class LoadCharacterizer(QObject):
                               settle_s=1.0, collect_s=MODE_C_STREAM_S)
                        for kv in rungs]
         self._advance()
+
+    @property
+    def clamp_result(self):
+        """After a clamp test: {"reached", "clamp_ma", "clamp_freq_hz", "peak_kv"},
+        else None. `reached` False means the ratio never fell below the threshold."""
+        return self._clamp_result
 
     @property
     def abort_rule(self):
@@ -284,7 +327,8 @@ class LoadCharacterizer(QObject):
         # The hard trip is checked on EVERY window of a ladder, SETTLE included:
         # the inrush from stepping to a new voltage lands during SETTLE, the one
         # window collection throws away.
-        if (self._mode == Mode.C and self._state in (_State.SETTLE, _State.COLLECT)
+        if (self._mode in (Mode.C, Mode.CLAMP)
+                and self._state in (_State.SETTLE, _State.COLLECT)
                 and self._hard_tripped(payload)):
             self._finish(aborted=True, rule="hard_trip",
                          rung_kv=self._current_step().peak_kv)
@@ -341,8 +385,8 @@ class LoadCharacterizer(QObject):
         self._settle_timer.start(max(1, int(step.settle_s * 1000)))
 
     def _command_step(self, step: _Step) -> None:
-        if self._mode in (Mode.A, Mode.C):
-            shape = "Sine" if self._mode == Mode.A else "Square"
+        if self._mode in (Mode.A, Mode.C, Mode.CLAMP):
+            shape = {Mode.A: "Sine", Mode.C: "Square", Mode.CLAMP: "Triangle"}[self._mode]
             status, peak = peak_status(shape, step.peak_kv * 2.0 * 1000.0 / _AMP_GAIN, 0.0)
             if status == "block":
                 raise RuntimeError(
@@ -351,6 +395,8 @@ class LoadCharacterizer(QObject):
             # with a square wave; a sine has no edges for the analysis to find.
             if self._mode == Mode.A:
                 self._drive.command_sine(self._amp_label, step.peak_kv, step.freq_hz)
+            elif self._mode == Mode.CLAMP:
+                self._drive.command_triangle(self._amp_label, step.peak_kv, step.freq_hz)
             else:
                 self._drive.command_square(self._amp_label, step.peak_kv, step.freq_hz)
         else:
@@ -370,6 +416,8 @@ class LoadCharacterizer(QObject):
                 point = self._finish_mode_a_point(step)
             elif self._mode == Mode.B:
                 point = self._finish_mode_b_point(step)
+            elif self._mode == Mode.CLAMP:
+                point = self._finish_clamp_point(step)
             else:
                 point = self._finish_mode_c_point(step)
         except Exception as e:
@@ -389,6 +437,19 @@ class LoadCharacterizer(QObject):
             self._finish(aborted=True, rule="leakage")
             return
 
+        if self._mode == Mode.CLAMP:
+            ratio = point["regulation_ratio"]
+            if ratio != ratio:
+                # No voltage reading at all: neither "following" nor "clamped".
+                self._finish(aborted=True, rule="no_data", rung_kv=step.peak_kv)
+                return
+            if ratio < CLAMP_RATIO_THRESHOLD:
+                self._clamp_result = {
+                    "reached": True, "clamp_ma": point["i_fund_ma"],
+                    "clamp_freq_hz": step.freq_hz, "peak_kv": step.peak_kv}
+                self._finish(aborted=False)
+                return
+
         if self._mode == Mode.C:
             rule = self._ladder_rule(point)
             if rule:
@@ -399,6 +460,30 @@ class LoadCharacterizer(QObject):
 
         self._step_index += 1
         self._advance()
+
+    def _finish_clamp_point(self, step: _Step) -> dict:
+        ain_v = AMP_CHANNEL_MAP[self._amp_label]["voltage"]
+        ain_i = AMP_CHANNEL_MAP[self._amp_label]["current"]
+        fs = 1.0 / self._last_sample_period if self._last_sample_period else 0.0
+        v_wave = (np.concatenate(self._collect_windows[ain_v])
+                  if self._collect_windows[ain_v] else np.array([]))
+        i_wave = (np.concatenate(self._collect_windows[ain_i])
+                  if self._collect_windows[ain_i] else np.array([]))
+        v_amp, _vp = (fundamental(v_wave, fs, step.freq_hz)
+                      if v_wave.size else (float("nan"), float("nan")))
+        i_amp, _ip = (fundamental(i_wave, fs, step.freq_hz)
+                      if i_wave.size else (float("nan"), float("nan")))
+        v_fund_kv = monitor_to_kv(v_amp)
+        i_fund_ma = ma_unclamped(i_amp) if i_amp == i_amp else float("nan")
+        commanded_fund_kv = step.peak_kv * _TRIANGLE_FUNDAMENTAL_FRACTION
+        return {
+            "mode": "CLAMP", "amp_label": self._amp_label, "freq_hz": step.freq_hz,
+            "commanded_peak_kv": step.peak_kv,
+            "v_fund_kv": v_fund_kv, "i_fund_ma": i_fund_ma,
+            "regulation_ratio": regulation_ratio(v_fund_kv, commanded_fund_kv),
+            "load_condition": self._load_condition.value,
+            "timestamp_iso": now_iso(),
+        }
 
     def _ladder_rule(self, point: dict):
         """The first abort rule a finished rung trips, or None.
@@ -671,12 +756,25 @@ class LoadCharacterizer(QObject):
             method = "impedance_sweep"
         elif self._mode == Mode.C:
             method = "charge_integral_ladder"
+        elif self._mode == Mode.CLAMP:
+            method = "clamp_test"
         else:
             return
 
         values: dict = {}
         if not aborted:
-            if self._mode == Mode.A:
+            if self._mode == Mode.CLAMP:
+                # clamp_ma is None (JSON null) when the ratio never fell below
+                # the threshold: a finding in its own right - the clamp lies
+                # above the top of the frequency ladder.
+                reached = self._clamp_result or {
+                    "reached": False, "clamp_ma": None, "clamp_freq_hz": None,
+                    "peak_kv": self._steps[-1].peak_kv}
+                self._clamp_result = reached
+                values = {"clamp_ma": reached["clamp_ma"],
+                          "clamp_freq_hz": reached["clamp_freq_hz"],
+                          "peak_kv": reached["peak_kv"]}
+            elif self._mode == Mode.A:
                 c_values = [p["c_pf"] for p in self._points if p["c_pf"] == p["c_pf"]]
                 g_values = [p["g_us"] for p in self._points if p["g_us"] == p["g_us"]]
                 if not c_values:

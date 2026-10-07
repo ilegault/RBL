@@ -19,6 +19,8 @@ from PySide6.QtWidgets import QApplication
 
 from rbl.config.calibration_config import CAL_TRIP_HARD_MA, LoadCondition
 from rbl.services.load_characterizer import (
+    CLAMP_FREQ_LADDER_HZ,
+    CLAMP_RATIO_THRESHOLD,
     GUI_REFRESH_HZ,
     MODE_C_FREQ_HZ,
     MODE_C_LADDER_KV,
@@ -267,6 +269,146 @@ def _square_commands(funcgen_map):
 def _only_result():
     (path,) = _result_files()
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _feed_clamp_step(lc, step, v_peak_kv, i_fund_ma, fs=50_000.0):
+    """One clamp-test step: a triangle voltage of peak `v_peak_kv` and a current
+    whose FUNDAMENTAL is exactly `i_fund_ma` (a sine at the drive frequency)."""
+    n = int(fs * step.collect_s)
+    t = np.arange(n) / fs
+    v = v_peak_kv * (2.0 / np.pi) * np.arcsin(np.sin(2 * np.pi * step.freq_hz * t))
+    i_raw = (i_fund_ma * np.sin(2 * np.pi * step.freq_hz * t + 1.2)) / 10.0
+    windows = max(1, round(step.collect_s * GUI_REFRESH_HZ))
+    chunk = n // windows
+    for w in range(windows):
+        lc.on_window({"sample_period": 1.0 / fs,
+                      "channels": {"AIN13": {"waveform": v[w*chunk:(w+1)*chunk]},
+                                   "AIN12": {"waveform": i_raw[w*chunk:(w+1)*chunk]}}})
+
+
+def _run_clamp(lc, freqs, v_peak_of, i_fund_of, peak_kv=1.0):
+    """Run the clamp test, feeding each step from the two functions of frequency."""
+    finished = []
+    lc.finished.connect(finished.append)
+    lc.start_clamp_test("X+", peak_kv=peak_kv, freq_list=freqs)
+    for _ in freqs:
+        if finished:
+            break
+        step = _begin_collect(lc)
+        _feed_clamp_step(lc, step, v_peak_of(step.freq_hz), i_fund_of(step.freq_hz))
+
+
+def _triangle_freqs(funcgen_map):
+    gen, _ch = funcgen_map["X+"]
+    return [c[3] for c in gen.calls if c[0] == "set_waveform" and c[2] == "Triangle"]
+
+
+class TestClampTest:
+    """Ticket 45: raise the frequency until the amplifier stops following its input."""
+
+    @staticmethod
+    def make(funcgen_map):
+        return LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES,
+                                 pressure_provider=good_vacuum)
+
+    def test_the_default_ladder_and_threshold(self):
+        assert CLAMP_FREQ_LADDER_HZ == [250, 500, 750, 1000, 1500, 2000, 2500, 3000, 4000, 5000]
+        assert CLAMP_RATIO_THRESHOLD == 0.95
+
+    def test_it_stops_at_the_first_step_that_stops_following(self, qapp, funcgen_map):
+        lc = self.make(funcgen_map)
+        _run_clamp(lc, CLAMP_FREQ_LADDER_HZ,
+                   v_peak_of=lambda f: 1.0 if f <= 1500 else 0.8,
+                   i_fund_of=lambda f: 0.01 * f)
+        rec = _only_result()
+        assert rec["method"] == "clamp_test"
+        assert rec["values"]["clamp_freq_hz"] == 2000
+        assert rec["values"]["peak_kv"] == 1.0
+        assert not rec.get("aborted")
+        # 2500 Hz was never commanded
+        assert _triangle_freqs(funcgen_map) == [250, 500, 750, 1000, 1500, 2000]
+        assert len(rec["points"]) == 6
+
+    def test_clamp_ma_is_the_current_fundamental_at_the_stopping_step(
+            self, qapp, funcgen_map):
+        lc = self.make(funcgen_map)
+        _run_clamp(lc, CLAMP_FREQ_LADDER_HZ,
+                   v_peak_of=lambda f: 1.0 if f <= 1500 else 0.8,
+                   i_fund_of=lambda f: 0.01 * f)
+        assert _only_result()["values"]["clamp_ma"] == pytest.approx(20.0, abs=1e-6)
+
+    def test_a_healthy_triangle_reads_a_ratio_of_one(self, qapp, funcgen_map):
+        # The fundamental of a triangle is 8/pi^2 of its peak; comparing it with
+        # the peak would read 0.81 on a perfectly healthy amplifier.
+        lc = self.make(funcgen_map)
+        points = []
+        lc.point_measured.connect(points.append)
+        _run_clamp(lc, [500.0], v_peak_of=lambda f: 1.0, i_fund_of=lambda f: 5.0)
+        assert points[0]["regulation_ratio"] == pytest.approx(1.0, abs=2e-3)
+
+    def test_a_ratio_just_under_the_threshold_stops_and_just_over_does_not(
+            self, qapp, funcgen_map):
+        lc = self.make(funcgen_map)
+        points = []
+        lc.point_measured.connect(points.append)
+        _run_clamp(lc, [250.0, 500.0, 750.0],
+                   v_peak_of=lambda f: {250.0: 0.96, 500.0: 0.94}.get(f, 1.0),
+                   i_fund_of=lambda f: 1.0)
+        assert [p["freq_hz"] for p in points] == [250.0, 500.0]
+
+    def test_if_the_ratio_never_drops_the_clamp_is_not_reached(self, qapp, funcgen_map):
+        lc = self.make(funcgen_map)
+        _run_clamp(lc, [250.0, 500.0], v_peak_of=lambda f: 1.0, i_fund_of=lambda f: 1.0)
+        rec = _only_result()
+        assert rec["values"]["clamp_ma"] is None
+        assert rec["values"]["clamp_freq_hz"] is None
+        assert not rec.get("aborted")
+        assert lc.clamp_result["reached"] is False
+
+    def test_the_clamp_result_is_available_to_the_tab(self, qapp, funcgen_map):
+        lc = self.make(funcgen_map)
+        _run_clamp(lc, [250.0, 500.0], v_peak_of=lambda f: 1.0 if f < 500 else 0.5,
+                   i_fund_of=lambda f: 0.02 * f)
+        assert lc.clamp_result == {"reached": True, "clamp_ma": pytest.approx(10.0, abs=1e-6),
+                                   "clamp_freq_hz": 500.0, "peak_kv": 1.0}
+
+    def test_one_sample_over_the_hard_trip_ends_it_with_hard_trip(self, qapp, funcgen_map):
+        lc = self.make(funcgen_map)
+        lc.start_clamp_test("X+")
+        _begin_collect(lc)
+        wave = np.zeros(100)
+        wave[3] = (CAL_TRIP_HARD_MA + 5.0) / 10.0
+        lc.on_window({"sample_period": 1e-4,
+                      "channels": {"AIN12": {"waveform": wave},
+                                   "AIN13": {"waveform": np.zeros(100)}}})
+        rec = _only_result()
+        assert rec["aborted"] is True and rec["abort_rule"] == "hard_trip"
+        assert rec["points"] == []
+
+    def test_no_voltage_reading_is_an_abort_not_a_silent_pass(self, qapp, funcgen_map):
+        lc = self.make(funcgen_map)
+        lc.start_clamp_test("X+", freq_list=[250.0, 500.0])
+        step = _begin_collect(lc)
+        _feed_windows(lc, {"AIN12": 0.1},          # current only: no voltage channel
+                      n_windows=max(1, round(step.collect_s * GUI_REFRESH_HZ)))
+        rec = _only_result()
+        assert rec["aborted"] is True and rec["abort_rule"] == "no_data"
+
+    def test_an_operator_abort_writes_an_aborted_result(self, qapp, funcgen_map):
+        lc = self.make(funcgen_map)
+        lc.start_clamp_test("X+")
+        lc.abort()
+        rec = _only_result()
+        assert rec["aborted"] is True and rec["abort_rule"] == "operator"
+        assert "clamp_ma" not in rec["values"]
+
+    def test_the_clamp_result_never_hides_the_capacitance(self, qapp, funcgen_map):
+        # A clamp result is ON_PLATES too, but carries no capacitance.
+        from rbl.config import characterization_history as ch
+        lc = self.make(funcgen_map)
+        _run_clamp(lc, [250.0], v_peak_of=lambda f: 1.0, i_fund_of=lambda f: 1.0)
+        assert ch.newest_on_plates_c_pf(
+            "X+", datetime.now().astimezone() + timedelta(days=1)) is None
 
 
 class TestModeCLadder:
