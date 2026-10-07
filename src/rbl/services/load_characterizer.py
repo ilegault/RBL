@@ -19,7 +19,12 @@ measurement every later phase consumes, per channel, on demand:
   Mode B - DC leakage vs. voltage. A ramped DC ladder with a long dwell per
            rung, aborting the ladder on rising leakage — a discharge
            starting, not something to climb further into.
-  Mode C - Charge integral (cross-check). Low-frequency square wave; the
+  Mode C - Charge integral voltage ladder. A low-frequency square wave
+           stepped through MODE_C_LADDER_KV (0.5 to 5 kV), reporting C and the
+           edge spike (peak, duration, charge) and the leakage between edges
+           at every rung; the headline C is the mean over the rungs. Driven
+           as a SQUARE wave (it was commanded as a sine, which has no edges
+           for the analysis to find). The
            charge under each edge gives C independent of the monitor's
            bandwidth (rbl.hardware.load_model.capacitance_from_charge).
            Streams BOTH the voltage and current monitor for the driven
@@ -102,6 +107,15 @@ MODE_B_LEAK_THRESHOLD_UA_DEFAULT = 50.0  # abort the ladder above this
 # --- Mode C: charge integral --------------------------------------------------
 MODE_C_FREQ_HZ = 10.0
 MODE_C_PEAK_KV = 1.0
+# One run steps through these rungs (peak kV of the +/- square wave): if C is
+# really independent of voltage it reads the same at every rung, and a change
+# with voltage means discharge or corona - the reason to climb rather than
+# measure once at 1 kV.
+MODE_C_LADDER_KV = [0.5, 1.0, 2.0, 3.0, 4.0, 5.0]
+# An edge whose current stays above half its peak for less than this is faster
+# than the monitor and sampling resolve: its measured peak is only a lower
+# bound on the true one (its charge, an integral, is still right).
+EDGE_LOWER_BOUND_US = 100.0
 MODE_C_STREAM_S = 5.0        # collection window before post-processing edges
 MODE_C_EDGE_WINDOW_PRE_S = 200e-6
 MODE_C_EDGE_WINDOW_POST_S = 2e-3
@@ -205,10 +219,12 @@ class LoadCharacterizer(QObject):
         ]
         self._advance()
 
-    def start_mode_c(self, amp_label: str) -> None:
+    def start_mode_c(self, amp_label: str, ladder_kv: list = None) -> None:
         self._start_common(Mode.C, amp_label)
-        self._steps = [_Step(freq_hz=MODE_C_FREQ_HZ, peak_kv=MODE_C_PEAK_KV,
-                              settle_s=1.0, collect_s=MODE_C_STREAM_S)]
+        rungs = ladder_kv or MODE_C_LADDER_KV
+        self._steps = [_Step(freq_hz=MODE_C_FREQ_HZ, peak_kv=kv,
+                              settle_s=1.0, collect_s=MODE_C_STREAM_S)
+                       for kv in rungs]
         self._advance()
 
     def abort(self) -> None:
@@ -272,11 +288,17 @@ class LoadCharacterizer(QObject):
 
     def _command_step(self, step: _Step) -> None:
         if self._mode in (Mode.A, Mode.C):
-            status, peak = peak_status("Sine", step.peak_kv * 2.0 * 1000.0 / _AMP_GAIN, 0.0)
+            shape = "Sine" if self._mode == Mode.A else "Square"
+            status, peak = peak_status(shape, step.peak_kv * 2.0 * 1000.0 / _AMP_GAIN, 0.0)
             if status == "block":
                 raise RuntimeError(
                     f"amplitude {step.peak_kv} kV at {step.freq_hz} Hz blocked by peak interlock")
-            self._drive.command_sine(self._amp_label, step.peak_kv, step.freq_hz)
+            # Mode C is a charge integral across SHARP edges, so it is driven
+            # with a square wave; a sine has no edges for the analysis to find.
+            if self._mode == Mode.A:
+                self._drive.command_sine(self._amp_label, step.peak_kv, step.freq_hz)
+            else:
+                self._drive.command_square(self._amp_label, step.peak_kv, step.freq_hz)
         else:
             if self._ramp_engine is not None:
                 self._drive.attach_ramp_engine(self._ramp_engine)
@@ -403,7 +425,12 @@ class LoadCharacterizer(QObject):
                   if self._collect_windows[ain_i] else np.array([]))
         dt = self._last_sample_period or 0.0
 
-        c_values = []
+        c_values: list = []
+        swings: list = []
+        peaks: list = []
+        durations: list = []
+        charges: list = []
+        leak_ua = float("nan")
         if v_wave.size > 2 and dt > 0:
             # Vectorised conversion — see _finish_mode_b_point's note on why
             # ma_unclamped()/monitor_to_kv() aren't applied elementwise here.
@@ -416,14 +443,25 @@ class LoadCharacterizer(QObject):
             # MEASURED trace, never assumed from a commanded phase.
             threshold_kv = step.peak_kv * 0.5
             diffs = np.diff(v_kv)
-            edge_idx = np.flatnonzero(np.abs(diffs) > threshold_kv) + 1
+            edge_idx = [int(i) for i in np.flatnonzero(np.abs(diffs) > threshold_kv) + 1]
             n_pre = max(1, int(MODE_C_EDGE_WINDOW_PRE_S / dt))
             n_post = max(1, int(MODE_C_EDGE_WINDOW_POST_S / dt))
+            between_edges = np.ones(i_ma.size, dtype=bool)
+            for idx in edge_idx:
+                between_edges[max(0, idx - n_pre):idx + n_post] = False
             for idx in edge_idx:
                 lo, hi = idx - n_pre, idx + n_post
                 if lo < 0 or hi >= i_ma.size:
                     continue
-                baseline = float(np.mean(i_ma[max(0, idx - 2 * n_pre):idx]))
+                # The baseline comes from the stretch BEFORE the integration
+                # window, not the stretch just before the detected voltage
+                # jump: the current onset can lead that jump by a sample or
+                # two, and the first sample of an edge is its largest. One such
+                # sample in the baseline average shifted C by about a third.
+                base_lo = max(0, idx - 2 * n_pre)
+                if lo - base_lo < 1:
+                    continue
+                baseline = float(np.mean(i_ma[base_lo:lo]))
                 # Not reflowed: splitting this expression across lines changes
                 # how mypy resolves the two ndarray.__getitem__ overloads and
                 # doubles a pre-existing stub-typing error (see PR #32).
@@ -433,16 +471,58 @@ class LoadCharacterizer(QObject):
                 c_pf = capacitance_from_charge(i_ma[lo:hi], dt, baseline, delta_v_kv)
                 if c_pf == c_pf:   # not NaN
                     c_values.append(c_pf)
+                    swings.append(abs(delta_v_kv))
+                    peak, duration_s, charge_c = self._edge_spike(i_ma[lo:hi] - baseline, dt)
+                    peaks.append(peak)
+                    durations.append(duration_s)
+                    charges.append(charge_c)
+            if between_edges.any():
+                leak_ua = float(np.mean(np.abs(i_ma[between_edges]))) * 1e3
 
         n_edges = len(c_values)
         c_pf_mean = float(np.mean(c_values)) if n_edges else float("nan")
         c_pf_std = float(np.std(c_values)) if n_edges else float("nan")
+
+        def mean_or_nan(values):
+            return float(np.mean(values)) if values else float("nan")
+
+        edge_duration_us = mean_or_nan(durations) * 1e6
         return {
             "mode": "C", "amp_label": self._amp_label, "n_edges": n_edges,
             "c_pf_mean": c_pf_mean, "c_pf_std": c_pf_std,
+            "rung_kv": step.peak_kv,
+            "measured_swing_kv": mean_or_nan(swings),
+            "edge_peak_ma": mean_or_nan(peaks),
+            "edge_duration_us": edge_duration_us,
+            "edge_charge_uc": mean_or_nan(charges) * 1e6,
+            "inter_edge_leak_ua": leak_ua,
+            # NaN duration (no edges) is not "short": there is no peak to qualify.
+            "edge_peak_is_lower_bound": bool(edge_duration_us < EDGE_LOWER_BOUND_US),
             "load_condition": self._load_condition.value,
             "timestamp_iso": now_iso(),
         }
+
+    @staticmethod
+    def _edge_spike(above_baseline_ma, dt: float):
+        """(peak mA, time above half the peak in s, charge in coulombs) for one edge.
+
+        `above_baseline_ma` is the current across one edge with the pre-edge
+        baseline removed. The duration is the contiguous stretch around the
+        peak that stays above half of it, so noise elsewhere in the window
+        cannot lengthen it.
+        """
+        a = np.abs(above_baseline_ma)
+        k = int(np.argmax(a))
+        peak = float(a[k])
+        half = peak / 2.0
+        lo = k
+        while lo > 0 and a[lo - 1] >= half:
+            lo -= 1
+        hi = k
+        while hi < a.size - 1 and a[hi + 1] >= half:
+            hi += 1
+        charge_c = abs(float(np.trapezoid(above_baseline_ma * 1e-3, dx=dt)))
+        return peak, (hi - lo + 1) * dt, charge_c
 
     # ------------------------------------------------------------------
     # Completion / persistence
@@ -487,10 +567,13 @@ class LoadCharacterizer(QObject):
                 values = {"c_pf": float(np.mean(c_values)),
                           "g_us": float(np.mean(g_values)) if g_values else 0.0}
             else:
-                if not self._points or self._points[-1]["c_pf_mean"] != \
-                        self._points[-1]["c_pf_mean"]:      # no edges: NaN
+                # The headline C is the mean over the rungs that found edges.
+                # Mode C does not measure conductance, so none is invented.
+                rung_c = [p["c_pf_mean"] for p in self._points
+                          if p["c_pf_mean"] == p["c_pf_mean"]]      # drop NaN
+                if not rung_c:
                     return
-                values = {"c_pf": float(self._points[-1]["c_pf_mean"]), "g_us": 0.0}
+                values = {"c_pf": float(np.mean(rung_c))}
 
         now = self._now_fn()
         assignment = amplifier_assignments.current_assignment(now) or {}
