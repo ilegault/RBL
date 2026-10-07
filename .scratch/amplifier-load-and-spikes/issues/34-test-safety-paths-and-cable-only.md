@@ -1,6 +1,6 @@
 # 34: Test safety for new stores, their paths, and the cable-only load condition
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
