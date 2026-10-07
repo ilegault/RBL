@@ -1,6 +1,6 @@
 # 41: The current-vs-frequency chart model, with a margin verdict per plate
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
