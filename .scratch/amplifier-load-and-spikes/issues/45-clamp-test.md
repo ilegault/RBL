@@ -1,6 +1,6 @@
 # 45: Clamp test: find the current where an amplifier stops following its input
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
