@@ -1,6 +1,6 @@
 # 37: Mode A and Mode C write characterization results tagged with the assigned amplifier
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -32,11 +32,11 @@ and `now_fn`. The result folder is real (temp path).
 
 ## Acceptance criteria
 
-- [ ] A completed synthetic Mode A run on X+ writes exactly one file to the temp `CHARACTERIZATION_DIR` with `method` `impedance_sweep`, `plate_position` `X+`, and `values.c_pf` within the existing test's tolerance of the synthetic capacitance.
-- [ ] With an assignment putting `S-123` on X+, that file's `amplifier_serial` is `S-123`; with no assignment it is `unassigned`.
-- [ ] An aborted Mode A run writes a file with `aborted: true` and no `c_pf`, and `characterization_history.newest` does not return it.
-- [ ] After any run, the temp `load_calibration.json` from the conftest fixture does not exist.
-- [ ] All other tests in `tests/test_load_characterizer.py` pass unchanged.
+- [x] A completed synthetic Mode A run on X+ writes exactly one file to the temp `CHARACTERIZATION_DIR` with `method` `impedance_sweep`, `plate_position` `X+`, and `values.c_pf` within the existing test's tolerance of the synthetic capacitance.
+- [x] With an assignment putting `S-123` on X+, that file's `amplifier_serial` is `S-123`; with no assignment it is `unassigned`.
+- [x] An aborted Mode A run writes a file with `aborted: true` and no `c_pf`, and `characterization_history.newest` does not return it.
+- [x] After any run, the temp `load_calibration.json` from the conftest fixture does not exist.
+- [x] All other tests in `tests/test_load_characterizer.py` pass unchanged.
 
 ## Gate
 
@@ -48,3 +48,6 @@ Run in CI's order (`.github/workflows/tests.yml`):
     pytest --tb=short -q -n auto --dist loadfile --durations=25
 
 ## Comments
+
+2026-10-07: Done. `LoadCharacterizer` takes `now_fn` and writes its result through `characterization_history.write_result` (Mode A `impedance_sweep`, Mode C `charge_integral_ladder`; aborted runs written with `aborted: true` and empty `values`; Mode B writes none). `test_finished_emits_and_persists_measurement` rewritten in place; new `TestResultFiles` in `tests/test_load_characterizer.py` covers each criterion plus load condition, Mode C, Mode B, and the retired store not being written. All other tests in that file are unchanged.
+Notes: a completed run with no valid capacitance (all NaN / no edges) writes nothing, as before. Mode C still reports `g_us` 0.0 as the old code did; ticket 43 replaces Mode C with the voltage ladder.
