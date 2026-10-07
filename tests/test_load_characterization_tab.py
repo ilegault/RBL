@@ -13,7 +13,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from datetime import datetime, timedelta
 
 import pytest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from rbl.config import amplifier_assignments as aa
 from rbl.config import characterization_history as ch
@@ -223,3 +223,154 @@ class TestComparisonTable:
         aa.record_assignment(b, NOW - timedelta(days=2), "swap")
         tab.refresh_results()
         assert cell(tab, "X+", COL_PLATES) == "not measured"
+
+
+SERIALS_A = {"X+": "S-A", "X-": "S-B", "Y+": "S-C", "Y-": "S-D"}
+SERIALS_B = {"X+": "S-C", "X-": "S-B", "Y+": "S-A", "Y-": "S-D"}   # X and Y exchanged
+
+
+def _records():
+    return aa.history()
+
+
+def _rows(tab):
+    return {plate: lbl.text() for plate, lbl in tab.lbl_serials.items()}
+
+
+@pytest.fixture
+def no_modal_dialogs(monkeypatch):
+    """Any QDialog.exec fails the test: the panel must go through its two
+    replaceable ask methods, never open a modal of its own."""
+    def boom(*a, **k):
+        pytest.fail("a modal dialog was opened")
+    monkeypatch.setattr(QDialog, "exec", boom)
+
+
+def fake_ask(monkeypatch, tab, answers):
+    """Replace the tab's assignment dialog with a queue of canned answers."""
+    queue = list(answers)
+    seen = []
+
+    def ask(current):
+        seen.append(current)
+        return queue.pop(0)
+    monkeypatch.setattr(tab, "_ask_assignment", ask)
+    return seen
+
+
+class TestAmplifiersPanel:
+    """Recording which amplifier drives which plate, and hardware changes."""
+
+    def test_with_no_assignment_every_row_reads_not_set(self, tab, no_modal_dialogs):
+        assert _rows(tab) == {"X+": "not set", "X-": "not set", "Y+": "not set", "Y-": "not set"}
+
+    def test_the_first_recording_is_the_initial_assignment(
+            self, tab, monkeypatch, no_modal_dialogs):
+        seen = fake_ask(monkeypatch, tab, [(SERIALS_A, NOW - timedelta(days=1), "fitted")])
+        tab.btn_record_swap.click()
+        assert seen == [None]                              # nothing was in force yet
+        assert _rows(tab) == SERIALS_A
+        (rec,) = _records()
+        assert rec["kind"] == "initial"
+        assert rec["mapping"] == SERIALS_A
+        assert rec["note"] == "fitted"
+
+    def test_a_second_recording_is_a_swap_and_updates_the_rows(
+            self, tab, monkeypatch, no_modal_dialogs):
+        seen = fake_ask(monkeypatch, tab, [
+            (SERIALS_A, NOW - timedelta(days=5), ""),
+            (SERIALS_B, NOW - timedelta(days=1), "X and Y exchanged")])
+        tab.btn_record_swap.click()
+        tab.btn_record_swap.click()
+        assert seen[1] == SERIALS_A                        # the dialog starts from what is in force
+        assert [r["kind"] for r in _records()] == ["initial", "swap"]
+        assert _rows(tab) == SERIALS_B
+
+    def test_cancelling_writes_nothing(self, tab, monkeypatch, no_modal_dialogs):
+        fake_ask(monkeypatch, tab, [None])
+        tab.btn_record_swap.click()
+        assert _records() == []
+        assert _rows(tab)["X+"] == "not set"
+
+    def test_a_swap_moves_results_with_their_amplifier(
+            self, tab, monkeypatch, no_modal_dialogs):
+        aa.record_assignment(SERIALS_A, NOW - timedelta(days=20), "initial")
+        ch.write_result({"plate_position": "X+", "amplifier_serial": "S-A",
+                         "load_condition": "ON_PLATES", "method": "impedance_sweep",
+                         "values": {"c_pf": 1600.0, "g_us": 0.0}}, NOW - timedelta(days=10))
+        tab.refresh_results()
+        assert "1600 pF" in cell(tab, "X+", COL_PLATES)
+        fake_ask(monkeypatch, tab, [(SERIALS_B, NOW - timedelta(days=1), "")])
+        tab.btn_record_swap.click()
+        assert cell(tab, "X+", COL_PLATES) == "not measured"      # new amplifier, no result yet
+
+    def test_a_swap_tells_the_planner_to_re_read(self, tab, monkeypatch, no_modal_dialogs):
+        fake_ask(monkeypatch, tab, [(SERIALS_A, NOW, "")])
+        changed = []
+        tab.measurements_changed.connect(lambda: changed.append(1))
+        tab.btn_record_swap.click()
+        assert changed == [1]
+
+    def test_a_refused_mapping_writes_nothing_and_says_so(
+            self, tab, monkeypatch, no_modal_dialogs):
+        fake_ask(monkeypatch, tab, [({"X+": "S-A", "X-": "S-B", "Y+": "S-C"}, NOW, "")])
+        warned = []
+        monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warned.append(a))
+        tab.btn_record_swap.click()
+        assert warned and _records() == []
+
+    def test_recording_a_hardware_change_flags_older_results_without_a_rebuild(
+            self, tab, monkeypatch, no_modal_dialogs):
+        measure("X+", 1500.0, days_ago=10)
+        tab.refresh_results()
+        before = tab.table.item(row_of(tab, "X+"), COL_PLATES)
+        assert before.background().color().alpha() == 0
+        monkeypatch.setattr(tab, "_ask_hardware_change",
+                            lambda: (NOW - timedelta(days=2), "feedthrough replaced"))
+        tab.btn_record_hw_change.click()
+        (rec,) = _records()
+        assert rec["kind"] == "hardware_change" and rec["note"] == "feedthrough replaced"
+        after = tab.table.item(row_of(tab, "X+"), COL_PLATES)
+        assert after.background().color().name().lower() == theme.WARN.lower()
+
+    def test_cancelling_a_hardware_change_writes_nothing(
+            self, tab, monkeypatch, no_modal_dialogs):
+        monkeypatch.setattr(tab, "_ask_hardware_change", lambda: None)
+        tab.btn_record_hw_change.click()
+        assert _records() == []
+
+
+class TestTheDialogsThemselves:
+    """The real dialogs are built and read, never exec'd."""
+
+    def test_the_assignment_dialog_needs_four_distinct_serials(self, qapp):
+        from rbl.gui.load_characterization_tab import AssignmentDialog
+        dlg = AssignmentDialog(None, NOW)
+        ok = dlg.buttons.button(dlg.buttons.StandardButton.Ok)
+        assert not ok.isEnabled()
+        for plate, serial in SERIALS_A.items():
+            dlg.serial_edits[plate].setText(serial)
+        assert ok.isEnabled()
+        dlg.serial_edits["Y-"].setText("S-A")                 # a duplicate
+        assert not ok.isEnabled()
+        dlg.serial_edits["Y-"].setText("S-D")
+        dlg.note_edit.setText("fitted")
+        mapping, when, note = dlg.answer()
+        assert mapping == SERIALS_A and note == "fitted"
+        assert abs((when - NOW).total_seconds()) < 60        # defaults to now
+
+    def test_the_assignment_dialog_starts_from_the_assignment_in_force(self, qapp):
+        from rbl.gui.load_characterization_tab import AssignmentDialog
+        dlg = AssignmentDialog(SERIALS_A, NOW)
+        assert {p: e.text() for p, e in dlg.serial_edits.items()} == SERIALS_A
+
+    def test_the_hardware_change_dialog_needs_a_note(self, qapp):
+        from rbl.gui.load_characterization_tab import HardwareChangeDialog
+        dlg = HardwareChangeDialog(NOW)
+        ok = dlg.buttons.button(dlg.buttons.StandardButton.Ok)
+        assert not ok.isEnabled()
+        dlg.note_edit.setText("new HV cable")
+        assert ok.isEnabled()
+        when, note = dlg.answer()
+        assert note == "new HV cable"
+        assert abs((when - NOW).total_seconds()) < 60
