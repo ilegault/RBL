@@ -17,7 +17,7 @@ import numpy as np
 import pytest
 from PySide6.QtWidgets import QApplication
 
-from rbl.config.calibration_config import LoadCondition
+from rbl.config.calibration_config import CAL_TRIP_HARD_MA, LoadCondition
 from rbl.services.load_characterizer import (
     GUI_REFRESH_HZ,
     MODE_C_FREQ_HZ,
@@ -71,6 +71,11 @@ def _feed_windows(lc, channels_ma_or_kv: dict, n_windows: int, n_samples: int = 
                          for ain, val in channels_ma_or_kv.items()},
         }
         lc.on_window(payload)
+
+
+def good_vacuum():
+    """A pressure the HV interlock permits every rung at."""
+    return 1e-7
 
 
 def _begin_collect(lc):
@@ -165,7 +170,7 @@ class TestResultFiles:
 
     def test_a_completed_mode_c_run_is_a_charge_integral_ladder_result(
             self, qapp, funcgen_map):
-        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES)
+        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES, pressure_provider=good_vacuum)
         lc.start_mode_c("X+", ladder_kv=[MODE_C_PEAK_KV])     # one rung
         fs = 1_000_000.0
         step = _begin_collect(lc)
@@ -173,7 +178,7 @@ class TestResultFiles:
         period = int(fs / MODE_C_FREQ_HZ)
         v = MODE_C_PEAK_KV * np.sign(np.sin(2 * np.pi * MODE_C_FREQ_HZ * np.arange(n) / fs))
         q = 1200.0 * 1e-12 * 2 * MODE_C_PEAK_KV * 1000.0
-        tau = 20e-6
+        tau = 300e-6      # a 20 us edge here would be a 120 mA hard trip (ticket 44)
         i_ma = np.zeros(n)
         for k, pos in enumerate(np.arange(period // 2, n, period // 2)):
             idx = np.arange(pos, min(pos + int(10 * tau * fs), n))
@@ -206,18 +211,25 @@ class TestResultFiles:
         assert not store.STORE_PATH.exists()
 
 
-def _feed_rung(lc, step, c_pf=1200.0, tau_s=100e-6, fs=500_000.0, leak_ma=0.0):
+def _feed_rung(lc, step, c_pf=1200.0, tau_s=300e-6, fs=500_000.0, leak_ma=0.0,
+               swing_fraction=1.0):
     """Feed one complete synthetic Mode C rung: a +/-step.peak_kv square wave
     whose edges each deliver exactly C x dV, decaying with time constant tau.
 
-    tau defaults to 50 sample intervals: a sampled step edge makes the trapezoid
-    integral read high by about half a sample's share (dt / 2 tau), so a
-    coarser tau would put that quantisation, not the analysis, in the result.
+    tau defaults to 150 sample intervals. Two things bound it: a sampled step
+    edge makes the trapezoid integral read high by about half a sample's share
+    (dt / 2 tau), so a shorter tau would put that quantisation in the result;
+    and the ladder's hard trip (CAL_TRIP_HARD_MA) treats any sample over 60 mA
+    as a short, so the edge of the 5 kV rung (12 uC into 1200 pF) has to be
+    spread over at least ~220 us to be a legal edge at all.
     """
     n = int(fs * step.collect_s)
     period = int(fs / MODE_C_FREQ_HZ)
-    v = step.peak_kv * np.sign(np.sin(2 * np.pi * MODE_C_FREQ_HZ * np.arange(n) / fs))
-    q = c_pf * 1e-12 * 2 * step.peak_kv * 1000.0
+    # swing_fraction < 1: an amplifier that does not follow its input swings
+    # less AND delivers proportionally less charge, so C itself is unchanged.
+    peak_kv = step.peak_kv * swing_fraction
+    v = peak_kv * np.sign(np.sin(2 * np.pi * MODE_C_FREQ_HZ * np.arange(n) / fs))
+    q = c_pf * 1e-12 * 2 * peak_kv * 1000.0
     i_ma = np.full(n, float(leak_ma))
     for k, pos in enumerate(np.arange(period // 2, n, period // 2)):
         idx = np.arange(pos, min(pos + int(12 * tau_s * fs), n))
@@ -231,14 +243,30 @@ def _feed_rung(lc, step, c_pf=1200.0, tau_s=100e-6, fs=500_000.0, leak_ma=0.0):
                                    "AIN12": {"waveform": (i_ma / 10.0)[w*chunk:(w+1)*chunk]}}})
 
 
-def _run_ladder(lc, ladder_kv=None, **kw):
+def _run_ladder(lc, ladder_kv=None, per_rung=None, **kw):
+    """Run rungs until the ladder finishes (completed or aborted).
+
+    `per_rung` maps a rung index to extra _feed_rung keyword arguments.
+    """
+    finished = []
+    lc.finished.connect(finished.append)
     lc.start_mode_c("X+", ladder_kv=ladder_kv)
-    done = 0
     total = len(ladder_kv) if ladder_kv else len(MODE_C_LADDER_KV)
-    while done < total:
+    for i in range(total):
+        if finished:
+            break
         step = _begin_collect(lc)
-        _feed_rung(lc, step, **kw)
-        done += 1
+        _feed_rung(lc, step, **{**kw, **(per_rung or {}).get(i, {})})
+
+
+def _square_commands(funcgen_map):
+    gen, _ch = funcgen_map["X+"]
+    return [c for c in gen.calls if c[0] == "set_waveform" and c[2] == "Square"]
+
+
+def _only_result():
+    (path,) = _result_files()
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 class TestModeCLadder:
@@ -248,7 +276,8 @@ class TestModeCLadder:
         assert MODE_C_LADDER_KV == [0.5, 1.0, 2.0, 3.0, 4.0, 5.0]
 
     def test_six_rungs_each_recover_the_capacitance(self, qapp, funcgen_map):
-        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES)
+        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES,
+                               pressure_provider=good_vacuum)
         points = []
         lc.point_measured.connect(points.append)
         _run_ladder(lc)
@@ -257,7 +286,8 @@ class TestModeCLadder:
             assert p["c_pf_mean"] == pytest.approx(1200.0, rel=0.3)
 
     def test_the_written_result_is_the_mean_of_the_rungs(self, qapp, funcgen_map):
-        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES)
+        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES,
+                               pressure_provider=good_vacuum)
         points = []
         lc.point_measured.connect(points.append)
         _run_ladder(lc)
@@ -270,7 +300,8 @@ class TestModeCLadder:
         assert not rec.get("aborted")
 
     def test_each_rung_reports_the_edge_charge_as_c_times_the_step(self, qapp, funcgen_map):
-        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES)
+        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES,
+                               pressure_provider=good_vacuum)
         points = []
         lc.point_measured.connect(points.append)
         _run_ladder(lc, ladder_kv=[0.5, 2.0, 5.0])
@@ -283,17 +314,20 @@ class TestModeCLadder:
     @pytest.mark.parametrize("tau_s, lower_bound", [(20e-6, True), (300e-6, False)])
     def test_a_narrow_edge_peak_is_flagged_as_a_lower_bound(
             self, qapp, funcgen_map, tau_s, lower_bound):
-        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES)
+        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES,
+                               pressure_provider=good_vacuum)
         points = []
         lc.point_measured.connect(points.append)
-        _run_ladder(lc, ladder_kv=[1.0], tau_s=tau_s)
+        # 200 pF keeps even the 20 us edge under the 60 mA hard trip.
+        _run_ladder(lc, ladder_kv=[1.0], tau_s=tau_s, c_pf=200.0)
         (p,) = points
         assert p["edge_peak_is_lower_bound"] is lower_bound
         # time above half the peak of an exponential decay is tau x ln 2
         assert p["edge_duration_us"] == pytest.approx(tau_s * np.log(2) * 1e6, rel=0.15)
 
     def test_the_edge_peak_current_is_reported(self, qapp, funcgen_map):
-        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES)
+        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES,
+                               pressure_provider=good_vacuum)
         points = []
         lc.point_measured.connect(points.append)
         _run_ladder(lc, ladder_kv=[1.0], tau_s=300e-6)
@@ -306,14 +340,16 @@ class TestModeCLadder:
         # current onset (as it can be on the bench). With the baseline taken
         # from the samples just before the detected jump, that largest sample
         # leaked into the baseline and C read about a third low.
-        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES)
+        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES,
+                               pressure_provider=good_vacuum)
         points = []
         lc.point_measured.connect(points.append)
         _run_ladder(lc, ladder_kv=[1.0], tau_s=80e-6)
         assert points[0]["c_pf_mean"] == pytest.approx(1200.0, rel=0.05)
 
     def test_leakage_between_edges_is_reported_in_microamps(self, qapp, funcgen_map):
-        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES)
+        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES,
+                               pressure_provider=good_vacuum)
         points = []
         lc.point_measured.connect(points.append)
         _run_ladder(lc, ladder_kv=[1.0], leak_ma=0.02)
@@ -322,7 +358,7 @@ class TestModeCLadder:
         assert points[0]["c_pf_mean"] == pytest.approx(1200.0, rel=0.3)
 
     def test_no_edges_still_reports_every_new_key(self, qapp, funcgen_map):
-        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES)
+        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES, pressure_provider=good_vacuum)
         points = []
         lc.point_measured.connect(points.append)
         lc.start_mode_c("X+", ladder_kv=[1.0])
@@ -339,7 +375,7 @@ class TestModeCLadder:
     def test_every_rung_is_driven_as_a_square_wave_at_the_edge_frequency(
             self, qapp, funcgen_map):
         # The charge-integral method needs sharp edges; a sine has none.
-        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES)
+        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES, pressure_provider=good_vacuum)
         _run_ladder(lc, ladder_kv=[0.5, 1.0])
         gen, _ch = funcgen_map["X+"]
         # The run ends by zeroing the output (a "DC" call); the rungs themselves
@@ -350,11 +386,186 @@ class TestModeCLadder:
         assert waves[1][2] == pytest.approx(2 * waves[0][2])    # 1.0 kV is twice 0.5 kV
 
     def test_progress_counts_the_rungs(self, qapp, funcgen_map):
-        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES)
+        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES, pressure_provider=good_vacuum)
         seen = []
         lc.progress.connect(lambda done, total, label: seen.append((done, total)))
         _run_ladder(lc, ladder_kv=[0.5, 1.0, 2.0])
         assert seen == [(0, 3), (1, 3), (2, 3)]
+
+
+class TestModeCLadderAborts:
+    """Ticket 44: any of four rules ends the ladder; the interlock gates each rung."""
+
+    @staticmethod
+    def make(funcgen_map, provider=good_vacuum):
+        return LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES,
+                                 pressure_provider=provider)
+
+    def test_a_clean_ladder_completes_six_rungs_with_no_abort_rule(self, qapp, funcgen_map):
+        lc = self.make(funcgen_map)
+        points = []
+        lc.point_measured.connect(points.append)
+        _run_ladder(lc)
+        assert len(points) == 6
+        rec = _only_result()
+        assert not rec.get("aborted")
+        assert "abort_rule" not in rec
+        assert "c_pf" in rec["values"]
+
+    def test_a_changed_capacitance_ends_the_ladder_and_the_next_rung_is_never_commanded(
+            self, qapp, funcgen_map):
+        lc = self.make(funcgen_map)
+        _run_ladder(lc, per_rung={2: {"c_pf": 1500.0}})        # 1.25 x the first rung
+        rec = _only_result()
+        assert rec["aborted"] is True
+        assert rec["abort_rule"] == "c_changed"
+        assert rec["abort_rung_kv"] == 2.0
+        assert len(rec["points"]) == 3
+        assert "c_pf" not in rec["values"]                       # no headline C
+        assert len(_square_commands(funcgen_map)) == 3           # 0.5, 1 and 2 kV only
+
+    def test_a_ten_percent_change_is_tolerated(self, qapp, funcgen_map):
+        lc = self.make(funcgen_map)
+        points = []
+        lc.point_measured.connect(points.append)
+        _run_ladder(lc, ladder_kv=[0.5, 1.0], per_rung={1: {"c_pf": 1200.0 * 1.08}})
+        assert len(points) == 2
+        assert not _only_result().get("aborted")
+
+    def test_leakage_between_edges_ends_the_ladder(self, qapp, funcgen_map):
+        lc = self.make(funcgen_map)
+        _run_ladder(lc, per_rung={1: {"leak_ma": 0.1}})          # 100 uA
+        rec = _only_result()
+        assert rec["abort_rule"] == "leakage"
+        assert rec["abort_rung_kv"] == 1.0
+        assert len(rec["points"]) == 2
+
+    def test_a_swing_below_90_percent_of_commanded_ends_the_ladder(self, qapp, funcgen_map):
+        lc = self.make(funcgen_map)
+        _run_ladder(lc, per_rung={1: {"swing_fraction": 0.85}})
+        rec = _only_result()
+        assert rec["abort_rule"] == "not_following"
+        assert rec["abort_rung_kv"] == 1.0
+        assert len(rec["points"]) == 2
+
+    def test_a_swing_at_95_percent_is_fine(self, qapp, funcgen_map):
+        lc = self.make(funcgen_map)
+        _run_ladder(lc, ladder_kv=[0.5, 1.0], per_rung={1: {"swing_fraction": 0.95}})
+        assert not _only_result().get("aborted")
+
+    def test_a_rung_with_no_edges_at_all_counts_as_not_following(self, qapp, funcgen_map):
+        lc = self.make(funcgen_map)
+        lc.start_mode_c("X+", ladder_kv=[1.0, 2.0])
+        step = _begin_collect(lc)
+        _feed_windows(lc, {"AIN13": 0.0, "AIN12": 0.0},
+                      n_windows=max(1, round(step.collect_s * GUI_REFRESH_HZ)))
+        rec = _only_result()
+        assert rec["abort_rule"] == "not_following"
+        assert rec["abort_rung_kv"] == 1.0
+
+    def test_one_sample_over_the_hard_trip_ends_the_ladder_before_the_point_is_emitted(
+            self, qapp, funcgen_map):
+        lc = self.make(funcgen_map)
+        points, finished = [], []
+        lc.point_measured.connect(points.append)
+        lc.finished.connect(finished.append)
+        lc.start_mode_c("X+", ladder_kv=[0.5, 1.0])
+        step = _begin_collect(lc)
+        wave = np.zeros(100)
+        wave[40] = (CAL_TRIP_HARD_MA + 5.0) / 10.0             # one railed sample
+        lc.on_window({"sample_period": 1e-4,
+                      "channels": {"AIN12": {"waveform": wave},
+                                   "AIN13": {"waveform": np.zeros(100)}}})
+        assert finished and points == []
+        rec = _only_result()
+        assert rec["abort_rule"] == "hard_trip"
+        assert rec["abort_rung_kv"] == 0.5
+        assert rec["points"] == []
+        assert len(_square_commands(funcgen_map)) == 1
+        assert step.peak_kv == 0.5
+
+    def test_a_sample_just_under_the_hard_trip_is_not_a_trip(self, qapp, funcgen_map):
+        lc = self.make(funcgen_map)
+        finished = []
+        lc.finished.connect(finished.append)
+        lc.start_mode_c("X+", ladder_kv=[0.5])
+        _begin_collect(lc)
+        wave = np.zeros(100)
+        wave[40] = (CAL_TRIP_HARD_MA - 5.0) / 10.0
+        lc.on_window({"sample_period": 1e-4,
+                      "channels": {"AIN12": {"waveform": wave},
+                                   "AIN13": {"waveform": np.zeros(100)}}})
+        assert finished == []
+
+    def test_a_negative_railed_sample_also_trips(self, qapp, funcgen_map):
+        lc = self.make(funcgen_map)
+        lc.start_mode_c("X+", ladder_kv=[0.5])
+        _begin_collect(lc)
+        wave = np.zeros(100)
+        wave[7] = -(CAL_TRIP_HARD_MA + 5.0) / 10.0
+        lc.on_window({"sample_period": 1e-4,
+                      "channels": {"AIN12": {"waveform": wave},
+                                   "AIN13": {"waveform": np.zeros(100)}}})
+        assert _only_result()["abort_rule"] == "hard_trip"
+
+    def test_a_pressure_the_interlock_refuses_stops_the_ladder_before_that_rung(
+            self, qapp, funcgen_map):
+        readings = iter([1e-7, 1e-7, 1e-7, 2e-4])               # outgassing as HV climbs
+        lc = self.make(funcgen_map, provider=lambda: next(readings))
+        points = []
+        lc.point_measured.connect(points.append)
+        _run_ladder(lc)
+        rec = _only_result()
+        assert rec["abort_rule"] == "interlock"
+        assert rec["abort_rung_kv"] == 3.0
+        assert len(rec["points"]) == 3
+        assert len(points) == 3
+        assert len(_square_commands(funcgen_map)) == 3           # 3 kV never commanded
+
+    def test_an_unknown_pressure_blocks_the_first_rung(self, qapp, funcgen_map):
+        # No data is not good vacuum: the default provider reports NaN.
+        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES)
+        lc.start_mode_c("X+")
+        rec = _only_result()
+        assert rec["abort_rule"] == "interlock"
+        assert rec["abort_rung_kv"] == 0.5
+        assert _square_commands(funcgen_map) == []
+
+    def test_a_ceiling_below_the_rung_blocks_it(self, qapp, funcgen_map):
+        # 7e-5 torr permits 1 kV: the 0.5 and 1 kV rungs run, 2 kV does not.
+        lc = self.make(funcgen_map, provider=lambda: 7e-5)
+        _run_ladder(lc)
+        rec = _only_result()
+        assert rec["abort_rule"] == "interlock"
+        assert rec["abort_rung_kv"] == 2.0
+        assert len(rec["points"]) == 2
+
+    def test_an_ended_ladder_still_emits_finished_and_zeroes_the_output(
+            self, qapp, funcgen_map):
+        lc = self.make(funcgen_map)
+        finished = []
+        lc.finished.connect(finished.append)
+        _run_ladder(lc, per_rung={1: {"leak_ma": 0.1}})
+        assert len(finished) == 1
+        gen, _ch = funcgen_map["X+"]
+        assert gen.calls[-1][2] == "DC"                          # zeroed last
+
+    def test_the_rule_that_stopped_it_is_available_to_the_tab(self, qapp, funcgen_map):
+        lc = self.make(funcgen_map)
+        _run_ladder(lc, per_rung={1: {"leak_ma": 0.1}})
+        assert lc.abort_rule == "leakage"
+
+    def test_the_first_matching_rule_in_order_is_reported(self, qapp, funcgen_map):
+        # Rung 2 both changes C and leaks: c_changed comes first.
+        lc = self.make(funcgen_map)
+        _run_ladder(lc, per_rung={1: {"c_pf": 1500.0, "leak_ma": 0.1}})
+        assert _only_result()["abort_rule"] == "c_changed"
+
+    def test_an_operator_abort_is_recorded_as_such(self, qapp, funcgen_map):
+        lc = self.make(funcgen_map)
+        lc.start_mode_c("X+")
+        lc.abort()
+        assert _only_result()["abort_rule"] == "operator"
 
 
 class TestModeA:
@@ -491,7 +702,7 @@ class TestModeB:
 
 class TestModeC:
     def test_finds_edges_and_recovers_capacitance_ballpark(self, qapp, funcgen_map):
-        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES)
+        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES, pressure_provider=good_vacuum)
         points = []
         lc.point_measured.connect(points.append)
         lc.start_mode_c("X+")
@@ -506,7 +717,7 @@ class TestModeC:
         c_true_pf = 1200.0
         delta_v_v = 2 * MODE_C_PEAK_KV * 1000.0
         q_true_c = c_true_pf * 1e-12 * delta_v_v
-        tau_s = 20e-6
+        tau_s = 300e-6    # a 20 us edge here would be a 120 mA hard trip (ticket 44)
         i_ma = np.zeros(n)
         edges = np.arange(period_samples // 2, n, period_samples // 2)
         for k, pos in enumerate(edges):
@@ -532,7 +743,7 @@ class TestModeC:
 
     def test_no_edges_reports_nan_not_a_crash(self, qapp, funcgen_map):
         import math
-        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES)
+        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES, pressure_provider=good_vacuum)
         points = []
         lc.point_measured.connect(points.append)
         lc.start_mode_c("X+")

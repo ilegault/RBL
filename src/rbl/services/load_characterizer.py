@@ -43,6 +43,26 @@ A QObject service in the shape of CalibrationRunner: `progress`,
 ONE channel at a time and produces per-point admittance/leakage records
 rather than CalibrationRunner's raw per-monitor CSV row.
 
+THE MODE C LADDER STOPS ON ANY OF FOUR RULES
+--------------------------------------------
+Characterization pushes toward the limits on purpose, and its data is only
+valid while the amplifier follows its input, so (docs/adr/0006: characterization
+and calibration runs keep their aborts) the ladder ends when:
+  hard_trip      any current sample over CAL_TRIP_HARD_MA, checked on every
+                 window including SETTLE (a dead short);
+  c_changed      a rung's C differs from the first rung's by more than 10 %
+                 (the load is not a linear capacitor here: incipient discharge);
+  leakage        current between edges above the Mode B threshold (50 uA);
+  not_following  measured swing under 90 % of the commanded 2 x rung_kv, or no
+                 edges at all (the amplifier is limiting).
+Before each rung the HV interlock must permit that voltage at the present
+pressure (unknown pressure blocks: no data is not good vacuum), rule
+"interlock". An ended ladder keeps the rungs it completed and the rule in its
+result file, and writes no headline C. BENCH NOTE: the amplifier supplies up to
+~100 mA for ~100 us when a square edge charges the load, which is above
+CAL_TRIP_HARD_MA (60 mA); whether hard_trip then fires on every real rung is for
+the bench to show (ticket 52).
+
 WHAT IS KEPT
 ------------
 A finished or aborted Mode A / Mode C run is written as a characterization
@@ -64,6 +84,7 @@ through the Phase 4 ramp engine rather than a step, per Section 2.3 Mode B.
 """
 import csv
 import logging
+import math
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -76,6 +97,7 @@ from rbl.config import amplifier_assignments, characterization_history
 from rbl.config.calibration_config import (
     CAL_LOAD_CAP_PF,
     CAL_MAX_KV,
+    CAL_TRIP_HARD_MA,
     ac_max_peak_kv,
 )
 from rbl.config.hardware_config import (
@@ -87,6 +109,7 @@ from rbl.config.hardware_config import (
 from rbl.hardware.ac_metrics import fundamental, phase_difference_deg
 from rbl.hardware.amp_monitor import ma_unclamped, monitor_to_kv
 from rbl.hardware.funcgen_safety import _AMP_GAIN, peak_status
+from rbl.hardware.hv_interlock import interlock_status
 from rbl.hardware.load_model import admittance_from_fundamentals, capacitance_from_charge
 from rbl.services.amp_drive import AmpDrive
 from rbl.services.calibration_writer import now_iso
@@ -116,6 +139,14 @@ MODE_C_LADDER_KV = [0.5, 1.0, 2.0, 3.0, 4.0, 5.0]
 # than the monitor and sampling resolve: its measured peak is only a lower
 # bound on the true one (its charge, an integral, is still right).
 EDGE_LOWER_BOUND_US = 100.0
+# --- Mode C ladder abort rules (see LoadCharacterizer._ladder_rule) ----------
+# A rung's C may differ from the first rung's by at most this fraction; more
+# means the load is not a linear capacitor at this voltage (incipient discharge).
+MODE_C_MAX_C_CHANGE = 0.10
+# The measured swing must reach this fraction of the commanded 2 x rung_kv; less
+# means the amplifier stopped following its input (it is limiting), and a
+# capacitance computed from that rung would be a number from a broken drive.
+MODE_C_MIN_SWING_FRACTION = 0.90
 MODE_C_STREAM_S = 5.0        # collection window before post-processing edges
 MODE_C_EDGE_WINDOW_PRE_S = 200e-6
 MODE_C_EDGE_WINDOW_POST_S = 2e-3
@@ -188,6 +219,8 @@ class LoadCharacterizer(QObject):
         self._last_sample_period = None
         self._leak_threshold_ua = MODE_B_LEAK_THRESHOLD_UA_DEFAULT
         self._csv_rows: list = []
+        self._abort_rule: str | None = None   # why the run ended early, if it did
+        self._abort_rung_kv: float | None = None
 
         self._settle_timer = QTimer(self)
         self._settle_timer.setSingleShot(True)
@@ -227,12 +260,18 @@ class LoadCharacterizer(QObject):
                        for kv in rungs]
         self._advance()
 
+    @property
+    def abort_rule(self):
+        """Why the run ended early ("hard_trip", "c_changed", "leakage",
+        "not_following", "interlock", "operator", "error"), or None."""
+        return self._abort_rule
+
     def abort(self) -> None:
         if self._state in (_State.IDLE, _State.DONE):
             return
         self._state = _State.ABORTING
         self._settle_timer.stop()
-        self._finish(aborted=True)
+        self._finish(aborted=True, rule="operator")
 
     def on_window(self, payload: dict) -> None:
         """Wire to Beamline.raw_window_ready, same contract as
@@ -240,6 +279,14 @@ class LoadCharacterizer(QObject):
         sp = payload.get("sample_period")
         if sp:
             self._last_sample_period = float(sp)
+        # The hard trip is checked on EVERY window of a ladder, SETTLE included:
+        # the inrush from stepping to a new voltage lands during SETTLE, the one
+        # window collection throws away.
+        if (self._mode == Mode.C and self._state in (_State.SETTLE, _State.COLLECT)
+                and self._hard_tripped(payload)):
+            self._finish(aborted=True, rule="hard_trip",
+                         rung_kv=self._current_step().peak_kv)
+            return
         if self._state != _State.COLLECT:
             return
         channels = payload.get("channels", {})
@@ -261,6 +308,8 @@ class LoadCharacterizer(QObject):
             raise ValueError(f"unknown amp label {amp_label!r}")
         self._mode = mode
         self._amp_label = amp_label
+        self._abort_rule = None
+        self._abort_rung_kv = None
         self._step_index = 0
         self._points = []
         self._csv_rows = []
@@ -274,6 +323,9 @@ class LoadCharacterizer(QObject):
             self._finish(aborted=False)
             return
         step = self._current_step()
+        if self._mode == Mode.C and not self._interlock_permits(step.peak_kv):
+            self._finish(aborted=True, rule="interlock", rung_kv=step.peak_kv)
+            return
         self.progress.emit(
             self._step_index, len(self._steps),
             f"{self._mode.value} {self._amp_label} "
@@ -321,7 +373,7 @@ class LoadCharacterizer(QObject):
         except Exception as e:
             self._print_err(f"point at step {self._step_index}: {e}")
             self.error.emit(str(e))
-            self._finish(aborted=True)
+            self._finish(aborted=True, rule="error")
             return
 
         self._points.append(point)
@@ -332,11 +384,71 @@ class LoadCharacterizer(QObject):
             log.warning(
                 "load_characterizer: leakage %.2f uA exceeds threshold %.2f uA — aborting ladder",
                 point["leak_ua"], self._leak_threshold_ua)
-            self._finish(aborted=True)
+            self._finish(aborted=True, rule="leakage")
             return
+
+        if self._mode == Mode.C:
+            rule = self._ladder_rule(point)
+            if rule:
+                log.warning("load_characterizer: Mode C ladder ended at %.3g kV: %s",
+                            step.peak_kv, rule)
+                self._finish(aborted=True, rule=rule, rung_kv=step.peak_kv)
+                return
 
         self._step_index += 1
         self._advance()
+
+    def _ladder_rule(self, point: dict):
+        """The first abort rule a finished rung trips, or None.
+
+        In order: c_changed, leakage, not_following (hard_trip is checked per
+        window in on_window, interlock before each rung in _advance). The first
+        matching rule is the one reported.
+        """
+        c_first = self._points[0]["c_pf_mean"]
+        c = point["c_pf_mean"]
+        if (len(self._points) > 1 and c_first == c_first and c == c
+                and c_first > 0
+                and abs(c - c_first) / c_first > MODE_C_MAX_C_CHANGE):
+            return "c_changed"
+        leak = point["inter_edge_leak_ua"]
+        if leak == leak and leak > self._leak_threshold_ua:
+            return "leakage"
+        swing = point["measured_swing_kv"]
+        # No edges at all means no swing was measured: the amplifier did not
+        # produce the commanded swing, whatever the reason.
+        if swing != swing or swing < MODE_C_MIN_SWING_FRACTION * 2.0 * point["rung_kv"]:
+            return "not_following"
+        return None
+
+    def _hard_tripped(self, payload: dict) -> bool:
+        """True if any current sample on the driven channel is over CAL_TRIP_HARD_MA.
+
+        Converted with ma_unclamped so a railed monitor (which monitor_to_ma
+        reports as NaN) still counts: NaN loses every comparison, and a dead
+        short is the biggest reading the hardware can produce.
+        """
+        ain = AMP_CHANNEL_MAP[self._amp_label]["current"]
+        entry = (payload.get("channels") or {}).get(ain)
+        wave = None if entry is None else entry.get("waveform")
+        if wave is None or len(wave) == 0:
+            return False
+        peak_v = float(np.nanmax(np.abs(np.asarray(wave, dtype=float))))
+        return ma_unclamped(peak_v) > CAL_TRIP_HARD_MA
+
+    def _interlock_permits(self, rung_kv: float) -> bool:
+        """May this rung's voltage be commanded at the present pressure?
+
+        A pressure the provider cannot give (NaN: gauge absent or stale) is
+        UNKNOWN, not good: no data is not good vacuum.
+        """
+        pressure = float(self._pressure_provider())
+        status, reason = interlock_status(
+            pressure, rung_kv, pressure_known=math.isfinite(pressure))
+        if status != "ok":
+            log.warning("load_characterizer: HV interlock refuses %.3g kV: %s",
+                        rung_kv, reason)
+        return status == "ok"
 
     # ------------------------------------------------------------------
     # Mode A — impedance sweep
@@ -528,7 +640,10 @@ class LoadCharacterizer(QObject):
     # Completion / persistence
     # ------------------------------------------------------------------
 
-    def _finish(self, aborted: bool) -> None:
+    def _finish(self, aborted: bool, rule: str = None, rung_kv: float = None) -> None:
+        if aborted:
+            self._abort_rule = rule
+            self._abort_rung_kv = rung_kv
         self._state = _State.DONE if not aborted else _State.IDLE
         self._settle_timer.stop()
         try:
@@ -588,6 +703,9 @@ class LoadCharacterizer(QObject):
         }
         if aborted:
             result["aborted"] = True
+            result["abort_rule"] = self._abort_rule
+            if self._abort_rung_kv is not None:
+                result["abort_rung_kv"] = self._abort_rung_kv
         try:
             characterization_history.write_result(result, now)
         except Exception as e:      # the run's CSV and signals must still complete
