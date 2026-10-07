@@ -87,6 +87,65 @@ catch a sustained overload without firing on a transient.
 
 ---
 
+## Amplifier limits and load
+
+**Continuous rating** - the 20 mA an amplifier may supply for as long as it is
+driven. The EEL5000 manual calls it "20 mA peak DC".
+
+**Burst rating** - the 100 mA an amplifier may supply for at most 4 ms at a time.
+A burst is never an operating point; it is the headroom a spike may use.
+
+**Recovery period** - the 100 ms after a burst during which the manual says the
+amplifier supplies at most 10 mA before another burst is available.
+
+**Operating point** - the shape, frequency and amplitude an amplifier is commanded to
+hold. Changing any of the three is a new operating point.
+
+**Reference current** - the steady current an amplifier draws during the first minute
+at an operating point, together with the noise measured over that same minute. It is
+captured again whenever the operating point changes.
+
+**Spike threshold** - twice the reference current, raised only as far as needed to sit
+five noise widths above the reference. With a quiet monitor it is simply twice the
+reference.
+
+**Current spike** - one interval during which an amplifier's current exceeds the spike
+threshold. Its duration, peak and charge describe it. A spike shorter than the monitor
+and sampling can resolve has a known charge but only a lower bound on its peak. The
+continuous and burst ratings are fixed reference levels, not what defines a spike.
+
+**Load capacitance** - the capacitance an amplifier output drives, measured, never
+assumed. It belongs to a load condition and is quoted with when and how it was
+measured.
+
+**Load condition** - what is physically connected to an amplifier's output during
+a measurement: *disconnected* (the amplifier alone), *cable only* (the HV cable
+attached, its far end open) or *on plates* (cable, feedthrough and steerer
+plates). Differences between conditions locate where the capacitance lives.
+
+**Characterization result** - one measured load capacitance (and leakage) for one
+amplifier at one plate position, under one load condition, by one method, at one time.
+Results are kept, never overwritten; the newest one for each combination is what the
+application plans from, shown with its age.
+
+**Hardware change** - a dated note that the load may have changed (an amplifier swap is
+one kind). Characterization results older than the latest hardware change are shown as
+predating it.
+
+**Plate position** - one of the four steerer plates an amplifier can drive: X+, X-,
+Y+ or Y-. A position is a place on the beamline, not an amplifier.
+
+**Amplifier** - one physical EEL5000 unit, known by its serial number. An amplifier
+can move between plate positions; its measurements move with it.
+
+**Amplifier assignment** - which amplifier drives which plate position, from a given
+date. Every load measurement belongs to the assignment in force when it was taken.
+
+**Amplifier swap** - the recorded change from one amplifier assignment to the next,
+with its date and an optional note.
+
+---
+
 ## Beam interception and collection
 
 **Slit current** — the current a single slit jaw intercepts. There are four, one
@@ -251,6 +310,12 @@ irradiation can span more than one session.
 current are both current from the beam, read in different places, and they do
 not agree with each other — nor should they. Prefer *slit current* and *cup
 current*. Do not write *beam current* unqualified.
+
+**"Trip" means two things.** The application's *hard trip* and *soft trip* are
+aborts it raises from the current monitor. The amplifier's own LIMIT and TRIP are
+front-panel modes of its internal current circuit: LIMIT clamps the current and the
+output stops following its input; TRIP shuts the output off. Say *amplifier LIMIT*
+or *amplifier TRIP* for the hardware, never bare "trip".
 
 **"Drift" means two unrelated things.** In optics it is the flight distance
 between the steerer and the sample. In calibration it is a long-running pass
