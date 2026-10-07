@@ -1,6 +1,6 @@
 # 36: Characterization results kept forever, and the queries that read them
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -39,11 +39,11 @@ Tests may fake: nothing. Real files in the temp folder from 34.
 
 ## Acceptance criteria
 
-- [ ] Two X+ on-plates results at day 1 and day 3: `newest('X+', 'ON_PLATES', day 4)` returns the day-3 one with `age_s == 86400`.
-- [ ] Swap: an X+ result by amplifier A at day 1, a swap putting B on X+ at day 2: `newest('X+', 'ON_PLATES', day 3)` is `None`, and `newest_for_amplifier(A, 'ON_PLATES', day 3)` returns the day-1 result.
-- [ ] A hardware change at day 2: the day-1 result has `predates_hardware_change is True`; a day-3 result has `False`.
-- [ ] Two results written in the same second produce two files (the second ends `_2.json`).
-- [ ] An `aborted: true` result is never returned by `newest`, and `newest_on_plates_c_pf` ignores `CABLE_ONLY` and `DISCONNECTED` results.
+- [x] Two X+ on-plates results at day 1 and day 3: `newest('X+', 'ON_PLATES', day 4)` returns the day-3 one with `age_s == 86400`.
+- [x] Swap: an X+ result by amplifier A at day 1, a swap putting B on X+ at day 2: `newest('X+', 'ON_PLATES', day 3)` is `None`, and `newest_for_amplifier(A, 'ON_PLATES', day 3)` returns the day-1 result.
+- [x] A hardware change at day 2: the day-1 result has `predates_hardware_change is True`; a day-3 result has `False`.
+- [x] Two results written in the same second produce two files (the second ends `_2.json`).
+- [x] An `aborted: true` result is never returned by `newest`, and `newest_on_plates_c_pf` ignores `CABLE_ONLY` and `DISCONNECTED` results.
 
 ## Gate
 
@@ -55,3 +55,8 @@ Run in CI's order (`.github/workflows/tests.yml`):
     pytest --tb=short -q -n auto --dist loadfile --durations=25
 
 ## Comments
+
+2026-10-07: Done. `config/characterization_history.py`; tests in `tests/test_characterization_history.py` (24: the five criteria plus swap-by-amplifier, unassigned handling, future-dated and corrupt files, malformed results, caller's dict untouched).
+Deviations from the ticket text:
+- It says to name files through `log_rollover.unused_path`. That lives in `services/`, and a `config/` module importing it is a new upward import (`tests/test_layering.py::test_no_new_layer_violations` fails; AGENTS.md forbids a fifth). The module keeps the same `_2`, `_3` naming with its own exclusive-create loop.
+- `newest_on_plates_c_pf` takes the newest ON_PLATES result that actually has a `c_pf`, so a newer clamp-test result (which has none) does not hide the capacitance.
