@@ -1,6 +1,6 @@
 # 46: The spike detector and reference capture (pure)
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
