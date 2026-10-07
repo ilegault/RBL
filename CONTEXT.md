@@ -76,14 +76,16 @@ visits each rung once, shuffled. The three pass types therefore produce
 sequences of *different lengths*, by design. Any code or test that assumes they
 are the same length is wrong.
 
-**Hard trip** — an immediate, unconditional abort on an over-current reading.
-Checked in every state, using the unclamped conversion so that a railed monitor
-reads as a huge number rather than as no number at all. It exists to catch a
-dead short.
+**Hard trip** — the abort of a calibration or characterization run when the
+current monitor has stayed at the rail for 5 ms or more. It exists to catch a dead
+short. A square edge charging the load leaves the rail sooner. Because the monitor
+cannot read above about 20 mA, it is defined by time at the rail, not by a current
+level. Never raised during a session or a drift pass (ADR 0006).
 
-**Soft trip** — an abort raised only once the current has stayed above the
-continuous limit for a minimum duration across consecutive windows. It exists to
-catch a sustained overload without firing on a transient.
+**Soft trip** — the abort of a calibration run once the current has stayed above
+the soft-trip level (19 mA, just under the rail) for a minimum duration across
+consecutive windows. It exists to catch a sustained overload without firing on a
+transient. Never raised during a session or a drift pass (ADR 0006).
 
 ---
 
@@ -93,10 +95,26 @@ catch a sustained overload without firing on a transient.
 driven. The EEL5000 manual calls it "20 mA peak DC".
 
 **Burst rating** - the 100 mA an amplifier may supply for at most 4 ms at a time.
-A burst is never an operating point; it is the headroom a spike may use.
+A burst is never an operating point; it is the headroom a spike may use. It exists
+only in the amplifier's 100 mA peak AC configuration. The factory configuration is
+20 mA DC, which has no burst (`docs/hardware/eel5000-manufacturer-notes.md`).
 
-**Recovery period** - the 100 ms after a burst during which the manual says the
-amplifier supplies at most 10 mA before another burst is available.
+**Recovery period** - in the 100 mA configuration, the rest of the 100 ms that
+begins with a burst. During it the amplifier supplies at most the continuous 20 mA,
+and another burst is available once it ends. The manual's "10 mA" is wrong.
+
+**Current limit setting** - the front-panel CURRENT pot, 0.5 to 20 mA (dial 50 =
+10 mA, dial 100 = 20 mA; one minor division is about 2 mA). Amplifier LIMIT clamps
+the instantaneous current there. Amplifier TRIP turns the HV off when it is reached.
+The manual's "0.5 to 10 mA" is wrong.
+
+**Current monitor scale** - 1 V at the current monitor is 2 mA of amplifier current,
+so its ±10 V span covers ±20 mA (ADR 0007). The manual's "1 V = 10 mA" is wrong. A
+reading at the end of the span is a lower bound on the current, not a measurement.
+
+**At the rail** - a current-monitor sample at the end of its span, |V| ≥ 9.9 V
+(about 19.8 mA). The current was at least that; how much more is unknown. What is
+recorded about time at the rail is how long it lasted, never a peak.
 
 **Operating point** - the shape, frequency and amplitude an amplifier is commanded to
 hold. Changing any of the three is a new operating point.
@@ -314,9 +332,11 @@ current*. Do not write *beam current* unqualified.
 
 **"Trip" means two things.** The application's *hard trip* and *soft trip* are
 aborts it raises from the current monitor. The amplifier's own LIMIT and TRIP are
-front-panel modes of its internal current circuit: LIMIT clamps the current and the
-output stops following its input; TRIP shuts the output off. Say *amplifier LIMIT*
-or *amplifier TRIP* for the hardware, never bare "trip".
+front-panel modes of its internal current circuit: LIMIT clamps the instantaneous
+current at the current limit setting and the output stops following its input;
+TRIP turns the HV off when the setting is reached (reset by HV ON under manual
+control; it re-enables itself within milliseconds under remote control). Say
+*amplifier LIMIT* or *amplifier TRIP* for the hardware, never bare "trip".
 
 **"Drift" means two unrelated things.** In optics it is the flight distance
 between the steerer and the sample. In calibration it is a long-running pass

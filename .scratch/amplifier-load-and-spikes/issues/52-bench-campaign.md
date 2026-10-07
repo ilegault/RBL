@@ -6,7 +6,7 @@
 
 **Auto-merge:** no
 
-**Blocked by:** 39, 42, 45, 50, 51
+**Blocked by:** 39, 42, 45, 50, 51, 60
 
 **Spec:** `.scratch/amplifier-load-and-spikes/spec.md` (Further Notes)
 **Binding:** `docs/adr/0005-drift-pass-on-plates-guarded-by-protections-not-a-clock.md`, `docs/adr/0006-amplifier-faults-are-observed-not-stopped-during-a-session.md`
@@ -42,3 +42,5 @@ Run in CI's order (`.github/workflows/tests.yml`):
     pytest --tb=short -q -n auto --dist loadfile --durations=25
 
 ## Comments
+
+2026-10-07 (planner): Now blocked by current-monitor-scale ticket 60. Every capacitance and current measured before ADR 0007 used the wrong scale (1 V = 10 mA; it is 1 V = 2 mA), so this campaign runs only after the old data is archived and the dial-50 clamp check has been done. Step 6's illustrated 1.6 nF is superseded: expect roughly 300 pF on plates.

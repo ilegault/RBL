@@ -465,9 +465,9 @@ someone else's bug fix smuggled into it cannot be reviewed.
 <!-- ACTIVE-PLAN:START -->
 ## Active implementation plan
 
-_Written by the planning model on 2026-10-07 03:10. Implement this. If something in it is wrong, say so before changing course._
+_Written by the planning model on 2026-10-07 17:00. Implement this. If something in it is wrong, say so before changing course._
 
-# Active work: two ticket sets: logging and sessions (unfinished), then amplifier load and spikes
+# Active work: logging and sessions (set 2), amplifier load and spikes (set 3), current-monitor scale (set 4)
 
 This is a pointer, not the work.
 
@@ -476,68 +476,86 @@ This is a pointer, not the work.
 - Spec: `.scratch/logging-and-sessions/spec.md`
 - ADRs: `docs/adr/0004-monitoring-log-and-sessions.md`; amendments dated 2026-10-05 in
   `docs/adr/0002-...md` (B1-B5) and `docs/adr/0003-...md` (C1-C5)
-- Tickets: `.scratch/logging-and-sessions/issues/19...33`. 19, 20, 22, 25 are done; 21-33
-  otherwise remain. Unchanged from the previous pointer.
+- Tickets: `.scratch/logging-and-sessions/issues/19...33`. 19-22 and 25 are done; 23, 24 and
+  26-33 remain.
 
-## Set 3 (new): measured amplifier loads with history, a current-vs-frequency planner, a spike recorder
+## Set 3 (nearly done): measured amplifier loads, current-vs-frequency planner, spike recorder
 
-- Spec: `.scratch/amplifier-load-and-spikes/spec.md`
-- ADRs (new, binding): `docs/adr/0005-drift-pass-on-plates-guarded-by-protections-not-a-clock.md`,
-  `docs/adr/0006-amplifier-faults-are-observed-not-stopped-during-a-session.md`.
-  Binding on all test work: `docs/adr/0001-tests-first-and-no-muted-failures.md`.
-- Glossary: `CONTEXT.md`, new section "Amplifier limits and load" (continuous rating, burst
-  rating, recovery period, operating point, reference current, spike threshold, current
-  spike, load capacitance, load condition incl. cable only, characterization result,
-  hardware change, plate position, amplifier, amplifier assignment, amplifier swap); new
-  known collision "Trip" means two things.
-- Tickets: `.scratch/amplifier-load-and-spikes/issues/34...52`
+- Spec: `.scratch/amplifier-load-and-spikes/spec.md`, amended by set 4's spec.
+- ADRs: `docs/adr/0005-...md`, `docs/adr/0006-...md`.
+- Tickets: `.scratch/amplifier-load-and-spikes/issues/34...52`. All are done except:
+  - **48**, rewritten 2026-10-07 for ADR 0007 and now blocked by 33, 56 and 58;
+  - **49**, blocked by 48;
+  - **52**, `ready-for-developer` and now also blocked by 60.
+
+## Set 4 (new): the current monitor reads 2 mA per volt
+
+- Spec: `.scratch/current-monitor-scale/spec.md`
+- ADR (new, binding): `docs/adr/0007-current-monitor-scale-is-2-ma-per-volt.md`. Also
+  binding: `docs/adr/0006-...md` (unchanged) and `docs/adr/0001-tests-first-and-no-muted-failures.md`.
+- Manufacturer's answers and the decisions taken from them:
+  `docs/hardware/eel5000-manufacturer-notes.md`. Read sections 1, 3 and 6 before any set-4
+  ticket.
+- Glossary changes in `CONTEXT.md`:
+  - new terms: "Current limit setting", "Current monitor scale", "At the rail";
+  - rewritten: "Hard trip", "Soft trip", "Burst rating", "Recovery period", and the
+    "Trip" known collision.
+- Tickets: `.scratch/current-monitor-scale/issues/53...60`
 - Tracker conventions: `docs/agents/issue-tracker.md`
 
 ## Next
 
-- **Set 3, ticket 34** first: it redirects the two new stores to temp paths in tests. Every
-  later ticket in set 3 writes to them, and the suite once wrote a fake capacitance into the
-  operator's real store.
-- **Set 3, tickets 41 and 46** (pure modules) can run alongside 34.
-- **Set 2, tickets 21 and 23** can run alongside all three. No two of these five touch the
-  same file.
+- **53 first.** It makes the tests independent of the scale while it is still 10.0, so 54's
+  scale change is a small diff. Nothing else in set 4 can start without it.
+- **59 can run alongside 53.** It is a new script under `scripts/` plus its own test file, and
+  touches no file that 53 touches.
+- Set 2's **23** and **26** are also unblocked.
 
-## Dependency order (set 3)
+## Dependency order (set 4)
 
 ```
-34 ─┬─ 35 ── 36 ─┬─ 37 ─┬─ 38 ── 39 ─┐
-    │            │      └─ 43 ── 44 ─┴─ 45 ──┐
-    │            ├─ 40 ──────────────────────┼──────── 51 ─┐
-    │            └──────────── 42 (also 41)  │             │
-    └──────────────── 47 (also 46) ─┬────────┼── 50        │
-                                    ├─ 48 (also 36, set-2 33) ── 49
-                                    └────────────────── 51
-41 ── 42
-46 ── 47
-52 (ready-for-developer, bench) blocked by 39, 42, 45, 50, 51
+53 ── 54 ─┬─ 55 ── 56 ─┐
+          ├─ 57 ───────┼── 60 (ready-for-developer, bench) ── 52 (set 3, bench)
+          └─ 58 ───────┤
+59 ────────────────────┘
+56, 58 ── 48 (set 3; also 33, 36, 47) ── 49
 ```
 
-- 38, 39, 45 and 50 are chained because each edits `load_characterization_tab.py`.
-- 48 waits for set 2's 33 because both edit `overview_tab.py` and `session_recorder.py`.
-- 52 is `ready-for-developer`: an agent must not claim it.
+- 55 and 56 are chained because both edit `_redraw_spikes` in `load_characterization_tab.py`.
+- 57 and 58 can run in parallel after 54. 57 edits `load_characterizer.py`; 58 edits
+  `characterization_history.py`, `trip_history.py` and `calibration_writer.py`. Both add
+  one small thing to `load_characterization_tab.py`, in different methods.
+- 60 is `ready-for-developer`: an agent must not claim it.
 
 ## Requirements that will be quietly treated as preferences
 
-1. **No fallback capacitance anywhere.** An unmeasured plate says `not measured`; the only
-   assumed value is `SIZING_ASSUMPTION_PF` (3000), used only to size a first amplitude.
-2. **New modules read paths through `rbl.config.paths` at call time**, so the conftest
-   fixtures from 34 cover them.
-3. **History and assignment modules never read a clock**; time is an argument.
-4. **During a session or drift pass, nothing turns an amplifier output off or opens a
-   blocking dialog** because of a spike or regulation fault (ADR 0006). Characterization
-   runs keep their aborts.
-5. **The spike recorder commands nothing.**
-6. **Results are never overwritten**; names go through `log_rollover.unused_path`.
-7. **Spike threshold is max(2 x reference, reference + 5 x noise)**, nothing else.
+1. **One scale.** `CURRENT_MONITOR_MA_PER_VOLT` is assigned only in `hardware_config.py`. No
+   second factor, no "legacy 10.0", and no "1 V = 10 mA" text anywhere in `src/`. Contract
+   tests in 54 enforce this.
+2. **The scale and the hard trip change in the same PR (54).** With only the scale changed,
+   the 60 mA hard trip could never fire.
+3. **The hard trip is time at the rail** (`HARD_TRIP_RAIL_S`, 5 ms), never a current level,
+   and only in calibration and characterization.
+4. **Sessions and drift passes are never stopped by current** (ADR 0006). The planner's
+   amber and red colours are warnings, never blocks.
+5. **A rail sample is always over the spike threshold**, or a clamped amplifier would never
+   produce a spike row.
+6. **`RailTracker`, `is_at_rail` and `spike_detector` stay pure**: no Qt, no clock, and no
+   `rbl` imports in `spike_detector`.
+7. **The archive script only moves.** It never deletes, never rescales, refuses a second
+   run, and takes its roots as arguments.
+8. **Trip-history tests pass an explicit temp path.** `TRIP_HISTORY_PATH` is not redirected
+   by `tests/conftest.py`.
+9. **Superseded tests are rewritten in place, or deleted only when the ticket's
+   `Deletes tests:` line lists them** (54 and 55).
 
-## What set 3 does not do
+## What set 4 does not do
 
-No LIMIT/TRIP monitor wiring, no automatic stops during sessions, no stream-rate change, no
-oscilloscope capture, no import of old `load_calibration.json` values, no change to the
-vacuum HV interlock.
+- No 100 mA burst configuration: no burst level, recovery period or gap warning. That
+  waits for the manufacturer's reply and a later experiment.
+- No DYNAMIC ADJUSTMENT guidance.
+- No rescaling or importing of old data.
+- No current-based stop in a session or drift pass.
+- No change to the LabJack range or the stream profiles.
+- No PI deck changes.
 <!-- ACTIVE-PLAN:END -->

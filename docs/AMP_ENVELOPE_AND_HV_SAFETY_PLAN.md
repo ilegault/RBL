@@ -56,6 +56,14 @@ EEL5000 CURRENT MONITOR (1V=10mA)─┴→ LabJack T7 CB37 → AIN6..AIN13
 
 ### 1.2 Amplifier ratings (EEL5000.20.100 manual, p. 1-3)
 
+> **Superseded in part (2026-10-07).** The manufacturer says the manual is wrong on
+> current. The current monitor is **1 V = 2 mA**, not 1 V = 10 mA (ADR 0007). The pot
+> runs **0.5-20 mA**, not 0.5-10 mA. Burst recovery is at **20 mA**, not 10 mA, and the
+> burst exists only in the 100 mA configuration (the factory setting is 20 mA DC).
+> Every current-derived figure in this document (sections 1.1, 1.2, 1.4, 1.6, 1.8 and
+> the operating-mode note below) is therefore 5x too high. See
+> `docs/hardware/eel5000-manufacturer-notes.md`, which wins wherever the two disagree.
+
 | Parameter | Value |
 |---|---|
 | Output voltage | ±5 kV |
@@ -105,8 +113,11 @@ Default drive shape is **triangle** (`AC_DEFAULT_SHAPE`), matching
 
 ### 1.4 Measured load capacitance
 
-Superseded 2026-10: capacitance is measured per amplifier and plate position; see the Load
-Characterization tab. The figures below are history.
+> **Superseded (2026-10-07).** The figures below were computed with the wrong
+> current-monitor scale and are 5x too high: 1200 pF is ~240 pF, and the 1528-1650 pF
+> four-channel readings are ~306-330 pF (ADR 0007). The 64 Hz / 517 Hz agreement shows
+> the load is linear, not that the scale was right. Plan from measured
+> characterization results, not from this section.
 
 ```python
 CAL_LOAD_CAP_PF = 1200.0   # rbl/config/calibration_config.py
