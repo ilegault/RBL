@@ -1,6 +1,6 @@
 # 35: Amplifier assignment history: initial assignment, swaps and hardware changes
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -33,11 +33,11 @@ Tests may fake: nothing. Use the temp path from 34's fixture and plain datetimes
 
 ## Acceptance criteria
 
-- [ ] After an `initial` at day 1 and a `swap` at day 10 that exchanges X+ and Y+, `assignment_at(day 5)['X+']` is the day-1 X+ serial and `assignment_at(day 11)['X+']` is the day-1 Y+ serial.
-- [ ] `assignment_at` before the first record returns `None`; `record_assignment` with three positions raises `ValueError` and the file's line count is unchanged.
-- [ ] `latest_hardware_change(now)` returns the later of two recorded changes and ignores one dated after `now`.
-- [ ] A line of invalid JSON between two valid records: `history()` returns the two valid records and does not raise.
-- [ ] After three writes the file has exactly three lines and the first line is unchanged byte for byte.
+- [x] After an `initial` at day 1 and a `swap` at day 10 that exchanges X+ and Y+, `assignment_at(day 5)['X+']` is the day-1 X+ serial and `assignment_at(day 11)['X+']` is the day-1 Y+ serial.
+- [x] `assignment_at` before the first record returns `None`; `record_assignment` with three positions raises `ValueError` and the file's line count is unchanged.
+- [x] `latest_hardware_change(now)` returns the later of two recorded changes and ignores one dated after `now`.
+- [x] A line of invalid JSON between two valid records: `history()` returns the two valid records and does not raise.
+- [x] After three writes the file has exactly three lines and the first line is unchanged byte for byte.
 
 ## Gate
 
@@ -49,3 +49,5 @@ Run in CI's order (`.github/workflows/tests.yml`):
     pytest --tb=short -q -n auto --dist loadfile --durations=25
 
 ## Comments
+
+2026-10-07: Done. `config/amplifier_assignments.py` (record_assignment, record_hardware_change, assignment_at, current_assignment, latest_hardware_change, history); tests in `tests/test_amplifier_assignments.py`, one per criterion plus malformed mappings, unknown kinds, call-time path lookup and naive/aware times. Writes raise on failure (a swap that was not recorded would corrupt every later answer); only reads are tolerant. The store file location is `paths.AMPLIFIER_ASSIGNMENTS_STORE`, read at call time.
