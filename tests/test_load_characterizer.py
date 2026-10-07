@@ -6,9 +6,12 @@ test convention), and synthetic window payloads are injected directly via
 on_window(). QTimer slots are invoked directly rather than by running the Qt
 event loop, matching tests/test_calibration_runner.py's convention.
 """
+import json
 import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from datetime import datetime, timedelta
 
 import numpy as np
 import pytest
@@ -69,6 +72,139 @@ def _feed_windows(lc, channels_ma_or_kv: dict, n_windows: int, n_samples: int = 
         lc.on_window(payload)
 
 
+def _begin_collect(lc):
+    """Skip the settle delay and return the step now being collected.
+
+    The one place these tests reach for the settle callback and the current
+    step; the real path waits `settle_s` on a QTimer.
+    """
+    lc._on_settle_elapsed()
+    return lc._current_step()
+
+
+def _result_files():
+    from rbl.config import paths
+    d = paths.CHARACTERIZATION_DIR
+    return sorted(d.glob("*.json")) if d.exists() else []
+
+
+def _run_mode_a_sine(lc, c_true_pf=1200.0):
+    """Drive a complete synthetic Mode A run at one frequency to completion."""
+    lc.start_mode_a("X+", freq_list=[1000.0])
+    fs = 50_000.0
+    step = _begin_collect(lc)
+    n = int(fs * step.collect_s)
+    t = np.arange(n) / fs
+    v_pk_v = step.peak_kv * 1000.0
+    v_raw = (v_pk_v / 1000.0) * np.sin(2 * np.pi * step.freq_hz * t)
+    i_ma = (2 * np.pi * step.freq_hz * c_true_pf * 1e-12 * v_pk_v
+            * np.cos(2 * np.pi * step.freq_hz * t) * 1e3)
+    i_raw = i_ma / 10.0
+    windows = max(1, round(step.collect_s * GUI_REFRESH_HZ))
+    chunk = n // windows
+    for w in range(windows):
+        lc.on_window({"sample_period": 1.0 / fs,
+                      "channels": {"AIN13": {"waveform": v_raw[w*chunk:(w+1)*chunk]},
+                                   "AIN12": {"waveform": i_raw[w*chunk:(w+1)*chunk]}}})
+
+
+class TestResultFiles:
+    """Ticket 37: runs write characterization results tagged with the amplifier."""
+
+    def test_a_completed_mode_a_run_writes_exactly_one_result(self, qapp, funcgen_map):
+        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES)
+        _run_mode_a_sine(lc)
+        (path,) = _result_files()
+        rec = json.loads(path.read_text(encoding="utf-8"))
+        assert rec["method"] == "impedance_sweep"
+        assert rec["plate_position"] == "X+"
+        assert rec["values"]["c_pf"] == pytest.approx(1200.0, abs=50.0)
+        assert rec["values"]["g_us"] == pytest.approx(0.0, abs=1e-6)
+        assert len(rec["points"]) == 1
+        assert not rec.get("aborted")
+
+    def test_the_serial_is_the_one_assigned_to_the_plate(self, qapp, funcgen_map):
+        from rbl.config import amplifier_assignments as aa
+        now = datetime(2026, 10, 7, 12, 0, 0)
+        aa.record_assignment({"X+": "S-123", "X-": "S-2", "Y+": "S-3", "Y-": "S-4"},
+                             now - timedelta(days=5), "initial")
+        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES,
+                               now_fn=lambda: now)
+        _run_mode_a_sine(lc)
+        (path,) = _result_files()
+        rec = json.loads(path.read_text(encoding="utf-8"))
+        assert rec["amplifier_serial"] == "S-123"
+        assert rec["when"] == now.isoformat()
+
+    def test_with_no_assignment_the_serial_is_unassigned(self, qapp, funcgen_map):
+        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES)
+        _run_mode_a_sine(lc)
+        (path,) = _result_files()
+        assert json.loads(path.read_text(encoding="utf-8"))["amplifier_serial"] == "unassigned"
+
+    def test_the_load_condition_is_recorded(self, qapp, funcgen_map):
+        lc = LoadCharacterizer(funcgen_map, LoadCondition.CABLE_ONLY)
+        _run_mode_a_sine(lc)
+        (path,) = _result_files()
+        assert json.loads(path.read_text(encoding="utf-8"))["load_condition"] == "CABLE_ONLY"
+
+    def test_an_aborted_run_writes_an_aborted_result_that_is_never_the_newest(
+            self, qapp, funcgen_map):
+        from rbl.config import characterization_history as ch
+        now = datetime(2026, 10, 7, 12, 0, 0)
+        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES,
+                               now_fn=lambda: now)
+        lc.start_mode_a("X+", freq_list=[1000.0])
+        lc.abort()
+        (path,) = _result_files()
+        rec = json.loads(path.read_text(encoding="utf-8"))
+        assert rec["aborted"] is True
+        assert "c_pf" not in rec["values"]
+        assert ch.newest("X+", "ON_PLATES", now + timedelta(days=1)) is None
+
+    def test_a_completed_mode_c_run_is_a_charge_integral_ladder_result(
+            self, qapp, funcgen_map):
+        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES)
+        lc.start_mode_c("X+")
+        fs = 1_000_000.0
+        step = _begin_collect(lc)
+        n = int(fs * step.collect_s)
+        period = int(fs / MODE_C_FREQ_HZ)
+        v = MODE_C_PEAK_KV * np.sign(np.sin(2 * np.pi * MODE_C_FREQ_HZ * np.arange(n) / fs))
+        q = 1200.0 * 1e-12 * 2 * MODE_C_PEAK_KV * 1000.0
+        tau = 20e-6
+        i_ma = np.zeros(n)
+        for k, pos in enumerate(np.arange(period // 2, n, period // 2)):
+            idx = np.arange(pos, min(pos + int(10 * tau * fs), n))
+            i_ma[idx] += (1.0 if k % 2 == 0 else -1.0) * (q / tau) * np.exp(
+                -(idx - pos) / (tau * fs)) * 1e3
+        windows = max(1, round(step.collect_s * GUI_REFRESH_HZ))
+        chunk = n // windows
+        for w in range(windows):
+            lc.on_window({"sample_period": 1.0 / fs,
+                          "channels": {"AIN13": {"waveform": v[w*chunk:(w+1)*chunk]},
+                                       "AIN12": {"waveform": (i_ma / 10.0)[w*chunk:(w+1)*chunk]}}})
+        (path,) = _result_files()
+        rec = json.loads(path.read_text(encoding="utf-8"))
+        assert rec["method"] == "charge_integral_ladder"
+        assert rec["values"]["c_pf"] == pytest.approx(1200.0, rel=0.3)
+
+    def test_mode_b_leakage_runs_write_no_capacitance_result(self, qapp, funcgen_map):
+        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES)
+        lc.start_mode_b("X+", ladder_kv=[1.0], leak_threshold_ua=50.0)
+        step = _begin_collect(lc)
+        _feed_windows(lc, {"AIN12": 0.0},
+                      n_windows=max(1, round(step.collect_s * GUI_REFRESH_HZ)))
+        assert _result_files() == []
+
+    def test_the_retired_single_record_store_is_never_written(self, qapp, funcgen_map):
+        from rbl.config import load_calibration_store as store
+        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES)
+        _run_mode_a_sine(lc)
+        assert _result_files()
+        assert not store.STORE_PATH.exists()
+
+
 class TestModeA:
     def test_recovers_known_capacitance_from_synthetic_sine(self, qapp, funcgen_map):
         lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES)
@@ -116,22 +252,25 @@ class TestModeA:
             lc.start_mode_a("Q+")
 
     def test_finished_emits_and_persists_measurement(
-        self, qapp, funcgen_map, monkeypatch, tmp_path
+        self, qapp, funcgen_map
     ):
-        import rbl.services.load_characterizer as mod
-        monkeypatch.setattr(mod, "save_measurement",
-                             lambda *a, **k: saved.append((a, k)))
-        saved = []
+        # Persisted as a characterization result file (ticket 37), not into
+        # the retired single-record store.
         lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES)
         finished = []
         lc.finished.connect(finished.append)
         lc.start_mode_a("X+", freq_list=[1000.0])
-        lc._on_settle_elapsed()
-        step = lc._current_step()
+        step = _begin_collect(lc)
         _feed_windows(lc, {"AIN13": 1.0, "AIN12": 0.1},
                       n_windows=max(1, round(step.collect_s * GUI_REFRESH_HZ)))
         assert finished
-        assert saved, "expected the measured capacitance to be persisted"
+        files = _result_files()
+        assert len(files) == 1, "expected the measurement to be persisted"
+        rec = json.loads(files[0].read_text(encoding="utf-8"))
+        assert rec["method"] == "impedance_sweep"
+        assert rec["plate_position"] == "X+"
+        assert rec["load_condition"] == "ON_PLATES"
+        assert rec["values"]["c_pf"] == rec["values"]["c_pf"]   # a number
 
 
 class TestModeB:

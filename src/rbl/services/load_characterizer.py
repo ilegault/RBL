@@ -38,6 +38,18 @@ A QObject service in the shape of CalibrationRunner: `progress`,
 ONE channel at a time and produces per-point admittance/leakage records
 rather than CalibrationRunner's raw per-monitor CSV row.
 
+WHAT IS KEPT
+------------
+A finished or aborted Mode A / Mode C run is written as a characterization
+result (rbl/config/characterization_history.py): one file per run, never
+overwritten, tagged with the SERIAL of the amplifier the current assignment
+puts on that plate ("unassigned" if none), the load condition, the method and
+the time. The old single-record store (load_calibration_store) is no longer
+written: it overwrote the previous measurement and knew nothing about which
+physical amplifier produced it. An aborted run is kept with `aborted: true`
+and no capacitance - the abort is a finding - and is never returned as the
+newest result. Mode B (leakage) writes only its CSV.
+
 SAFETY
 ------
 Every commanded amplitude is clamped through `ac_max_peak_kv()` and
@@ -49,11 +61,13 @@ import csv
 import logging
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum, auto
 
 import numpy as np
 from PySide6.QtCore import QObject, QTimer, Signal
 
+from rbl.config import amplifier_assignments, characterization_history
 from rbl.config.calibration_config import (
     CAL_LOAD_CAP_PF,
     CAL_MAX_KV,
@@ -65,7 +79,6 @@ from rbl.config.hardware_config import (
     CURRENT_MONITOR_MA_PER_VOLT,
     VOLTAGE_MONITOR_KV_PER_VOLT,
 )
-from rbl.config.load_calibration_store import save_measurement
 from rbl.hardware.ac_metrics import fundamental, phase_difference_deg
 from rbl.hardware.amp_monitor import ma_unclamped, monitor_to_kv
 from rbl.hardware.funcgen_safety import _AMP_GAIN, peak_status
@@ -126,7 +139,8 @@ class LoadCharacterizer(QObject):
     error = Signal(str)
 
     def __init__(self, funcgen_map: dict, load_condition, parent=None,
-                 output_dir=None, ramp_engine=None, pressure_provider=None):
+                 output_dir=None, ramp_engine=None, pressure_provider=None,
+                 now_fn=None):
         """
         funcgen_map: {amp_label: (DG1022Z, channel_int)}.
         load_condition: calibration_config.LoadCondition — tagged on every
@@ -136,6 +150,9 @@ class LoadCharacterizer(QObject):
             is constructed if not given.
         pressure_provider: optional callable() -> pressure in torr, recorded
             alongside each Mode B point (Section 2.3). Returns NaN if absent.
+        now_fn: optional callable() -> datetime for the time stamped on the
+            result file; defaults to the local, timezone-aware now. Tests
+            pass a fixed time.
         """
         super().__init__(parent)
         self._map = funcgen_map
@@ -144,6 +161,7 @@ class LoadCharacterizer(QObject):
         self._ramp_engine = ramp_engine
         self._pressure_provider = pressure_provider or (lambda: float("nan"))
         self._output_dir = output_dir
+        self._now_fn = now_fn or (lambda: datetime.now().astimezone())
 
         self._mode: Mode = None
         self._amp_label: str = None
@@ -440,24 +458,58 @@ class LoadCharacterizer(QObject):
 
         csv_path = self._write_csv() if self._csv_rows else ""
 
-        if self._mode == Mode.A and not aborted and self._points:
-            c_values = [p["c_pf"] for p in self._points if p["c_pf"] == p["c_pf"]]
-            g_values = [p["g_us"] for p in self._points if p["g_us"] == p["g_us"]]
-            if c_values:
-                save_measurement(
-                    self._amp_label, c_pf=float(np.mean(c_values)),
-                    g_us=float(np.mean(g_values)) if g_values else 0.0,
-                    load_condition=self._load_condition.value, method="impedance_sweep",
-                )
-        elif self._mode == Mode.C and not aborted and self._points:
-            point = self._points[-1]
-            if point["c_pf_mean"] == point["c_pf_mean"]:
-                save_measurement(
-                    self._amp_label, c_pf=point["c_pf_mean"], g_us=0.0,
-                    load_condition=self._load_condition.value, method="charge_integral",
-                )
+        self._write_characterization_result(aborted)
 
         self.finished.emit(csv_path)
+
+    def _write_characterization_result(self, aborted: bool) -> None:
+        """Keep this run as a characterization result file (never overwritten).
+
+        Modes A and C produce capacitance results; Mode B (leakage) does not.
+        An aborted run is written too, with `aborted: true` and no `c_pf`: an
+        abort is itself a finding, and `characterization_history` never returns
+        it as the newest result, so nothing plans from it.
+        """
+        if self._mode == Mode.A:
+            method = "impedance_sweep"
+        elif self._mode == Mode.C:
+            method = "charge_integral_ladder"
+        else:
+            return
+
+        values: dict = {}
+        if not aborted:
+            if self._mode == Mode.A:
+                c_values = [p["c_pf"] for p in self._points if p["c_pf"] == p["c_pf"]]
+                g_values = [p["g_us"] for p in self._points if p["g_us"] == p["g_us"]]
+                if not c_values:
+                    return
+                values = {"c_pf": float(np.mean(c_values)),
+                          "g_us": float(np.mean(g_values)) if g_values else 0.0}
+            else:
+                if not self._points or self._points[-1]["c_pf_mean"] != \
+                        self._points[-1]["c_pf_mean"]:      # no edges: NaN
+                    return
+                values = {"c_pf": float(self._points[-1]["c_pf_mean"]), "g_us": 0.0}
+
+        now = self._now_fn()
+        assignment = amplifier_assignments.current_assignment(now) or {}
+        result = {
+            "plate_position": self._amp_label,
+            "amplifier_serial": assignment.get(
+                self._amp_label, characterization_history.UNASSIGNED),
+            "load_condition": self._load_condition.value,
+            "method": method,
+            "values": values,
+            "points": list(self._points),
+        }
+        if aborted:
+            result["aborted"] = True
+        try:
+            characterization_history.write_result(result, now)
+        except Exception as e:      # the run's CSV and signals must still complete
+            self._print_err(f"could not write the characterization result: {e}")
+            self.error.emit(f"Could not save the characterization result: {e}")
 
     def _write_csv(self):
         if self._output_dir is None:
