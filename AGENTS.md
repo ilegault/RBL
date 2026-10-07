@@ -465,81 +465,79 @@ someone else's bug fix smuggled into it cannot be reviewed.
 <!-- ACTIVE-PLAN:START -->
 ## Active implementation plan
 
-_Written by the planning model on 2026-10-05 22:37. Implement this. If something in it is wrong, say so before changing course._
+_Written by the planning model on 2026-10-07 03:10. Implement this. If something in it is wrong, say so before changing course._
 
-# Active work: two ticket sets: cup acquisition settings, then logging and sessions
+# Active work: two ticket sets: logging and sessions (unfinished), then amplifier load and spikes
 
-This is a **pointer**, not the work. The work is two ticket sets. Part C of the second is
-blocked by the end of the first.
+This is a pointer, not the work.
 
-## Set 1: operator-editable acquisition settings for the Faraday cup (unchanged)
-
-- Spec: `.scratch/cup-settings/spec.md`
-- ADRs: `docs/adr/0002-cup-acquisition-triggered-by-current.md` (amendment 2026-09-24,
-  A1-A8), `docs/adr/0003-commanded-and-confirmed-cup-position.md`
-- Tickets: `.scratch/cup-settings/issues/01...16`
-- Unblocked: 01, 04, 05, 09 (disjoint files). 13-16 are chained on purpose: all edit
-  `src/rbl/gui/faraday_cup_tab.py`.
-- Its five binding requirements are in `.scratch/cup-settings/spec.md`; read them.
-
-## Set 2: daily vacuum monitoring log, sessions that own their files, an operator-opened cup log
+## Set 2 (still open): daily vacuum monitoring log, sessions, the cup log
 
 - Spec: `.scratch/logging-and-sessions/spec.md`
-- ADRs: `docs/adr/0004-monitoring-log-and-sessions.md` (new);
-  `docs/adr/0002-...md` amendment 2026-10-05 (B1-B5); `docs/adr/0003-...md` amendment
-  2026-10-05 (C1-C5). Binding on all test work: `docs/adr/0001-tests-first-and-no-muted-failures.md`.
-- Glossary: `CONTEXT.md`, new section "Logging and sessions" (monitoring log, session,
-  cup log, test cup log, not logging, automatic cup insertion, manual insertion, counted
-  insertion, excluded interval, stop gap, dose continuation); "Run start current / run
-  end current"; Known collisions "session" and "arm".
-- Tickets: `.scratch/logging-and-sessions/issues/19...33`
+- ADRs: `docs/adr/0004-monitoring-log-and-sessions.md`; amendments dated 2026-10-05 in
+  `docs/adr/0002-...md` (B1-B5) and `docs/adr/0003-...md` (C1-C5)
+- Tickets: `.scratch/logging-and-sessions/issues/19...33`. 19, 20, 22, 25 are done; 21-33
+  otherwise remain. Unchanged from the previous pointer.
+
+## Set 3 (new): measured amplifier loads with history, a current-vs-frequency planner, a spike recorder
+
+- Spec: `.scratch/amplifier-load-and-spikes/spec.md`
+- ADRs (new, binding): `docs/adr/0005-drift-pass-on-plates-guarded-by-protections-not-a-clock.md`,
+  `docs/adr/0006-amplifier-faults-are-observed-not-stopped-during-a-session.md`.
+  Binding on all test work: `docs/adr/0001-tests-first-and-no-muted-failures.md`.
+- Glossary: `CONTEXT.md`, new section "Amplifier limits and load" (continuous rating, burst
+  rating, recovery period, operating point, reference current, spike threshold, current
+  spike, load capacitance, load condition incl. cable only, characterization result,
+  hardware change, plate position, amplifier, amplifier assignment, amplifier swap); new
+  known collision "Trip" means two things.
+- Tickets: `.scratch/amplifier-load-and-spikes/issues/34...52`
 - Tracker conventions: `docs/agents/issue-tracker.md`
 
 ## Next
 
-- **Set 2, ticket 19** first: the rollover helper. It unblocks 20, 22 and 27.
-- **Set 2, ticket 25** (pure `dose_model.py`) can run alongside it.
-- Set 1 tickets 01, 04, 05, 09 can run alongside both. No two of these six touch the
+- **Set 3, ticket 34** first: it redirects the two new stores to temp paths in tests. Every
+  later ticket in set 3 writes to them, and the suite once wrote a fake capacitance into the
+  operator's real store.
+- **Set 3, tickets 41 and 46** (pure modules) can run alongside 34.
+- **Set 2, tickets 21 and 23** can run alongside all three. No two of these five touch the
   same file.
 
-## Dependency order (set 2)
+## Dependency order (set 3)
 
 ```
-19 ─┬─ 20 ── 21
-    ├─ 22 ── 23 ── 24 ─────────────────────┐
-    └──────────────┐                       │
-25 ────────────────┼───────────── 30       │
-cup-settings/16 ── 26 ── 27 ── 28 ── 29 ── 30 ── 31 ── 32 ── 33
-                                                        (24)┘
+34 ─┬─ 35 ── 36 ─┬─ 37 ─┬─ 38 ── 39 ─┐
+    │            │      └─ 43 ── 44 ─┴─ 45 ──┐
+    │            ├─ 40 ──────────────────────┼──────── 51 ─┐
+    │            └──────────── 42 (also 41)  │             │
+    └──────────────── 47 (also 46) ─┬────────┼── 50        │
+                                    ├─ 48 (also 36, set-2 33) ── 49
+                                    └────────────────── 51
+41 ── 42
+46 ── 47
+52 (ready-for-developer, bench) blocked by 39, 42, 45, 50, 51
 ```
 
-- 27 is blocked by 19, 25 and 26. 28 is blocked by 27 and cup-settings/16.
-- 28-33 are chained because each edits `faraday_cup_tab.py`. 32 also needs 24 (both
-  edit session start/stop).
-- No ticket is held or `ready-for-developer`.
+- 38, 39, 45 and 50 are chained because each edits `load_characterization_tab.py`.
+- 48 waits for set 2's 33 because both edit `overview_tab.py` and `session_recorder.py`.
+- 52 is `ready-for-developer`: an agent must not claim it.
 
 ## Requirements that will be quietly treated as preferences
 
-1. **No log file is ever overwritten.** Every new file name goes through
-   `log_rollover.unused_path`. A second video run continues segment numbering and
-   appends to `frames.csv` (ticket 23). That's the bug this fixes.
-2. **`log_rollover` and `VacuumMonitorLog` take the time as an argument and never read
-   a clock**, so midnight, month-end and DST are tested by passing times.
-3. **Stop Logging stays stopped**, including through midnight.
-4. **No cup file exists unless an operator opened a cup log**, and automatic cup
-   insertion cannot start without one. Manual insertion always works.
-5. **Only automatic insertions count toward the dose.** Manual cup-in time is
-   *excluded* from the hold interval, not ignored.
-6. **`DoseTotals` lives in `rbl/hardware/dose_model.py`.** `hardware` never imports
-   from `services`.
-7. **Dialogs sit behind replaceable methods** (`_confirm_stop_automatic`,
-   `_ask_restart`, `_ask_continue_dose`), so tests drive them without a modal.
-8. **Renames are text a person reads only.** Python identifiers, CSV column names and
-   settings-file keys keep their names.
+1. **No fallback capacitance anywhere.** An unmeasured plate says `not measured`; the only
+   assumed value is `SIZING_ASSUMPTION_PF` (3000), used only to size a first amplitude.
+2. **New modules read paths through `rbl.config.paths` at call time**, so the conftest
+   fixtures from 34 cover them.
+3. **History and assignment modules never read a clock**; time is an argument.
+4. **During a session or drift pass, nothing turns an amplifier output off or opens a
+   blocking dialog** because of a spike or regulation fault (ADR 0006). Characterization
+   runs keep their aborts.
+5. **The spike recorder commands nothing.**
+6. **Results are never overwritten**; names go through `log_rollover.unused_path`.
+7. **Spike threshold is max(2 x reference, reference + 5 x noise)**, nothing else.
 
-## What set 2 does not do
+## What set 3 does not do
 
-No rollover for anything but the monitoring log. No splitting of old log files. No
-video outside a session. No time limit on dose continuation. No change to any cup
-default.
+No LIMIT/TRIP monitor wiring, no automatic stops during sessions, no stream-rate change, no
+oscilloscope capture, no import of old `load_calibration.json` values, no change to the
+vacuum HV interlock.
 <!-- ACTIVE-PLAN:END -->
