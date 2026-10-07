@@ -106,6 +106,65 @@ class TestEndedLadderIsReported:
         assert "leakage" in tab.lbl_status.text()
 
 
+class TestClampTestInTheTab:
+    @staticmethod
+    def fake_runner(monkeypatch, tab, result, finish=True):
+        from PySide6.QtCore import QObject, Signal
+
+        import rbl.gui.load_characterization_tab as mod
+        calls = []
+
+        class Runner(QObject):
+            point_measured = Signal(dict)
+            finished = Signal(str)
+            error = Signal(str)
+            progress = Signal(int, int, str)
+            abort_rule = None
+            clamp_result = result
+
+            def __init__(self, *a, **k):
+                super().__init__()
+
+            def start_clamp_test(self, amp_label, **kw):
+                calls.append(amp_label)
+                if finish:
+                    self.finished.emit("")
+
+        monkeypatch.setattr(mod, "LoadCharacterizer", Runner)
+        monkeypatch.setattr(mod, "RampEngine", lambda *a, **k: object())
+        monkeypatch.setattr(tab.beamline, "build_funcgen_map",
+                            lambda: {label: (object(), 1) for label in ("X+", "X-", "Y+", "Y-")})
+        tab.on_labjack_connected("T7-1")
+        return calls
+
+    def test_selecting_clamp_test_and_running_starts_it_on_the_selected_plate(
+            self, tab, monkeypatch):
+        calls = self.fake_runner(monkeypatch, tab, {"reached": True, "clamp_ma": 17.5,
+                                                     "clamp_freq_hz": 2000, "peak_kv": 1.0})
+        tab.cb_channel.setCurrentText("Y+")
+        tab.rb_mode_clamp.setChecked(True)
+        tab.btn_run.click()
+        assert calls == ["Y+"]
+        assert "17.5 mA" in tab.lbl_status.text() and "2000" in tab.lbl_status.text()
+
+    def test_a_clamp_that_was_not_reached_says_so(self, tab, monkeypatch):
+        self.fake_runner(monkeypatch, tab, {"reached": False, "clamp_ma": None,
+                                             "clamp_freq_hz": None, "peak_kv": 1.0})
+        tab.rb_mode_clamp.setChecked(True)
+        tab.btn_run.click()
+        assert "not reached" in tab.lbl_status.text()
+
+    def test_every_mode_and_condition_button_is_locked_while_a_run_is_active(
+            self, tab, monkeypatch):
+        self.fake_runner(monkeypatch, tab, None, finish=False)
+        tab.rb_mode_clamp.setChecked(True)
+        tab.btn_run.click()
+        for rb in (tab.rb_mode_a, tab.rb_mode_b, tab.rb_mode_c, tab.rb_mode_clamp,
+                   tab.rb_disconnected, tab.rb_on_plates, tab.rb_cable_only):
+            assert not rb.isEnabled()
+        assert tab.btn_abort.isEnabled() and not tab.btn_run.isEnabled()
+
+
 class TestRunGuards:
     def test_run_without_labjack_connection_warns_and_does_not_start(self, tab, monkeypatch):
         warned = []

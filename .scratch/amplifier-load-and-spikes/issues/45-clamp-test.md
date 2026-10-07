@@ -1,6 +1,6 @@
 # 45: Clamp test: find the current where an amplifier stops following its input
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -29,11 +29,11 @@ Tests may fake: the function generator and stream windows.
 
 ## Acceptance criteria
 
-- [ ] Synthetic steps holding 1.0 kV through 1500 Hz and 0.8 kV at 2000 Hz: the test stops after 2000 Hz with `clamp_freq_hz == 2000`, and 2500 Hz is never commanded.
-- [ ] `clamp_ma` equals the synthetic current fundamental at the stopping step to 1e-6.
-- [ ] A run whose ratio never drops writes `clamp_ma: null` and the status text contains `not reached`.
-- [ ] Selecting Clamp test and clicking Run (fakes connected) calls `start_clamp_test` with the selected plate.
-- [ ] One sample above `CAL_TRIP_HARD_MA` stops the clamp test with `hard_trip`.
+- [x] Synthetic steps holding 1.0 kV through 1500 Hz and 0.8 kV at 2000 Hz: the test stops after 2000 Hz with `clamp_freq_hz == 2000`, and 2500 Hz is never commanded.
+- [x] `clamp_ma` equals the synthetic current fundamental at the stopping step to 1e-6.
+- [x] A run whose ratio never drops writes `clamp_ma: null` and the status text contains `not reached`.
+- [x] Selecting Clamp test and clicking Run (fakes connected) calls `start_clamp_test` with the selected plate.
+- [x] One sample above `CAL_TRIP_HARD_MA` stops the clamp test with `hard_trip`.
 
 ## Gate
 
@@ -45,3 +45,10 @@ Run in CI's order (`.github/workflows/tests.yml`):
     pytest --tb=short -q -n auto --dist loadfile --durations=25
 
 ## Comments
+
+2026-10-07: Done. `Mode.CLAMP` and `start_clamp_test(amp_label, peak_kv=1.0, freq_list=None)` (triangle, `CLAMP_FREQ_LADDER_HZ`), the hard trip applies, the result is `method` `clamp_test` with `values` `{clamp_ma, clamp_freq_hz, peak_kv}` (`clamp_ma` null when not reached), and the tab has a "Clamp test" radio button and a status line that names the clamp or says `not reached`. Tests: `TestClampTest` in `tests/test_load_characterizer.py`, `TestClampTestInTheTab` in `tests/test_load_characterization_tab.py`.
+Decisions the ticket left open or got wrong:
+- The ratio is the measured voltage FUNDAMENTAL over the commanded triangle's FUNDAMENTAL (8/pi^2 x peak), not over the peak. Compared with the peak, a perfectly healthy amplifier reads 0.81 and the test would clamp at the first step; a test with a healthy triangle reading 1.0 and a mutation check that fails with the peak guard it.
+- No voltage reading at all ends the test with rule `no_data` rather than silently counting as "followed".
+- The tab's mode and condition button lock now includes the clamp and cable-only buttons (cable-only was missing from the lock).
+- The clamp test is not interlock-gated per step (the ticket asks only for the hard trip); at 1 kV that is below the lowest ceiling in the pressure ladder, but a human may want it gated.

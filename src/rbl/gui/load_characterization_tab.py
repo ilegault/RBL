@@ -72,7 +72,7 @@ from rbl.config.hardware_config import AMP_LABELS
 from rbl.gui import theme
 from rbl.gui.widgets.connection_bar import LabJackPanel
 from rbl.gui.widgets.inputs import NoScrollComboBox
-from rbl.services.load_characterizer import LoadCharacterizer, Mode
+from rbl.services.load_characterizer import CLAMP_RATIO_THRESHOLD, LoadCharacterizer, Mode
 from rbl.services.ramp_engine import RampEngine
 
 TABLE_HEADERS = ["Plate position", "Disconnected", "Cable only", "On plates",
@@ -218,9 +218,10 @@ class LoadCharacterizationTab(QWidget):
         self.rb_mode_a = QRadioButton("A: Impedance sweep")
         self.rb_mode_b = QRadioButton("B: DC leakage vs. voltage")
         self.rb_mode_c = QRadioButton("C: Charge integral")
+        self.rb_mode_clamp = QRadioButton("Clamp test")
         self.rb_mode_a.setChecked(True)
         self._mode_group = QButtonGroup(self)
-        for rb in (self.rb_mode_a, self.rb_mode_b, self.rb_mode_c):
+        for rb in (self.rb_mode_a, self.rb_mode_b, self.rb_mode_c, self.rb_mode_clamp):
             self._mode_group.addButton(rb)
             mode_row.addWidget(rb)
         cfg_form.addRow("Mode:", mode_row)
@@ -317,6 +318,8 @@ class LoadCharacterizationTab(QWidget):
             return Mode.A
         if self.rb_mode_b.isChecked():
             return Mode.B
+        if self.rb_mode_clamp.isChecked():
+            return Mode.CLAMP
         return Mode.C
 
     def _selected_load_condition(self) -> LoadCondition:
@@ -360,6 +363,8 @@ class LoadCharacterizationTab(QWidget):
             self._runner.start_mode_a(amp_label)
         elif mode == Mode.B:
             self._runner.start_mode_b(amp_label)
+        elif mode == Mode.CLAMP:
+            self._runner.start_clamp_test(amp_label)
         else:
             self._runner.start_mode_c(amp_label)
 
@@ -380,7 +385,17 @@ class LoadCharacterizationTab(QWidget):
     def _on_finished(self, csv_path: str):
         self._set_running(False)
         rule = getattr(self._runner, "abort_rule", None)
-        if rule:
+        clamp = getattr(self._runner, "clamp_result", None)
+        if clamp is not None and not rule:
+            if clamp["reached"]:
+                self.lbl_status.setText(
+                    f"Clamp test: the output stopped following at {clamp['clamp_freq_hz']:.0f} Hz, "
+                    f"{clamp['clamp_ma']:.1f} mA (at {clamp['peak_kv']:.1f} kV peak).")
+            else:
+                self.lbl_status.setText(
+                    "Clamp test: not reached - the output followed its input up to "
+                    "the top of the frequency ladder.")
+        elif rule:
             # Which rule stopped it is a finding, not just "aborted".
             self.lbl_status.setText(f"Stopped by rule '{rule}'"
                                     + (f" (CSV: {csv_path})" if csv_path else "."))
@@ -399,8 +414,8 @@ class LoadCharacterizationTab(QWidget):
         self.btn_run.setEnabled(not running)
         self.btn_abort.setEnabled(running)
         self.cb_channel.setEnabled(not running)
-        for rb in (self.rb_mode_a, self.rb_mode_b, self.rb_mode_c,
-                   self.rb_disconnected, self.rb_on_plates):
+        for rb in (self.rb_mode_a, self.rb_mode_b, self.rb_mode_c, self.rb_mode_clamp,
+                   self.rb_disconnected, self.rb_on_plates, self.rb_cable_only):
             rb.setEnabled(not running)
         self.run_state_changed.emit(running)
 
@@ -429,6 +444,14 @@ class LoadCharacterizationTab(QWidget):
             self._ax1.plot(kvs, leak, "o-", color="tab:orange")
             self._ax1.set_xlabel("Commanded voltage (kV)")
             self._ax1.set_ylabel("Leakage (uA)")
+            self._ax2.set_visible(False)
+        elif mode == Mode.CLAMP:
+            freqs = [p["freq_hz"] for p in self._plot_points]
+            ratios = [p["regulation_ratio"] for p in self._plot_points]
+            self._ax1.plot(freqs, ratios, "o-", color="tab:purple")
+            self._ax1.axhline(CLAMP_RATIO_THRESHOLD, color=theme.FAULT, linestyle=":")
+            self._ax1.set_xlabel("Frequency (Hz)")
+            self._ax1.set_ylabel("Output / command (fundamental)")
             self._ax2.set_visible(False)
         else:
             n = list(range(1, len(self._plot_points) + 1))
