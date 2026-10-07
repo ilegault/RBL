@@ -323,6 +323,8 @@ class MainWindow(QMainWindow):
         self.spike_recorder = SpikeRecorder(self.beamline.funcgen_setpoints, parent=self)
         self.beamline.raw_window_ready.connect(self.spike_recorder.on_window)
         self.calibration_tab.set_spike_recorder(self.spike_recorder)
+        # Every spike it logs is plotted live on the Load Characterization tab.
+        self.load_char_tab.set_spike_recorder(self.spike_recorder)
         # A calibration run switching the stream profile out from under
         # AmpTab would corrupt the run if AmpTab's own Apply fired mid-run.
         self.calibration_tab.run_state_changed.connect(

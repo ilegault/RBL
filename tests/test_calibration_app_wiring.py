@@ -272,3 +272,16 @@ class TestDriftPassOnThePlates:
         tab.drift_ac_amp_spins()["Y+"].setValue(3.5)
         # Y+ is driven AC to 3.5 kV; the other three stay DC at the 2.0 kV setpoint.
         assert tab.drift_commanded_kv() == 3.5
+
+
+class TestSpikeChartWiring:
+    def test_a_spike_the_recorder_logs_appears_on_the_load_characterization_chart(self, win):
+        tab = win.load_char_tab
+        before = sum(len(c.get_offsets()) for c in tab.spike_axes.collections
+                     if c.get_label() in ("X+", "X-", "Y+", "Y-"))
+        win.spike_recorder.spike_recorded.emit(
+            {"plate_position": "Y-", "duration_s": 0.003, "peak_ma": 33.0,
+             "peak_is_lower_bound": False})
+        after = sum(len(c.get_offsets()) for c in tab.spike_axes.collections
+                    if c.get_label() in ("X+", "X-", "Y+", "Y-"))
+        assert after == before + 1
