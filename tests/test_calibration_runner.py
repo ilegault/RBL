@@ -436,6 +436,57 @@ class TestWriterIntegration:
         assert "seed" in meta
 
 
+class TestLadderCapNamesItsCapacitance:
+    """The run note says which C sized the ladder and whether it was measured."""
+
+    @staticmethod
+    def note_for(funcgen_map, tmp_path, channels):
+        import json
+        writer = CalibrationWriter(output_dir=tmp_path)
+        runner = CalibrationRunner(funcgen_map, LoadCondition.ON_PLATES, writer=writer)
+        runner.start_ac_sweep(channels=channels, freq_hz=1000.0)
+        runner.abort()
+        with open(writer.meta_path) as f:
+            return json.load(f)["run_note"]
+
+    def test_unmeasured_channels_name_the_sizing_assumption(self, qapp, funcgen_map, tmp_path):
+        note = self.note_for(funcgen_map, tmp_path, ["X+"])
+        assert "sizing assumption" in note["ladder_cap_basis"]
+        assert "3000 pF" in note["ladder_cap_basis"]
+        assert "assumed C=1500" not in note["ladder_cap_basis"]
+
+    def test_a_measured_channel_says_measured_and_sizes_the_ladder(
+            self, qapp, funcgen_map, tmp_path):
+        from datetime import datetime, timedelta
+
+        from rbl.config import characterization_history as ch
+        ch.write_result(
+            {"plate_position": "X+", "amplifier_serial": "unassigned",
+             "load_condition": "ON_PLATES", "method": "impedance_sweep",
+             "values": {"c_pf": 1000.0, "g_us": 0.0}},
+            datetime.now().astimezone() - timedelta(days=1))
+        note = self.note_for(funcgen_map, tmp_path, ["X+"])
+        assert "measured" in note["ladder_cap_basis"]
+        assert "1000 pF" in note["ladder_cap_basis"]
+        assert "sizing assumption" not in note["ladder_cap_basis"]
+
+    def test_the_largest_capacitance_among_the_driven_channels_sizes_the_ladder(
+            self, qapp, funcgen_map, tmp_path):
+        # The ladder is shared by every driven channel, so it must be safe for
+        # the heaviest load among them: X- is unmeasured (3000), X+ is not.
+        from datetime import datetime, timedelta
+
+        from rbl.config import characterization_history as ch
+        ch.write_result(
+            {"plate_position": "X+", "amplifier_serial": "unassigned",
+             "load_condition": "ON_PLATES", "method": "impedance_sweep",
+             "values": {"c_pf": 1000.0, "g_us": 0.0}},
+            datetime.now().astimezone() - timedelta(days=1))
+        note = self.note_for(funcgen_map, tmp_path, ["X+", "X-"])
+        assert "3000 pF" in note["ladder_cap_basis"]
+        assert "sizing assumption" in note["ladder_cap_basis"]
+
+
 class TestProgressAndFinish:
     def test_progress_emitted_each_setpoint(self, qapp, funcgen_map):
         runner = CalibrationRunner(funcgen_map, LoadCondition.DISCONNECTED)

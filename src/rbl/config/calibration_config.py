@@ -24,10 +24,10 @@ Deviations inside CAL_UNCERTAINTY_V are noise, not findings.
 """
 import math
 import random
+from datetime import datetime
 from enum import Enum
 
 from rbl.config.funcgen_limits import MAX_GEN_VOLTS
-from rbl.config.load_calibration_store import capacitance_pf_for
 from rbl.config.paths import CALIBRATION_DIR
 
 # --- Sweep ---------------------------------------------------------------
@@ -155,16 +155,19 @@ CAL_TRIP_CONSEC_WINDOWS = 2
 # enforced (step inrush).  The hard limit still applies.
 CAL_TRIP_BLANK_WINDOWS = 2
 
-# Measured mean load capacitance per channel, pF.  From the 2026-08-11 AC
-# sweeps, back-solved at 64 Hz and 517 Hz independently (they agreed to
-# within 8%).  Replaces the 130 pF guess that amp_test_config still carries
-# as LOAD_CAP_PF_DEFAULT.
+# A SIZING ASSUMPTION, NOT A MEASUREMENT, in pF.  The plate load is measured
+# per amplifier and plate position (Load Characterization tab, kept in
+# rbl/config/characterization_history.py), and everything that can use a
+# measured number does.  This is what is left for a plate position that has no
+# on-plates result yet: it sizes the FIRST amplitude of a characterization run
+# or a ramp, and nothing else.  It is deliberately larger than anything
+# measured so far (1528-1650 pF on the last four-channel measurement), because
+# an unmeasured load should be treated as large: a too-large assumption gives a
+# conservative first amplitude, a too-small one an over-current.
 #
-# This is used ONLY to shorten the ladder before a run.  Nothing downstream
-# corrects a measurement with it, and the reactive interlock does not consult
-# it — so if this number is wrong the sweep is merely conservative or gets
-# stopped by the interlock, never silently mis-recorded.
-CAL_LOAD_CAP_PF = 1500
+# It is never shown as a capacitance, never appears beside measured numbers and
+# never corrects a recorded value; the reactive interlock does not consult it.
+SIZING_ASSUMPTION_PF = 3000
 
 
 # Waveform shape -> the constant in  I_pk = k * f * C * V_pk  for a capacitive
@@ -205,23 +208,40 @@ def ac_shape_k(shape: str = None) -> float:
     return _AC_PEAK_CURRENT_K.get(str(shape).strip().lower(), 2.0 * math.pi)
 
 
-def _resolve_load_pf(load_pf: float = None, amp_label: str = None) -> float:
-    """load_pf if given; else the Phase 1 measured value for amp_label if one
-    has ever been recorded; else CAL_LOAD_CAP_PF.
+def resolve_load_pf_with_basis(load_pf: float = None, amp_label: str = None,
+                               now: datetime = None) -> tuple:
+    """(c_pf, basis) for sizing a ladder, a ramp or a first amplitude.
 
-    Per-channel measurement (rbl.config.load_calibration_store) shortens the
-    ladder more accurately than the single global guess once it exists, but
-    the fallback chain ends at CAL_LOAD_CAP_PF exactly as before this
-    existed — see that constant's docstring: this is used only to size a
-    ladder before a run, never to correct a measurement already recorded.
+    `load_pf` if given (basis "given"); else the capacitance of the newest
+    ON_PLATES characterization result for the amplifier currently assigned to
+    `amp_label` (basis "measured"); else SIZING_ASSUMPTION_PF (basis "sizing
+    assumption"). Cable-only and disconnected results are smaller than the load
+    a run drives and are never used.
+
+    This sizes things BEFORE a run; it is never used to correct a measurement
+    already recorded. `now` is only for the history lookup and defaults to the
+    local time.
     """
     if load_pf is not None:
-        return load_pf
+        return load_pf, "given"
     if amp_label is not None:
-        measured = capacitance_pf_for(amp_label)
+        # Imported here: characterization_history imports LoadCondition from
+        # this module, so a top-level import would be circular.
+        from rbl.config import characterization_history
+        measured = characterization_history.newest_on_plates_c_pf(
+            amp_label, now or datetime.now().astimezone())
         if measured is not None:
-            return measured
-    return CAL_LOAD_CAP_PF
+            return measured, "measured"
+    return SIZING_ASSUMPTION_PF, "sizing assumption"
+
+
+def resolve_load_pf(load_pf: float = None, amp_label: str = None,
+                    now: datetime = None) -> float:
+    """The capacitance only; see `resolve_load_pf_with_basis`."""
+    return resolve_load_pf_with_basis(load_pf, amp_label, now)[0]
+
+
+_resolve_load_pf = resolve_load_pf
 
 
 def ac_peak_current_ma(freq_hz: float, peak_kv: float, load_pf: float = None,
@@ -234,12 +254,12 @@ def ac_peak_current_ma(freq_hz: float, peak_kv: float, load_pf: float = None,
         V_pk [V]  = peak_kv * 1000
         I_pk [mA] = k * f * load_pf * peak_kv * 1e-6
 
-    `load_pf` wins if given; otherwise `amp_label` (if given) tries the
-    Phase 1 per-channel measurement store before falling back to
-    CAL_LOAD_CAP_PF — see `_resolve_load_pf`.
+    `load_pf` wins if given; otherwise `amp_label` (if given) uses the plate's
+    newest measured on-plates capacitance, and with none SIZING_ASSUMPTION_PF —
+    see `resolve_load_pf_with_basis`.
 
-    PREDICTIVE ONLY.  This sizes the ladder before a run from an assumed
-    capacitance; it is not how current is measured.  The measured current comes
+    PREDICTIVE ONLY.  This sizes the ladder before a run from a capacitance;
+    it is not how current is measured.  The measured current comes
     straight off the amplifier's CURRENT monitor and is interpreted from the raw
     samples (see rbl.hardware.ac_metrics) — nothing downstream back-solves a
     capacitance to get it.
@@ -254,9 +274,10 @@ def ac_max_peak_kv(freq_hz: float, load_pf: float = None, trip_ma: float = None,
 
     Inverts ac_peak_current_ma for the given shape, then clamps to the
     amplifier's own kV rating.  At low frequency the kV rating binds and this
-    just returns CAL_MAX_KV; with CAL_LOAD_CAP_PF and a 20 mA limit the
-    crossover sits near 530 Hz for a sine and near 830 Hz for a triangle,
-    because a triangle draws less peak current at the same amplitude.
+    just returns CAL_MAX_KV; at 1500 pF and a 20 mA limit the crossover sits
+    near 530 Hz for a sine and near 830 Hz for a triangle, because a triangle
+    draws less peak current at the same amplitude (the crossover moves down in
+    proportion to the capacitance).
 
     `load_pf`/`amp_label` resolve exactly as in `ac_peak_current_ma` — this
     stays the authoritative clamp for the calibration runner regardless of

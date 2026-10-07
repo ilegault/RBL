@@ -16,7 +16,7 @@ discharge is likely, in software, since the fault-monitor BNCs are not wired.
 The thresholds below are PLACEHOLDERS pending Phase 1 Mode B (DC leakage vs.
 voltage), which measures the real discharge onset per channel. Replace them
 once that data exists, and record the new provenance here in the same style
-as `calibration_config.CAL_LOAD_CAP_PF`'s comment.
+as `calibration_config.SIZING_ASSUMPTION_PF`'s comment.
 
 SCOPE
 -----

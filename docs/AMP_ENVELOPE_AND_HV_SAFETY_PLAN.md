@@ -105,6 +105,9 @@ Default drive shape is **triangle** (`AC_DEFAULT_SHAPE`), matching
 
 ### 1.4 Measured load capacitance
 
+Superseded 2026-10: capacitance is measured per amplifier and plate position; see the Load
+Characterization tab. The figures below are history.
+
 ```python
 CAL_LOAD_CAP_PF = 1200.0   # rbl/config/calibration_config.py
 ```

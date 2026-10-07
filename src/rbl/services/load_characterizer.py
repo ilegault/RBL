@@ -1,13 +1,12 @@
 """
 load_characterizer.py
 Phase 1: per-channel load capacitance and leakage conductance, measured on
-demand instead of assumed from `calibration_config.CAL_LOAD_CAP_PF`'s
-one-off analysis.
+demand instead of assumed from a single global guess.
 
 WHY THIS EXISTS
 ---------------
-`CAL_LOAD_CAP_PF` is a single global number, hand-derived once from two AC
-sweeps. It cannot tell the four channels apart, and it cannot answer whether
+The old global capacitance guess was a single number, hand-derived once from
+two AC sweeps. It could not tell the four channels apart, and it cannot answer whether
 a channel is leaky — which is exactly the question behind the historical
 Y-axis fault history (Appendix A of the plan). This service produces the
 measurement every later phase consumes, per channel, on demand:
@@ -95,10 +94,11 @@ from PySide6.QtCore import QObject, QTimer, Signal
 
 from rbl.config import amplifier_assignments, characterization_history
 from rbl.config.calibration_config import (
-    CAL_LOAD_CAP_PF,
     CAL_MAX_KV,
     CAL_TRIP_HARD_MA,
+    SIZING_ASSUMPTION_PF,
     ac_max_peak_kv,
+    resolve_load_pf,
 )
 from rbl.config.hardware_config import (
     AMP_CHANNEL_MAP,
@@ -214,7 +214,7 @@ class LoadCharacterizer(QObject):
         self._steps: list = []
         self._step_index = 0
         self._points: list = []
-        self._c_est_pf = CAL_LOAD_CAP_PF
+        self._c_est_pf = SIZING_ASSUMPTION_PF
         self._collect_windows: dict = {}
         self._last_sample_period = None
         self._leak_threshold_ua = MODE_B_LEAK_THRESHOLD_UA_DEFAULT
@@ -233,7 +233,9 @@ class LoadCharacterizer(QObject):
     def start_mode_a(self, amp_label: str, freq_list: list = None) -> None:
         self._start_common(Mode.A, amp_label)
         freqs = freq_list or MODE_A_FREQ_LADDER_HZ
-        self._c_est_pf = CAL_LOAD_CAP_PF
+        # The first amplitude is sized from this plate's newest measured
+        # capacitance if there is one, else the named sizing assumption.
+        self._c_est_pf = resolve_load_pf(None, amp_label, self._now_fn())
         self._steps = [
             _Step(freq_hz=f, peak_kv=self._mode_a_amplitude_for(f),
                   settle_s=MODE_A_SETTLE_S, collect_s=MODE_A_COLLECT_S)

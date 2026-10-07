@@ -18,7 +18,7 @@ plan-stage placeholders from docs/AMP_ENVELOPE_AND_HV_SAFETY_PLAN.md Section
 knee in that curve is the channel's actual DC limit. Once that data exists,
 replace the ladder below with the measured values and update this comment
 with the measurement date, in the style of
-`calibration_config.CAL_LOAD_CAP_PF`'s provenance comment.
+`calibration_config.SIZING_ASSUMPTION_PF`'s provenance comment.
 """
 
 # (max_kv_permitted, pressure_torr_required_below), decreasing kv order.

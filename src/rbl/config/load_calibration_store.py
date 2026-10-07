@@ -1,10 +1,19 @@
 """
 load_calibration_store.py
-Per-channel measured load capacitance/conductance, persisted across
-sessions — the measurement Phase 1 (rbl/services/load_characterizer.py)
-produces, replacing `calibration_config.CAL_LOAD_CAP_PF`'s single global
-guess with a number the app can reproduce and refresh on demand, per amp
-channel.
+RETIRED. No planning, display or characterization path reads or writes this
+store any more. Load characterization results are kept, never overwritten, in
+rbl/config/characterization_history.py, tagged with the amplifier's serial, the
+plate position, the load condition, the method and the time. This store kept
+ONE record per (channel, load condition) and overwrote it, so it could not say
+how a load changed or which physical amplifier a number belonged to. The file
+on disk is left alone and its values were deliberately NOT imported: today's
+measurements start from ground zero with nothing unverified in them. The module
+stays only so its own tests and any old file can still be read.
+
+Originally: per-channel measured load capacitance/conductance, persisted
+across sessions - the measurement Phase 1 (rbl/services/load_characterizer.py)
+produces, replacing a single global capacitance guess with a number the app
+can reproduce and refresh on demand, per amp channel.
 
 WHY KEYED BY (amp_label, load_condition)
 -------------------------------------------
@@ -26,12 +35,10 @@ persistence.py's schema into two unrelated shapes under one file.
 WHAT THIS DOES NOT DO
 ----------------------
 This store must never let a per-channel measurement retroactively alter a
-recording already taken. `calibration_config.CAL_LOAD_CAP_PF`'s docstring
-makes that promise for the global constant; this file keeps the same
-promise for the per-channel case. `ac_peak_current_ma()`/`ac_max_peak_kv()`
-consult this store ONLY to size a ladder BEFORE a run starts — nothing
-downstream re-derives an already-recorded value from a later, different
-stored capacitance.
+recording already taken. The same promise now holds for the characterization
+results: `ac_peak_current_ma()`/`ac_max_peak_kv()` consult them ONLY to size a
+ladder BEFORE a run starts — nothing downstream re-derives an already-recorded
+value from a later, different capacitance.
 """
 import json
 import time
@@ -46,8 +53,7 @@ def load_all() -> dict:
     """{amp_label: {load_condition: {"c_pf", "g_us", "measured_at", "method"}}}.
 
     Returns {} on any failure (missing file, corrupt JSON) — a bad or absent
-    store must never prevent the app from starting, and callers fall back to
-    CAL_LOAD_CAP_PF exactly as if no measurement had ever been taken.
+    store must never prevent the app from starting.
     """
     try:
         with open(STORE_PATH, encoding="utf-8") as f:

@@ -52,7 +52,7 @@ import time
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
-from rbl.config.calibration_config import CAL_LOAD_CAP_PF
+from rbl.config.calibration_config import resolve_load_pf
 from rbl.hardware.funcgen_driver import MAX_AMP_VPP, MAX_GEN_VOLTS
 
 log = logging.getLogger(__name__)
@@ -95,7 +95,8 @@ class RampEngine(QObject):
             or disconnect, the engine sees the update without re-construction.
         load_pf_for_label: optional callable(label) -> load capacitance in pF,
             used only for the predicted-peak-current log line. Defaults to
-            the global CAL_LOAD_CAP_PF for every label.
+            the newest measured on-plates capacitance for the label's plate,
+            or SIZING_ASSUMPTION_PF when there is none.
         plate_gain_for_label: optional callable(label) -> volts-to-plate-volts
             gain, used only for that same log line (e.g. the EEL5000's 1000x).
             Defaults to 1.0 (log reflects generator volts directly) — pass
@@ -104,7 +105,8 @@ class RampEngine(QObject):
         super().__init__(parent)
         self._map = funcgen_map
         self._ramp_duration_s = ramp_duration_s
-        self._load_pf_for_label = load_pf_for_label or (lambda label: CAL_LOAD_CAP_PF)
+        self._load_pf_for_label = load_pf_for_label or (
+            lambda label: resolve_load_pf(None, label))
         self._plate_gain_for_label = plate_gain_for_label or (lambda label: 1.0)
         self._round_trip_s: dict[str, float] = {}   # label -> measured seconds
         self._timer = QTimer(self)
@@ -117,6 +119,10 @@ class RampEngine(QObject):
     # itself during a ramp instead of firing a false alarm on the legitimate
     # lag between commanded and measured values.
     # ------------------------------------------------------------------
+
+    def load_pf(self, label: str) -> float:
+        """The capacitance (pF) the predicted-current log line uses for `label`."""
+        return self._load_pf_for_label(label)
 
     def is_ramping(self, label: str) -> bool:
         return label in self._ramps
