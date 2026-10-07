@@ -110,7 +110,8 @@ five noise widths above the reference. With a quiet monitor it is simply twice t
 reference.
 
 **Current spike** - one interval during which an amplifier's current exceeds the spike
-threshold. Its duration, peak and charge describe it. A spike shorter than the monitor
+threshold for at least two consecutive samples (one sample over a 5-sigma line is
+noise: about eight an hour). Its duration, peak and charge describe it. A spike shorter than the monitor
 and sampling can resolve has a known charge but only a lower bound on its peak. The
 continuous and burst ratings are fixed reference levels, not what defines a spike.
 

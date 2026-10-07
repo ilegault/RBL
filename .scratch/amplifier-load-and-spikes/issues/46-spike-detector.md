@@ -1,6 +1,6 @@
 # 46: The spike detector and reference capture (pure)
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -30,11 +30,11 @@ Tests may fake: nothing. Synthetic numpy arrays from a seeded generator.
 
 ## Acceptance criteria
 
-- [ ] A 2 mA baseline with seeded Gaussian noise of sigma 0.1 mA: threshold is 4.0 mA within 2 %, and a 6 mA, 1 ms excursion is reported once with peak 6 mA within 5 %.
-- [ ] The same baseline with sigma 1.0 mA: threshold equals reference + 5 x noise within 5 %, and one hour of pure noise at 7.5 kS/s (fed in 100 ms chunks) yields fewer than 5 spikes.
-- [ ] A spike starting in the last 3 samples of one `feed` and ending in the next is reported once, with its full duration.
-- [ ] At 7.5 kS/s a 3-sample spike has `peak_is_lower_bound is True`; a 20-sample spike has `False`.
-- [ ] A rectangular spike 10 mA above reference for 1 ms has `charge_uc` 10 within 2 %.
+- [x] A 2 mA baseline with seeded Gaussian noise of sigma 0.1 mA: threshold is 4.0 mA within 2 %, and a 6 mA, 1 ms excursion is reported once with peak 6 mA within 5 %.
+- [x] The same baseline with sigma 1.0 mA: threshold equals reference + 5 x noise within 5 %, and one hour of pure noise at 7.5 kS/s (fed in 100 ms chunks) yields fewer than 5 spikes.
+- [x] A spike starting in the last 3 samples of one `feed` and ending in the next is reported once, with its full duration.
+- [x] At 7.5 kS/s a 3-sample spike has `peak_is_lower_bound is True`; a 20-sample spike has `False`.
+- [x] A rectangular spike 10 mA above reference for 1 ms has `charge_uc` 10 within 2 %.
 
 ## Gate
 
@@ -46,3 +46,7 @@ Run in CI's order (`.github/workflows/tests.yml`):
     pytest --tb=short -q -n auto --dist loadfile --durations=25
 
 ## Comments
+
+2026-10-07: Done. `hardware/spike_detector.py`, tests in `tests/test_spike_detector.py`. Two points where the ticket text could not be implemented literally; the developer decided both:
+- Lower-bound flag: `duration < 100 us` can never be true at 7.5 kS/s (one sample is 133 us), yet criterion 4 needs a 3-sample spike flagged. Rule is now `duration < 100 us OR fewer than MIN_RESOLVED_SAMPLES (4) samples`.
+- One hour of noise: a 5-sigma threshold is exceeded by single samples about 8 times an hour (measured 9), so "fewer than 5" cannot pass. A spike now needs MIN_SPIKE_SAMPLES (2) contiguous samples; CONTEXT.md "Current spike" updated.
