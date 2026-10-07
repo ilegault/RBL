@@ -12,14 +12,31 @@ widgets here.
 The tab subscribes to Beamline.vacuum_changed (VacuumState snapshots) and
 Beamline.vacuum_error (string messages).  It never holds a driver reference
 or opens a serial port.
+
+CONTINUOUS VACUUM MONITORING LOG (ADR 0004)
+--------------------------------------------
+Per ADR 0004 (Decisions 1, 2, 3), the vacuum monitoring log is the only continuous
+log in RBL. It starts automatically on launch and rolls over daily at local midnight
+into month folders (<root>/YYYY-MM/vacuum_YYYYMMDDTHHMMSS.csv).
+
+WHY STOP LOGGING MUST NOT AUTO-RESTART
+---------------------------------------
+An earlier defect auto-restarted logging whenever _on_vacuum_state found no active
+logger, causing a Stop Logging action to be immediately overturned within one second
+(the next 1 Hz poll). Stopping logging via Stop Logging now stops the monitoring log
+permanently until the operator explicitly clicks Start Logging or relaunches the
+application. Midnight rollovers never re-enable a stopped log.
 """
 import logging
 import time
 from collections import deque
+from datetime import datetime
+from pathlib import Path
 
 import matplotlib
 
-from rbl.services.vacuum_logger import VacuumLogger, gauge_labels, vacuum_comment_lines
+from rbl.services.vacuum_logger import gauge_labels, vacuum_comment_lines
+from rbl.services.vacuum_monitor_log import VacuumMonitorLog
 
 matplotlib.use("QtAgg")
 # The Figure/Canvas pair now lives inside LivePlotPanel; this module only
@@ -151,7 +168,7 @@ class VacuumTab(QWidget):
     All layout sections are described in-line below.
     """
 
-    def __init__(self, beamline, parent=None):
+    def __init__(self, beamline, parent=None, monitor_log_root: Path | None = None):
         super().__init__(parent)
         self.beamline         = beamline
         self._last_state      = None    # most recent VacuumState
@@ -171,8 +188,11 @@ class VacuumTab(QWidget):
         # so it shows up as a real row.  Hiding is the operator's call, not
         # something we can infer, hence a manual toggle that persists.
         self._hidden_gauges:  set = _load_hidden_gauges()
-        # Logging service — set by Phase 6
-        self._logger          = None
+        # Continuous vacuum monitoring log (ADR 0004)
+        self._monitor_log     = VacuumMonitorLog(
+            root=monitor_log_root,
+            comment_lines_fn=self._build_comment_lines,
+        )
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -430,9 +450,10 @@ class VacuumTab(QWidget):
     def _build_logging_bar(self) -> QHBoxLayout:
         """Bottom bar: Start/Stop Logging button + current log path label."""
         log_bar = QHBoxLayout()
-        self._btn_log = QPushButton("Start Logging")
-        self._btn_log.setEnabled(False)   # enabled once a state arrives
-        self._lbl_log_path = QLabel("(not logging)")
+        self._btn_log = QPushButton("Stop Logging")
+        self._btn_log.setObjectName("vacuum_log_btn")
+        self._lbl_log_path = QLabel("(waiting for reading)")
+        self._lbl_log_path.setObjectName("vacuum_log_path")
         self._lbl_log_path.setStyleSheet(
             f"color: {theme.NEUTRAL}; font-size: 10px; font-style: italic;"
         )
@@ -601,58 +622,50 @@ class VacuumTab(QWidget):
                 self._history[key] = deque(maxlen=_MAX_HISTORY)
             self._history[key].append((now, r.pressure))
 
-        # Auto-start logging on the first measurement
-        if self._logger is None:
-            self._start_logging()
-
-        # Forward to active logger; reopen if gauge set changed
-        if self._logger is not None:
-            ok = self._logger.write_row(state)
-            if not ok:
-                log.warning("vacuum_tab: gauge set changed mid-session — reopening logger")
-                self._logger.close()
-                self._logger = VacuumLogger(
-                    self._build_gauge_labels(state),
-                    output_dir=None,
-                )
-                self._logger.write_header_comment(self._build_comment_lines(state))
-                self._logger.write_row(state)
+        # Continuous monitoring log (ADR 0004)
+        self._monitor_log.write(state, datetime.now().astimezone())
+        if self._monitor_log.is_running and self._monitor_log.current_path:
+            self._lbl_log_path.setText(self._monitor_log.current_path)
+            self._lbl_log_path.setStyleSheet(
+                f"color: {theme.OK}; font-size: 10px; font-style: italic;"
+            )
 
     # -----------------------------------------------------------------------
     # Logging toggle
     # -----------------------------------------------------------------------
 
     def _on_log_toggle(self):
-        if self._logger is None:
-            self._start_logging()
-        else:
+        if self._monitor_log.is_running:
             self._stop_logging()
+        else:
+            self._start_logging()
 
     def _start_logging(self):
-        state = self._last_state
-        if state is None:
-            return
-        labels = self._build_gauge_labels(state)
-        self._logger = VacuumLogger(labels)
-        self._logger.write_header_comment(self._build_comment_lines(state))
+        self._monitor_log.start()
         self._btn_log.setText("Stop Logging")
-        self._lbl_log_path.setText(self._logger.csv_path)
-        self._lbl_log_path.setStyleSheet(
-            f"color: {theme.OK}; font-size: 10px; font-style: italic;"
-        )
-        log.info("vacuum_tab: logging started -> %s", self._logger.csv_path)
+        if self._monitor_log.current_path:
+            self._lbl_log_path.setText(self._monitor_log.current_path)
+            self._lbl_log_path.setStyleSheet(
+                f"color: {theme.OK}; font-size: 10px; font-style: italic;"
+            )
+        else:
+            self._lbl_log_path.setText("(waiting for reading)")
+            self._lbl_log_path.setStyleSheet(
+                f"color: {theme.NEUTRAL}; font-size: 10px; font-style: italic;"
+            )
+        log.info("vacuum_tab: monitoring log started")
 
     def _stop_logging(self):
-        if self._logger is None:
-            return
-        path = self._logger.close()
-        self._logger = None
+        path = self._monitor_log.stop()
         self._btn_log.setText("Start Logging")
-        self._lbl_log_path.setText(f"Saved: {path}")
+        if path:
+            self._lbl_log_path.setText(f"Saved: {path}")
+        else:
+            self._lbl_log_path.setText("Stopped")
         self._lbl_log_path.setStyleSheet(
             f"color: {theme.NEUTRAL}; font-size: 10px; font-style: italic;"
         )
-        log.info("vacuum_tab: logging stopped — file closed: %s", path)
+        log.info("vacuum_tab: monitoring log stopped — file closed: %s", path)
 
     @staticmethod
     def _build_gauge_labels(state) -> list[str]:
@@ -989,12 +1002,11 @@ class VacuumTab(QWidget):
     def shutdown(self):
         self._redraw_timer.stop()
         self.plot.stop()
-        if self._logger is not None:
+        if self._monitor_log is not None:
             try:
-                self._logger.close()
+                self._monitor_log.stop()
             except Exception:
-                log.exception("vacuum_tab: error closing logger on shutdown")
-            self._logger = None
+                log.exception("vacuum_tab: error stopping monitor log on shutdown")
 
 
 # ---------------------------------------------------------------------------
