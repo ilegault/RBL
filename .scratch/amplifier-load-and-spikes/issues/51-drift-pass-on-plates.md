@@ -1,6 +1,6 @@
 # 51: A drift pass on the plates: no time cap, protections required, observe-only
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
