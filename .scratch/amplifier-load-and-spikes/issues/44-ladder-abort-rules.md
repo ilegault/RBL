@@ -1,6 +1,6 @@
 # 44: The Mode C ladder stops on any of four rules, and the interlock gates each rung
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
