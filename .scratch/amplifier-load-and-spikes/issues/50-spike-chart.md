@@ -1,6 +1,6 @@
 # 50: The spike chart: peak current vs duration on log-log axes, live and from past runs
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
