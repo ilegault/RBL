@@ -1,6 +1,6 @@
 # 42: The Raster Planner shows steady current vs frequency, from measured C only
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -33,11 +33,11 @@ Tests may fake: `now_fn`. History files are real (temp folder).
 
 ## Acceptance criteria
 
-- [ ] With no results, `_channel_capacitance()` returns `(None, 'not measured')` for all four plates and no line label on the chart contains `pF`.
-- [ ] With only X+ measured at 1600 pF, the chart has exactly one current line, three legend entries ending `not measured`, and the two level lines with the labels above.
-- [ ] An operating point of 12 mA makes the envelope label use `theme.WARN`; 17 mA uses `theme.FAULT`.
-- [ ] A plate with only a disconnected result reads `not measured`.
-- [ ] A result written while the tab is open appears as a line after `refresh_capacitance()`.
+- [x] With no results, `_channel_capacitance()` returns `(None, 'not measured')` for all four plates and no line label on the chart contains `pF`.
+- [x] With only X+ measured at 1600 pF, the chart has exactly one current line, three legend entries ending `not measured`, and the two level lines with the labels above.
+- [x] An operating point of 12 mA makes the envelope label use `theme.WARN`; 17 mA uses `theme.FAULT`.
+- [x] A plate with only a disconnected result reads `not measured`.
+- [x] A result written while the tab is open appears as a line after `refresh_capacitance()`.
 
 ## Gate
 
@@ -49,3 +49,9 @@ Run in CI's order (`.github/workflows/tests.yml`):
     pytest --tb=short -q -n auto --dist loadfile --durations=25
 
 ## Comments
+
+2026-10-07: Done. The Raster Planner plots steady current vs frequency (log-log) from measured on-plates capacitance only; the old kV wall chart and every fallback number are gone from the tab.
+- `RasterPlannerTab(now_fn=...)`; `_channel_capacitance()` returns `(c_pf, "measured, <age>")` or `(None, "not measured")` from `characterization_history.newest_on_plates` (added here: the newest on-plates result that carries a capacitance, so a newer clamp result does not hide it). `age_text()` (today / N days ago / N weeks ago, weeks from 60 days) is added to `characterization_history` for ticket 38 to reuse.
+- The readout, the verdict colour and the chart all come from one `current_vs_frequency` model so they cannot disagree. The kV headroom number is kept (envelope_status over the measured plates only).
+- The five named tests were rewritten in place; the `TestEnvelopeCheck` tests and `test_frequency_does_change_the_predicted_current` also needed measured capacitances now that there is no fallback, so they use a `measured_tab` fixture. `tab.envelope_axes` is a new read-only property so the chart is tested without private access.
+- Fixed on the way: drawing the log-log chart with nothing measured raised (log scale on empty data), so limits are set before the scale.

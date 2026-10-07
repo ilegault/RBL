@@ -64,7 +64,7 @@ species and then changing beam is the practical way to overrun a sample.
 WHY ALL FOUR CHANNELS' CAPACITANCE, NOT ONE
 -------------------------------------------
 The four channels are four separate physical loads — that is the entire reason
-`load_calibration_store` is keyed per channel — and I = k*f*C*V is linear in C,
+the characterization results are kept per plate position — and I = k*f*C*V is linear in C,
 so using X+'s capacitance for Y- simply predicts the wrong current for Y-.
 Each is predicted from its own measurement, and the envelope check reports the
 channel with the least headroom rather than an average that belongs to nobody.
@@ -80,6 +80,7 @@ WHERE THE DEFAULTS LIVE
 | Runtime species list     | ~/.config/rbl/funcgen.json        |
 """
 import math
+from datetime import datetime
 
 import matplotlib
 import numpy as np
@@ -107,14 +108,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from rbl.config import characterization_history
 from rbl.config.beam_species import DEFAULT_SPECIES, DEFAULT_SPECIES_ROW
 from rbl.config.calibration_config import (
-    CAL_LOAD_CAP_PF,
+    AC_DEFAULT_SHAPE,
     CAL_MAX_KV,
-    ac_peak_current_ma,
 )
 from rbl.config.hardware_config import AMP_LABELS
-from rbl.config.load_calibration_store import capacitance_pf_for
 from rbl.config.persistence import load_config, save_config
 from rbl.config.raster_defaults import (
     AMP_MAX_BANDWIDTH_HZ,
@@ -152,8 +152,8 @@ from rbl.hardware import slit_raster_model as srm
 from rbl.hardware.raster_model import (
     displacement_mm,
 )
+from rbl.hardware.raster_plan import current_vs_frequency, steerer_limited_solve
 from rbl.hardware.raster_plan import envelope_status as _envelope_status
-from rbl.hardware.raster_plan import steerer_limited_solve
 
 _SPECIES_CFG_KEY = "raster_species"
 
@@ -209,8 +209,10 @@ class RasterPlannerTab(QWidget):
     patch_dimensions_changed = Signal(float, float)   # (patch_width_x_mm, patch_height_y_mm)
     species_changed = Signal(str, float, int)   # (species_name, energy_ev, charge_state)
 
-    def __init__(self, beamline=None, profiler=None, parent=None):
+    def __init__(self, beamline=None, profiler=None, parent=None, now_fn=None):
         super().__init__(parent)
+        # Injected so ages of measured capacitances are testable.
+        self._now_fn = now_fn or (lambda: datetime.now().astimezone())
         self._updating = False       # guards the species table's itemChanged
         self._beamline = beamline
         self._profiler = profiler
@@ -258,6 +260,11 @@ class RasterPlannerTab(QWidget):
     def recompute(self):
         """Public recalculation."""
         self._recompute()
+
+    @property
+    def envelope_axes(self):
+        """The current-vs-frequency chart's matplotlib axes (for tests)."""
+        return self._ax_env
 
     @property
     def solution(self) -> dict:
@@ -841,8 +848,14 @@ class RasterPlannerTab(QWidget):
         plate_kv = {ax: sol[ax]["ac_plate_kv"] for ax in ("X", "Y")}
         caps = self._channel_capacitance()
         freq_of_axis = {"X": self.sb_freq_x_hz.value(), "Y": self.sb_freq_y_hz.value()}
-        self._show_capacitance_and_current(caps, plate_kv, freq_of_axis)
-        self._check_envelope(caps, plate_kv, freq_of_axis)
+        # One model feeds the readout, the verdict colour and the chart, so the
+        # three cannot disagree about a plate's current.
+        model = current_vs_frequency(
+            {label: c_pf for label, (c_pf, _src) in caps.items()},
+            plate_kv, freq_of_axis, AC_DEFAULT_SHAPE,
+            axis_of_channel=AXIS_OF_CHANNEL)
+        self._show_capacitance_and_current(caps, model)
+        self._check_envelope(caps, model, plate_kv, freq_of_axis)
 
         self._fill_planes(planes, sol, d_slit, slit_mode)
         self._draw_beamline(planes, sol, d_slit, z_slit, slit_mode, fwhm_mm)
@@ -1041,19 +1054,25 @@ class RasterPlannerTab(QWidget):
             self.lbl_transmission.setStyleSheet(
                 theme.status_label(theme.NEUTRAL, bold=False))
 
-    def _show_capacitance_and_current(self, caps, plate_kv, freq_of_axis):
-        self.lbl_c_source.setText("   ".join(
-            f"{label} {c_pf:.0f} pF ({src})" for label, (c_pf, src) in caps.items()))
-        n_fallback = sum(1 for _c, src in caps.values() if src == "fallback")
-        self.lbl_c_source.setStyleSheet(
-            theme.status_label(theme.OK if n_fallback == 0 else theme.WARN, bold=False))
-        def _current_ma(label):
-            axis = AXIS_OF_CHANNEL[label]
-            return ac_peak_current_ma(freq_of_axis[axis], plate_kv[axis],
-                                       load_pf=caps[label][0])
+    def _show_capacitance_and_current(self, caps, model):
+        """Per-plate capacitance and predicted current; unmeasured plates say so.
 
+        There is no assumed capacitance: a plate without a measured ON_PLATES
+        result shows "not measured" and no current.
+        """
+        self.lbl_c_source.setText("   ".join(
+            f"{label} {c_pf:.0f} pF ({src})" if c_pf is not None
+            else f"{label} not measured"
+            for label, (c_pf, src) in caps.items()))
+        all_measured = all(c_pf is not None for c_pf, _src in caps.values())
+        self.lbl_c_source.setStyleSheet(
+            theme.status_label(theme.OK if all_measured else theme.WARN, bold=False))
+
+        op = model["operating_point"]
         self.lbl_currents.setText("   ".join(
-            f"{label} {_current_ma(label):.3f} mA" for label in AMP_LABELS))
+            f"{label} {op[label][1]:.3f} mA" if label in op
+            else f"{label} not measured"
+            for label in AMP_LABELS))
 
     # ------------------------------------------------------------------
     # Profiler / slits
@@ -1718,47 +1737,43 @@ class RasterPlannerTab(QWidget):
     # ------------------------------------------------------------------
 
     def _channel_capacitance(self) -> dict:
-        """{amp_label: (c_pf, source_str)} for all four channels.
+        """{plate: (c_pf, source_str)}; `(None, "not measured")` if never measured.
 
-        Each channel is its own load; see the module docstring. A channel
-        that has never been characterised falls back to CAL_LOAD_CAP_PF and
-        SAYS SO, because a guessed capacitance sitting silently next to
-        three measured ones is how a prediction gets trusted more than it
-        has earned.
+        Each plate is its own load (see the module docstring), and the number
+        is the newest ON_PLATES result for the amplifier CURRENTLY assigned to
+        that plate position, shown with its age. Nothing is assumed: a plate
+        with no such result says "not measured" and gets no prediction,
+        because a guessed capacitance sitting beside measured ones is how a
+        prediction gets trusted more than it has earned.
 
-        ON_PLATES WINS
+        ON_PLATES ONLY
         --------------
-        A channel can hold both conditions.  ON_PLATES is the load the
-        amplifier actually drives during a run; DISCONNECTED is the
-        amplifier and its internal network alone, and is smaller by exactly
-        the thing being planned for.  `capacitance_pf_for` with no condition
-        returns whichever was measured most RECENTLY, which would mean a
-        DISCONNECTED sweep run after an ON_PLATES one silently became the
-        number this tab plans from.  So the condition is asked for by name,
-        and displayed.
+        ON_PLATES is the load the amplifier actually drives during a run;
+        cable-only and disconnected results are smaller by exactly the thing
+        being planned for, so they are never planning inputs here.
         """
-        out = {}
+        now = self._now_fn()
+        out: dict[str, tuple[float | None, str]] = {}
         for label in AMP_LABELS:
-            for condition in ("ON_PLATES", "DISCONNECTED"):
-                measured = capacitance_pf_for(label, condition)
-                if measured is not None:
-                    out[label] = (measured, "measured"
-                                  if condition == "ON_PLATES"
-                                  else "measured, DISCONNECTED")
-                    break
-            else:
-                out[label] = (CAL_LOAD_CAP_PF, "fallback")
+            rec = characterization_history.newest_on_plates(label, now)
+            if rec is None:
+                out[label] = (None, "not measured")
+                continue
+            src = "measured, " + characterization_history.age_text(rec["age_s"])
+            if rec["predates_hardware_change"]:
+                src += ", predates a hardware change"
+            out[label] = (float(rec["values"]["c_pf"]), src)
         return out
 
     def refresh_capacitance(self):
-        """Re-read the calibration store and recompute.
+        """Re-read the characterization results and recompute.
 
         Called when this tab is shown, when a Load Characterization run
         finishes (wired in app.py), and from the button.  Before this
         existed the tab read the store once, at construction, so a
         characterisation run finishing while the app was open changed
         nothing here until the next restart - the four channels kept
-        showing "fallback" beside a table that had just measured them.
+        showing "not measured" beside a table that had just measured them.
         """
         self._recompute()
 
@@ -1766,41 +1781,64 @@ class RasterPlannerTab(QWidget):
         super().showEvent(event)
         self.refresh_capacitance()
 
-    def _check_envelope(self, caps, plate_kv, freq_of_axis):
-        """Delegate to raster_plan.envelope_status; update envelope label.
+    def _check_envelope(self, caps, model, plate_kv, freq_of_axis):
+        """Update the envelope label and the current chart.
 
-        Each channel is checked against its own measured capacitance and the
-        tightest is reported.  The pure computation lives in raster_plan so it
-        can be unit-tested without Qt.
+        The label keeps the kV headroom (raster_plan.envelope_status, run over
+        the MEASURED plates only) and takes its colour from the worst measured
+        plate's margin verdict under the continuous rating
+        (raster_plan.current_vs_frequency): green below 10 mA, amber to 16 mA,
+        red above, red also if the voltage walls say outside. Plates without a
+        measurement are listed as "not measured" and get no verdict.
         """
-        st = _envelope_status(caps, plate_kv, freq_of_axis, self._solution,
+        measured = {name: v for name, v in caps.items() if v[0] is not None}
+        unmeasured = [name for name, v in caps.items() if v[0] is None]
+
+        if not measured:
+            self.lbl_envelope.setText(f"not measured: {', '.join(unmeasured)}")
+            self.lbl_envelope.setStyleSheet(theme.status_label(theme.NEUTRAL))
+            self._draw_current_chart(model, caps)
+            return
+
+        st = _envelope_status(measured, plate_kv, freq_of_axis, self._solution,
                                axis_of_channel=AXIS_OF_CHANNEL)
         label    = st["worst_label"]
         kv       = st["kv"]
         f        = st["freq_hz"]
         env_kv   = st["env_kv"]
         ratio    = st["ratio"]
-        walls    = st["walls"]
         in_env   = st["in_envelope"]
 
         if st["exceeded_bandwidth"]:
-            self.lbl_envelope.setText(
-                f"{label}: {f:.1f} Hz exceeds the {AMP_MAX_BANDWIDTH_HZ:.0f} Hz "
-                f"bandwidth wall — out of envelope")
+            text = (f"{label}: {f:.1f} Hz exceeds the {AMP_MAX_BANDWIDTH_HZ:.0f} Hz "
+                    f"bandwidth wall — out of envelope")
         else:
             verdict = "INSIDE" if (in_env and not st["over_ceiling"]) else "OUTSIDE"
-            self.lbl_envelope.setText(
-                f"{label}: {kv:.3f} kV at {f:.1f} Hz vs. {env_kv:.3f} kV available "
-                f"({100 * ratio:.0f}% of the wall) — {verdict} the envelope")
+            text = (f"{label}: {kv:.3f} kV at {f:.1f} Hz vs. {env_kv:.3f} kV available "
+                    f"({100 * ratio:.0f}% of the wall) — {verdict} the envelope")
         if st["over_ceiling"]:
-            self.lbl_envelope.setText(
-                self.lbl_envelope.text() +
-                f"   ⚠ {', '.join(sorted(st['over_ceiling']))} peak (offset included) "
-                f"exceeds the {CAL_MAX_KV:.1f} kV amplifier ceiling")
-        self.lbl_envelope.setStyleSheet(
-            theme.status_label(theme.OK if in_env else theme.FAULT))
+            text += (f"   ⚠ {', '.join(sorted(st['over_ceiling']))} peak (offset "
+                     f"included) exceeds the {CAL_MAX_KV:.1f} kV amplifier ceiling")
 
-        self._draw_envelope(walls, label, caps, plate_kv, freq_of_axis)
+        # Worst measured plate by predicted operating-point current.
+        worst_plate, (_f_op, worst_ma) = max(
+            model["operating_point"].items(), key=lambda kv_: kv_[1][1])
+        worst_verdict = model["verdict"][worst_plate]
+        cont = model["levels"]["continuous_ma"]
+        text += f"   {worst_plate}: {worst_ma:.1f} mA of the {cont:.0f} mA continuous rating"
+        if unmeasured:
+            text += f"   not measured: {', '.join(unmeasured)}"
+        self.lbl_envelope.setText(text)
+
+        if worst_verdict == "red" or not in_env:
+            role = theme.FAULT
+        elif worst_verdict == "amber":
+            role = theme.WARN
+        else:
+            role = theme.OK
+        self.lbl_envelope.setStyleSheet(theme.status_label(role))
+
+        self._draw_current_chart(model, caps)
 
     def _fill_species_deflections(self, kv_x, kv_y, plate_length_cm, plate_gap_cm,
                                    drift_cm_of_axis, scan_half_x, scan_half_y,
@@ -1852,25 +1890,51 @@ class RasterPlannerTab(QWidget):
     # Plots
     # ------------------------------------------------------------------
 
-    def _draw_envelope(self, walls, worst_label, caps, plate_kv, freq_of_axis):
+    def _draw_current_chart(self, model, caps):
+        """Steady current (mA) against frequency (Hz), log-log, one line per plate.
+
+        Lines come only from MEASURED capacitances; a plate without one has a
+        legend entry "<plate> not measured" and no line. Each measured plate
+        has a marker at its axis's planned operating point. The 20 mA
+        continuous rating is a solid line; the 100 mA burst rating is dotted
+        and says in its label that it is never an operating point.
+        """
         ax = self._ax_env
         ax.clear()
-        ax.plot(walls["freq_hz"], walls["current_wall_kv"], label="Current wall")
-        ax.plot(walls["freq_hz"], walls["voltage_wall_kv"], "--", label="Voltage wall")
-        # All four requested points, so a channel that is fine is visibly
-        # fine rather than merely absent.
-        for marker, axis in (("o", "X"), ("s", "Y")):
-            ax.plot([freq_of_axis[axis]], [plate_kv[axis]], marker, color="red",
-                    markersize=9, label=f"{axis} axis requested")
+        freqs = model["freq_hz"]
+        lows = []
+        for i, label in enumerate(AMP_LABELS):
+            c_pf, src = caps[label]
+            colour = f"C{i}"
+            if c_pf is None:
+                # Legend-only handle: nothing is drawn, nothing is guessed.
+                ax.plot([], [], linestyle="none", label=f"{label} not measured")
+                continue
+            series = model["series"][label]
+            lows.append(min(series))
+            ax.plot(freqs, series, color=colour,
+                    label=f"{label} ({c_pf:.0f} pF, {src.removeprefix('measured, ')})")
+            f_op, ma_op = model["operating_point"][label]
+            ax.plot([f_op], [ma_op], "o", color=colour, markersize=8,
+                    markeredgecolor="black", label="_nolegend_")
+        levels = model["levels"]
+        ax.axhline(levels["continuous_ma"], color=theme.WARN, linestyle="-",
+                   label=f"{levels['continuous_ma']:.0f} mA continuous rating")
+        ax.axhline(levels["burst_ma"], color=theme.FAULT, linestyle=":",
+                   label=f"{levels['burst_ma']:.0f} mA burst only: 4 ms or less, "
+                         f"then 100 ms at 10 mA or less; never an operating point")
+        # Limits first: a log scale on an axes with no positive data (nothing
+        # measured yet) raises otherwise.
+        ax.set_xlim(freqs[0], freqs[-1])
+        ax.set_ylim(max(1e-3, min(lows) / 2) if lows else 0.1,
+                    levels["burst_ma"] * 3)
         ax.set_xscale("log")
-        ax.set_ylim(0, walls["voltage_wall_kv"][0] * 1.2)
-        ax.set_xlabel("Frequency (Hz)")
-        ax.set_ylabel("Peak plate voltage (kV)")
-        ax.set_title(f"Walls shown for {worst_label} "
-                     f"({caps[worst_label][0]:.0f} pF, tightest channel)",
-                     fontsize="small")
-        ax.grid(True, alpha=0.3)
-        ax.legend(fontsize="small")
+        ax.set_yscale("log")
+        ax.set_xlabel("Raster frequency (Hz)")
+        ax.set_ylabel("Steady current (mA)")
+        ax.set_title(f"Predicted from each plate's measured capacitance "
+                     f"({AC_DEFAULT_SHAPE} drive)", fontsize="small")
+        ax.grid(True, which="both", alpha=0.3)
+        ax.legend(fontsize="x-small", loc="upper left")
         self._fig_env.tight_layout()
         self._canvas_env.draw_idle()
-

@@ -12,19 +12,24 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import re
+from datetime import datetime, timedelta
+
 import pytest
 from PySide6.QtWidgets import QApplication
 
-from rbl.config import load_calibration_store as store
-from rbl.config.calibration_config import CAL_LOAD_CAP_PF
+from rbl.config import characterization_history as ch
 from rbl.config.hardware_config import AMP_LABELS
 from rbl.config.steerer_geometry import PLATE_RATING_KV
+from rbl.gui import theme
 from rbl.gui.raster_planner_tab import (
     MODE_SLIT,
     MODE_STEERER,
     RasterPlannerTab,
 )
 from rbl.hardware import slit_raster_model as srm
+
+NOW = datetime(2026, 10, 7, 12, 0, 0)
 
 
 @pytest.fixture(scope="module")
@@ -34,7 +39,26 @@ def qapp():
 
 @pytest.fixture
 def tab(qapp):
-    return RasterPlannerTab()
+    return RasterPlannerTab(now_fn=lambda: NOW)
+
+
+def measure(plate, c_pf, days_ago=3, cond="ON_PLATES", method="impedance_sweep"):
+    """Write a characterization result as the Load Characterization tab would
+    (no amplifier assignment on record, so the serial is "unassigned")."""
+    ch.write_result(
+        {"plate_position": plate, "amplifier_serial": "unassigned",
+         "load_condition": cond, "method": method,
+         "values": {"c_pf": c_pf, "g_us": 0.0}},
+        NOW - timedelta(days=days_ago))
+
+
+@pytest.fixture
+def measured_tab(tab):
+    """The tab with all four plates measured at 1600 pF on plates."""
+    for plate in AMP_LABELS:
+        measure(plate, 1600.0)
+    tab.refresh_capacitance()
+    return tab
 
 
 @pytest.fixture
@@ -45,12 +69,6 @@ def steerer_tab(tab):
     return tab
 
 
-@pytest.fixture
-def isolated_store(tmp_path, monkeypatch):
-    monkeypatch.setattr(store, "STORE_PATH", tmp_path / "load_calibration.json")
-    return store
-
-
 def _kv(tab, axis):
     return tab.solution[axis]["amplitude_kv"]
 
@@ -58,37 +76,44 @@ def _kv(tab, axis):
 class TestPerChannelCapacitance:
     """All four channels are separate loads; none stands in for another."""
 
-    def test_reports_all_four_channels(self, tab, isolated_store):
+    def test_reports_all_four_channels(self, tab):
         assert set(tab.channel_capacitance()) == set(AMP_LABELS)
 
-    def test_unmeasured_channels_fall_back_and_say_so(self, tab, isolated_store):
+    def test_unmeasured_channels_fall_back_and_say_so(self, tab):
+        # Kept under its old name: there is no fallback any more. A plate with
+        # no result says "not measured" and carries no number.
         for label in AMP_LABELS:
-            assert tab.channel_capacitance()[label] == (CAL_LOAD_CAP_PF, "fallback")
+            assert tab.channel_capacitance()[label] == (None, "not measured")
 
-    def test_one_measured_channel_does_not_change_the_others(self, tab, isolated_store):
-        isolated_store.save_measurement("X+", c_pf=1050.0, g_us=0.0,
-                                        load_condition="ON_PLATES",
-                                        method="impedance_sweep")
+    def test_one_measured_channel_does_not_change_the_others(self, tab):
+        measure("X+", 1050.0)
         caps = tab.channel_capacitance()
-        assert caps["X+"] == (1050.0, "measured")
+        assert caps["X+"] == (1050.0, "measured, 3 days ago")
         for label in ("X-", "Y+", "Y-"):
-            assert caps[label] == (CAL_LOAD_CAP_PF, "fallback")
+            assert caps[label] == (None, "not measured")
 
-    def test_each_channel_current_uses_its_own_capacitance(self, tab, isolated_store):
-        isolated_store.save_measurement("X+", c_pf=600.0, g_us=0.0,
-                                        load_condition="ON_PLATES", method="m")
-        isolated_store.save_measurement("X-", c_pf=1200.0, g_us=0.0,
-                                        load_condition="ON_PLATES", method="m")
+    def test_each_channel_current_uses_its_own_capacitance(self, tab):
+        measure("X+", 600.0)
+        measure("X-", 1200.0)
         tab.recompute()
-        parts = tab.lbl_currents.text().split()
-        mapping = dict(zip(parts[0::3], parts[1::3]))
-        assert float(mapping["X-"]) == pytest.approx(2 * float(mapping["X+"]), abs=2e-3)
+        mapping = {m.group(1): float(m.group(2)) for m in
+                   re.finditer(r"([XY][+-]) ([\d.]+) mA", tab.lbl_currents.text())}
+        assert set(mapping) == {"X+", "X-"}
+        assert mapping["X-"] == pytest.approx(2 * mapping["X+"], abs=2e-3)
 
-    def test_a_fallback_channel_is_flagged_not_silent(self, tab, isolated_store):
+    def test_a_fallback_channel_is_flagged_not_silent(self, tab):
+        # Same name, new meaning: an unmeasured channel is named as such.
         tab.recompute()
-        assert "fallback" in tab.lbl_c_source.text()
+        assert "not measured" in tab.lbl_c_source.text()
+        assert "pF" not in tab.lbl_c_source.text()
         for label in AMP_LABELS:
             assert label in tab.lbl_c_source.text()
+
+    def test_an_unmeasured_plate_gets_no_current_prediction(self, tab):
+        measure("X+", 1600.0)
+        tab.recompute()
+        text = tab.lbl_currents.text()
+        assert "X+ " in text and "Y- not measured" in text
 
 
 class TestTheJawsAreImagedOntoTheSample:
@@ -438,7 +463,8 @@ class TestSpeciesTable:
 
 
 class TestEnvelopeCheck:
-    def test_low_frequency_low_amplitude_is_inside(self, tab):
+    def test_low_frequency_low_amplitude_is_inside(self, measured_tab):
+        tab = measured_tab
         tab.sb_patch_x_mm.setValue(5.0)
         tab.sb_patch_y_mm.setValue(5.0)
         tab.sb_freq_x_hz.setValue(517.0)
@@ -446,11 +472,13 @@ class TestEnvelopeCheck:
         tab.recompute()
         assert "INSIDE" in tab.lbl_envelope.text()
 
-    def test_it_names_the_binding_channel(self, tab):
+    def test_it_names_the_binding_channel(self, measured_tab):
+        tab = measured_tab
         tab.recompute()
         assert any(tab.lbl_envelope.text().startswith(label) for label in AMP_LABELS)
 
-    def test_envelope_shrinks_at_higher_frequency(self, tab):
+    def test_envelope_shrinks_at_higher_frequency(self, measured_tab):
+        tab = measured_tab
         tab.sb_freq_x_hz.setValue(500.0)
         tab.recompute()
         a = float(tab.lbl_envelope.text().split(" vs. ")[1].split(" kV")[0])
@@ -459,7 +487,8 @@ class TestEnvelopeCheck:
         b = float(tab.lbl_envelope.text().split(" vs. ")[1].split(" kV")[0])
         assert b < a
 
-    def test_beyond_bandwidth_wall_is_flagged(self, tab):
+    def test_beyond_bandwidth_wall_is_flagged(self, measured_tab):
+        tab = measured_tab
         tab.sb_freq_x_hz.setValue(10_000.0)
         tab.recompute()
         text = tab.lbl_envelope.text()
@@ -476,7 +505,8 @@ class TestFrequencyIsNotGeometry:
         assert _kv(tab, "X") == pytest.approx(before)
         assert tab.lbl_blades.text() == blades_before
 
-    def test_frequency_does_change_the_predicted_current(self, tab, isolated_store):
+    def test_frequency_does_change_the_predicted_current(self, measured_tab):
+        tab = measured_tab
         tab.sb_freq_x_hz.setValue(100.0)
         tab.recompute()
         low = tab.lbl_currents.text()
@@ -514,34 +544,145 @@ class TestTheProfilerIsOfferedNeverAdopted:
 
 
 class TestCapacitanceRefresh:
-    """The store is a file; a file cannot announce that it changed."""
+    """The results are files; a file cannot announce that it changed."""
 
-    def test_refresh_picks_up_a_measurement_taken_after_construction(
-            self, tab, isolated_store):
+    def test_refresh_picks_up_a_measurement_taken_after_construction(self, tab):
         tab.recompute()
-        assert "fallback" in tab.lbl_c_source.text()
-        isolated_store.save_measurement("X+", c_pf=1528.7, g_us=5.1,
-                                        load_condition="ON_PLATES",
-                                        method="impedance_sweep")
+        assert "not measured" in tab.lbl_c_source.text()
+        measure("X+", 1528.7, days_ago=0)
         tab.refresh_capacitance()
-        assert "1529 pF (measured)" in tab.lbl_c_source.text()
+        assert "1529 pF (measured, today)" in tab.lbl_c_source.text()
 
-    def test_on_plates_wins_over_a_later_disconnected_sweep(self, tab, isolated_store):
-        isolated_store.save_measurement("X+", c_pf=1500.0, g_us=0.0,
-                                        load_condition="ON_PLATES", method="m",
-                                        measured_at=100.0)
-        isolated_store.save_measurement("X+", c_pf=120.0, g_us=0.0,
-                                        load_condition="DISCONNECTED", method="m",
-                                        measured_at=200.0)
-        assert tab.channel_capacitance()["X+"] == (1500.0, "measured")
+    def test_on_plates_wins_over_a_later_disconnected_sweep(self, tab):
+        measure("X+", 1500.0, days_ago=5)
+        measure("X+", 120.0, days_ago=3, cond="DISCONNECTED")
+        assert tab.channel_capacitance()["X+"] == (1500.0, "measured, 5 days ago")
 
-    def test_a_disconnected_only_channel_says_which_condition_it_is(
-            self, tab, isolated_store):
-        isolated_store.save_measurement("Y-", c_pf=130.0, g_us=0.0,
-                                        load_condition="DISCONNECTED", method="m")
-        c_pf, source = tab.channel_capacitance()["Y-"]
-        assert c_pf == 130.0
-        assert "DISCONNECTED" in source
+    def test_a_disconnected_only_channel_says_it_is_not_measured(self, tab):
+        measure("Y-", 130.0, cond="DISCONNECTED")
+        assert tab.channel_capacitance()["Y-"] == (None, "not measured")
+
+    def test_a_cable_only_result_is_never_used_for_planning(self, tab):
+        measure("Y-", 400.0, cond="CABLE_ONLY")
+        assert tab.channel_capacitance()["Y-"] == (None, "not measured")
+
+    def test_a_clamp_result_newer_than_the_capacitance_does_not_hide_it(self, tab):
+        measure("X+", 1600.0, days_ago=4)
+        ch.write_result(
+            {"plate_position": "X+", "amplifier_serial": "unassigned",
+             "load_condition": "ON_PLATES", "method": "clamp_test",
+             "values": {"clamp_ma": 17.0}}, NOW - timedelta(days=1))
+        assert tab.channel_capacitance()["X+"][0] == 1600.0
+
+
+def _legend(tab):
+    return [t.get_text() for t in tab.envelope_axes.get_legend().get_texts()]
+
+
+def _current_lines(tab):
+    return [ln for ln in tab.envelope_axes.get_lines()
+            if len(ln.get_xdata()) > 2
+            and ln.get_label().startswith(tuple(AMP_LABELS))]
+
+
+def _c_for_operating_ma(tab, target_ma):
+    """The capacitance that puts X's planned operating point at `target_ma`."""
+    from rbl.config.calibration_config import ac_shape_k
+    tab.recompute()
+    kv = tab.solution["X"]["ac_plate_kv"]
+    f = tab.sb_freq_x_hz.value()
+    return target_ma * 1e6 / (ac_shape_k() * f * kv)
+
+
+class TestCurrentVsFrequencyChart:
+    BURST = ("100 mA burst only: 4 ms or less, then 100 ms at 10 mA or less; "
+             "never an operating point")
+
+    def test_with_no_results_nothing_is_drawn_and_no_label_mentions_pf(self, tab):
+        tab.recompute()
+        assert _current_lines(tab) == []
+        assert not any("pF" in text for text in _legend(tab))
+        assert sum(t.endswith("not measured") for t in _legend(tab)) == 4
+
+    def test_one_measured_plate_has_one_line_and_three_not_measured_entries(self, tab):
+        measure("X+", 1600.0)
+        tab.recompute()
+        (line,) = _current_lines(tab)
+        assert line.get_label() == "X+ (1600 pF, 3 days ago)"
+        legend = _legend(tab)
+        assert sum(t.endswith("not measured") for t in legend) == 3
+        assert "20 mA continuous rating" in legend
+        assert self.BURST in legend
+
+    def test_the_two_rating_lines_have_the_right_level_and_style(self, tab):
+        tab.recompute()
+        by_label = {ln.get_label(): ln for ln in tab.envelope_axes.get_lines()}
+        cont = by_label["20 mA continuous rating"]
+        burst = by_label[self.BURST]
+        assert list(cont.get_ydata()) == [20.0, 20.0]
+        assert cont.get_linestyle() == "-"
+        assert list(burst.get_ydata()) == [100.0, 100.0]
+        assert burst.get_linestyle() == ":"
+
+    def test_the_axes_are_log_log_and_labelled(self, tab):
+        tab.recompute()
+        ax = tab.envelope_axes
+        assert ax.get_xscale() == "log" and ax.get_yscale() == "log"
+        assert ax.get_xlabel() == "Raster frequency (Hz)"
+        assert ax.get_ylabel() == "Steady current (mA)"
+
+    def test_each_measured_plate_has_a_marker_at_its_operating_point(self, tab):
+        measure("X+", 1600.0)
+        measure("Y+", 1600.0)
+        tab.recompute()
+        markers = [ln for ln in tab.envelope_axes.get_lines() if ln.get_marker() == "o"]
+        assert len(markers) == 2
+        by_axis = {"X": tab.sb_freq_x_hz.value(), "Y": tab.sb_freq_y_hz.value()}
+        assert sorted(m.get_xdata()[0] for m in markers) == sorted(by_axis.values())
+
+    def test_a_result_written_while_the_tab_is_open_appears_after_refresh(self, tab):
+        tab.recompute()
+        assert _current_lines(tab) == []
+        measure("X+", 1612.0)
+        tab.refresh_capacitance()
+        (line,) = _current_lines(tab)
+        assert line.get_label().startswith("X+ (1612 pF")
+
+    def test_a_plate_with_only_a_disconnected_result_reads_not_measured(self, tab):
+        measure("Y-", 130.0, cond="DISCONNECTED")
+        tab.recompute()
+        assert "Y- not measured" in _legend(tab)
+        assert _current_lines(tab) == []
+
+    def test_green_below_10_ma(self, tab):
+        measure("X+", _c_for_operating_ma(tab, 6.0))
+        tab.recompute()
+        assert theme.OK in tab.lbl_envelope.styleSheet()
+
+    def test_an_operating_point_of_12_ma_is_amber(self, tab):
+        measure("X+", _c_for_operating_ma(tab, 12.0))
+        tab.recompute()
+        assert theme.WARN in tab.lbl_envelope.styleSheet()
+        assert "12.0 mA" in tab.lbl_envelope.text()
+
+    def test_an_operating_point_of_17_ma_is_red(self, tab):
+        measure("X+", _c_for_operating_ma(tab, 17.0))
+        tab.recompute()
+        assert theme.FAULT in tab.lbl_envelope.styleSheet()
+
+    def test_unmeasured_plates_are_listed_with_no_verdict(self, tab):
+        measure("X+", 1600.0)
+        tab.recompute()
+        assert "not measured: X-, Y+, Y-" in tab.lbl_envelope.text()
+
+    def test_with_nothing_measured_the_label_gives_no_verdict(self, tab):
+        tab.recompute()
+        assert tab.lbl_envelope.text() == "not measured: X+, X-, Y+, Y-"
+        assert "INSIDE" not in tab.lbl_envelope.text()
+        assert "OUTSIDE" not in tab.lbl_envelope.text()
+
+    def test_the_kv_headroom_number_is_kept(self, measured_tab):
+        assert " kV available " in measured_tab.lbl_envelope.text()
 
 
 class TestThePlaneTableIsHonestAtTheJaw:
