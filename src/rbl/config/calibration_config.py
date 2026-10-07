@@ -335,8 +335,11 @@ CAL_OUTPUT_DIR = CALIBRATION_DIR
 
 DRIFT_DEFAULT_KV       = 3.0
 DRIFT_LOG_INTERVAL_S   = 1.0
-DRIFT_MAX_UNATTENDED_H = 12.0   # only when load condition is DISCONNECTED
-DRIFT_MAX_ATTENDED_H   = 2.0    # hard cap when load condition is ON_PLATES
+# Cap on a drift pass with the amplifier DISCONNECTED from the steerer. A pass
+# on the plates has no time cap: it runs only while the vacuum HV interlock and
+# the spike recorder are running (docs/adr/0005-drift-pass-on-plates-guarded-by-
+# protections-not-a-clock.md).
+DRIFT_MAX_UNATTENDED_H = 12.0
 
 
 class LoadCondition(Enum):

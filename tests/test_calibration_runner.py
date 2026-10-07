@@ -529,25 +529,157 @@ def _windows_per_drift_log():
     return max(1, round(DRIFT_LOG_INTERVAL_S * GUI_REFRESH_HZ))
 
 
+def settled(runner):
+    """SETTLE -> COLLECT, as the settle timer does in production."""
+    runner._on_settle_elapsed()
+
+
+def state_name(runner) -> str:
+    return runner._state.name
+
+
+def protections(ok=True, reason=""):
+    """A protections_ok callable that can be flipped mid-run."""
+    box = {"ok": ok, "reason": reason, "calls": 0}
+
+    def check():
+        box["calls"] += 1
+        return box["ok"], box["reason"]
+    check.box = box
+    return check
+
+
 class TestDriftLoadConditionGuard:
     def test_on_plates_8h_refused(self, qapp, funcgen_map):
+        # Refused because a protection is not running - not because of the length.
         runner = CalibrationRunner(funcgen_map, LoadCondition.ON_PLATES)
         errors = []
         runner.error.connect(errors.append)
-        runner.start_drift(3.0, 8.0)
-        assert errors
-        assert runner._state == _State.IDLE
-        print("[OK] ON_PLATES + 8 h is refused")
+        runner.start_drift(3.0, 8.0,
+                           protections_ok=protections(False, "spike recorder not running"))
+        assert errors and "spike recorder not running" in errors[0]
+        assert state_name(runner) == "IDLE"
+        print("[OK] ON_PLATES + 8 h is refused when a protection is not running")
 
     def test_on_plates_1h_accepted(self, qapp, funcgen_map):
         runner = CalibrationRunner(funcgen_map, LoadCondition.ON_PLATES)
         errors = []
         runner.error.connect(errors.append)
-        runner.start_drift(3.0, 1.0)
-        runner._on_settle_elapsed()   # SETTLE -> COLLECT, same as production
+        runner.start_drift(3.0, 1.0, protections_ok=protections(True))
+        settled(runner)
         assert not errors
-        assert runner._state == _State.COLLECT
-        print("[OK] ON_PLATES + 1 h is accepted")
+        assert state_name(runner) == "COLLECT"
+        print("[OK] ON_PLATES + 1 h is accepted with protections running")
+
+    def test_a_24_hour_pass_on_the_plates_starts_when_protections_are_running(
+            self, qapp, funcgen_map):
+        runner = CalibrationRunner(funcgen_map, LoadCondition.ON_PLATES)
+        errors = []
+        runner.error.connect(errors.append)
+        runner.start_drift(3.0, 24.0, protections_ok=protections(True, ""))
+        assert not errors
+        assert state_name(runner) != "IDLE"
+
+    def test_a_pass_on_the_plates_does_not_start_without_a_protections_check(
+            self, qapp, funcgen_map):
+        runner = CalibrationRunner(funcgen_map, LoadCondition.ON_PLATES)
+        errors = []
+        runner.error.connect(errors.append)
+        runner.start_drift(3.0, 1.0)
+        assert errors and "protections" in errors[0]
+        assert state_name(runner) == "IDLE"
+
+    def test_a_protections_check_that_raises_counts_as_not_ok(self, qapp, funcgen_map):
+        def broken():
+            raise RuntimeError("gauge link down")
+        runner = CalibrationRunner(funcgen_map, LoadCondition.ON_PLATES)
+        errors = []
+        runner.error.connect(errors.append)
+        runner.start_drift(3.0, 1.0, protections_ok=broken)
+        assert errors and "gauge link down" in errors[0]
+        assert state_name(runner) == "IDLE"
+
+    def test_a_refused_pass_commands_nothing(self, qapp, funcgen_map, gens):
+        runner = CalibrationRunner(funcgen_map, LoadCondition.ON_PLATES)
+        runner.start_drift(
+            3.0, 8.0, protections_ok=protections(False, "HV interlock not permitting 3.0 kV"))
+        assert not any(entry[0] == "WRITE" for g in gens.values() for entry in g.log)
+
+    def test_losing_a_protection_mid_run_ends_the_pass_within_one_window(
+            self, qapp, funcgen_map, gens):
+        check = protections(True, "")
+        runner = CalibrationRunner(funcgen_map, LoadCondition.ON_PLATES)
+        errors, finished = [], []
+        runner.error.connect(errors.append)
+        runner.finished.connect(finished.append)
+        runner.start_drift(3.0, 12.0, protections_ok=check)
+        settled(runner)
+        runner.on_window(make_payload())
+        assert not finished
+        check.box.update(ok=False, reason="spike recorder not running")
+        runner.on_window(make_payload())                      # the very next window
+        assert finished
+        assert errors and "spike recorder not running" in errors[-1]
+        assert state_name(runner) != "COLLECT"
+        # every output was zeroed and turned off
+        for g in gens.values():
+            for ch in (1, 2):
+                assert g.state[ch]["output"] is False
+
+    def test_the_interlock_stopping_ends_the_pass_and_names_it(self, qapp, funcgen_map):
+        check = protections(True, "")
+        runner = CalibrationRunner(funcgen_map, LoadCondition.ON_PLATES)
+        errors = []
+        runner.error.connect(errors.append)
+        runner.start_drift(3.0, 12.0, protections_ok=check)
+        settled(runner)
+        check.box.update(ok=False, reason="HV interlock not permitting 3.0 kV")
+        runner.on_window(make_payload())
+        assert "HV interlock not permitting 3.0 kV" in errors[-1]
+
+    def test_the_protections_are_checked_on_every_window(self, qapp, funcgen_map):
+        check = protections(True, "")
+        runner = CalibrationRunner(funcgen_map, LoadCondition.ON_PLATES)
+        runner.start_drift(3.0, 12.0, protections_ok=check)
+        before = check.box["calls"]
+        settled(runner)
+        for _ in range(5):
+            runner.on_window(make_payload())
+        assert check.box["calls"] - before >= 5
+
+    def test_a_40_ma_window_during_a_pass_on_the_plates_does_not_end_it(
+            self, qapp, funcgen_map, caplog):
+        # ADR 0006: the application is the witness, not the protection.
+        runner = CalibrationRunner(funcgen_map, LoadCondition.ON_PLATES)
+        finished, errors = [], []
+        runner.finished.connect(finished.append)
+        runner.error.connect(errors.append)
+        runner.start_drift(3.0, 12.0, protections_ok=protections(True, ""))
+        settled(runner)
+        with caplog.at_level("WARNING"):
+            for _ in range(5):
+                runner.on_window(make_payload(current_v=4.0))   # 4 V on the monitor = 40 mA
+        assert not finished and not errors
+        assert state_name(runner) == "COLLECT"
+        assert any("40.0 mA" in m and "not stopping" in m for m in caplog.messages)
+
+    def test_an_excursion_is_logged_once_not_every_window(self, qapp, funcgen_map, caplog):
+        runner = CalibrationRunner(funcgen_map, LoadCondition.ON_PLATES)
+        runner.start_drift(3.0, 12.0, protections_ok=protections(True, ""))
+        settled(runner)
+        with caplog.at_level("WARNING"):
+            for _ in range(20):
+                runner.on_window(make_payload(current_v=4.0))
+        per_channel = [m for m in caplog.messages if "X+ drew" in m]
+        assert len(per_channel) == 1
+
+    def test_a_disconnected_pass_needs_no_protections_check(self, qapp, funcgen_map):
+        runner = CalibrationRunner(funcgen_map, LoadCondition.DISCONNECTED)
+        errors = []
+        runner.error.connect(errors.append)
+        runner.start_drift(3.0, 1.0)
+        settled(runner)
+        assert not errors and state_name(runner) == "COLLECT"
 
     def test_disconnected_10h_accepted(self, qapp, funcgen_map):
         runner = CalibrationRunner(funcgen_map, LoadCondition.DISCONNECTED)

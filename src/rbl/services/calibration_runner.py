@@ -100,7 +100,6 @@ from rbl.config.calibration_config import (
     CAL_TRIP_MIN_DURATION_S,
     CAL_ZERO_DWELL_S,
     DRIFT_LOG_INTERVAL_S,
-    DRIFT_MAX_ATTENDED_H,
     DRIFT_MAX_UNATTENDED_H,
     LoadCondition,
     ac_max_peak_kv,
@@ -199,6 +198,8 @@ class CalibrationRunner(QObject):
         self._seed     = None
         self._orig_state: dict = {}     # amp_label -> get_state() snapshot
         self._current_driven: str = None  # tracks which amp is being driven
+        self._drift_protections_ok = None   # callable() -> (bool, str), ON_PLATES drift only
+        self._drift_overcurrent_logged: dict = {}
 
         self._collect_windows: dict = {}   # ain -> [np.ndarray, ...]
         self._collect_window_count = 0
@@ -375,7 +376,8 @@ class CalibrationRunner(QObject):
         self._enter_step()
 
     def start_drift(self, setpoint_kv: float, duration_h: float,
-                    ac_channels: "dict[str, dict] | None" = None):
+                    ac_channels: "dict[str, dict] | None" = None,
+                    protections_ok=None):
         """Hold one setpoint on all four channels and log every AIN every
         DRIFT_LOG_INTERVAL_S, for duration_h.
 
@@ -397,33 +399,44 @@ class CalibrationRunner(QObject):
             Channels absent from the dict (or when ac_channels is None entirely)
             are driven as DC at setpoint_kv.
 
-        The load-condition duration guard is enforced HERE, not only in the
-        GUI: unattended running (up to DRIFT_MAX_UNATTENDED_H) is permitted
-        only with the amplifier DISCONNECTED from the steerer; ON_PLATES is
-        capped at DRIFT_MAX_ATTENDED_H. A future headless entry point must
-        inherit this rule rather than re-derive it.
+        protections_ok : callable() -> (bool, str) | None
+            REQUIRED for ON_PLATES. A pass on the plates has no time cap
+            (docs/adr/0005): it starts only while this returns (True, ...), is
+            re-checked on every window, and ends - zeroing the outputs and
+            emitting `error` with the reason - the moment it returns
+            (False, reason). The caller supplies "the vacuum HV interlock
+            permits the commanded voltage" and "the spike recorder is running".
+            A callable that raises counts as not ok: an unwatched pass is the
+            thing this exists to prevent. Ignored for DISCONNECTED.
+
+        The guards are enforced HERE, not only in the GUI: a DISCONNECTED pass
+        is capped at DRIFT_MAX_UNATTENDED_H, and an ON_PLATES pass cannot start
+        without `protections_ok`. A future headless entry point must inherit
+        these rules rather than re-derive them.
         """
         if self._state != _State.IDLE:
             self._print_err("start_drift: a run is already in progress")
             return
 
-        max_allowed = (DRIFT_MAX_ATTENDED_H
-                        if self._load_condition is LoadCondition.ON_PLATES
-                        else DRIFT_MAX_UNATTENDED_H)
-        if duration_h > max_allowed:
+        on_plates = self._load_condition is LoadCondition.ON_PLATES
+        if not on_plates and duration_h > DRIFT_MAX_UNATTENDED_H:
             msg = (
                 f"Drift run refused: {duration_h:.2f} h exceeds the "
-                f"{max_allowed:.2f} h cap for load condition "
+                f"{DRIFT_MAX_UNATTENDED_H:.2f} h cap for load condition "
                 f"{self._load_condition.value}."
             )
-            if self._load_condition is LoadCondition.ON_PLATES:
-                msg += (
-                    f" Runs longer than {DRIFT_MAX_ATTENDED_H:.1f} h are only "
-                    "permitted with the amplifier DISCONNECTED from the steerer."
-                )
             self._print_err(msg)
             self.error.emit(msg)
             return
+        self._drift_protections_ok = protections_ok if on_plates else None
+        if on_plates:
+            ok, reason = self._protections_state()
+            if not ok:
+                msg = f"Drift run refused: {reason}."
+                self._print_err(msg)
+                self.error.emit(msg)
+                self._drift_protections_ok = None
+                return
 
         self._mode    = "drift"
         # Clear per-run interlock and driven-channel state.  _current_driven
@@ -498,6 +511,57 @@ class CalibrationRunner(QObject):
         self._trip_consec     = 0
         self._trip_blank_left = CAL_TRIP_BLANK_WINDOWS
         self._settle_timer.start(int(CAL_SETTLE_S * 1000))
+
+    def _protections_state(self) -> tuple:
+        """(ok, reason) from the caller's protections check; fails closed."""
+        if self._drift_protections_ok is None:
+            return False, "no protections check was supplied for a drift pass on the plates"
+        try:
+            ok, reason = self._drift_protections_ok()
+        except Exception as e:
+            return False, f"the protections check failed ({e})"
+        return bool(ok), (reason or "a required protection is not running")
+
+    def _end_for_protection(self, reason: str) -> None:
+        """Stop a drift pass because a protection it depends on stopped.
+
+        Hardware first (_finish zeroes and turns off every output), then the
+        message, the same order as _trip.
+        """
+        msg = f"Drift pass ended: {reason}. Outputs zeroed."
+        self._print_err(msg)
+        self._state = _State.ABORTING
+        self._settle_timer.stop()
+        self._watchdog_timer.stop()
+        try:
+            self._finish(aborted=True)
+        finally:
+            self.error.emit(msg)
+
+    def _observe_drift_overcurrent(self, payload: dict) -> None:
+        """Log, but never act on, current above the continuous rating.
+
+        During a drift pass on the plates the application is the witness
+        (docs/adr/0006): the amplifier's own LIMIT and TRIP are the protection,
+        and stopping a multi-hour pass over a spike would cost more than the
+        spike. Throttled per channel so a persistent excursion does not write
+        ten log lines a second for hours.
+        """
+        now = time.monotonic()
+        for amp in AMP_LABELS:
+            entry = (payload.get("channels") or {}).get(AMP_CHANNEL_MAP[amp]["current"])
+            wave = None if entry is None else entry.get("waveform")
+            if wave is None or len(wave) == 0:
+                continue
+            peak_ma = abs(ma_unclamped(float(np.nanmax(np.abs(np.asarray(wave, dtype=float))))))
+            if not peak_ma > self._trip_ma:
+                continue
+            if now - self._drift_overcurrent_logged.get(amp, -1e9) < 10.0:
+                continue
+            self._drift_overcurrent_logged[amp] = now
+            log.warning("[CAL] drift on the plates: %s drew %.1f mA peak, above the %.0f mA "
+                        "continuous rating - observed, not stopping (ADR 0006)",
+                        amp, peak_ma, self._trip_ma)
 
     def abort(self):
         if self._state in (_State.IDLE, _State.DONE, _State.ABORTING):
@@ -659,6 +723,18 @@ class CalibrationRunner(QObject):
         sp = payload.get("sample_period")
         if sp:
             self._last_sample_period = float(sp)
+        # A drift pass on the plates runs only while its protections do: check
+        # them on every window, before anything else can keep it going.
+        if (self._mode == "drift" and self._drift_protections_ok is not None
+                and self._state in (_State.SETTLE, _State.COLLECT, _State.RECORD)):
+            ok, reason = self._protections_state()
+            if not ok:
+                self._end_for_protection(reason)
+                return
+            try:
+                self._observe_drift_overcurrent(payload)
+            except Exception as e:
+                self._print_err(f"_observe_drift_overcurrent: {e}")
         # Interlock first, and before the state guard: an over-current during
         # SETTLE is still an over-current.
         if self._state in (_State.ZERO, _State.SETTLE,

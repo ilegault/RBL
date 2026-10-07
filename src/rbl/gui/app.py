@@ -44,6 +44,7 @@ from rbl.gui.vacuum_tab import VacuumTab
 from rbl.hardware.camera_source import CameraSource
 from rbl.services.beamline_snapshot import BeamlineSnapshotProvider
 from rbl.services.session_recorder import SessionRecorder
+from rbl.services.spike_recorder import SpikeRecorder
 from rbl.state.beamline import Beamline
 from rbl.util import best_effort
 
@@ -316,6 +317,12 @@ class MainWindow(QMainWindow):
         self.calibration_tab.pair_profile_requested.connect(
             self.beamline.set_stream_pair_profile)
         self.beamline.raw_window_ready.connect(self.calibration_tab.on_window)
+        # The spike recorder watches every driven amplifier's current monitor on
+        # the same raw stream. It records only while something has started it
+        # (a drift pass on the plates today), and commands nothing.
+        self.spike_recorder = SpikeRecorder(self.beamline.funcgen_setpoints, parent=self)
+        self.beamline.raw_window_ready.connect(self.spike_recorder.on_window)
+        self.calibration_tab.set_spike_recorder(self.spike_recorder)
         # A calibration run switching the stream profile out from under
         # AmpTab would corrupt the run if AmpTab's own Apply fired mid-run.
         self.calibration_tab.run_state_changed.connect(
@@ -641,6 +648,7 @@ class MainWindow(QMainWindow):
         best_effort("amp_tab.shutdown",                 self.amp_tab.shutdown)
         best_effort("funcgen_tab.close_session",        self.funcgen_tab.close_session)
         best_effort("calibration_tab.shutdown",         self.calibration_tab.shutdown)
+        best_effort("spike_recorder.stop",              self.spike_recorder.stop)
         best_effort("load_char_tab.shutdown",           self.load_char_tab.shutdown)
         best_effort("dynamic_adjustment_tab.shutdown",  self.dynamic_adjustment_tab.shutdown)
         best_effort("vacuum_tab.shutdown",              self.vacuum_tab.shutdown)
