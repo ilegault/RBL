@@ -9,6 +9,18 @@ Every run is kept as a characterization result (rbl/config/
 characterization_history.py): never overwritten, tagged with the amplifier's
 serial, the plate position, the load condition and the time.
 
+THE SPIKES PANEL
+----------------
+Every current spike the spike recorder logs, as one marker on a log-log chart of
+peak current against duration, with the amplifier's own ratings drawn as zones:
+above 100 mA is over the burst rating, and above 20 mA for longer than 4 ms is
+beyond what a burst may last. Colour is the plate; a HOLLOW marker is a peak that
+is only a lower bound (the spike was shorter than the monitor and sampling can
+resolve, so its true peak was at least that high). The chart shows the current
+run live; "Open spike file..." shows a past run's spikes.csv instead, and live
+spikes then keep accumulating out of sight until "Show live" brings them back,
+so a past run is never mixed with the present one.
+
 THE AMPLIFIERS PANEL
 --------------------
 Every measurement belongs to the AMPLIFIER that produced it, not to the plate it
@@ -37,7 +49,10 @@ documents that file as busy, and this feature has an independent run
 lifecycle (its own runner, its own profile/pair requests) that does not
 share state with a calibration sweep.
 """
+import csv
+import logging
 from datetime import datetime
+from pathlib import Path
 
 import matplotlib
 
@@ -51,6 +66,7 @@ from PySide6.QtWidgets import (
     QDateTimeEdit,
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -74,6 +90,14 @@ from rbl.gui.widgets.connection_bar import LabJackPanel
 from rbl.gui.widgets.inputs import NoScrollComboBox
 from rbl.services.load_characterizer import CLAMP_RATIO_THRESHOLD, LoadCharacterizer, Mode
 from rbl.services.ramp_engine import RampEngine
+
+log = logging.getLogger(__name__)
+
+# The amplifier's ratings, drawn on the spike chart (mA and s).
+CONTINUOUS_RATING_MA = 20.0
+BURST_RATING_MA = 100.0
+BURST_LIMIT_S = 4e-3
+_SPIKE_LIVE_CAP = 5000       # live markers kept; a storm must not make redraws crawl
 
 TABLE_HEADERS = ["Plate position", "Disconnected", "Cable only", "On plates",
                  "Cable minus amplifier", "Plates minus cable"]
@@ -290,6 +314,35 @@ class LoadCharacterizationTab(QWidget):
         top_row.addWidget(plot_box, stretch=1)
 
         layout.addLayout(top_row, stretch=1)
+
+        # ── Spikes: peak current vs duration, live or from a past run ─────────
+        spike_box = QGroupBox("Spikes")
+        spike_lay = QVBoxLayout(spike_box)
+        spike_btns = QHBoxLayout()
+        self.btn_open_spikes = QPushButton("Open spike file...")
+        self.btn_open_spikes.clicked.connect(self._on_open_spike_file)
+        self.btn_show_live = QPushButton("Show live")
+        self.btn_show_live.clicked.connect(self._on_show_live_spikes)
+        self.btn_show_live.setEnabled(False)
+        self.lbl_spikes = QLabel("")
+        self.lbl_spikes.setWordWrap(True)
+        spike_btns.addWidget(self.btn_open_spikes)
+        spike_btns.addWidget(self.btn_show_live)
+        spike_btns.addWidget(self.lbl_spikes, stretch=1)
+        spike_lay.addLayout(spike_btns)
+        self._fig_spikes = Figure(figsize=(6, 3))
+        self._canvas_spikes = FigureCanvasQTAgg(self._fig_spikes)
+        self._canvas_spikes.setMinimumHeight(260)
+        self._canvas_spikes.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                          QSizePolicy.Policy.Expanding)
+        self._ax_spikes = self._fig_spikes.add_subplot(111)
+        spike_lay.addWidget(self._canvas_spikes)
+        layout.addWidget(spike_box)
+        self._live_spikes: list = []
+        self._file_spikes: list | None = None      # None = showing live
+        self._file_name = ""
+        self._file_unreadable = 0
+        self._redraw_spikes()
 
         # ── Per-plate comparison table, grouped by axis ──────────────────────
         table_box = QGroupBox("Load by plate position (newest result per condition)")
@@ -517,6 +570,141 @@ class LoadCharacterizationTab(QWidget):
                        and g > 3 * median_floor)
             first = self.table.item(row, 0)
             first.setBackground(QColor(theme.FAULT) if outlier else clear)
+
+    # ------------------------------------------------------------------
+    # Spikes panel
+    # ------------------------------------------------------------------
+
+    @property
+    def spike_axes(self):
+        """The spike chart's matplotlib axes (for tests)."""
+        return self._ax_spikes
+
+    def set_spike_recorder(self, recorder) -> None:
+        """Plot every spike the recorder logs, as it happens."""
+        recorder.spike_recorded.connect(self.add_spike)
+
+    def add_spike(self, row: dict) -> None:
+        """One live spike (a row as `SpikeRecorder.spike_recorded` emits it)."""
+        spike = self._parse_spike(row)
+        if spike is None:
+            return
+        self._live_spikes.append(spike)
+        del self._live_spikes[:-_SPIKE_LIVE_CAP]
+        if self._file_spikes is None:           # not paused on a past file
+            self._redraw_spikes()
+
+    @staticmethod
+    def _parse_spike(row: dict):
+        """(plate, duration_s, peak_ma, lower_bound) from a recorder or CSV row."""
+        try:
+            plate = row["plate_position"]
+            if plate not in AMP_LABELS:
+                return None
+            duration = float(row["duration_s"])
+            peak = float(row["peak_ma"])
+            lower = row["peak_is_lower_bound"]
+            if not isinstance(lower, bool):
+                lower = str(lower).strip().lower() in ("true", "1")
+            if not (duration > 0 and peak > 0):          # log axes cannot show these
+                return None
+            return plate, duration, peak, lower
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def _ask_spike_file(self):
+        """-> Path or None. The only place the file dialog opens."""
+        name, _ = QFileDialog.getOpenFileName(
+            self, "Open spike file", "", "Spike files (spikes.csv *.csv);;All files (*)")
+        return Path(name) if name else None
+
+    def _on_open_spike_file(self):
+        path = self._ask_spike_file()
+        if path is None:
+            return
+        spikes, unreadable = [], 0
+        try:
+            with open(path, newline="", encoding="utf-8") as f:
+                for row in csv.DictReader(f):
+                    spike = self._parse_spike(row)
+                    if spike is None:
+                        unreadable += 1
+                    else:
+                        spikes.append(spike)
+        except OSError as e:
+            QMessageBox.warning(self, "Spike file not opened", str(e))
+            return
+        self._file_spikes = spikes
+        self._file_name = Path(path).parent.name + "/" + Path(path).name
+        self._file_unreadable = unreadable
+        self.btn_show_live.setEnabled(True)
+        self._redraw_spikes()
+
+    def _on_show_live_spikes(self):
+        self._file_spikes = None
+        self.btn_show_live.setEnabled(False)
+        self._redraw_spikes()
+
+    def _redraw_spikes(self):
+        showing_file = self._file_spikes is not None
+        spikes = self._file_spikes if showing_file else self._live_spikes
+        ax = self._ax_spikes
+        ax.clear()
+
+        # Limits first: a log scale on an axes with no positive data raises.
+        durations = [s[1] for s in spikes]
+        peaks = [s[2] for s in spikes]
+        x_lo = min([5e-5, *durations]) / 2
+        x_hi = max([10.0, *durations]) * 2
+        y_lo = min([1.0, *peaks]) / 2
+        y_hi = max([BURST_RATING_MA * 3, *peaks]) * 2
+        ax.set_xlim(x_lo, x_hi)
+        ax.set_ylim(y_lo, y_hi)
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+
+        ax.fill_between([x_lo, x_hi], [BURST_RATING_MA] * 2, [y_hi] * 2,
+                        color=theme.FAULT, alpha=0.12, label="over burst rating")
+        ax.fill_between([BURST_LIMIT_S, x_hi], [CONTINUOUS_RATING_MA] * 2, [y_hi] * 2,
+                        color=theme.WARN, alpha=0.12, label="beyond 4 ms burst")
+        ax.axhline(CONTINUOUS_RATING_MA, color=theme.WARN, linestyle="-", linewidth=1.0)
+        ax.axhline(BURST_RATING_MA, color=theme.FAULT, linestyle=":", linewidth=1.0)
+        ax.text(x_lo * 1.2, CONTINUOUS_RATING_MA * 1.08, "20 mA continuous", fontsize=7,
+                color=theme.WARN, va="bottom")
+        ax.text(x_lo * 1.2, BURST_RATING_MA * 1.08, "100 mA burst", fontsize=7,
+                color=theme.FAULT, va="bottom")
+        ax.axvline(BURST_LIMIT_S, color=theme.NEUTRAL, linestyle="--", linewidth=0.8)
+
+        counts = {plate: 0 for plate in AMP_LABELS}
+        for i, plate in enumerate(AMP_LABELS):
+            mine = [s for s in spikes if s[0] == plate]
+            counts[plate] = len(mine)
+            if not mine:
+                continue
+            colour = f"C{i}"
+            ax.scatter([s[1] for s in mine], [s[2] for s in mine],
+                       s=36, edgecolors=colour, linewidths=1.4,
+                       facecolors=["none" if s[3] else colour for s in mine],
+                       label=plate, zorder=3)
+        ax.set_xlabel("Spike duration (s)")
+        ax.set_ylabel("Peak current (mA)")
+        ax.grid(True, which="both", alpha=0.25)
+        if any(counts.values()):
+            ax.legend(fontsize="x-small", loc="lower left")
+        self._fig_spikes.tight_layout()
+        self._canvas_spikes.draw_idle()
+
+        per_plate = "   ".join(f"{plate} {n}" for plate, n in counts.items())
+        if showing_file:
+            note = f"{self._file_name}: {per_plate}"
+            if self._file_unreadable:
+                note += (f"   ({self._file_unreadable} unreadable row(s) skipped; "
+                         f"live spikes paused)")
+            else:
+                note += "   (live spikes paused)"
+        else:
+            note = f"live: {per_plate}"
+        self.lbl_spikes.setText(note)
 
     # ------------------------------------------------------------------
     # Amplifiers panel
