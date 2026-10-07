@@ -1,6 +1,6 @@
 # 40: No fallback capacitance outside the UI: measured, or a named sizing assumption
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
