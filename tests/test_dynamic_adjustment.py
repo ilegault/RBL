@@ -13,6 +13,7 @@ import pytest
 from PySide6.QtWidgets import QApplication
 
 from rbl.config.hardware_config import AMP_CHANNEL_MAP
+from rbl.hardware.amp_monitor import ma_to_monitor
 from rbl.services.dynamic_adjustment import (
     TRIAL_FREQ_HZ,
     TRIAL_PEAK_KV,
@@ -128,7 +129,7 @@ class TestFullTrialPipeline:
         # detector (designed for a real amplifier's charge/discharge pulse
         # train) has an unambiguous signal to lock onto.
         i_ma = 10.0 * np.exp(-t_since_edge / 2e-4) + 0.1
-        _feed_square_wave(trial, i_ma / 10.0, fs, stop_stage="current")
+        _feed_square_wave(trial, ma_to_monitor(i_ma), fs, stop_stage="current")
 
         assert completed, "trial did not complete"
         return completed[0]

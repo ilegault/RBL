@@ -38,9 +38,10 @@ import numpy as np
 
 from rbl.config.calibration_config import (
     AMP_BURST_RATING_MA,
-    CAL_AC_TRIP_MA,
+    CAL_AC_TRIP_MA,  # noqa: F401 — preserved so tests can verify continuous_ma is decoupled from it
     CAL_MAX_KV,
 )
+from rbl.config.hardware_config import AMP_CONTINUOUS_RATING_MA
 from rbl.config.raster_defaults import AMP_MAX_BANDWIDTH_HZ
 from rbl.hardware import slit_raster_model as srm
 from rbl.hardware.load_model import envelope_walls, shape_k
@@ -198,7 +199,7 @@ def envelope_status(
         axis = aoc[label]
         f    = freq_of_axis[axis]
         kv   = plate_kv[axis]
-        walls = envelope_walls(load_pf=c_pf, trip_ma=CAL_AC_TRIP_MA,
+        walls = envelope_walls(load_pf=c_pf, trip_ma=AMP_CONTINUOUS_RATING_MA,
                                shape="triangle", max_kv=CAL_MAX_KV,
                                max_f_hz=AMP_MAX_BANDWIDTH_HZ)
         if f <= AMP_MAX_BANDWIDTH_HZ:
@@ -311,7 +312,7 @@ def current_vs_frequency(
         "freq_hz":         [float(f) for f in freqs],
         "series":          series,
         "operating_point": operating_point,
-        "levels":          {"continuous_ma": CAL_AC_TRIP_MA,
+        "levels":          {"continuous_ma": AMP_CONTINUOUS_RATING_MA,
                             "burst_ma": AMP_BURST_RATING_MA},
         "verdict":         verdict,
     }
