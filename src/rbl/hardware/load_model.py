@@ -58,6 +58,11 @@ _SHAPE_K = {
 AMP_SLEW_V_PER_US = 300.0
 
 
+def shape_k(shape: str) -> float:
+    """Public k factor for I_pk = k * f * C * V_pk (see `_SHAPE_K`)."""
+    return _shape_k(shape)
+
+
 def _shape_k(shape: str) -> float:
     try:
         return _SHAPE_K[shape.lower()]
