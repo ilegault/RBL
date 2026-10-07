@@ -568,6 +568,26 @@ class TestModeCLadderAborts:
         assert _only_result()["abort_rule"] == "operator"
 
 
+class TestModeAStartsFromTheMeasuredLoad:
+    def test_a_measured_plate_sizes_its_first_amplitude_from_its_own_capacitance(
+            self, qapp, funcgen_map):
+        from rbl.config import characterization_history as ch
+        ch.write_result(
+            {"plate_position": "X+", "amplifier_serial": "unassigned",
+             "load_condition": "ON_PLATES", "method": "impedance_sweep",
+             "values": {"c_pf": 1000.0, "g_us": 0.0}},
+            datetime.now().astimezone() - timedelta(days=1))
+        gen, _ = funcgen_map["X+"]
+        LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES).start_mode_a(
+            "X+", freq_list=[1000.0])                       # measured: 1000 pF
+        LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES).start_mode_a(
+            "X-", freq_list=[1000.0])                       # unmeasured: sizing assumption
+        sines = {c[1]: c[4] for c in gen.calls if c[0] == "set_waveform" and c[2] == "Sine"}
+        # Channel 1 is X+, channel 2 is X-: 3000 pF is three times 1000 pF, so
+        # the same target current needs a third of the amplitude.
+        assert sines[1] == pytest.approx(3 * sines[2], rel=1e-6)
+
+
 class TestModeA:
     def test_recovers_known_capacitance_from_synthetic_sine(self, qapp, funcgen_map):
         lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES)
@@ -602,11 +622,12 @@ class TestModeA:
     def test_amplitude_chosen_to_target_current_band(self, qapp, funcgen_map):
         lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES)
         v = lc._mode_a_amplitude_for(1000.0)
-        # I = 2*pi*f*C*V -> should land near MODE_A_TARGET_MA at CAL_LOAD_CAP_PF.
+        # I = 2*pi*f*C*V -> should land near MODE_A_TARGET_MA at SIZING_ASSUMPTION_PF
+        # (nothing is measured for X+ here).
         import math
 
-        from rbl.config.calibration_config import CAL_LOAD_CAP_PF
-        i_ma = 2 * math.pi * 1000.0 * (CAL_LOAD_CAP_PF * 1e-12) * (v * 1000.0) * 1e3
+        from rbl.config.calibration_config import SIZING_ASSUMPTION_PF
+        i_ma = 2 * math.pi * 1000.0 * (SIZING_ASSUMPTION_PF * 1e-12) * (v * 1000.0) * 1e3
         assert i_ma == pytest.approx(4.0, rel=0.05)
 
     def test_unknown_amp_label_raises(self, qapp, funcgen_map):

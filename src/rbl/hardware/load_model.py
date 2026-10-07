@@ -6,8 +6,8 @@ docs/AMP_ENVELOPE_AND_HV_SAFETY_PLAN.md into curves a plot can draw.
 
 WHY THIS EXISTS
 ---------------
-`CAL_LOAD_CAP_PF` in `calibration_config.py` is a single global number,
-hand-derived once from a one-off analysis of two AC sweeps. It answers "how
+The old global capacitance guess in `calibration_config.py` was a single
+number, hand-derived once from a one-off analysis of two AC sweeps. It answers "how
 big is the load" but not "is this channel leaky" or "did the model just
 break down at 3 kHz" — and it cannot, by construction, tell the four
 channels apart. This module is the arithmetic that a *measurement* needs:

@@ -202,3 +202,27 @@ class TestUnknownChannel:
         engine.retarget("Z+", 1.0, mode="offset")
         assert failures and failures[0][0] == "Z+"
         assert not engine.is_ramping("Z+")
+
+
+
+class TestDefaultLoadLookup:
+    """Without a lookup of its own the engine asks the characterization results:
+    a measured plate gives its capacitance, an unmeasured one the named sizing
+    assumption (large, so the predicted current errs high)."""
+
+    def test_a_measured_label_and_an_unmeasured_one(self, qapp):
+        from datetime import datetime, timedelta
+
+        from rbl.config import characterization_history as ch
+        ch.write_result(
+            {"plate_position": "X+", "amplifier_serial": "unassigned",
+             "load_condition": "ON_PLATES", "method": "impedance_sweep",
+             "values": {"c_pf": 1600.0, "g_us": 0.0}},
+            datetime.now().astimezone() - timedelta(days=1))
+        engine = RampEngine({})
+        assert engine.load_pf("X+") == 1600.0
+        assert engine.load_pf("Y-") == 3000
+
+    def test_an_explicit_lookup_still_wins(self, qapp):
+        engine = RampEngine({}, load_pf_for_label=lambda label: 42.0)
+        assert engine.load_pf("X+") == 42.0

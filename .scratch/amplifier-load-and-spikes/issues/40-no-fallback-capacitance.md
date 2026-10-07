@@ -1,6 +1,6 @@
 # 40: No fallback capacitance outside the UI: measured, or a named sizing assumption
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -37,11 +37,11 @@ Tests may fake: nothing on disk; history files in the temp folder.
 
 ## Acceptance criteria
 
-- [ ] `_resolve_load_pf(None, 'X+')` with an on-plates X+ result of 1600 pF returns 1600.0; with only a cable-only result it returns 3000.
-- [ ] Rewritten `test_ac_max_peak_kv_uses_measured_capacitance_for_labelled_channel` passes using a measured Y+ result written through `write_result`.
-- [ ] A `RampEngine` built without `load_pf_for_label` returns 1600.0 from its load lookup for a measured label and 3000 for an unmeasured one.
-- [ ] `grep -rn CAL_LOAD_CAP_PF src` finds nothing, and a test asserts `not hasattr(calibration_config, 'CAL_LOAD_CAP_PF')`.
-- [ ] The first line under the section 1.4 heading of `docs/AMP_ENVELOPE_AND_HV_SAFETY_PLAN.md` begins `Superseded 2026-10`.
+- [x] `_resolve_load_pf(None, 'X+')` with an on-plates X+ result of 1600 pF returns 1600.0; with only a cable-only result it returns 3000.
+- [x] Rewritten `test_ac_max_peak_kv_uses_measured_capacitance_for_labelled_channel` passes using a measured Y+ result written through `write_result`.
+- [x] A `RampEngine` built without `load_pf_for_label` returns 1600.0 from its load lookup for a measured label and 3000 for an unmeasured one.
+- [x] `grep -rn CAL_LOAD_CAP_PF src` finds nothing, and a test asserts `not hasattr(calibration_config, 'CAL_LOAD_CAP_PF')`.
+- [x] The first line under the section 1.4 heading of `docs/AMP_ENVELOPE_AND_HV_SAFETY_PLAN.md` begins `Superseded 2026-10`.
 
 ## Gate
 
@@ -53,3 +53,6 @@ Run in CI's order (`.github/workflows/tests.yml`):
     pytest --tb=short -q -n auto --dist loadfile --durations=25
 
 ## Comments
+
+2026-10-07: Done. `CAL_LOAD_CAP_PF` (1500) is gone; `SIZING_ASSUMPTION_PF = 3000` replaces it, commented as an assumption used only to size a first amplitude or a ramp. `_resolve_load_pf` (public alias `resolve_load_pf`, plus `resolve_load_pf_with_basis` returning "measured" / "sizing assumption" / "given") reads `characterization_history.newest_on_plates_c_pf` and never the retired store. `RampEngine` defaults to it (new public `load_pf(label)` so it is tested without private access); `LoadCharacterizer` starts Mode A from it; `CalibrationRunner` sizes the AC ladder for the heaviest driven channel and its run note names the C and its basis. Docstrings across `src/` updated, `load_calibration_store` marked RETIRED, the plan's section 1.4 carries the superseded line. The six tests in `tests/test_calibration_config_load.py` rewritten in place, same names, plus new ones for the criteria.
+Behaviour change to know about: the AC calibration ladder used to be capped at 1500 pF; with no measurement it is now capped at 3000 pF, so un-characterized plates get a ladder roughly half as tall at high frequency until they are measured. That is the intended "treat an unmeasured load as large".

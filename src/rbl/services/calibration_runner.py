@@ -91,7 +91,6 @@ from rbl.config.calibration_config import (
     CAL_AC_SETTLE_S,
     CAL_AC_TRIP_MA,
     CAL_COLLECT_S,
-    CAL_LOAD_CAP_PF,
     CAL_MAX_KV,
     CAL_PASSES,
     CAL_SETTLE_S,
@@ -108,6 +107,7 @@ from rbl.config.calibration_config import (
     ac_peak_current_ma,
     ac_shape_k,
     ac_sweep_points,
+    resolve_load_pf_with_basis,
     sweep_points,
 )
 from rbl.config.hardware_config import AMP_AIN_NAMES, AMP_CHANNEL_MAP, AMP_LABELS
@@ -705,6 +705,19 @@ class CalibrationRunner(QObject):
                 pass_counter += 1
         return seq
 
+    def _ladder_load_pf(self) -> tuple:
+        """(c_pf, basis) that sizes the AC ladder.
+
+        One ladder serves every driven channel, so it is sized for the heaviest
+        load among them: the largest of each channel's newest measured on-plates
+        capacitance, with SIZING_ASSUMPTION_PF standing in for a channel that
+        has none. The basis says which it was ("measured" or "sizing
+        assumption"), so the run note never presents an assumption as a
+        measurement.
+        """
+        resolved = [resolve_load_pf_with_basis(None, amp) for amp in self._channels]
+        return max(resolved, key=lambda pair: pair[0])
+
     def _build_ac_sequence(self) -> list:
         """AC sweep: amplitude ramp for each selected channel (up then down).
 
@@ -719,18 +732,20 @@ class CalibrationRunner(QObject):
         # set by the steepest dV/dt, and a triangle's is 4fV while a sine's is
         # 2*pi*fV. Passing the shape stops a triangle run being capped as if it
         # were a sine, which held the ladder ~57% below the real current wall.
-        ceiling = ac_max_peak_kv(self._ac_freq_hz, shape=self._ac_shape)
+        c_pf, c_basis = self._ladder_load_pf()
+        ceiling = ac_max_peak_kv(self._ac_freq_hz, load_pf=c_pf, shape=self._ac_shape)
         pts = ac_sweep_points(ceiling)
         top = max(pts) if pts else 0.0
         if ceiling < CAL_MAX_KV - 1e-9:
             log.info("[CAL] AC ladder capped at %.1f kV pk for %.0f Hz %s "
-                     "(current limit %.0f mA, assumed C=%.0f pF -> %.1f mA at top rung); "
+                     "(current limit %.0f mA, C=%.0f pF [%s] -> %.1f mA at top rung); "
                      "amplifier rating is %.1f kV. "
-                     "This is a PREDICTION from an assumed capacitance; the "
-                     "recorded current is measured, not derived from it.",
+                     "This is a PREDICTION; the recorded current is measured, "
+                     "not derived from it.",
                      top, self._ac_freq_hz, self._ac_shape, self._trip_ma,
-                     CAL_LOAD_CAP_PF,
-                     ac_peak_current_ma(self._ac_freq_hz, top, shape=self._ac_shape),
+                     c_pf, c_basis,
+                     ac_peak_current_ma(self._ac_freq_hz, top, load_pf=c_pf,
+                                        shape=self._ac_shape),
                      CAL_MAX_KV)
         for pass_idx, amp in enumerate(self._channels):
             for point_idx, peak_kv in enumerate(pts):
@@ -1257,10 +1272,11 @@ class CalibrationRunner(QObject):
             ),
         }
         if ac:
-            note["ladder_cap_kv"] = ac_max_peak_kv(self._ac_freq_hz,
+            c_pf, c_basis = self._ladder_load_pf()
+            note["ladder_cap_kv"] = ac_max_peak_kv(self._ac_freq_hz, load_pf=c_pf,
                                                    shape=self._ac_shape)
             note["ladder_cap_basis"] = (
-                f"PREDICTION ONLY, from assumed C={CAL_LOAD_CAP_PF:.0f} pF and "
+                f"PREDICTION ONLY, from C={c_pf:.0f} pF ({c_basis}) and "
                 f"I_pk = {ac_shape_k(self._ac_shape):.3f}*f*C*V_pk for shape "
                 f"{self._ac_shape}. Sizes the ladder before the run; never used "
                 f"to interpret a measurement."
