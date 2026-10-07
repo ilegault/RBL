@@ -21,6 +21,7 @@ from rbl.config.calibration_config import LoadCondition
 from rbl.services.load_characterizer import (
     GUI_REFRESH_HZ,
     MODE_C_FREQ_HZ,
+    MODE_C_LADDER_KV,
     MODE_C_PEAK_KV,
     LoadCharacterizer,
     _State,
@@ -165,7 +166,7 @@ class TestResultFiles:
     def test_a_completed_mode_c_run_is_a_charge_integral_ladder_result(
             self, qapp, funcgen_map):
         lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES)
-        lc.start_mode_c("X+")
+        lc.start_mode_c("X+", ladder_kv=[MODE_C_PEAK_KV])     # one rung
         fs = 1_000_000.0
         step = _begin_collect(lc)
         n = int(fs * step.collect_s)
@@ -203,6 +204,157 @@ class TestResultFiles:
         _run_mode_a_sine(lc)
         assert _result_files()
         assert not store.STORE_PATH.exists()
+
+
+def _feed_rung(lc, step, c_pf=1200.0, tau_s=100e-6, fs=500_000.0, leak_ma=0.0):
+    """Feed one complete synthetic Mode C rung: a +/-step.peak_kv square wave
+    whose edges each deliver exactly C x dV, decaying with time constant tau.
+
+    tau defaults to 50 sample intervals: a sampled step edge makes the trapezoid
+    integral read high by about half a sample's share (dt / 2 tau), so a
+    coarser tau would put that quantisation, not the analysis, in the result.
+    """
+    n = int(fs * step.collect_s)
+    period = int(fs / MODE_C_FREQ_HZ)
+    v = step.peak_kv * np.sign(np.sin(2 * np.pi * MODE_C_FREQ_HZ * np.arange(n) / fs))
+    q = c_pf * 1e-12 * 2 * step.peak_kv * 1000.0
+    i_ma = np.full(n, float(leak_ma))
+    for k, pos in enumerate(np.arange(period // 2, n, period // 2)):
+        idx = np.arange(pos, min(pos + int(12 * tau_s * fs), n))
+        i_ma[idx] += (1.0 if k % 2 == 0 else -1.0) * (q / tau_s) * np.exp(
+            -(idx - pos) / (tau_s * fs)) * 1e3
+    windows = max(1, round(step.collect_s * GUI_REFRESH_HZ))
+    chunk = n // windows
+    for w in range(windows):
+        lc.on_window({"sample_period": 1.0 / fs,
+                      "channels": {"AIN13": {"waveform": v[w*chunk:(w+1)*chunk]},
+                                   "AIN12": {"waveform": (i_ma / 10.0)[w*chunk:(w+1)*chunk]}}})
+
+
+def _run_ladder(lc, ladder_kv=None, **kw):
+    lc.start_mode_c("X+", ladder_kv=ladder_kv)
+    done = 0
+    total = len(ladder_kv) if ladder_kv else len(MODE_C_LADDER_KV)
+    while done < total:
+        step = _begin_collect(lc)
+        _feed_rung(lc, step, **kw)
+        done += 1
+
+
+class TestModeCLadder:
+    """Ticket 43: one run steps through the rungs and reports each."""
+
+    def test_the_default_ladder_is_half_a_kilovolt_to_five(self):
+        assert MODE_C_LADDER_KV == [0.5, 1.0, 2.0, 3.0, 4.0, 5.0]
+
+    def test_six_rungs_each_recover_the_capacitance(self, qapp, funcgen_map):
+        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES)
+        points = []
+        lc.point_measured.connect(points.append)
+        _run_ladder(lc)
+        assert [p["rung_kv"] for p in points] == [0.5, 1.0, 2.0, 3.0, 4.0, 5.0]
+        for p in points:
+            assert p["c_pf_mean"] == pytest.approx(1200.0, rel=0.3)
+
+    def test_the_written_result_is_the_mean_of_the_rungs(self, qapp, funcgen_map):
+        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES)
+        points = []
+        lc.point_measured.connect(points.append)
+        _run_ladder(lc)
+        (path,) = _result_files()
+        rec = json.loads(path.read_text(encoding="utf-8"))
+        assert rec["method"] == "charge_integral_ladder"
+        assert len(rec["points"]) == 6
+        assert rec["values"]["c_pf"] == pytest.approx(
+            sum(p["c_pf_mean"] for p in points) / 6, abs=1e-9)
+        assert not rec.get("aborted")
+
+    def test_each_rung_reports_the_edge_charge_as_c_times_the_step(self, qapp, funcgen_map):
+        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES)
+        points = []
+        lc.point_measured.connect(points.append)
+        _run_ladder(lc, ladder_kv=[0.5, 2.0, 5.0])
+        for p in points:
+            # C [pF] x dV [kV] x 1e-3 = charge in uC
+            assert p["edge_charge_uc"] == pytest.approx(
+                1200.0 * 2 * p["rung_kv"] * 1e-3, rel=0.05)
+            assert p["measured_swing_kv"] == pytest.approx(2 * p["rung_kv"], rel=0.01)
+
+    @pytest.mark.parametrize("tau_s, lower_bound", [(20e-6, True), (300e-6, False)])
+    def test_a_narrow_edge_peak_is_flagged_as_a_lower_bound(
+            self, qapp, funcgen_map, tau_s, lower_bound):
+        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES)
+        points = []
+        lc.point_measured.connect(points.append)
+        _run_ladder(lc, ladder_kv=[1.0], tau_s=tau_s)
+        (p,) = points
+        assert p["edge_peak_is_lower_bound"] is lower_bound
+        # time above half the peak of an exponential decay is tau x ln 2
+        assert p["edge_duration_us"] == pytest.approx(tau_s * np.log(2) * 1e6, rel=0.15)
+
+    def test_the_edge_peak_current_is_reported(self, qapp, funcgen_map):
+        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES)
+        points = []
+        lc.point_measured.connect(points.append)
+        _run_ladder(lc, ladder_kv=[1.0], tau_s=300e-6)
+        q = 1200.0 * 1e-12 * 2 * 1.0 * 1000.0
+        assert points[0]["edge_peak_ma"] == pytest.approx(q / 300e-6 * 1e3, rel=0.05)
+
+    def test_an_edge_whose_current_leads_the_detected_voltage_jump_is_not_biased(
+            self, qapp, funcgen_map):
+        # In the synthetic trace the voltage jump is detected a sample after the
+        # current onset (as it can be on the bench). With the baseline taken
+        # from the samples just before the detected jump, that largest sample
+        # leaked into the baseline and C read about a third low.
+        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES)
+        points = []
+        lc.point_measured.connect(points.append)
+        _run_ladder(lc, ladder_kv=[1.0], tau_s=80e-6)
+        assert points[0]["c_pf_mean"] == pytest.approx(1200.0, rel=0.05)
+
+    def test_leakage_between_edges_is_reported_in_microamps(self, qapp, funcgen_map):
+        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES)
+        points = []
+        lc.point_measured.connect(points.append)
+        _run_ladder(lc, ladder_kv=[1.0], leak_ma=0.02)
+        assert points[0]["inter_edge_leak_ua"] == pytest.approx(20.0, rel=0.1)
+        # and the capacitance is not disturbed by a steady leak
+        assert points[0]["c_pf_mean"] == pytest.approx(1200.0, rel=0.3)
+
+    def test_no_edges_still_reports_every_new_key(self, qapp, funcgen_map):
+        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES)
+        points = []
+        lc.point_measured.connect(points.append)
+        lc.start_mode_c("X+", ladder_kv=[1.0])
+        step = _begin_collect(lc)
+        _feed_windows(lc, {"AIN13": 1.0, "AIN12": 0.0},
+                      n_windows=max(1, round(step.collect_s * GUI_REFRESH_HZ)))
+        (p,) = points
+        assert p["rung_kv"] == 1.0 and p["n_edges"] == 0
+        for key in ("measured_swing_kv", "edge_peak_ma", "edge_duration_us",
+                    "edge_charge_uc"):
+            assert np.isnan(p[key])
+        assert p["edge_peak_is_lower_bound"] is False
+
+    def test_every_rung_is_driven_as_a_square_wave_at_the_edge_frequency(
+            self, qapp, funcgen_map):
+        # The charge-integral method needs sharp edges; a sine has none.
+        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES)
+        _run_ladder(lc, ladder_kv=[0.5, 1.0])
+        gen, _ch = funcgen_map["X+"]
+        # The run ends by zeroing the output (a "DC" call); the rungs themselves
+        # are the AC calls.
+        waves = [(c[2], c[3], c[4]) for c in gen.calls
+                 if c[0] == "set_waveform" and c[2] != "DC"]
+        assert [(w[0], w[1]) for w in waves] == [("Square", MODE_C_FREQ_HZ)] * 2
+        assert waves[1][2] == pytest.approx(2 * waves[0][2])    # 1.0 kV is twice 0.5 kV
+
+    def test_progress_counts_the_rungs(self, qapp, funcgen_map):
+        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES)
+        seen = []
+        lc.progress.connect(lambda done, total, label: seen.append((done, total)))
+        _run_ladder(lc, ladder_kv=[0.5, 1.0, 2.0])
+        assert seen == [(0, 3), (1, 3), (2, 3)]
 
 
 class TestModeA:

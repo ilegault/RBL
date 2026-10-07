@@ -1,6 +1,6 @@
 # 43: Mode C steps from 0.5 to 5 kV and reports C and the edge spike at every rung
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -31,11 +31,11 @@ test does).
 
 ## Acceptance criteria
 
-- [ ] A synthetic 1200 pF load across all six rungs: six `point_measured` emissions with `rung_kv` 0.5, 1, 2, 3, 4, 5, each `c_pf_mean` within the existing test's tolerance of 1200.
-- [ ] The written result's `values.c_pf` equals the mean of the six rung values to 1e-9.
-- [ ] A synthetic edge 20 us wide reports `edge_peak_is_lower_bound is True`; one 300 us wide reports `False`.
-- [ ] Each rung's `edge_charge_uc` equals C x 2 x rung_kv within 5 %.
-- [ ] `test_finds_edges_and_recovers_capacitance_ballpark` and `test_no_edges_reports_nan_not_a_crash` pass unchanged.
+- [x] A synthetic 1200 pF load across all six rungs: six `point_measured` emissions with `rung_kv` 0.5, 1, 2, 3, 4, 5, each `c_pf_mean` within the existing test's tolerance of 1200.
+- [x] The written result's `values.c_pf` equals the mean of the six rung values to 1e-9.
+- [x] A synthetic edge 20 us wide reports `edge_peak_is_lower_bound is True`; one 300 us wide reports `False`.
+- [x] Each rung's `edge_charge_uc` equals C x 2 x rung_kv within 5 %.
+- [x] `test_finds_edges_and_recovers_capacitance_ballpark` and `test_no_edges_reports_nan_not_a_crash` pass unchanged.
 
 ## Gate
 
@@ -47,3 +47,9 @@ Run in CI's order (`.github/workflows/tests.yml`):
     pytest --tb=short -q -n auto --dist loadfile --durations=25
 
 ## Comments
+
+2026-10-07: Done. Mode C steps through `MODE_C_LADDER_KV` (0.5 to 5 kV) and every rung reports `rung_kv`, `measured_swing_kv`, `edge_peak_ma`, `edge_duration_us`, `edge_charge_uc`, `inter_edge_leak_ua` and `edge_peak_is_lower_bound`; the result's `values.c_pf` is the mean of the rungs. Tests: `TestModeCLadder` in `tests/test_load_characterizer.py`; the two existing Mode C tests pass unchanged. One test I wrote for ticket 37 (`test_a_completed_mode_c_run_is_a_charge_integral_ladder_result`) now asks for a single-rung ladder, since a default run is six rungs.
+Two defects found in the existing Mode C and fixed here, because the ladder cannot be trusted without them (both need bench confirmation, see ticket 52):
+- Mode C was COMMANDED as a sine (`command_sine`) while the analysis looks for sharp square-wave edges. It now commands a square wave.
+- The edge baseline was averaged from the samples just before the detected voltage jump, so when the current onset leads that jump by a sample the largest sample of the edge leaked into the baseline and C read about a third low (verified: 821 pF for a 1200 pF synthetic). The baseline now comes from the stretch before the integration window; a regression test fails on the old code.
+Mode C no longer writes a made-up `g_us` of 0.0 (it does not measure conductance), so a zero cannot distort the conductance outlier median in ticket 38. Abort rules are ticket 44.
