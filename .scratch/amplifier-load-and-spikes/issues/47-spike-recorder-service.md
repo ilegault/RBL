@@ -1,6 +1,6 @@
 # 47: The spike recorder: a reference per operating point, a spike file, and waveforms
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -38,11 +38,11 @@ Tests may fake: the payload (synthetic windows), the setpoints object, and the c
 
 ## Acceptance criteria
 
-- [ ] 60 s of a steady 2 mA current payload then one 6 mA, 1 ms excursion writes exactly one `spikes.csv` row for that plate with `peak_ma` 6 within 5 %, and one waveform file spanning 2 s either side.
-- [ ] An excursion in the first 60 s writes no row; after a setpoint change, an excursion in the next 60 s writes no row.
-- [ ] Two spikes 50 ms apart: the second row has `gap_to_previous_s` 0.05 within one sample interval, and both land in one waveform file.
-- [ ] A plate whose setpoint has `output_on=False` produces no rows whatever its payload contains.
-- [ ] With every setpoint-mutating, generator and drive method replaced by a function that fails the test, a full run with spikes passes.
+- [x] 60 s of a steady 2 mA current payload then one 6 mA, 1 ms excursion writes exactly one `spikes.csv` row for that plate with `peak_ma` 6 within 5 %, and one waveform file spanning 2 s either side.
+- [x] An excursion in the first 60 s writes no row; after a setpoint change, an excursion in the next 60 s writes no row.
+- [x] Two spikes 50 ms apart: the second row has `gap_to_previous_s` 0.05 within one sample interval, and both land in one waveform file.
+- [x] A plate whose setpoint has `output_on=False` produces no rows whatever its payload contains.
+- [x] With every setpoint-mutating, generator and drive method replaced by a function that fails the test, a full run with spikes passes.
 
 ## Gate
 
@@ -54,3 +54,11 @@ Run in CI's order (`.github/workflows/tests.yml`):
     pytest --tb=short -q -n auto --dist loadfile --durations=25
 
 ## Comments
+
+2026-10-07: Done. `services/spike_recorder.py`; tests in `tests/test_spike_recorder.py` (18). Choices the ticket left open:
+- `gap_to_previous_s` runs from the END of the previous spike to the START of this one (the manual's 100 ms recovery period runs from the end of a burst). The 50 ms criterion test places the second spike 50 ms after the first ends.
+- The recorder connects `FuncGenSetpoints.changed` itself in its constructor so it re-captures even when built alone; ticket 48's wiring in MainWindow repeats the same reset harmlessly.
+- Rows with no amplifier assignment on record say `not recorded` (never a guess). This reads `config/amplifier_assignments` from ticket 35, which the ticket's `Blocked by` did not list; 35 was merged first.
+- A merged waveform file is capped at 60 s (MAX_EVENT_S) so a storm of spikes cannot grow memory for hours.
+- Not done here (belongs to ticket 48): the entry in the session event log.
+- Verified the "never commands" test is real: a deliberate setpoint call inside the recorder fails it.
