@@ -1,6 +1,6 @@
 # 35: Amplifier assignment history: initial assignment, swaps and hardware changes
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
