@@ -1,6 +1,6 @@
 # 59: A one-shot script archives every store written with the old current scale
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
