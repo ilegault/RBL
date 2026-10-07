@@ -1,6 +1,6 @@
 # 23: Video can start and stop several times in one session without overwriting
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -42,17 +42,17 @@ camera (an open fake camera QObject with `frame_ready`). Must be real: `SessionR
 
 ## Acceptance criteria
 
-- [ ] `VideoRecorder` constructed with `first_segment_index=3` names its first segment
+- [x] `VideoRecorder` constructed with `first_segment_index=3` names its first segment
       `video_003.*`.
-- [ ] Two `VideoRecorder` runs in one folder: `frames.csv` has one header row and the
+- [x] Two `VideoRecorder` runs in one folder: `frames.csv` has one header row and the
       rows of both runs.
-- [ ] Session test: start session, `start_video()`, offer frames, `stop_video()`,
+- [x] Session test: start session, `start_video()`, offer frames, `stop_video()`,
       `start_video()`, offer frames, stop session. No segment file name repeats, the first
       run's segment file still exists, `events.csv` has two `video_started` and two
       `video_stopped`, and `session.json` `video.runs` has two entries.
-- [ ] `start_video()` before `start()` returns `False` and creates no file; called twice
+- [x] `start_video()` before `start()` returns `False` and creates no file; called twice
       while running, the second returns `False`.
-- [ ] Every existing test in `tests/test_video_recorder.py` and
+- [x] Every existing test in `tests/test_video_recorder.py` and
       `tests/test_session_recorder.py` passes unchanged.
 
 ## Gate
@@ -65,3 +65,11 @@ Run in CI's order (`.github/workflows/tests.yml`):
     pytest --tb=short -q -n auto --dist loadfile --durations=25
 
 ## Comments
+
+Implemented 2026-10-07:
+- `VideoRecorder.__init__` gains `first_segment_index: int = 0`; `start()` opens `frames.csv` in append mode, writing the header only when the file is new or empty.
+- `SessionRecorder.start_video() -> bool`: guards against not recording, video already running, and closed camera; constructs `VideoRecorder` with `first_segment_index` pointing to next unused segment index.
+- `SessionRecorder.stop_video(detail="")`: disconnects `frame_ready`, stops `VideoRecorder`, sets `stopped_t_rel` and `last_segment` on the run, increments `_next_segment_index`, and writes `video_stopped` event.
+- `events.csv` logs `video_started` and `video_stopped` (detail `camera_closed` when `_on_camera_closed` ends a run).
+- `session.json` `video` records `"runs": [{"started_t_rel", "stopped_t_rel", "first_segment", "last_segment"}]`.
+- Tests in `tests/test_video_recorder.py` (`test_first_segment_index`, `test_two_video_runs_append_frames_csv`) and `tests/test_session_recorder.py` (`test_start_video_guards_and_refusals`, `test_session_video_start_stop_multiple_runs_no_overwrite`, `test_camera_closed_ends_video_run_session_continues`, `test_session_start_with_video_enabled_backwards_compat`) cover all criteria. All 2325 tests pass.

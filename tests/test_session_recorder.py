@@ -360,3 +360,178 @@ def test_main_window_wires_vacuum_changed_to_session_recorder(qapp, monkeypatch)
     win.beamline.vacuum_changed.emit(st)
     assert delivered == [st]
     win.close()
+
+
+def _make_open_camera():
+    from PySide6.QtCore import QObject, Signal
+
+    class _OpenCam(QObject):
+        closed = Signal()
+        error = Signal(str)
+        frame_ready = Signal(object, float)
+        format_ready = Signal(str)
+
+        def is_open(self):
+            return True
+
+        def actual_size(self):
+            return (4, 4)
+
+        def latest_frame(self):
+            return None
+
+        def requested_fourcc(self):
+            return "MJPG"
+
+        _thread = None
+
+    return _OpenCam()
+
+
+def test_start_video_guards_and_refusals(tmp_path, qapp, monkeypatch):
+    """start_video() before start() returns False and creates no file;
+    called twice while running, the second returns False.
+    """
+    from tests.test_video_recorder import _patch_cv2
+    writers = []
+    _patch_cv2(monkeypatch, writers)
+    monkeypatch.setattr("rbl.services.session_recorder._logs_dir", lambda: str(tmp_path))
+
+    cam = _make_open_camera()
+    rec = SessionRecorder(lambda: {}, cam)
+
+    # 1. Before start(): returns False, creates no file
+    assert rec.start_video() is False
+    assert len(os.listdir(tmp_path)) == 0
+
+    # 2. Start session
+    assert rec.start() is True
+    sessions = [d for d in os.listdir(tmp_path) if d.startswith("session_")]
+    assert len(sessions) == 1
+
+    # 3. Call start_video() once: True
+    assert rec.start_video() is True
+
+    # 4. Call start_video() second time while running: False
+    assert rec.start_video() is False
+
+    rec.stop()
+
+
+def test_session_video_start_stop_multiple_runs_no_overwrite(tmp_path, qapp, monkeypatch):
+    """Session test: start session, start_video(), offer frames, stop_video(),
+    start_video(), offer frames, stop session. No segment file name repeats, the first
+    run's segment file still exists, events.csv has two video_started and two
+    video_stopped, and session.json video.runs has two entries.
+    """
+    from tests.test_video_recorder import _fake_frame, _patch_cv2
+    writers = []
+    _patch_cv2(monkeypatch, writers)
+    monkeypatch.setattr("rbl.services.session_recorder._logs_dir", lambda: str(tmp_path))
+
+    cam = _make_open_camera()
+    rec = SessionRecorder(lambda: {}, cam)
+    rec.set_record_fps(2)
+
+    assert rec.start() is True
+    sessions = [d for d in os.listdir(tmp_path) if d.startswith("session_")]
+    sess_dir = os.path.join(tmp_path, sessions[0])
+
+    # Run 1
+    assert rec.start_video() is True
+    for i in range(5):
+        cam.frame_ready.emit(_fake_frame(), float(i))
+    rec.stop_video()
+
+    # Run 2
+    assert rec.start_video() is True
+    for i in range(5, 10):
+        cam.frame_ready.emit(_fake_frame(), float(i))
+    rec.stop()
+
+    # Check segment files
+    seg0 = os.path.join(sess_dir, "video_000.avi")
+    seg1 = os.path.join(sess_dir, "video_001.avi")
+    assert os.path.exists(seg0), "first run's segment file must still exist"
+    assert os.path.exists(seg1), "second run's segment file must exist"
+
+    # Check events.csv
+    events_path = os.path.join(sess_dir, "events.csv")
+    event_rows = list(csv.reader(open(events_path, encoding="utf-8")))
+    video_started = [r for r in event_rows if len(r) >= 4 and r[3] == "video_started"]
+    video_stopped = [r for r in event_rows if len(r) >= 4 and r[3] == "video_stopped"]
+    assert len(video_started) == 2, f"expected 2 video_started events, got {len(video_started)}"
+    assert len(video_stopped) == 2, f"expected 2 video_stopped events, got {len(video_stopped)}"
+
+    # Check session.json manifest
+    manifest_path = os.path.join(sess_dir, "session.json")
+    manifest = json.loads(open(manifest_path, encoding="utf-8").read())
+    runs = manifest.get("video", {}).get("runs", [])
+    assert len(runs) == 2, f"expected 2 runs in video.runs, got {runs}"
+    assert runs[0]["first_segment"] == 0
+    assert runs[0]["last_segment"] == 0
+    assert isinstance(runs[0]["started_t_rel"], float)
+    assert isinstance(runs[0]["stopped_t_rel"], float)
+
+    assert runs[1]["first_segment"] == 1
+    assert runs[1]["last_segment"] == 1
+    assert isinstance(runs[1]["started_t_rel"], float)
+    assert isinstance(runs[1]["stopped_t_rel"], float)
+
+
+def test_camera_closed_ends_video_run_session_continues(tmp_path, qapp, monkeypatch):
+    """The camera closing while video runs ends that video run with a video_stopped
+    event whose detail is camera_closed. The session keeps running.
+    """
+    from tests.test_video_recorder import _fake_frame, _patch_cv2
+    writers = []
+    _patch_cv2(monkeypatch, writers)
+    monkeypatch.setattr("rbl.services.session_recorder._logs_dir", lambda: str(tmp_path))
+
+    cam = _make_open_camera()
+    rec = SessionRecorder(lambda: {}, cam)
+
+    assert rec.start() is True
+    assert rec.start_video() is True
+    cam.frame_ready.emit(_fake_frame(), 1.0)
+
+    # Camera closes
+    cam.closed.emit()
+
+    assert rec.is_recording() is True, "session must continue running"
+
+    rec.stop()
+
+    sessions = [d for d in os.listdir(tmp_path) if d.startswith("session_")]
+    sess_dir = os.path.join(tmp_path, sessions[0])
+    events_path = os.path.join(sess_dir, "events.csv")
+    event_rows = list(csv.reader(open(events_path, encoding="utf-8")))
+    stopped_rows = [r for r in event_rows if len(r) >= 5 and r[3] == "video_stopped"]
+    assert len(stopped_rows) == 1
+    assert stopped_rows[0][4] == "camera_closed"
+
+
+def test_session_start_with_video_enabled_backwards_compat(tmp_path, qapp, monkeypatch):
+    """When set_video_enabled(True) is set before start(), video starts automatically."""
+    from tests.test_video_recorder import _patch_cv2
+    writers = []
+    _patch_cv2(monkeypatch, writers)
+    monkeypatch.setattr("rbl.services.session_recorder._logs_dir", lambda: str(tmp_path))
+
+    cam = _make_open_camera()
+    rec = SessionRecorder(lambda: {}, cam)
+    rec.set_video_enabled(True)
+    assert rec.start() is True
+    assert rec.state()["video_active"] is True
+    rec.stop()
+    assert rec.state()["video_active"] is False
+
+    sessions = [d for d in os.listdir(tmp_path) if d.startswith("session_")]
+    sess_dir = os.path.join(tmp_path, sessions[0])
+    manifest = json.loads(open(os.path.join(sess_dir, "session.json"), encoding="utf-8").read())
+    runs = manifest.get("video", {}).get("runs", [])
+    assert len(runs) == 1
+    assert runs[0]["first_segment"] == 0
+    assert runs[0]["last_segment"] == 0
+
+
