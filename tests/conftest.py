@@ -39,6 +39,30 @@ def _never_touch_the_real_calibration_store(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _never_touch_the_real_amplifier_stores(tmp_path, monkeypatch):
+    """Point the amplifier-assignment history and the characterization-results
+    directory at temp locations, always.
+
+    Same reasoning as _never_touch_the_real_calibration_store above: a test
+    once wrote a fabricated capacitance into the operator's real store and the
+    planner then called it "measured". These two places are written by later
+    tickets (assignment history, characterization results), so they are
+    redirected before any of those modules exist.
+
+    This only covers modules that read the path through `rbl.config.paths` AT
+    CALL TIME (`paths.AMPLIFIER_ASSIGNMENTS_STORE`). A module that copies the
+    path into its own constant at import time keeps the real location and
+    escapes this fixture - do not do that.
+    """
+    from rbl.config import paths
+    monkeypatch.setattr(paths, "AMPLIFIER_ASSIGNMENTS_STORE",
+                        Path(tmp_path) / "amplifier_assignments.jsonl")
+    monkeypatch.setattr(paths, "CHARACTERIZATION_DIR",
+                        Path(tmp_path) / "load_characterization")
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _never_touch_the_real_cup_settings_store(tmp_path, monkeypatch):
     """Point the Faraday cup acquisition settings store at a temp file, always.
 

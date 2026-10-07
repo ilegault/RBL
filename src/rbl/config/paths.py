@@ -46,3 +46,12 @@ CONFIG_DIR:       Path = Path.home() / ".config" / "rbl"
 FUNCGEN_CONFIG:   Path = CONFIG_DIR / "funcgen.json"
 LOAD_CAL_STORE:   Path = CONFIG_DIR / "load_calibration.json"
 CUP_SETTINGS_STORE: Path = CONFIG_DIR / "cup_settings.json"
+
+# Amplifier assignment history (JSONL): which physical amplifier drove which
+# plate, and when. Read through this module at call time (paths.X), never
+# copied into a module constant, so tests/conftest.py's autouse fixture covers
+# every later module that touches it.
+AMPLIFIER_ASSIGNMENTS_STORE: Path = CONFIG_DIR / "amplifier_assignments.jsonl"
+
+# One file per load-characterization result, never overwritten.
+CHARACTERIZATION_DIR: Path = DATA_DIR / "load_characterization"

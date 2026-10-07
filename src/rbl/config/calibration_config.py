@@ -325,9 +325,14 @@ class LoadCondition(Enum):
     dialog in calibration_tab.py — but it gates the drift-duration guard
     (rbl/services/calibration_runner.py) and is recorded in every CSV's
     metadata sidecar.
+
+    CABLE_ONLY is the HV cable attached with its far end open: it separates
+    the cable's own capacitance from the plates' when the three conditions
+    are compared.
     """
     DISCONNECTED = "DISCONNECTED"
     ON_PLATES    = "ON_PLATES"
+    CABLE_ONLY   = "CABLE_ONLY"
 
 
 # --- Sweep point generation -------------------------------------------------
