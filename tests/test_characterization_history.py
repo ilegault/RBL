@@ -198,3 +198,25 @@ def test_the_callers_dict_is_not_modified():
     before = json.dumps(r, sort_keys=True)
     ch.write_result(r, day(2))
     assert json.dumps(r, sort_keys=True) == before
+
+
+def test_newest_on_plates_returns_the_record_with_its_age():
+    aa.record_assignment(A_AT_XP, day(1), "initial")
+    ch.write_result(result(c_pf=1600.0), day(1))
+    rec = ch.newest_on_plates("X+", day(3))
+    assert rec["values"]["c_pf"] == 1600.0
+    assert rec["age_s"] == 2 * 86400
+
+
+@pytest.mark.parametrize("age_s, text", [
+    (0, "today"),
+    (86399, "today"),
+    (86400, "1 day ago"),
+    (3 * 86400, "3 days ago"),
+    (32 * 86400, "32 days ago"),
+    (59 * 86400, "59 days ago"),
+    (70 * 86400, "10 weeks ago"),
+    (-5, "today"),
+])
+def test_age_text(age_s, text):
+    assert ch.age_text(age_s) == text

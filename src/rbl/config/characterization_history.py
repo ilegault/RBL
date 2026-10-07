@@ -185,8 +185,34 @@ def newest_for_amplifier(serial: str, load_condition: str,
                    and r["load_condition"] == load_condition))
 
 
+def newest_on_plates(plate_position: str, now: datetime) -> dict | None:
+    """Newest ON_PLATES result that carries a capacitance (with age), or None.
+
+    Looks past a newer result that has none (a clamp test), so the planner is
+    shown the capacitance together with the age of the run that measured it.
+    """
+    return newest(plate_position, LoadCondition.ON_PLATES.value, now,
+                  _need_value="c_pf")
+
+
 def newest_on_plates_c_pf(plate_position: str, now: datetime) -> float | None:
     """Capacitance (pF) of the newest ON_PLATES result that carries one, or None."""
-    rec = newest(plate_position, LoadCondition.ON_PLATES.value, now,
-                 _need_value="c_pf")
+    rec = newest_on_plates(plate_position, now)
     return None if rec is None else float(rec["values"]["c_pf"])
+
+
+_DAY_S = 86400.0
+_WEEKS_FROM_DAYS = 60
+
+
+def age_text(age_s: float) -> str:
+    """How old a result is, for display: "today", "1 day ago", "32 days ago",
+    and weeks once it is a couple of months old."""
+    days = int(max(0.0, age_s) // _DAY_S)
+    if days < 1:
+        return "today"
+    if days == 1:
+        return "1 day ago"
+    if days < _WEEKS_FROM_DAYS:
+        return f"{days} days ago"
+    return f"{days // 7} weeks ago"
