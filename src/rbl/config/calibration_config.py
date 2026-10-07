@@ -106,6 +106,12 @@ CAL_AC_COLLECT_S = 2.0      # average over more cycles for a stable RMS reading
 # level a sweep should ever sit at.
 CAL_AC_TRIP_MA = 20.0
 
+# EEL5000 burst rating, mA: 100 mA for 4 ms or less, then 100 ms at 10 mA or
+# less (the "recovery period"). A reference level on the Raster Planner's
+# current chart and the top zone of the spike chart - never an operating
+# point and never a threshold anything is stopped at.
+AMP_BURST_RATING_MA = 100.0
+
 # --- Interlock qualification ---------------------------------------------
 #
 # The sweep profile streams the driven pair at 50 kS/s per channel, so a

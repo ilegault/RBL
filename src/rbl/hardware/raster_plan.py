@@ -14,6 +14,11 @@ This module holds the computations that were previously embedded in the widget:
                            the slits are parked open and the sweep edge defines
                            the patch boundary (``_steerer_limited`` in the tab).
 
+  current_vs_frequency   — the Raster Planner's current chart: steady current
+                           in mA against frequency, one line per plate from
+                           its own measured capacitance, with a green / amber /
+                           red margin verdict under the continuous rating.
+
   envelope_status        — per-channel operating-envelope check: which channel
                            has the least headroom, whether it is inside the
                            walls, and a ``walls`` dict for plotting.  The widget
@@ -31,10 +36,14 @@ import math
 
 import numpy as np
 
-from rbl.config.calibration_config import CAL_AC_TRIP_MA, CAL_MAX_KV
+from rbl.config.calibration_config import (
+    AMP_BURST_RATING_MA,
+    CAL_AC_TRIP_MA,
+    CAL_MAX_KV,
+)
 from rbl.config.raster_defaults import AMP_MAX_BANDWIDTH_HZ
 from rbl.hardware import slit_raster_model as srm
-from rbl.hardware.load_model import envelope_walls
+from rbl.hardware.load_model import envelope_walls, shape_k
 from rbl.hardware.raster_model import dwell_uniformity, required_drive
 
 # ---------------------------------------------------------------------------
@@ -223,6 +232,88 @@ def envelope_status(
         "walls":                walls,
         "over_ceiling":         over_ceiling,
         "exceeded_bandwidth":   exceeded_bandwidth,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Steady current vs frequency
+# ---------------------------------------------------------------------------
+
+# Margin under the continuous rating (CAL_AC_TRIP_MA, 20 mA): amber from 50 %
+# of it, red above 80 %. A raster that sits at 19 mA is "inside" the rating
+# and one noisy edge from the amplifier's own limit; the operator wants to
+# see that coming.
+MARGIN_AMBER_MA = 10.0   # 50 % of the continuous rating
+MARGIN_RED_MA   = 16.0   # 80 % of the continuous rating
+
+_CHART_F_MIN_HZ = 10.0
+_CHART_F_MAX_HZ = 10_000.0
+_CHART_POINTS   = 200
+
+
+def current_vs_frequency(
+        caps: dict,
+        plate_kv: dict,
+        freq_of_axis: dict,
+        shape: str,
+        axis_of_channel: dict | None = None,
+) -> dict:
+    """Predicted steady current against frequency, one line per plate.
+
+    Args:
+        caps:            {plate: c_pf | None}. ``None`` means the plate has no
+                         measured result: it gets no line, no operating point
+                         and the verdict ``not_measured``. No capacitance is
+                         ever substituted for it.
+        plate_kv:        {axis: peak_plate_kv} - amplitude of each axis.
+        freq_of_axis:    {axis: freq_hz} - planned frequency of each axis.
+        shape:           commanded waveform ("triangle", "sine", ...); sets the
+                         k factor in I = k * f * C * V.
+        axis_of_channel: {plate: axis}; defaults to the X+/X-/Y+/Y- layout.
+
+    Returns:
+        freq_hz          200 log-spaced points, 10 Hz to 10 kHz
+        series           {plate: [mA, ...]} for measured plates only
+        operating_point  {plate: (freq_hz, mA)} for measured plates
+        levels           {"continuous_ma": 20.0, "burst_ma": 100.0}
+        verdict          {plate: "green" | "amber" | "red" | "not_measured"}
+                         from the operating-point current: green below 10 mA,
+                         amber from 10 up to and including 16 mA, red above.
+    """
+    aoc = axis_of_channel if axis_of_channel is not None else _DEFAULT_AXIS_OF_CHANNEL
+    k = shape_k(shape)
+    freqs = np.logspace(math.log10(_CHART_F_MIN_HZ),
+                        math.log10(_CHART_F_MAX_HZ), _CHART_POINTS)
+
+    series: dict = {}
+    operating_point: dict = {}
+    verdict: dict = {}
+    for plate, c_pf in caps.items():
+        if c_pf is None:
+            verdict[plate] = "not_measured"
+            continue
+        axis = aoc[plate]
+        kv = plate_kv[axis]
+        f_op = freq_of_axis[axis]
+        # pF x kV = 1e-9 C; dividing by 1e6 (not multiplying by 1e-6) keeps
+        # round inputs exact so a reading of exactly 10.0 mA stays 10.0.
+        series[plate] = [float(k * f * c_pf * kv / 1e6) for f in freqs]
+        ma = k * f_op * c_pf * kv / 1e6
+        operating_point[plate] = (f_op, ma)
+        if ma > MARGIN_RED_MA:
+            verdict[plate] = "red"
+        elif ma >= MARGIN_AMBER_MA:
+            verdict[plate] = "amber"
+        else:
+            verdict[plate] = "green"
+
+    return {
+        "freq_hz":         [float(f) for f in freqs],
+        "series":          series,
+        "operating_point": operating_point,
+        "levels":          {"continuous_ma": CAL_AC_TRIP_MA,
+                            "burst_ma": AMP_BURST_RATING_MA},
+        "verdict":         verdict,
     }
 
 

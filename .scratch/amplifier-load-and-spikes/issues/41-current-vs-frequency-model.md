@@ -1,6 +1,6 @@
 # 41: The current-vs-frequency chart model, with a margin verdict per plate
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -32,11 +32,11 @@ Tests may fake: nothing. Plain numbers.
 
 ## Acceptance criteria
 
-- [ ] C = 1600 pF, triangle, 2 kV, 500 Hz: operating-point current 6.4 mA (to 1e-9), verdict `green`.
-- [ ] Operating points of exactly 10.0 and 16.0 mA are `amber`; 9.999 mA is `green`; 16.001 mA is `red`.
-- [ ] A plate with `None` has no `series` or `operating_point` entry and verdict `not_measured`.
-- [ ] A sine at the same C, V and f gives an operating-point current 2*pi/4 times the triangle's.
-- [ ] `levels` is exactly `{'continuous_ma': 20.0, 'burst_ma': 100.0}`.
+- [x] C = 1600 pF, triangle, 2 kV, 500 Hz: operating-point current 6.4 mA (to 1e-9), verdict `green`.
+- [x] Operating points of exactly 10.0 and 16.0 mA are `amber`; 9.999 mA is `green`; 16.001 mA is `red`.
+- [x] A plate with `None` has no `series` or `operating_point` entry and verdict `not_measured`.
+- [x] A sine at the same C, V and f gives an operating-point current 2*pi/4 times the triangle's.
+- [x] `levels` is exactly `{'continuous_ma': 20.0, 'burst_ma': 100.0}`.
 
 ## Gate
 
@@ -48,3 +48,5 @@ Run in CI's order (`.github/workflows/tests.yml`):
     pytest --tb=short -q -n auto --dist loadfile --durations=25
 
 ## Comments
+
+2026-10-07: Done. `raster_plan.current_vs_frequency` plus `MARGIN_AMBER_MA` / `MARGIN_RED_MA`; burst rating lives in `calibration_config.AMP_BURST_RATING_MA`; `load_model.shape_k` is a public wrapper so `raster_plan` does not import a private name. Tests: `tests/test_current_vs_frequency.py` (one test per criterion plus grid, per-axis and unknown-shape cases). The chart widget that draws this is ticket 42.
