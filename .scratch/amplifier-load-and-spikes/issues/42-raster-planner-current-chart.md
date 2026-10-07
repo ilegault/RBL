@@ -1,6 +1,6 @@
 # 42: The Raster Planner shows steady current vs frequency, from measured C only
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
