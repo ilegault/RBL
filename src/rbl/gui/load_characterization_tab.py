@@ -263,7 +263,14 @@ class LoadCharacterizationTab(QWidget):
 
     def _on_finished(self, csv_path: str):
         self._set_running(False)
-        self.lbl_status.setText(f"Finished: {csv_path}" if csv_path else "Finished (aborted).")
+        rule = getattr(self._runner, "abort_rule", None)
+        if rule:
+            # Which rule stopped it is a finding, not just "aborted".
+            self.lbl_status.setText(f"Stopped by rule '{rule}'"
+                                    + (f" (CSV: {csv_path})" if csv_path else "."))
+        else:
+            self.lbl_status.setText(
+                f"Finished: {csv_path}" if csv_path else "Finished (aborted).")
         if self._prior_profile:
             self.profile_change_requested.emit(self._prior_profile)
         self.refresh_results()

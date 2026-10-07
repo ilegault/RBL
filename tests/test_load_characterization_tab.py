@@ -77,6 +77,35 @@ class TestModeAndConditionSelection:
         assert tab.rb_disconnected.isChecked()
 
 
+class TestEndedLadderIsReported:
+    def test_the_status_names_the_rule_that_stopped_the_run(self, tab, monkeypatch):
+        from PySide6.QtCore import QObject, Signal
+
+        import rbl.gui.load_characterization_tab as mod
+
+        class StoppedRunner(QObject):
+            point_measured = Signal(dict)
+            finished = Signal(str)
+            error = Signal(str)
+            progress = Signal(int, int, str)
+            abort_rule = "leakage"
+
+            def __init__(self, *a, **k):
+                super().__init__()
+
+            def start_mode_c(self, *a, **k):
+                self.finished.emit("")
+
+        monkeypatch.setattr(mod, "LoadCharacterizer", StoppedRunner)
+        monkeypatch.setattr(mod, "RampEngine", lambda *a, **k: object())
+        monkeypatch.setattr(tab.beamline, "build_funcgen_map",
+                            lambda: {label: (object(), 1) for label in ("X+", "X-", "Y+", "Y-")})
+        tab.on_labjack_connected("T7-1")
+        tab.rb_mode_c.setChecked(True)
+        tab.btn_run.click()
+        assert "leakage" in tab.lbl_status.text()
+
+
 class TestRunGuards:
     def test_run_without_labjack_connection_warns_and_does_not_start(self, tab, monkeypatch):
         warned = []
