@@ -1,6 +1,6 @@
 # 39: The Amplifiers panel: record an amplifier swap or a hardware change
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
