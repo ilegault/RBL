@@ -1,6 +1,6 @@
 # 38: The Load Characterization tab shows results by axis, with age and three load conditions
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -31,11 +31,11 @@ Tests may fake: `now_fn`. History files are real (temp folder).
 
 ## Acceptance criteria
 
-- [ ] With no results, every condition cell reads exactly `not measured`.
-- [ ] An on-plates result of 1612.0 pF by `charge_integral_ladder` written 32 days before `now`: the X+ `On plates` cell contains `1612`, `charge_integral_ladder` and `32 days ago`.
-- [ ] Cable-only 400 pF and on-plates 1600 pF for Y-: the Y- `Plates minus cable` cell reads `1200 pF`.
-- [ ] A result older than a recorded hardware change has background `theme.WARN` and the tooltip above; a newer result does not.
-- [ ] Rewritten `test_outlier_conductance_is_flagged` still flags the plate whose on-plates G is more than 3x the median.
+- [x] With no results, every condition cell reads exactly `not measured`.
+- [x] An on-plates result of 1612.0 pF by `charge_integral_ladder` written 32 days before `now`: the X+ `On plates` cell contains `1612`, `charge_integral_ladder` and `32 days ago`.
+- [x] Cable-only 400 pF and on-plates 1600 pF for Y-: the Y- `Plates minus cable` cell reads `1200 pF`.
+- [x] A result older than a recorded hardware change has background `theme.WARN` and the tooltip above; a newer result does not.
+- [x] Rewritten `test_outlier_conductance_is_flagged` still flags the plate whose on-plates G is more than 3x the median.
 
 ## Gate
 
@@ -47,3 +47,6 @@ Run in CI's order (`.github/workflows/tests.yml`):
     pytest --tb=short -q -n auto --dist loadfile --durations=25
 
 ## Comments
+
+2026-10-07: Done. The four-channel table is now a per-plate table grouped by axis (X axis / X+ / X- / Y axis / Y+ / Y-) with columns Plate position, Disconnected, Cable only, On plates, Cable minus amplifier, Plates minus cable. Cells read `<C> pF, <method>, <age>` from `characterization_history.newest_with_capacitance` (new here: the newest result for that condition that carries a capacitance, so a newer clamp result does not hide it) or `not measured`; results predating the latest hardware change use the `theme.WARN` background with the tooltip `measured before the hardware change on <date>`. The conductance outlier highlight is kept, judged on on-plates results only. `LoadCharacterizationTab(now_fn=...)`, and a public `refresh_results()` replaces the private `_refresh_table`.
+Age wording: the ticket lists "today, N days ago, N weeks ago" but also needs "32 days ago"; `characterization_history.age_text` (added in ticket 42) switches to weeks from 60 days. The three named tests were rewritten in place (class renamed `TestComparisonTable`).
