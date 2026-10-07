@@ -1,6 +1,6 @@
 # 37: Mode A and Mode C write characterization results tagged with the assigned amplifier
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
