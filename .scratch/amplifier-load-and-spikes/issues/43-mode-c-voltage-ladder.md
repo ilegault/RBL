@@ -1,6 +1,6 @@
 # 43: Mode C steps from 0.5 to 5 kV and reports C and the edge spike at every rung
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
