@@ -185,14 +185,19 @@ def newest_for_amplifier(serial: str, load_condition: str,
                    and r["load_condition"] == load_condition))
 
 
-def newest_on_plates(plate_position: str, now: datetime) -> dict | None:
-    """Newest ON_PLATES result that carries a capacitance (with age), or None.
+def newest_with_capacitance(plate_position: str, load_condition: str,
+                            now: datetime) -> dict | None:
+    """Newest result for this position and condition that carries a capacitance.
 
-    Looks past a newer result that has none (a clamp test), so the planner is
-    shown the capacitance together with the age of the run that measured it.
+    Looks past a newer result that has none (a clamp test), so what is shown is
+    the capacitance together with the age of the run that measured it.
     """
-    return newest(plate_position, LoadCondition.ON_PLATES.value, now,
-                  _need_value="c_pf")
+    return newest(plate_position, load_condition, now, _need_value="c_pf")
+
+
+def newest_on_plates(plate_position: str, now: datetime) -> dict | None:
+    """`newest_with_capacitance` for ON_PLATES - the load a run actually drives."""
+    return newest_with_capacitance(plate_position, LoadCondition.ON_PLATES.value, now)
 
 
 def newest_on_plates_c_pf(plate_position: str, now: datetime) -> float | None:

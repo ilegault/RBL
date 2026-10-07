@@ -3,12 +3,23 @@ load_characterization_tab.py
 PySide6 widget for the "Load Characterization" outer tab (Phase 1).
 
 Measures per-channel load capacitance/leakage on demand instead of relying
-on `calibration_config.CAL_LOAD_CAP_PF`'s one-off analysis. Three modes
-(rbl/services/load_characterizer.py): impedance sweep (A), DC leakage
-ladder (B), charge-integral cross-check (C). Results persist to
-rbl/config/load_calibration_store.py and feed back into
-`calibration_config.ac_peak_current_ma()`/`ac_max_peak_kv()` for future
-runs — see that module's docstring for the fallback chain.
+on an assumed number. Three modes (rbl/services/load_characterizer.py):
+impedance sweep (A), DC leakage ladder (B), charge-integral voltage ladder (C).
+Every run is kept as a characterization result (rbl/config/
+characterization_history.py): never overwritten, tagged with the amplifier's
+serial, the plate position, the load condition and the time.
+
+THE TABLE
+---------
+One row per plate position, grouped by axis (X+ and X- together, Y+ and Y-
+together) so the two plates of an axis can be compared at a glance. Each load
+condition shows the NEWEST result for the amplifier currently assigned to that
+plate, with its method and age ("1612 pF, charge_integral_ladder, 32 days ago"),
+or "not measured": no number is ever substituted. The last two columns are the
+differences between conditions - cable minus amplifier alone, plates minus
+cable - which is how the ~1.6 nF is traced to the amplifier, the cable or the
+plates. A result measured before the latest hardware change is shown in amber
+with the date of that change, because it may no longer describe the load.
 
 A sibling tab to calibration_tab.py, not a sub-panel of it (per the plan's
 own "the user's call") — calibration_tab.py's own docstring already
@@ -16,6 +27,8 @@ documents that file as busy, and this feature has an independent run
 lifecycle (its own runner, its own profile/pair requests) that does not
 share state with a calibration sweep.
 """
+from datetime import datetime
+
 import matplotlib
 
 matplotlib.use("QtAgg")
@@ -39,32 +52,43 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from rbl.config import amplifier_assignments, characterization_history
 from rbl.config.calibration_config import LoadCondition
 from rbl.config.hardware_config import AMP_LABELS
-from rbl.config.load_calibration_store import load_all
 from rbl.gui import theme
 from rbl.gui.widgets.connection_bar import LabJackPanel
 from rbl.gui.widgets.inputs import NoScrollComboBox
 from rbl.services.load_characterizer import LoadCharacterizer, Mode
 from rbl.services.ramp_engine import RampEngine
 
+TABLE_HEADERS = ["Plate position", "Disconnected", "Cable only", "On plates",
+                 "Cable minus amplifier", "Plates minus cable"]
+COL_CABLE_MINUS_AMP = 4
+COL_PLATES_MINUS_CABLE = 5
+# Which load condition each of the first three result columns shows.
+_CONDITION_COLUMNS = {1: "DISCONNECTED", 2: "CABLE_ONLY", 3: "ON_PLATES"}
+# X+ and X- are the push-pull pair on one axis, Y+ and Y- the other.
+_TABLE_ROWS = [("axis", "X axis"), ("plate", "X+"), ("plate", "X-"),
+               ("axis", "Y axis"), ("plate", "Y+"), ("plate", "Y-")]
+
 
 class LoadCharacterizationTab(QWidget):
     """The 'Load Characterization' outer tab: Modes A/B/C, live plot, and
-    the four-channel comparison table."""
+    the per-plate comparison table."""
 
     profile_change_requested = Signal(str)
     pair_profile_requested   = Signal(str, str)   # (profile_name, amp_label)
     run_state_changed        = Signal(bool)
-    # A run has written a new per-channel measurement to
-    # load_calibration_store.  Anything planning from that store (the Raster
-    # Planner) has to be told: it reads the file, and a file does not emit
-    # anything when it changes.  Wired in app.py.
+    # A run has written a new characterization result.  Anything planning from
+    # the results (the Raster Planner) has to be told: it reads files, and a
+    # file does not emit anything when it changes.  Wired in app.py.
     measurements_changed     = Signal()
 
-    def __init__(self, beamline, parent=None):
+    def __init__(self, beamline, parent=None, now_fn=None):
         super().__init__(parent)
         self.beamline = beamline
+        # Injected so the ages shown are testable.
+        self._now_fn = now_fn or (lambda: datetime.now().astimezone())
         self._runner: LoadCharacterizer = None
         self._ramp_engine = None
         self._connected = False
@@ -150,18 +174,23 @@ class LoadCharacterizationTab(QWidget):
 
         layout.addLayout(top_row, stretch=1)
 
-        # ── Four-channel comparison table (Section 2.6) ──────────────────────
-        table_box = QGroupBox("Four-Channel Comparison")
+        # ── Per-plate comparison table, grouped by axis ──────────────────────
+        table_box = QGroupBox("Load by plate position (newest result per condition)")
         table_lay = QVBoxLayout(table_box)
-        self.table = QTableWidget(len(AMP_LABELS), 5)
-        self.table.setHorizontalHeaderLabels(
-            ["Channel", "C (pF)", "G (uS)", "tan(delta)", "Load condition shown"])
-        for row, label in enumerate(AMP_LABELS):
-            self.table.setItem(row, 0, QTableWidgetItem(label))
+        self.table = QTableWidget(len(_TABLE_ROWS), len(TABLE_HEADERS))
+        self.table.setHorizontalHeaderLabels(TABLE_HEADERS)
+        for row, (kind, label) in enumerate(_TABLE_ROWS):
+            item = QTableWidgetItem(label)
+            self.table.setItem(row, 0, item)
+            if kind == "axis":
+                self.table.setSpan(row, 0, 1, len(TABLE_HEADERS))
+                font = item.font()
+                font.setBold(True)
+                item.setFont(font)
         table_lay.addWidget(self.table)
         layout.addWidget(table_box)
 
-        self._refresh_table()
+        self.refresh_results()
 
     # ------------------------------------------------------------------
     # Run control
@@ -237,7 +266,7 @@ class LoadCharacterizationTab(QWidget):
         self.lbl_status.setText(f"Finished: {csv_path}" if csv_path else "Finished (aborted).")
         if self._prior_profile:
             self.profile_change_requested.emit(self._prior_profile)
-        self._refresh_table()
+        self.refresh_results()
         self.measurements_changed.emit()
 
     def _on_characterizer_error(self, msg: str):
@@ -290,53 +319,65 @@ class LoadCharacterizationTab(QWidget):
         self._canvas.draw_idle()
 
     # ------------------------------------------------------------------
-    # Four-channel comparison table
+    # Per-plate comparison table
     # ------------------------------------------------------------------
 
-    def _refresh_table(self):
-        import math
-        data = load_all()
-        g_values = [None] * len(AMP_LABELS)
+    def refresh_results(self):
+        """Re-read the characterization results and redraw the table."""
+        now = self._now_fn()
+        hw_change = amplifier_assignments.latest_hardware_change(now)
+        stale_tip = ("" if hw_change is None else
+                     f"measured before the hardware change on {hw_change:%Y-%m-%d}")
+        clear = QColor(0, 0, 0, 0)
+        on_plates_g: dict = {}
 
-        for row, label in enumerate(AMP_LABELS):
-            per_channel = data.get(label, {})
-            # ON_PLATES is the operationally relevant condition; fall back to
-            # whatever else exists so a DISCONNECTED-only channel still shows.
-            condition = "ON_PLATES" if "ON_PLATES" in per_channel else (
-                "DISCONNECTED" if "DISCONNECTED" in per_channel else None)
-            record = per_channel.get(condition) if condition else None
+        for row, (kind, label) in enumerate(_TABLE_ROWS):
+            if kind == "axis":
+                continue
+            found: dict = {}
+            for col, condition in _CONDITION_COLUMNS.items():
+                rec = characterization_history.newest_with_capacitance(
+                    label, condition, now)
+                found[condition] = rec
+                item = QTableWidgetItem("not measured" if rec is None else
+                                        self._result_text(rec))
+                item.setBackground(clear)
+                if rec is not None and rec["predates_hardware_change"]:
+                    item.setBackground(QColor(theme.WARN))
+                    item.setToolTip(stale_tip)
+                self.table.setItem(row, col, item)
 
-            c_pf = record["c_pf"] if record else None
-            g_us = record["g_us"] if record else None
-            g_values[row] = g_us
-            tan_delta = None
-            if record and c_pf and c_pf > 0:
-                # tan(delta) at 1 kHz, purely for a single comparable number
-                # in this table — the measured loss_tangent from a Mode A
-                # sweep already carries the frequency it was measured at.
-                tan_delta = (g_us * 1e-6) / (2 * math.pi * 1000.0 * c_pf * 1e-12)
+            c = {cond: (rec["values"]["c_pf"] if rec else None)
+                 for cond, rec in found.items()}
+            self.table.setItem(row, COL_CABLE_MINUS_AMP, QTableWidgetItem(
+                self._difference_text(c["CABLE_ONLY"], c["DISCONNECTED"])))
+            self.table.setItem(row, COL_PLATES_MINUS_CABLE, QTableWidgetItem(
+                self._difference_text(c["ON_PLATES"], c["CABLE_ONLY"])))
+            rec = found["ON_PLATES"]
+            on_plates_g[row] = None if rec is None else rec["values"].get("g_us")
 
-            self.table.setItem(row, 1, QTableWidgetItem("—" if c_pf is None else f"{c_pf:.1f}"))
-            self.table.setItem(row, 2, QTableWidgetItem("—" if g_us is None else f"{g_us:.4f}"))
-            self.table.setItem(
-                row, 3, QTableWidgetItem("—" if tan_delta is None else f"{tan_delta:.4f}")
-            )
-            self.table.setItem(row, 4, QTableWidgetItem(condition or "—"))
+        # Outlier highlight: a plate whose conductance is notably higher than
+        # the others' is direct evidence of a leakage path (Section 2.6) - the
+        # diagnostic this table exists for. Judged on the on-plates results only:
+        # the load a run actually drives.
+        finite = sorted(g for g in on_plates_g.values() if g is not None)
+        median_floor = max(finite[len(finite) // 2], 1e-9) if len(finite) >= 2 else None
+        for row, g in on_plates_g.items():
+            outlier = (median_floor is not None and g is not None
+                       and g > 3 * median_floor)
+            first = self.table.item(row, 0)
+            first.setBackground(QColor(theme.FAULT) if outlier else clear)
 
-        # Outlier highlight: a channel whose conductance is notably higher
-        # than the others' is direct evidence of a leakage path (Section 2.6)
-        # — the diagnostic this whole table exists for.
-        finite = sorted(g for g in g_values if g is not None)
-        if len(finite) >= 2:
-            median = finite[len(finite) // 2]
-            floor = max(median, 1e-9)
-            for row, g in enumerate(g_values):
-                is_outlier = g is not None and g > 3 * floor
-                color = QColor(theme.FAULT) if is_outlier else None
-                for col in range(5):
-                    item = self.table.item(row, col)
-                    if item:
-                        item.setBackground(color if color else QColor(0, 0, 0, 0))
+    @staticmethod
+    def _result_text(rec: dict) -> str:
+        return (f"{rec['values']['c_pf']:.0f} pF, {rec['method']}, "
+                f"{characterization_history.age_text(rec['age_s'])}")
+
+    @staticmethod
+    def _difference_text(minuend, subtrahend) -> str:
+        if minuend is None or subtrahend is None:
+            return ""
+        return f"{minuend - subtrahend:.0f} pF"
 
     # ------------------------------------------------------------------
     # _lj_tabs contract (see rbl/gui/app.py) — same shape as AmpTab/CalibrationTab.
