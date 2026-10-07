@@ -1,6 +1,6 @@
 # 39: The Amplifiers panel: record an amplifier swap or a hardware change
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -31,11 +31,11 @@ Tests may fake: the two `_ask_*` methods. The assignment store is real (temp pat
 
 ## Acceptance criteria
 
-- [ ] With no assignment, the rows read `not set`; after a faked `_ask_assignment` returns four serials, the rows show them and the store holds one record with kind `initial`.
-- [ ] A second faked swap writes a record with kind `swap` and the rows show the new mapping.
-- [ ] A faked `_ask_assignment` returning `None` writes nothing.
-- [ ] After Record hardware change, a previously normal result cell has background `theme.WARN` without rebuilding the tab.
-- [ ] With `QDialog.exec` replaced by a function that fails the test, all of the above pass.
+- [x] With no assignment, the rows read `not set`; after a faked `_ask_assignment` returns four serials, the rows show them and the store holds one record with kind `initial`.
+- [x] A second faked swap writes a record with kind `swap` and the rows show the new mapping.
+- [x] A faked `_ask_assignment` returning `None` writes nothing.
+- [x] After Record hardware change, a previously normal result cell has background `theme.WARN` without rebuilding the tab.
+- [x] With `QDialog.exec` replaced by a function that fails the test, all of the above pass.
 
 ## Gate
 
@@ -47,3 +47,6 @@ Run in CI's order (`.github/workflows/tests.yml`):
     pytest --tb=short -q -n auto --dist loadfile --durations=25
 
 ## Comments
+
+2026-10-07: Done. The Load Characterization tab has an "Amplifiers" group box: four rows (`not set` or the serial in force) and the buttons "Record amplifier swap" and "Record hardware change". The dialogs (`AssignmentDialog`, `HardwareChangeDialog`) sit behind `_ask_assignment` / `_ask_hardware_change`; the first recording is `initial`, later ones `swap`. Both actions refresh the rows and the results table and emit `measurements_changed` so the Raster Planner re-reads. Tests (`TestAmplifiersPanel`, `TestTheDialogsThemselves`) replace the two ask methods and make any `QDialog.exec` fail the test; the real dialogs are built and read but never executed.
+Choices the ticket left open: the assignment dialog enables OK only for four non-empty, distinct serials (one amplifier cannot drive two plates); the hardware-change dialog requires a note; a mapping the store refuses is reported with a warning and nothing is written.

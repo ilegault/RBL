@@ -9,6 +9,16 @@ Every run is kept as a characterization result (rbl/config/
 characterization_history.py): never overwritten, tagged with the amplifier's
 serial, the plate position, the load condition and the time.
 
+THE AMPLIFIERS PANEL
+--------------------
+Every measurement belongs to the AMPLIFIER that produced it, not to the plate it
+happened to be plugged into, so the operator records which serial drives which
+plate ("Record amplifier swap": the first recording is the initial assignment,
+later ones are swaps) and any hardware change ("Record hardware change": a new
+cable, a cleaned feedthrough). Both go to rbl/config/amplifier_assignments.py,
+append-only. The dialogs sit behind two replaceable methods (`_ask_assignment`,
+`_ask_hardware_change`) so tests never open a modal.
+
 THE TABLE
 ---------
 One row per plate position, grouped by axis (X+ and X- together, Y+ and Y-
@@ -34,14 +44,18 @@ import matplotlib
 matplotlib.use("QtAgg")
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QDateTime, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QDateTimeEdit,
+    QDialog,
+    QDialogButtonBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPushButton,
     QRadioButton,
@@ -70,6 +84,90 @@ _CONDITION_COLUMNS = {1: "DISCONNECTED", 2: "CABLE_ONLY", 3: "ON_PLATES"}
 # X+ and X- are the push-pull pair on one axis, Y+ and Y- the other.
 _TABLE_ROWS = [("axis", "X axis"), ("plate", "X+"), ("plate", "X-"),
                ("axis", "Y axis"), ("plate", "Y+"), ("plate", "Y-")]
+
+
+def _qdatetime_from(when: datetime) -> QDateTime:
+    """A QDateTime showing `when` in local time (the dialogs' default of 'now')."""
+    return QDateTime.fromSecsSinceEpoch(int(when.timestamp()))
+
+
+class AssignmentDialog(QDialog):
+    """One serial-number field per plate position, a date and a note.
+
+    OK is enabled only when all four serials are filled in and distinct: one
+    physical amplifier cannot drive two plates.
+    """
+
+    def __init__(self, current: dict | None, now: datetime, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Record amplifier swap")
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        self.serial_edits = {}
+        for plate in AMP_LABELS:
+            edit = QLineEdit((current or {}).get(plate, ""))
+            edit.setPlaceholderText("amplifier serial number")
+            edit.textChanged.connect(self._refresh_ok)
+            self.serial_edits[plate] = edit
+            form.addRow(f"{plate}:", edit)
+        self.when_edit = QDateTimeEdit(_qdatetime_from(now))
+        self.when_edit.setCalendarPopup(True)
+        self.when_edit.setDisplayFormat("yyyy-MM-dd HH:mm")
+        form.addRow("Date:", self.when_edit)
+        self.note_edit = QLineEdit()
+        self.note_edit.setPlaceholderText("optional note")
+        form.addRow("Note:", self.note_edit)
+        layout.addLayout(form)
+        self.buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+        layout.addWidget(self.buttons)
+        self._refresh_ok()
+
+    def _refresh_ok(self, *_):
+        serials = [e.text().strip() for e in self.serial_edits.values()]
+        ok = all(serials) and len(set(serials)) == len(serials)
+        self.buttons.button(QDialogButtonBox.StandardButton.Ok).setEnabled(ok)
+
+    def answer(self):
+        """(mapping, when, note) as the panel records them."""
+        mapping = {plate: e.text().strip() for plate, e in self.serial_edits.items()}
+        return mapping, self.when_edit.dateTime().toPython(), self.note_edit.text().strip()
+
+
+class HardwareChangeDialog(QDialog):
+    """A date and a note. The note is required: a hardware change with no
+    description cannot be told apart from another one in six months."""
+
+    def __init__(self, now: datetime, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Record hardware change")
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        self.when_edit = QDateTimeEdit(_qdatetime_from(now))
+        self.when_edit.setCalendarPopup(True)
+        self.when_edit.setDisplayFormat("yyyy-MM-dd HH:mm")
+        form.addRow("Date:", self.when_edit)
+        self.note_edit = QLineEdit()
+        self.note_edit.setPlaceholderText("e.g. new HV cable, feedthrough cleaned")
+        self.note_edit.textChanged.connect(self._refresh_ok)
+        form.addRow("What changed:", self.note_edit)
+        layout.addLayout(form)
+        self.buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+        layout.addWidget(self.buttons)
+        self._refresh_ok()
+
+    def _refresh_ok(self, *_):
+        self.buttons.button(QDialogButtonBox.StandardButton.Ok).setEnabled(
+            bool(self.note_edit.text().strip()))
+
+    def answer(self):
+        """(when, note) as the panel records them."""
+        return self.when_edit.dateTime().toPython(), self.note_edit.text().strip()
 
 
 class LoadCharacterizationTab(QWidget):
@@ -157,6 +255,24 @@ class LoadCharacterizationTab(QWidget):
         cfg_form.addRow("Status:", self.lbl_status)
 
         left_col.addWidget(cfg_box)
+
+        # ── Amplifiers: which serial drives which plate ───────────────────────
+        amp_box = QGroupBox("Amplifiers")
+        amp_form = QFormLayout(amp_box)
+        self.lbl_serials = {}
+        for plate in AMP_LABELS:
+            lbl = QLabel("not set")
+            self.lbl_serials[plate] = lbl
+            amp_form.addRow(f"{plate}:", lbl)
+        amp_btns = QHBoxLayout()
+        self.btn_record_swap = QPushButton("Record amplifier swap")
+        self.btn_record_swap.clicked.connect(self._on_record_swap)
+        self.btn_record_hw_change = QPushButton("Record hardware change")
+        self.btn_record_hw_change.clicked.connect(self._on_record_hardware_change)
+        amp_btns.addWidget(self.btn_record_swap)
+        amp_btns.addWidget(self.btn_record_hw_change)
+        amp_form.addRow(amp_btns)
+        left_col.addWidget(amp_box)
         left_col.addStretch()
         top_row.addLayout(left_col, stretch=0)
 
@@ -323,8 +439,12 @@ class LoadCharacterizationTab(QWidget):
     # ------------------------------------------------------------------
 
     def refresh_results(self):
-        """Re-read the characterization results and redraw the table."""
+        """Re-read the amplifier assignment and characterization results and
+        redraw the panel and the table."""
         now = self._now_fn()
+        in_force = amplifier_assignments.current_assignment(now) or {}
+        for plate, lbl in self.lbl_serials.items():
+            lbl.setText(in_force.get(plate, "not set"))
         hw_change = amplifier_assignments.latest_hardware_change(now)
         stale_tip = ("" if hw_change is None else
                      f"measured before the hardware change on {hw_change:%Y-%m-%d}")
@@ -367,6 +487,52 @@ class LoadCharacterizationTab(QWidget):
                        and g > 3 * median_floor)
             first = self.table.item(row, 0)
             first.setBackground(QColor(theme.FAULT) if outlier else clear)
+
+    # ------------------------------------------------------------------
+    # Amplifiers panel
+    # ------------------------------------------------------------------
+
+    def _ask_assignment(self, current: dict | None):
+        """-> (mapping, when, note) or None. The only place the swap dialog opens."""
+        dlg = AssignmentDialog(current, self._now_fn(), self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return None
+        return dlg.answer()
+
+    def _ask_hardware_change(self):
+        """-> (when, note) or None. The only place the hardware-change dialog opens."""
+        dlg = HardwareChangeDialog(self._now_fn(), self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return None
+        return dlg.answer()
+
+    def _on_record_swap(self):
+        current = amplifier_assignments.current_assignment(self._now_fn())
+        answer = self._ask_assignment(current)
+        if answer is None:
+            return
+        mapping, when, note = answer
+        # The first recording establishes the assignment; later ones are swaps.
+        has_one = any(r.get("kind") in ("initial", "swap")
+                      for r in amplifier_assignments.history())
+        try:
+            amplifier_assignments.record_assignment(
+                mapping, when, "swap" if has_one else "initial", note)
+        except ValueError as e:
+            QMessageBox.warning(self, "Amplifier assignment not recorded", str(e))
+            return
+        self.refresh_results()
+        # The planner reads the newest result for the amplifier now at each plate.
+        self.measurements_changed.emit()
+
+    def _on_record_hardware_change(self):
+        answer = self._ask_hardware_change()
+        if answer is None:
+            return
+        when, note = answer
+        amplifier_assignments.record_hardware_change(when, note)
+        self.refresh_results()
+        self.measurements_changed.emit()
 
     @staticmethod
     def _result_text(rec: dict) -> str:
