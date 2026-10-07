@@ -132,6 +132,7 @@ class SpikeRecorder(QObject):
         self._csv_file = None
         self._csv = None
         self._plates: dict = {}
+        self._forced: frozenset = frozenset()
         self._t = 0.0
         self._dt = None
         self._wall0 = None
@@ -146,8 +147,15 @@ class SpikeRecorder(QObject):
     def is_running(self) -> bool:
         return self._running
 
-    def start(self, output_dir) -> None:
-        """Begin recording into `output_dir` (created if needed)."""
+    def start(self, output_dir, driven_plates=None) -> None:
+        """Begin recording into `output_dir` (created if needed).
+
+        `driven_plates` names plates to treat as driven whatever the setpoint
+        model says. A drift pass drives the amplifiers straight through the
+        calibration runner, which does not go through FuncGenSetpoints, so the
+        model still reads "output off" and the recorder would watch nothing;
+        the pass says which plates it is driving instead.
+        """
         if self._running:
             self.stop()
         self._dir = Path(output_dir)
@@ -159,6 +167,7 @@ class SpikeRecorder(QObject):
         self._csv.writeheader()
         self._csv_file.flush()
         self._plates = {}
+        self._forced = frozenset(driven_plates or ())
         self._t = 0.0
         self._dt = None
         self._wall0 = self._now()
@@ -200,7 +209,7 @@ class SpikeRecorder(QObject):
 
         for key, plate in CHANNEL_ROLE.items():
             params = self._setpoints.get(key)
-            if not (params.output_on and params.amp_vpp != 0):
+            if plate not in self._forced and not (params.output_on and params.amp_vpp != 0):
                 st = self._plates.pop(plate, None)
                 if st is not None:
                     self._write_pending(plate, st)

@@ -48,13 +48,13 @@ from rbl.config.calibration_config import (
     CAL_AC_FREQ_PRESETS,
     CAL_DRIFT_PROFILE,
     CAL_MAX_KV,
+    CAL_OUTPUT_DIR,
     CAL_PASSES,
     CAL_STEP_KV,
     CAL_SWEEP_PROFILE,
     CAL_UNCERTAINTY_V,
     CAL_ZERO_DWELL_S,
     DRIFT_DEFAULT_KV,
-    DRIFT_MAX_ATTENDED_H,
     DRIFT_MAX_UNATTENDED_H,
     LoadCondition,
     ac_sweep_points,
@@ -65,7 +65,7 @@ from rbl.gui import theme
 from rbl.gui.widgets.connection_bar import LabJackPanel
 from rbl.gui.widgets.inputs import NoScrollComboBox, QuietDoubleSpinBox, unit_row
 from rbl.services.calibration_runner import CalibrationRunner
-from rbl.services.calibration_writer import CalibrationWriter
+from rbl.services.calibration_writer import CalibrationWriter, new_run_id
 
 log = logging.getLogger(__name__)
 
@@ -169,6 +169,10 @@ class CalibrationTab(QWidget):
         self._prior_profile   = None      # stashed at run start, restored after
         self._prior_pair      = None      # ditto, for pair profiles
         self._connected       = False
+        # The current spike recorder (set by MainWindow). A drift pass on the
+        # plates runs only while it is recording.
+        self._spike_recorder  = None
+        self._drift_recorder_active = False
         self._dwell_start_t:  float = None
         self._dwell_total_s:  float = 0.0
 
@@ -407,13 +411,17 @@ class CalibrationTab(QWidget):
         cfg_form.addRow(self._drift_setpoint_label, self._drift_setpoint_row)
 
         self.spn_drift_h = QuietDoubleSpinBox()
-        self.spn_drift_h.setRange(0.0, DRIFT_MAX_UNATTENDED_H)
+        # No cap here: a pass on the plates has none (it runs only while the HV
+        # interlock and the spike recorder do), and a DISCONNECTED pass is
+        # capped by the runner at DRIFT_MAX_UNATTENDED_H with a message.
+        self.spn_drift_h.setRange(0.0, 999.0)
         self.spn_drift_h.setValue(1.0)
         self.spn_drift_h.setDecimals(2)
         self.spn_drift_h.setToolTip(
-            f"Above {DRIFT_MAX_ATTENDED_H:.1f} h is only permitted with the "
-            f"amplifier DISCONNECTED from the steerer (unattended cap "
-            f"{DRIFT_MAX_UNATTENDED_H:.1f} h)."
+            f"On the plates there is no time limit: the pass runs only while the "
+            f"vacuum HV interlock permits the voltage and the spike recorder is "
+            f"recording, and ends, saying which stopped, if either does. "
+            f"DISCONNECTED passes are capped at {DRIFT_MAX_UNATTENDED_H:.1f} h."
         )
         self._drift_duration_label = QLabel("Drift duration:")
         self._drift_duration_row = QWidget()
@@ -688,17 +696,15 @@ class CalibrationTab(QWidget):
             QMessageBox.warning(self, "Load condition required",
                                  "Select a load condition before running.")
             return
-        if self.rb_drift.isChecked() and load_condition is LoadCondition.ON_PLATES \
-                and self.spn_drift_h.value() > DRIFT_MAX_ATTENDED_H:
-            QMessageBox.warning(
-                self, "Drift duration refused",
-                f"Runs longer than {DRIFT_MAX_ATTENDED_H:.1f} h are only "
-                f"permitted with the amplifier DISCONNECTED from the steerer.",
-            )
-            return
+        drift_on_plates = (self.rb_drift.isChecked()
+                           and load_condition is LoadCondition.ON_PLATES)
 
         dialog = _PreRunChecklistDialog(load_condition, self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        run_id = new_run_id()
+        if drift_on_plates and not self._start_drift_protections(run_id):
             return
 
         # Resolved before the stream is reconfigured: the pair profile has to
@@ -707,7 +713,7 @@ class CalibrationTab(QWidget):
         channels = self._get_selected_channels()
 
         funcgen_map = self.beamline.build_funcgen_map()
-        self._writer = CalibrationWriter(metadata={
+        self._writer = CalibrationWriter(run_id=run_id, metadata={
             "load_condition": load_condition.value,
         })
         self._runner = CalibrationRunner(
@@ -798,7 +804,81 @@ class CalibrationTab(QWidget):
                 self.spn_drift_kv.value(),
                 self.spn_drift_h.value(),
                 ac_channels=ac_channels,
+                protections_ok=self._drift_protections_ok if drift_on_plates else None,
             )
+
+    # ------------------------------------------------------------------
+    # Drift pass on the plates: guarded by running protections, not a clock
+    # (docs/adr/0005). The pass drives exactly the waveform entered above.
+    # ------------------------------------------------------------------
+
+    def set_spike_recorder(self, recorder) -> None:
+        """Give the tab the spike recorder a drift pass on the plates requires."""
+        self._spike_recorder = recorder
+
+    def drift_ac_checks(self) -> dict:
+        """The per-channel 'drive this channel as AC' check boxes."""
+        return self._drift_ac_checks
+
+    def drift_ac_amp_spins(self) -> dict:
+        """The per-channel AC amplitude spin boxes."""
+        return self._drift_ac_amp_spins
+
+    def drift_commanded_kv(self) -> float:
+        """Highest peak voltage any channel of the drift pass will be driven to."""
+        setpoint = abs(self.spn_drift_kv.value())
+        if not self.chk_drift_ac.isChecked():
+            return setpoint
+        return max(
+            self._drift_ac_amp_spins[amp].value()
+            if self._drift_ac_checks[amp].isChecked() else setpoint
+            for amp in SC.AMP_LABELS
+        )
+
+    def _drift_protections_ok(self) -> tuple:
+        """(ok, reason): the HV interlock permits the voltage AND the spike
+        recorder is running. Asked at start and again on every window."""
+        kv = self.drift_commanded_kv()
+        status, detail = self.beamline.hv_interlock_status_for(kv)
+        if status != "ok":
+            return False, f"HV interlock not permitting {kv:.1f} kV ({detail})"
+        if self._spike_recorder is None or not self._spike_recorder.is_running():
+            return False, "spike recorder not running"
+        return True, ""
+
+    def _start_drift_protections(self, run_id: str) -> bool:
+        """Start the spike recorder for this pass; False (and a message) if the
+        pass may not start. The recorder is started FIRST so that "is it
+        running" is a fact the check can read, then everything is checked."""
+        if self._spike_recorder is None:
+            QMessageBox.warning(
+                self, "Drift pass refused",
+                "No spike recorder is available, and a drift pass on the plates "
+                "does not run without one.")
+            return False
+        folder = CAL_OUTPUT_DIR / f"{run_id}_spikes"
+        try:
+            self._spike_recorder.start(folder, driven_plates=set(SC.AMP_LABELS))
+        except Exception as e:
+            QMessageBox.warning(self, "Drift pass refused",
+                                f"The spike recorder could not start: {e}")
+            return False
+        self._drift_recorder_active = True
+        ok, reason = self._drift_protections_ok()
+        if not ok:
+            self._stop_drift_recorder()
+            QMessageBox.warning(self, "Drift pass refused",
+                                f"A drift pass on the plates needs its protections: {reason}.")
+            return False
+        return True
+
+    def _stop_drift_recorder(self) -> None:
+        if self._drift_recorder_active and self._spike_recorder is not None:
+            try:
+                self._spike_recorder.stop()
+            except Exception:
+                log.exception("stopping the spike recorder")
+        self._drift_recorder_active = False
 
     def _on_step_mode_changed(self, *_):
         """Show what return-to-zero costs in wall-clock time.
@@ -861,6 +941,10 @@ class CalibrationTab(QWidget):
 
     def _on_runner_error(self, msg: str):
         log.error("calibration run error: %s", msg)
+        # Shown, not just logged: a drift pass that ended because a protection
+        # stopped must say so to whoever comes back to it. This arrives after
+        # `finished`, so it replaces the bare "Stopped".
+        self.lbl_state.setText(msg)
 
     def _on_overcurrent(self, amp_label: str, measured_ma: float,
                         limit_ma: float):
@@ -906,6 +990,7 @@ class CalibrationTab(QWidget):
         ))
 
     def _on_finished(self, csv_path: str):
+        self._stop_drift_recorder()
         self._stop_dwell_bar()
         self.btn_run.setEnabled(True)
         self.btn_abort.setEnabled(False)
@@ -963,6 +1048,7 @@ class CalibrationTab(QWidget):
     # ------------------------------------------------------------------
 
     def shutdown(self):
+        self._stop_drift_recorder()
         self._set_execution_state(False)   # always release the sleep lock on exit
         if self._runner is not None:
             self._runner.abort()

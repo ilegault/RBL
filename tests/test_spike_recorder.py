@@ -315,3 +315,29 @@ def test_the_recorder_never_commands_anything(qapp, setpoints, tmp_path, monkeyp
     r.save_pre_event("X+")
     r.stop()
     assert len(_rows(tmp_path / "run")) == 2
+
+
+def test_driven_plates_named_at_start_are_watched_whatever_the_setpoint_model_says(
+        qapp, tmp_path):
+    # A drift pass drives the amplifiers through the calibration runner, which
+    # does not go through FuncGenSetpoints: the model still says "output off".
+    sp = FuncGenSetpoints()
+    r = SpikeRecorder(sp, now_fn=lambda: NOW)
+    r.start(tmp_path / "run", driven_plates={"X+"})
+    s = Stream(r)
+    s.feed(60.0, plates=("X+", "Y+"))
+    s.feed(5.0, spikes=[(1.0, 10, 9.0)], plates=("X+", "Y+"))
+    r.stop()
+    assert {row["plate_position"] for row in _rows(tmp_path / "run")} == {"X+"}
+
+
+def test_a_restart_forgets_the_previous_forced_plates(qapp, tmp_path):
+    sp = FuncGenSetpoints()
+    r = SpikeRecorder(sp, now_fn=lambda: NOW)
+    r.start(tmp_path / "a", driven_plates={"X+"})
+    r.stop()
+    r.start(tmp_path / "b")
+    s = Stream(r)
+    s.feed(65.0, spikes=[(62.0, 10, 9.0)])
+    r.stop()
+    assert _rows(tmp_path / "b") == []
