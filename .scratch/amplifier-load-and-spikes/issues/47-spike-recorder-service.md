@@ -1,6 +1,6 @@
 # 47: The spike recorder: a reference per operating point, a spike file, and waveforms
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
