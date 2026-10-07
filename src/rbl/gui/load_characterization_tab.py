@@ -108,9 +108,11 @@ class LoadCharacterizationTab(QWidget):
         cond_row = QHBoxLayout()
         self.rb_disconnected = QRadioButton("DISCONNECTED")
         self.rb_on_plates = QRadioButton("ON_PLATES")
+        self.rb_cable_only = QRadioButton("Cable only (far end open)")
         self.rb_on_plates.setChecked(True)
         self._cond_group = QButtonGroup(self)
-        for rb in (self.rb_disconnected, self.rb_on_plates):
+        for rb in (self.rb_disconnected, self.rb_on_plates,
+                   self.rb_cable_only):
             self._cond_group.addButton(rb)
             cond_row.addWidget(rb)
         cfg_form.addRow("Load condition:", cond_row)
@@ -173,8 +175,11 @@ class LoadCharacterizationTab(QWidget):
         return Mode.C
 
     def _selected_load_condition(self) -> LoadCondition:
-        return (LoadCondition.ON_PLATES if self.rb_on_plates.isChecked()
-                else LoadCondition.DISCONNECTED)
+        if self.rb_on_plates.isChecked():
+            return LoadCondition.ON_PLATES
+        if self.rb_cable_only.isChecked():
+            return LoadCondition.CABLE_ONLY
+        return LoadCondition.DISCONNECTED
 
     def _on_run_clicked(self):
         if not self._connected:

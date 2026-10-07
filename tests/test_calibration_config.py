@@ -106,5 +106,9 @@ class TestConstants:
         assert CAL_PROFILE in STREAM_PROFILES
         assert set(AMP_CHANNELS).issubset(set(STREAM_PROFILES[CAL_PROFILE]["scan_list"]))
 
-    def test_load_condition_enum_has_exactly_two_members(self):
-        assert {m.name for m in LoadCondition} == {"DISCONNECTED", "ON_PLATES"}
+    def test_load_condition_enum_has_exactly_three_members(self):
+        # Ticket 34 added CABLE_ONLY (cable attached, far end open) on purpose;
+        # the old assertion pinned the enum to the two conditions that existed
+        # before it. Any further member must be a deliberate decision too.
+        assert {m.name for m in LoadCondition} == {
+            "DISCONNECTED", "ON_PLATES", "CABLE_ONLY"}

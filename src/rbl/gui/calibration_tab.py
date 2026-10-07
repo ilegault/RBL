@@ -104,6 +104,9 @@ class _PreRunChecklistDialog(QDialog):
         ]
         if load_condition is LoadCondition.ON_PLATES:
             items.append("Nobody is at the beamline and the area is clear.")
+        if load_condition is LoadCondition.CABLE_ONLY:
+            items.append("The HV cable's far end is open and insulated "
+                         "(nothing attached to it).")
         for text in items:
             cb = QCheckBox(text)
             cb.setWordWrap(True) if hasattr(cb, "setWordWrap") else None

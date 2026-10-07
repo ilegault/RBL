@@ -1,6 +1,6 @@
 # 34: Test safety for new stores, their paths, and the cable-only load condition
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -37,11 +37,11 @@ Tests may fake: nothing on disk; Qt widgets are real (offscreen).
 
 ## Acceptance criteria
 
-- [ ] Inside any test, `rbl.config.paths.AMPLIFIER_ASSIGNMENTS_STORE` and `CHARACTERIZATION_DIR` are both under `tmp_path` and not under `Path.home()` (one test asserts both).
-- [ ] `LoadCondition('CABLE_ONLY')` round-trips, and `[c.value for c in LoadCondition]` is `['DISCONNECTED', 'ON_PLATES', 'CABLE_ONLY']`.
-- [ ] On the Load Characterization tab, checking the new radio button makes `_selected_load_condition()` return `LoadCondition.CABLE_ONLY`; `test_disconnected_condition_selection` still passes unchanged.
-- [ ] `_PreRunChecklistDialog(LoadCondition.CABLE_ONLY)` contains a checklist item whose text includes `far end`.
-- [ ] All existing tests pass unchanged.
+- [x] Inside any test, `rbl.config.paths.AMPLIFIER_ASSIGNMENTS_STORE` and `CHARACTERIZATION_DIR` are both under `tmp_path` and not under `Path.home()` (one test asserts both).
+- [x] `LoadCondition('CABLE_ONLY')` round-trips, and `[c.value for c in LoadCondition]` is `['DISCONNECTED', 'ON_PLATES', 'CABLE_ONLY']`.
+- [x] On the Load Characterization tab, checking the new radio button makes `_selected_load_condition()` return `LoadCondition.CABLE_ONLY`; `test_disconnected_condition_selection` still passes unchanged.
+- [x] `_PreRunChecklistDialog(LoadCondition.CABLE_ONLY)` contains a checklist item whose text includes `far end`.
+- [x] All existing tests pass unchanged.
 
 ## Gate
 
@@ -53,3 +53,6 @@ Run in CI's order (`.github/workflows/tests.yml`):
     pytest --tb=short -q -n auto --dist loadfile --durations=25
 
 ## Comments
+
+2026-10-07: Done. `paths.AMPLIFIER_ASSIGNMENTS_STORE` / `CHARACTERIZATION_DIR` added with an autouse conftest fixture; `LoadCondition.CABLE_ONLY`, a third radio button and a "far end" checklist item added. Tests: `tests/test_amplifier_test_safety_and_cable_only.py` (criteria 1-4, selection tested by clicking Run and capturing the condition handed to the characterizer, so no private access is added to the ratchet).
+Criterion 5 note: `test_load_condition_enum_has_exactly_two_members` pinned the enum to the two old members, which criterion 2 deliberately changes. It is renamed to `..._three_members` and asserts the new set; every other existing test is unchanged.
