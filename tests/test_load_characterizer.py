@@ -18,6 +18,7 @@ import pytest
 from PySide6.QtWidgets import QApplication
 
 from rbl.config.calibration_config import CAL_TRIP_HARD_MA, LoadCondition
+from rbl.hardware.amp_monitor import ma_to_monitor
 from rbl.services.load_characterizer import (
     CLAMP_FREQ_LADDER_HZ,
     CLAMP_RATIO_THRESHOLD,
@@ -107,7 +108,7 @@ def _run_mode_a_sine(lc, c_true_pf=1200.0):
     v_raw = (v_pk_v / 1000.0) * np.sin(2 * np.pi * step.freq_hz * t)
     i_ma = (2 * np.pi * step.freq_hz * c_true_pf * 1e-12 * v_pk_v
             * np.cos(2 * np.pi * step.freq_hz * t) * 1e3)
-    i_raw = i_ma / 10.0
+    i_raw = ma_to_monitor(i_ma)
     windows = max(1, round(step.collect_s * GUI_REFRESH_HZ))
     chunk = n // windows
     for w in range(windows):
@@ -189,9 +190,10 @@ class TestResultFiles:
         windows = max(1, round(step.collect_s * GUI_REFRESH_HZ))
         chunk = n // windows
         for w in range(windows):
+            i_chunk = ma_to_monitor(i_ma)[w*chunk:(w+1)*chunk]
             lc.on_window({"sample_period": 1.0 / fs,
                           "channels": {"AIN13": {"waveform": v[w*chunk:(w+1)*chunk]},
-                                       "AIN12": {"waveform": (i_ma / 10.0)[w*chunk:(w+1)*chunk]}}})
+                                       "AIN12": {"waveform": i_chunk}}})
         (path,) = _result_files()
         rec = json.loads(path.read_text(encoding="utf-8"))
         assert rec["method"] == "charge_integral_ladder"
@@ -240,9 +242,10 @@ def _feed_rung(lc, step, c_pf=1200.0, tau_s=300e-6, fs=500_000.0, leak_ma=0.0,
     windows = max(1, round(step.collect_s * GUI_REFRESH_HZ))
     chunk = n // windows
     for w in range(windows):
+        i_chunk = ma_to_monitor(i_ma)[w*chunk:(w+1)*chunk]
         lc.on_window({"sample_period": 1.0 / fs,
                       "channels": {"AIN13": {"waveform": v[w*chunk:(w+1)*chunk]},
-                                   "AIN12": {"waveform": (i_ma / 10.0)[w*chunk:(w+1)*chunk]}}})
+                                   "AIN12": {"waveform": i_chunk}}})
 
 
 def _run_ladder(lc, ladder_kv=None, per_rung=None, **kw):
@@ -277,7 +280,7 @@ def _feed_clamp_step(lc, step, v_peak_kv, i_fund_ma, fs=50_000.0):
     n = int(fs * step.collect_s)
     t = np.arange(n) / fs
     v = v_peak_kv * (2.0 / np.pi) * np.arcsin(np.sin(2 * np.pi * step.freq_hz * t))
-    i_raw = (i_fund_ma * np.sin(2 * np.pi * step.freq_hz * t + 1.2)) / 10.0
+    i_raw = ma_to_monitor(i_fund_ma * np.sin(2 * np.pi * step.freq_hz * t + 1.2))
     windows = max(1, round(step.collect_s * GUI_REFRESH_HZ))
     chunk = n // windows
     for w in range(windows):
@@ -747,7 +750,7 @@ class TestModeA:
         v_raw = (v_pk_v / 1000.0) * np.sin(2 * np.pi * step.freq_hz * t)
         i_ma_physical = (2 * np.pi * step.freq_hz * 1200e-12 * v_pk_v
                           * np.cos(2 * np.pi * step.freq_hz * t) * 1e3)
-        i_raw = i_ma_physical / 10.0
+        i_raw = ma_to_monitor(i_ma_physical)
 
         windows = max(1, round(step.collect_s * GUI_REFRESH_HZ))
         chunk = n // windows
@@ -890,7 +893,7 @@ class TestModeC:
             peak_a = q_true_c / tau_s
             i_ma[idx] += sign * (peak_a * np.exp(-(idx - pos) / (tau_s * fs))) * 1e3
         v_raw = v_square
-        i_raw = i_ma / 10.0
+        i_raw = ma_to_monitor(i_ma)
 
         windows = max(1, round(step.collect_s * GUI_REFRESH_HZ))
         chunk = n // windows

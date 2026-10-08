@@ -246,11 +246,16 @@ AIN_TO_AMP = {
 # Scale factors (see EEL5000 manual, Specifications, p. 1-3)
 VOLTAGE_MONITOR_KV_PER_VOLT = 1.0    # 1000:1 divider -> 1 V == 1 kV
 CURRENT_MONITOR_MA_PER_VOLT = 10.0   # 1 V == 10 mA
+# a current-monitor sample at or beyond this magnitude is AT THE RAIL - the
+# LabJack's +/-10 V input range is exhausted, so the current was at least
+# this much and how much more is unknown (CONTEXT.md 'At the rail')
+CURRENT_MONITOR_RAIL_VOLTS  = 9.9
 
 # Display / sanity limits
-AMP_MAX_KV     = 5.0    # amplifier rated +/-5 kV
-AMP_MAX_MA_DC  = 20.0   # continuous DC rating
-AMP_MAX_MA_PK  = 100.0  # 4 ms peak rating
+AMP_MAX_KV               = 5.0    # amplifier rated +/-5 kV
+# the EEL5000's continuous rating; for display and planning only, never a trip level
+AMP_CONTINUOUS_RATING_MA = 20.0
+AMP_MAX_MA_PK            = 100.0  # 4 ms peak rating
 
 # The complete channel set the shared poll worker must read every cycle:
 # 4 log amps + 8 amplifier monitors = 12 channels, ONE eReadNames round trip.

@@ -1,14 +1,17 @@
 """Tests for EEL5000 monitor -> kV/mA conversion. Pure math, no hardware."""
 import math
 
+import numpy as np
 import pytest
 
 from rbl.config import hardware_config as SC
 from rbl.gui import theme
 from rbl.hardware.amp_monitor import (
+    RailTracker,
     current_status,
     format_kv,
     format_ma,
+    is_at_rail,
     monitor_to_kv,
     monitor_to_ma,
     voltage_status,
@@ -121,3 +124,43 @@ class TestChannelMapIntegrity:
     def test_every_amp_has_a_color(self):
         for amp in SC.AMP_LABELS:
             assert amp in theme.SLIT_COLORS
+
+
+class TestRail:
+    def test_is_at_rail_threshold_and_nan(self):
+        assert is_at_rail(9.9) is True
+        assert is_at_rail(-9.95) is True
+        assert is_at_rail(9.89) is False
+        assert is_at_rail(float("nan")) is False
+        arr = is_at_rail(np.array([0.0, 10.0, -10.0, np.nan]))
+        assert np.array_equal(arr, [False, True, True, False])
+
+    def test_rail_tracker_measures_a_short_run(self):
+        tracker = RailTracker()
+        volts = np.array([0.0, 0.0] + [10.0] * 10 + [0.0, 0.0])
+        dur = tracker.feed(volts, dt_s=1e-4)
+        assert abs(dur - 0.001) < 1e-12
+
+    def test_rail_tracker_joins_a_run_across_windows(self):
+        tracker = RailTracker()
+        w1 = np.array([0.0] * 10 + [10.0] * 30)
+        w2 = np.array([10.0] * 30 + [0.0] * 10)
+        tracker.feed(w1, dt_s=1e-4)
+        dur2 = tracker.feed(w2, dt_s=1e-4)
+        assert abs(dur2 - 0.006) < 1e-12
+
+    def test_rail_tracker_restarts_after_one_sample_below_the_rail(self):
+        tracker = RailTracker()
+        volts = np.array([10.0] * 30 + [9.0] + [10.0] * 30)
+        dur = tracker.feed(volts, dt_s=1e-4)
+        assert abs(dur - 0.003) < 1e-12
+        tracker.reset()
+        w_after = np.array([10.0])
+        assert abs(tracker.feed(w_after, dt_s=1e-4) - 1e-4) < 1e-12
+
+
+class TestContinuousRatingName:
+    def test_continuous_rating_has_one_name(self):
+        assert SC.AMP_CONTINUOUS_RATING_MA == 20.0
+        assert not hasattr(SC, "AMP_MAX_MA_DC")
+

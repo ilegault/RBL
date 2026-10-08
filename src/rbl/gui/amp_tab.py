@@ -242,7 +242,7 @@ class AmpTab(QWidget):
         # it holds these limits and the user zooms/pans them.  Voltage defaults
         # to the full +/-5 kV rating envelope; current to its +/-20 mA DC rating.
         self._ylim_v = [-SC.AMP_MAX_KV, SC.AMP_MAX_KV]
-        self._ylim_i = [-SC.AMP_MAX_MA_DC, SC.AMP_MAX_MA_DC]
+        self._ylim_i = [-SC.AMP_CONTINUOUS_RATING_MA, SC.AMP_CONTINUOUS_RATING_MA]
 
         # Active vertical click-drag pan (None when not dragging).
         self._pan = None
@@ -645,8 +645,12 @@ class AmpTab(QWidget):
         self.ax_i.grid(True, alpha=0.3)
         self.ax_i.axhline(0.0, color="#999", lw=0.8, ls="-")
         # DC rating envelope: +/-20 mA
-        self.ax_i.axhline( SC.AMP_MAX_MA_DC, color=theme.WARN, lw=0.8, ls="--", alpha=0.5)
-        self.ax_i.axhline(-SC.AMP_MAX_MA_DC, color=theme.WARN, lw=0.8, ls="--", alpha=0.5)
+        self.ax_i.axhline(
+            SC.AMP_CONTINUOUS_RATING_MA, color=theme.WARN, lw=0.8, ls="--", alpha=0.5
+        )
+        self.ax_i.axhline(
+            -SC.AMP_CONTINUOUS_RATING_MA, color=theme.WARN, lw=0.8, ls="--", alpha=0.5
+        )
 
         # Mirrored voltage axis on the right-hand side, requested for readability.
         # A secondary y-axis tracks ax_v's data limits automatically, so it
@@ -1552,7 +1556,7 @@ class AmpTab(QWidget):
 
     def _i_reset(self):
         """Reset the current axis to the full ±mA rating."""
-        self._ylim_i = [-SC.AMP_MAX_MA_DC, SC.AMP_MAX_MA_DC]
+        self._ylim_i = [-SC.AMP_CONTINUOUS_RATING_MA, SC.AMP_CONTINUOUS_RATING_MA]
         self._apply_ylimits()
         self.canvas.draw_idle()
 

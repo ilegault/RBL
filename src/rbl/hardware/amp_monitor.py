@@ -19,6 +19,9 @@ waveform capture.
 Pure math. No hardware, no Qt.
 """
 import math
+from typing import Union, overload
+
+import numpy as np
 
 from rbl.config import hardware_config as SC
 
@@ -114,7 +117,7 @@ def current_status(ma: float) -> str:
     if ma is None or (isinstance(ma, float) and math.isnan(ma)):
         return "over"
     a = abs(ma)
-    if a <= SC.AMP_MAX_MA_DC:
+    if a <= SC.AMP_CONTINUOUS_RATING_MA:
         return "ok"
     if a <= SC.AMP_MAX_MA_PK:
         return "peak"
@@ -166,6 +169,71 @@ def pair_correlation(a, b) -> float:
     return cov / math.sqrt(var_a * var_b)
 
 
+# --- Rail tracking -----------------------------------------------------------
+
+@overload
+def is_at_rail(volts: float) -> bool: ...
+
+@overload
+def is_at_rail(volts: np.ndarray) -> np.ndarray: ...
+
+def is_at_rail(volts: Union[float, np.ndarray]) -> Union[bool, np.ndarray]:
+    """Return True (or bool array) where |volts| >= CURRENT_MONITOR_RAIL_VOLTS.
+
+    NaN gives False. Pure function accepting a float or numpy array.
+    """
+    if isinstance(volts, np.ndarray):
+        abs_v = np.abs(np.where(np.isnan(volts), 0.0, volts))
+        return abs_v >= SC.CURRENT_MONITOR_RAIL_VOLTS
+    if volts is None or (isinstance(volts, (float, int, np.floating)) and math.isnan(volts)):
+        return False
+    return abs(volts) >= SC.CURRENT_MONITOR_RAIL_VOLTS
+
+
+class RailTracker:
+    """Track contiguous at-the-rail runs across stream windows.
+
+    Pure: numpy only, no Qt, no clock, no hardware. That is what makes it
+    testable with synthetic arrays.
+    """
+
+    def __init__(self) -> None:
+        self._open_run: int = 0
+
+    def feed(self, volts: np.ndarray, dt_s: float) -> float:
+        """Feed a window of raw current-monitor volts.
+
+        Returns the longest contiguous at-the-rail run, in seconds, among
+        the runs that include at least one sample of this window.
+        A run still at the rail at the end of the previous feed continues
+        into this one, and its earlier samples count.
+        Duration is sample count * dt_s.
+        A NaN sample or a sample below the rail ends a run.
+        """
+        arr = np.asarray(volts, dtype=float).ravel()
+        if len(arr) == 0:
+            return 0.0
+
+        mask = is_at_rail(arr)
+        max_run = 0
+        current_run = self._open_run
+
+        for m in mask:
+            if m:
+                current_run += 1
+                if current_run > max_run:
+                    max_run = current_run
+            else:
+                current_run = 0
+
+        self._open_run = current_run
+        return max_run * dt_s
+
+    def reset(self) -> None:
+        """Forget any open run."""
+        self._open_run = 0
+
+
 # --- Self-test ---------------------------------------------------------------
 
 if __name__ == "__main__":
@@ -202,6 +270,18 @@ if __name__ == "__main__":
     assert "µA" in format_ma(0.5)
     assert "—"  in format_kv(float("nan"))
     assert "—"  in format_ma(float("nan"))
+
+    # Rail tracking
+    assert is_at_rail(9.9) is True
+    assert is_at_rail(-9.95) is True
+    assert is_at_rail(9.89) is False
+    assert is_at_rail(float("nan")) is False
+    assert np.array_equal(
+        is_at_rail(np.array([0.0, 10.0, -10.0, np.nan])),
+        [False, True, True, False],
+    )
+    _rt = RailTracker()
+    assert abs(_rt.feed(np.array([0.0] * 5 + [10.0] * 10 + [0.0] * 5), 1e-4) - 0.001) < 1e-12
 
     # Buffer is the shared one, not a copy
     from rbl.hardware.current_monitor import RollingBuffer as _RB

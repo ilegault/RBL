@@ -1,6 +1,6 @@
 # 53: Prep: tests convert through `ma_to_monitor`, a rail tracker exists, and the 20 mA rating has one name
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -96,25 +96,25 @@ numpy arrays.
 
 ## Acceptance criteria
 
-- [ ] `test_is_at_rail_threshold_and_nan` (new, `tests/test_amp_monitor.py`):
+- [x] `test_is_at_rail_threshold_and_nan` (new, `tests/test_amp_monitor.py`):
   - `is_at_rail(9.9)` and `is_at_rail(-9.95)` are True;
   - `is_at_rail(9.89)` and `is_at_rail(float("nan"))` are False;
   - `is_at_rail(np.array([0.0, 10.0, -10.0, np.nan]))` equals `[False, True, True, False]`.
-- [ ] `test_rail_tracker_measures_a_short_run` (new): 10 samples at 10.0 V between 0 V
+- [x] `test_rail_tracker_measures_a_short_run` (new): 10 samples at 10.0 V between 0 V
   samples, `dt_s=1e-4`, returns `0.001` (abs 1e-12).
-- [ ] `test_rail_tracker_joins_a_run_across_windows` (new): one window ending in 30 rail
+- [x] `test_rail_tracker_joins_a_run_across_windows` (new): one window ending in 30 rail
   samples, then one starting with 30 rail samples, `dt_s=1e-4`. The second `feed` returns
   `0.006` (abs 1e-12).
-- [ ] `test_rail_tracker_restarts_after_one_sample_below_the_rail` (new): 30 rail
+- [x] `test_rail_tracker_restarts_after_one_sample_below_the_rail` (new): 30 rail
   samples, one at 9.0 V, then 30 rail samples, in one window. `feed` returns `0.003`, and
   `reset()` makes a following 1-sample rail window return `1e-4`.
-- [ ] `test_continuous_rating_has_one_name` (new, `tests/test_amp_monitor.py`):
+- [x] `test_continuous_rating_has_one_name` (new, `tests/test_amp_monitor.py`):
   `hardware_config.AMP_CONTINUOUS_RATING_MA == 20.0`, and
   `hasattr(hardware_config, "AMP_MAX_MA_DC")` is False.
-- [ ] `test_planner_continuous_level_is_the_rating_not_the_soft_trip` (new,
+- [x] `test_planner_continuous_level_is_the_rating_not_the_soft_trip` (new,
   `tests/test_current_vs_frequency.py`): with `raster_plan.CAL_AC_TRIP_MA` monkeypatched
   to `19.0`, `current_vs_frequency(...)["levels"]["continuous_ma"] == 20.0`.
-- [ ] The full suite passes with `CURRENT_MONITOR_MA_PER_VOLT == 10.0`, and
+- [x] The full suite passes with `CURRENT_MONITOR_MA_PER_VOLT == 10.0`, and
   `grep -nE "/ ?10\.0" tests/test_load_characterizer.py tests/test_dynamic_adjustment.py`
   finds no current-to-volts conversion (no test: refactor of test helpers, proved by the
   existing suite staying green).
@@ -129,3 +129,10 @@ Run in CI's order (`.github/workflows/tests.yml`):
     pytest --tb=short -q -n auto --dist loadfile --durations=25
 
 ## Comments
+
+2026-10-07: Implemented ticket 53.
+- `src/rbl/config/hardware_config.py`: Added `CURRENT_MONITOR_RAIL_VOLTS = 9.9` and `AMP_CONTINUOUS_RATING_MA = 20.0`; removed `AMP_MAX_MA_DC`. Updated readers in `amp_monitor.py` and `amp_tab.py`.
+- `src/rbl/hardware/raster_plan.py`: Decoupled planner continuous levels and envelope walls from `CAL_AC_TRIP_MA` to `AMP_CONTINUOUS_RATING_MA`.
+- `src/rbl/hardware/amp_monitor.py`: Added pure `is_at_rail` and `RailTracker` class with cross-window open run tracking.
+- Test helpers in `test_load_characterizer.py`, `test_dynamic_adjustment.py`, and `dynamic_adjustment.py` self-test updated to use `ma_to_monitor`.
+- Verified with unit tests in `test_amp_monitor.py`, `test_current_vs_frequency.py`, and full test suite passing (2,325 passed).

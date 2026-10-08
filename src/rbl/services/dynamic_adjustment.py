@@ -48,6 +48,7 @@ import numpy as np
 from PySide6.QtCore import QObject, Signal
 
 from rbl.config.hardware_config import AMP_CHANNEL_MAP, AMP_MAX_KV
+from rbl.hardware.amp_monitor import ma_to_monitor
 from rbl.hardware.edge_metrics import (
     current_tail_duration_s,
     figure_of_merit,
@@ -334,7 +335,7 @@ if __name__ == "__main__":
 
     tau = 2e-4
     i_ma = 15.0 * np.exp(-(t % (1.0 / TRIAL_FREQ_HZ / 2)) / tau) * np.sign(v_kv) + 0.2
-    raw_i = i_ma / 10.0   # CURRENT_MONITOR_MA_PER_VOLT == 10.0
+    raw_i = ma_to_monitor(i_ma)
     for w in range(0, n, chunk):
         payload = {"sample_period": 1.0 / fs,
                    "channels": {trial.target_ain(): {"waveform": raw_i[w:w+chunk]}}}

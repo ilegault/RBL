@@ -81,3 +81,10 @@ def test_margin_constants_are_half_and_80_percent_of_continuous():
 def test_unknown_shape_is_refused():
     with pytest.raises(ValueError):
         _one(1600.0, 2.0, 500.0, "wobble")
+
+
+def test_planner_continuous_level_is_the_rating_not_the_soft_trip(monkeypatch):
+    monkeypatch.setattr(raster_plan, "CAL_AC_TRIP_MA", 19.0)
+    r = current_vs_frequency({"X+": 1600.0}, {"X": 2.0}, {"X": 500.0}, "triangle")
+    assert r["levels"]["continuous_ma"] == 20.0
+
