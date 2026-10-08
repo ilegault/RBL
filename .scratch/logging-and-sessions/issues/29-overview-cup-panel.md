@@ -1,6 +1,6 @@
 # 29: The Overview cup panel, with Start/Stop for a cup test log
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -41,14 +41,14 @@ Tests may fake: instrument payloads. Must be real: `CupLog` (with `test_root=tmp
 
 ## Acceptance criteria
 
-- [ ] A fresh `CupPanel` shows `Not logging` styled with `theme.WARN`.
-- [ ] Clicking `Start Logging` creates a file under `tmp_path/YYYY-MM/`, the path line
+- [x] A fresh `CupPanel` shows `Not logging` styled with `theme.WARN`.
+- [x] Clicking `Start Logging` creates a file under `tmp_path/YYYY-MM/`, the path line
       shows that path, and the Faraday tab's `Not logging` label is hidden.
-- [ ] After an automatic or manual insertion closes, the panel's charge text equals the
+- [x] After an automatic or manual insertion closes, the panel's charge text equals the
       Faraday tab's `lbl_running_q` text.
-- [ ] With a session-kind log open (`open_for_session`), the button is disabled with the
+- [x] With a session-kind log open (`open_for_session`), the button is disabled with the
       tooltip above.
-- [ ] Clicking `Stop Logging` closes the file and the panel returns to `Not logging`.
+- [x] Clicking `Stop Logging` closes the file and the panel returns to `Not logging`.
 
 ## Gate
 
@@ -60,3 +60,12 @@ Run in CI's order (`.github/workflows/tests.yml`):
     pytest --tb=short -q -n auto --dist loadfile --durations=25
 
 ## Comments
+
+2026-10-08. Added `CupPanel` (`src/rbl/gui/widgets/cup_panel.py`), `FaradayCupTab.cup_view_changed`
+(de-duplicated `CupView`, published from log open/close, run and cycle changes, and dose updates),
+`OverviewTab.attach_cup_log`, and the `MainWindow` wiring with its comment. All tests are in
+`tests/test_cup_panel.py`: fresh panel (criterion 1), Start Logging creates `YYYY-MM/` file and hides the
+tab's label (2), charge equals `lbl_running_q` after force start/stop and with nonzero charge (3),
+session-kind log disables the button with the tooltip (4), Stop Logging returns to `Not logging` (5),
+plus current/position rendering and the real `MainWindow` wiring. Full suite 2404 passed; ruff clean;
+mypy error set identical to master. No bench verification needed.
