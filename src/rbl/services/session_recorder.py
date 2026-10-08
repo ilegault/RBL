@@ -107,7 +107,6 @@ class SessionRecorder(QObject):
         self._segment_seconds  = SEGMENT_SECONDS_DEFAULT
         self._quality_label    = QUALITY_DEFAULT
         self._master_codec     = MASTER_CODEC_DEFAULT
-        self._video_enabled    = False
 
         # Camera fourcc tracking (set when camera opens)
         self._camera_fourcc_actual    = ""
@@ -171,19 +170,19 @@ class SessionRecorder(QObject):
         self.settings_changed.emit()
 
     def set_record_fps(self, v: int) -> None:
-        if self._recording:
+        if self._video_recorder is not None:
             return
         self._record_fps = v
         self.settings_changed.emit()
 
     def set_segment_seconds(self, v: int) -> None:
-        if self._recording:
+        if self._video_recorder is not None:
             return
         self._segment_seconds = v
         self.settings_changed.emit()
 
     def set_quality(self, label: str) -> None:
-        if self._recording:
+        if self._video_recorder is not None:
             return
         if label in QUALITY_PRESETS:
             self._quality_label = label
@@ -191,17 +190,11 @@ class SessionRecorder(QObject):
 
     def set_master_codec(self, label: str) -> None:
         from rbl.config.recording_config import MASTER_CODECS
-        if self._recording:
+        if self._video_recorder is not None:
             return
         if label in MASTER_CODECS:
             self._master_codec = label
             self.settings_changed.emit()
-
-    def set_video_enabled(self, on: bool) -> None:
-        if self._recording:
-            return
-        self._video_enabled = on
-        self.settings_changed.emit()
 
     # ---- session control ---------------------------------------------------
 
@@ -261,11 +254,7 @@ class SessionRecorder(QObject):
         self._recording = True
         self._write_event("session_start",
                           f"csv_interval_s={self._csv_interval_s} "
-                          f"video={self._video_enabled and self._camera.is_open()} "
                           f"record_fps={self._record_fps}")
-
-        # Video (optional, backwards compatibility for set_video_enabled).
-        self._start_video()
 
         self._write_manifest()
         self.state_changed.emit()
@@ -551,10 +540,6 @@ class SessionRecorder(QObject):
         self._write_event("video_stopped", detail)
         self._write_manifest()
         self.state_changed.emit()
-
-    def _start_video(self) -> None:
-        if self._video_enabled:
-            self.start_video()
 
     def _on_frame(self, frame, t_mono: float) -> None:
         """Called on camera thread via DirectConnection."""
