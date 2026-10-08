@@ -1,6 +1,6 @@
 # 26: Cup log columns for origin and totals, a continuation header, and a restart row
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
