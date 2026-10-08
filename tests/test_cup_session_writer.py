@@ -1581,3 +1581,132 @@ class TestWriteCycleLifecycleRows:
 
 
 
+
+
+def _data_rows(writer):
+    with open(writer.csv_path, encoding="utf-8") as f:
+        return list(csv.DictReader([ln for ln in f if not ln.startswith("#")]))
+
+
+_SUMMARY_ARGS = dict(
+    run_id=1,
+    commanded_timestamp=10.0,
+    confirmed_timestamp=10.4,
+    dwell=5.0,
+    sample_count=20,
+    mean_current_a=1.0e-7,
+    std_current_a=1.0e-9,
+    beam_on_seconds=60.0,
+    charge=5.0e-7,
+)
+
+
+class TestSummaryOriginAndTotals:
+    """Ticket 26: origin, counted_in_dose and total_beam_on_s columns (ADR 0003 C4/C5)."""
+
+    def test_new_columns_are_appended_after_every_existing_one(self):
+        assert CSV_COLUMNS[-3:] == ["origin", "counted_in_dose", "total_beam_on_s"]
+        assert CSV_COLUMNS[-4] == "dpa"
+
+    def test_explicit_values_read_back_in_their_columns(self, tmp_path):
+        sw = CupSessionWriter(session_id="t26_explicit", output_dir=tmp_path)
+        sw.write_insertion_summary(
+            **_SUMMARY_ARGS, origin="manual", counted_in_dose=False, total_beam_on_s=12.5
+        )
+        sw.close()
+        (row,) = [r for r in _data_rows(sw) if r["record_type"] == "insertion_summary"]
+        assert row["origin"] == "manual"
+        assert row["counted_in_dose"] == "false"
+        assert float(row["total_beam_on_s"]) == pytest.approx(12.5)
+
+    def test_defaults_read_automatic_and_true(self, tmp_path):
+        sw = CupSessionWriter(session_id="t26_default", output_dir=tmp_path)
+        sw.write_insertion_summary(**_SUMMARY_ARGS)
+        sw.close()
+        (row,) = [r for r in _data_rows(sw) if r["record_type"] == "insertion_summary"]
+        assert row["origin"] == "automatic"
+        assert row["counted_in_dose"] == "true"
+        assert row["total_beam_on_s"] == ""
+
+    @pytest.mark.parametrize("origin", ["automatic", "manual", "forced", "uncommanded"])
+    def test_every_documented_origin_is_accepted(self, tmp_path, origin):
+        sw = CupSessionWriter(session_id=f"t26_{origin}", output_dir=tmp_path)
+        sw.write_insertion_summary(**_SUMMARY_ARGS, origin=origin)
+        sw.close()
+        (row,) = [r for r in _data_rows(sw) if r["record_type"] == "insertion_summary"]
+        assert row["origin"] == origin
+
+    def test_unknown_origin_raises_and_writes_no_row(self, tmp_path):
+        sw = CupSessionWriter(session_id="t26_banana", output_dir=tmp_path)
+        with pytest.raises(ValueError, match="banana"):
+            sw.write_insertion_summary(**_SUMMARY_ARGS, origin="banana")
+        sw.close()
+        assert _data_rows(sw) == []
+
+
+class TestContinuationHeader:
+    """Ticket 26: a continued session's header names its dose source and totals."""
+
+    CONT = {
+        "source_path": "/data/cup_20261001T090000.csv",
+        "total_charge_c": 1.25e-3,
+        "total_beam_on_s": 5400.5,
+        "insertion_count": 42,
+        "beam_on_during_gap": True,
+    }
+
+    def test_header_carries_source_path_and_every_value(self, tmp_path):
+        sw = CupSessionWriter(
+            session_id="t26_cont", output_dir=tmp_path, continuation=self.CONT
+        )
+        sw.close()
+        header = _header_text(sw)
+        assert "# dose continued from: /data/cup_20261001T090000.csv" in header
+        (line,) = [ln for ln in header.splitlines() if ln.startswith("# continued totals:")]
+        for name in ("total_charge_c", "total_beam_on_s", "insertion_count", "beam_on_during_gap"):
+            assert name in line
+        assert "1.25" in line and "5400.5" in line and "42" in line and "true" in line.lower()
+
+    def test_without_continuation_neither_line_appears(self, tmp_path):
+        sw = CupSessionWriter(session_id="t26_nocont", output_dir=tmp_path)
+        sw.close()
+        header = _header_text(sw)
+        assert "dose continued from" not in header
+        assert "total_charge_c" not in header
+
+
+class TestAutomaticInsertionRestarted:
+    """Ticket 26: the restart row records the gap and whether beam was on."""
+
+    def test_row_carries_gap_times_beam_flag_and_mode(self, tmp_path):
+        sw = CupSessionWriter(session_id="t26_restart", output_dir=tmp_path)
+        sw.write_automatic_insertion_restarted(
+            t_host=300.0,
+            gap_start_t=100.0,
+            gap_end_t=250.0,
+            beam_on_during_gap=True,
+            mode="resumed",
+        )
+        sw.close()
+        (row,) = [r for r in _data_rows(sw) if r["record_type"] == "automatic_insertion_restarted"]
+        assert float(row["host_timestamp"]) == pytest.approx(300.0)
+        details = row["details"]
+        assert "gap_start_t=100" in details
+        assert "gap_end_t=250" in details
+        assert "beam_on_during_gap=true" in details
+        assert "mode=resumed" in details
+
+    def test_beam_off_gap_is_written_false(self, tmp_path):
+        sw = CupSessionWriter(session_id="t26_restart_off", output_dir=tmp_path)
+        sw.write_automatic_insertion_restarted(
+            t_host=1.0, gap_start_t=0.0, gap_end_t=1.0, beam_on_during_gap=False, mode="fresh"
+        )
+        sw.close()
+        (row,) = [r for r in _data_rows(sw) if r["record_type"] == "automatic_insertion_restarted"]
+        assert "beam_on_during_gap=false" in row["details"]
+
+    def test_header_record_types_line_names_it(self, tmp_path):
+        sw = CupSessionWriter(session_id="t26_rt", output_dir=tmp_path)
+        sw.close()
+        (line,) = [ln for ln in _header_text(sw).splitlines() if ln.startswith("# record types:")]
+        assert "automatic_insertion_restarted" in line

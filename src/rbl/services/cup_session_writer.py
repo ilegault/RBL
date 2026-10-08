@@ -152,7 +152,15 @@ CSV_COLUMNS: list[str] = [
     "k",
     "fluence",
     "dpa",
+    # Appended last so old analysis that indexes by position keeps working
+    # (ticket 26, ADR 0003 C4/C5).
+    "origin",
+    "counted_in_dose",
+    "total_beam_on_s",
 ]
+
+# Who caused an insertion. Anything else is a caller bug, not a new category.
+INSERTION_ORIGINS: tuple[str, ...] = ("automatic", "manual", "forced", "uncommanded")
 
 
 def _new_session_id() -> str:
@@ -161,6 +169,16 @@ def _new_session_id() -> str:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _header_float(v: Any, fmt: str) -> str:
+    """Format a header number the way the rows do; an absent one reads ``n/a``."""
+    return format(float(v), fmt) if v is not None else "n/a"
+
+
+def _bool_text(v: Any) -> str:
+    """Lower-case ``true`` / ``false`` so every boolean in the file reads the same."""
+    return "true" if v else "false"
 
 
 def _safe_float(v: float | None, fmt: str = ".8e") -> str:
@@ -225,6 +243,7 @@ class CupSessionWriter:
         arm_debounce_s: float = CUP_ARM_DEBOUNCE_S,
         release_interval_s: float = CUP_RELEASE_INTERVAL_S,
         settle_window_s: float = CUP_SETTLE_WINDOW_S,
+        continuation: dict[str, Any] | None = None,
     ) -> None:
         """Open a session file.
 
@@ -233,7 +252,16 @@ class CupSessionWriter:
         from the Faraday Cup tab. A header that reports a different number than
         the detector actually used makes the archive unreadable, so the caller
         passes the values in force when the file is opened.
+
+        ``continuation`` is set when this file carries on the dose of an earlier
+        session (ADR 0003 C5). It holds ``source_path``, ``total_charge_c``,
+        ``total_beam_on_s``, ``insertion_count`` and ``beam_on_during_gap``; the
+        header then names the source so the dose chain can be followed across
+        files by hand.
         """
+        self._continuation: dict[str, Any] | None = (
+            dict(continuation) if continuation is not None else None
+        )
         self._arm_threshold_a = arm_threshold_a
         self._release_threshold_a = release_threshold_a
         self._arm_debounce_s = arm_debounce_s
@@ -335,8 +363,19 @@ class CupSessionWriter:
             "fault_move_not_confirmed, fault_controller_not_in_auto, "
             "fault_impossible_status, fault_disagreement, "
             "cycle_insertion_skipped, insertion_summary, "
-            "cycle_disarmed, cycle_armed, settings_changed\n"
+            "cycle_disarmed, cycle_armed, settings_changed, "
+            "automatic_insertion_restarted\n"
         )
+        if self._continuation is not None:
+            c = self._continuation
+            self._file.write(f"# dose continued from: {c.get('source_path', '')}\n")
+            charge_txt = _header_float(c.get("total_charge_c"), ".8e")
+            self._file.write(
+                f"# continued totals: total_charge_c={charge_txt}  "
+                f"total_beam_on_s={c.get('total_beam_on_s')}  "
+                f"insertion_count={c.get('insertion_count')}  "
+                f"beam_on_during_gap={_bool_text(c.get('beam_on_during_gap'))}\n"
+            )
         self._file.write("# columns: " + ", ".join(CSV_COLUMNS) + "\n")
 
     def _write_row(self, row_dict: dict[str, str]) -> None:
@@ -858,6 +897,9 @@ class CupSessionWriter:
         dpa: float | None = None,
         t_host: float | None = None,
         details: str = "",
+        origin: str = "automatic",
+        counted_in_dose: bool = True,
+        total_beam_on_s: float | None = None,
     ) -> None:
         """Write a per-insertion summary row to the CSV archive and flush immediately.
 
@@ -870,7 +912,18 @@ class CupSessionWriter:
 
         Each stage of the dose chain is recorded in its own column so the arithmetic
         can be recomputed and traced by hand from the file alone.
+
+        ``origin`` says who caused the insertion (``automatic``, ``manual``,
+        ``forced`` or ``uncommanded``) and ``counted_in_dose`` whether its charge
+        went into the running total, so a reader can separate the scheduled
+        series from operator-made ones. ``total_beam_on_s`` is the running total
+        beam-on time across continued sessions. An unknown ``origin`` raises
+        before anything is written.
         """
+        if origin not in INSERTION_ORIGINS:
+            raise ValueError(
+                f"Invalid origin {origin!r}; must be one of {', '.join(INSERTION_ORIGINS)}"
+            )
         cs = charge_state if charge_state is not None else self._charge_state
         a = area if area is not None else self._area_cm2
         k_val = k if k is not None else self._k
@@ -926,6 +979,47 @@ class CupSessionWriter:
             "k": _safe_float(k_val, ".8e") if (k_val is not None and k_val > 0.0) else "",
             "fluence": _safe_float(calc_fluence, ".8e"),
             "dpa": _safe_float(calc_dpa, ".8e"),
+            "origin": origin,
+            "counted_in_dose": _bool_text(counted_in_dose),
+            "total_beam_on_s": (
+                f"{total_beam_on_s:.3f}" if total_beam_on_s is not None else ""
+            ),
+        }
+        self._write_row(row)
+
+    def write_automatic_insertion_restarted(
+        self,
+        t_host: float,
+        gap_start_t: float,
+        gap_end_t: float,
+        beam_on_during_gap: bool,
+        mode: str,
+    ) -> None:
+        """Write a marker recording that the automatic insertion cycle was restarted.
+
+        WHY THIS EXISTS (ADR 0003 C6, Ticket 26)
+        ----------------------------------------
+        When the cycle stops and later starts again, the dose total has a hole:
+        nothing was sampled for the gap. Whether beam was on during that gap decides
+        whether the hole matters, so the row carries the gap's start and end, that
+        flag, and the arming ``mode`` it came back in. Values go in ``details`` as
+        ``key=value`` pairs, like the other lifecycle markers.
+        """
+        det = (
+            f"gap_start_t={gap_start_t:.6f}; gap_end_t={gap_end_t:.6f}; "
+            f"beam_on_during_gap={_bool_text(beam_on_during_gap)}; mode={mode}"
+        )
+        row = {
+            "record_type": "automatic_insertion_restarted",
+            "iso_timestamp": _now_iso(),
+            "host_timestamp": f"{t_host:.6f}",
+            "inst_timestamp": "",
+            "current_a": "",
+            "status_word": "",
+            "over_range": "",
+            "run_id": str(self._active_run_id) if self._active_run_id is not None else "",
+            "details": det,
+            "position": "",
         }
         self._write_row(row)
 
