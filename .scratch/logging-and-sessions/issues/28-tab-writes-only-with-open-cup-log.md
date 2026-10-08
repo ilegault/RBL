@@ -1,6 +1,6 @@
 # 28: The Faraday Cup tab writes only while a cup log is open
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
