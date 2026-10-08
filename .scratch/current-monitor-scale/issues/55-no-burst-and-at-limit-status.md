@@ -1,6 +1,6 @@
 # 55: No burst rating anywhere, and a reading at the rail shows as "at limit"
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
