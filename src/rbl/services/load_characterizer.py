@@ -111,7 +111,7 @@ from rbl.config.hardware_config import (
     VOLTAGE_MONITOR_KV_PER_VOLT,
 )
 from rbl.hardware.ac_metrics import fundamental, phase_difference_deg
-from rbl.hardware.amp_monitor import RailTracker, ma_unclamped, monitor_to_kv
+from rbl.hardware.amp_monitor import RailTracker, is_at_rail, ma_unclamped, monitor_to_kv
 from rbl.hardware.funcgen_safety import _AMP_GAIN, peak_status
 from rbl.hardware.hv_interlock import interlock_status
 from rbl.hardware.load_model import admittance_from_fundamentals, capacitance_from_charge
@@ -302,8 +302,9 @@ class LoadCharacterizer(QObject):
 
     @property
     def clamp_result(self):
-        """After a clamp test: {"reached", "clamp_ma", "clamp_freq_hz", "peak_kv"},
-        else None. `reached` False means the ratio never fell below the threshold."""
+        """After a clamp test: {"reached", "clamp_ma", "clamp_freq_hz", "peak_kv", "at_rail"},
+        else None. `reached` False means the ratio never fell below the threshold.
+        `at_rail` is True when any raw current sample touched the monitor rail (>=9.9 V)."""
         return self._clamp_result
 
     @property
@@ -448,7 +449,8 @@ class LoadCharacterizer(QObject):
             if ratio < CLAMP_RATIO_THRESHOLD:
                 self._clamp_result = {
                     "reached": True, "clamp_ma": point["i_fund_ma"],
-                    "clamp_freq_hz": step.freq_hz, "peak_kv": step.peak_kv}
+                    "clamp_freq_hz": step.freq_hz, "peak_kv": step.peak_kv,
+                    "at_rail": point["at_rail"]}
                 self._finish(aborted=False)
                 return
 
@@ -478,11 +480,13 @@ class LoadCharacterizer(QObject):
         v_fund_kv = monitor_to_kv(v_amp)
         i_fund_ma = ma_unclamped(i_amp) if i_amp == i_amp else float("nan")
         commanded_fund_kv = step.peak_kv * _TRIANGLE_FUNDAMENTAL_FRACTION
+        at_rail = bool(np.any(is_at_rail(i_wave))) if i_wave.size else False
         return {
             "mode": "CLAMP", "amp_label": self._amp_label, "freq_hz": step.freq_hz,
             "commanded_peak_kv": step.peak_kv,
             "v_fund_kv": v_fund_kv, "i_fund_ma": i_fund_ma,
             "regulation_ratio": regulation_ratio(v_fund_kv, commanded_fund_kv),
+            "at_rail": at_rail,
             "load_condition": self._load_condition.value,
             "timestamp_iso": now_iso(),
         }
@@ -633,6 +637,7 @@ class LoadCharacterizer(QObject):
         peaks: list = []
         durations: list = []
         charges: list = []
+        edge_at_rail = False
         leak_ua = float("nan")
         if v_wave.size > 2 and dt > 0:
             # Vectorised conversion — see _finish_mode_b_point's note on why
@@ -679,6 +684,8 @@ class LoadCharacterizer(QObject):
                     peaks.append(peak)
                     durations.append(duration_s)
                     charges.append(charge_c)
+                    if bool(np.any(is_at_rail(i_wave[lo:hi]))):
+                        edge_at_rail = True
             if between_edges.any():
                 leak_ua = float(np.mean(np.abs(i_ma[between_edges]))) * 1e3
 
@@ -701,6 +708,7 @@ class LoadCharacterizer(QObject):
             "inter_edge_leak_ua": leak_ua,
             # NaN duration (no edges) is not "short": there is no peak to qualify.
             "edge_peak_is_lower_bound": bool(edge_duration_us < EDGE_LOWER_BOUND_US),
+            "edge_at_rail": bool(edge_at_rail),
             "load_condition": self._load_condition.value,
             "timestamp_iso": now_iso(),
         }
@@ -773,11 +781,13 @@ class LoadCharacterizer(QObject):
                 # above the top of the frequency ladder.
                 reached = self._clamp_result or {
                     "reached": False, "clamp_ma": None, "clamp_freq_hz": None,
-                    "peak_kv": self._steps[-1].peak_kv}
+                    "peak_kv": self._steps[-1].peak_kv,
+                    "at_rail": False}
                 self._clamp_result = reached
                 values = {"clamp_ma": reached["clamp_ma"],
                           "clamp_freq_hz": reached["clamp_freq_hz"],
-                          "peak_kv": reached["peak_kv"]}
+                          "peak_kv": reached["peak_kv"],
+                          "clamp_at_rail": reached.get("at_rail", False)}
             elif self._mode == Mode.A:
                 c_values = [p["c_pf"] for p in self._points if p["c_pf"] == p["c_pf"]]
                 g_values = [p["g_us"] for p in self._points if p["g_us"] == p["g_us"]]
