@@ -1,6 +1,6 @@
 # 27: The CupLog service: one cup log at a time, and reading totals back
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
