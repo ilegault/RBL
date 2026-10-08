@@ -21,11 +21,14 @@ from PySide6.QtWidgets import QApplication
 from rbl.config.calibration_config import (
     CAL_MAX_KV,
     CAL_PASSES,
+    CAL_TRIP_BLANK_WINDOWS,
+    CAL_TRIP_CONSEC_WINDOWS,
     DRIFT_LOG_INTERVAL_S,
     LoadCondition,
 )
 from rbl.config.hardware_config import AMP_AIN_NAMES, AMP_CHANNEL_MAP, AMP_LABELS
 from rbl.config.labjack_stream_config import GUI_REFRESH_HZ
+from rbl.hardware.amp_monitor import ma_to_monitor
 from rbl.services import calibration_runner as calibration_runner_module
 from rbl.services.calibration_runner import CalibrationRunner, _State
 from rbl.services.calibration_writer import CalibrationWriter
@@ -101,12 +104,13 @@ def funcgen_map(gens):
 _VOLTAGE_AINS = {AMP_CHANNEL_MAP[amp]["voltage"] for amp in AMP_LABELS}
 
 
-def make_payload(voltage_v: float = 1.0, n: int = 40, current_v: float = 0.1):
+def make_payload(voltage_v: float = 1.0, n: int = 40, current_v: float = 0.1,
+                 sample_period: float = 2.5e-3):
     """A synthetic window_ready payload carrying all 8 amp AINs.
 
     voltage_v drives every voltage-monitor AIN; current_v drives every
     current-monitor AIN. They are kept separate because the two monitors
-    have different gains (1 V == 1 kV vs 1 V == 10 mA, see
+    have different gains (1 V == 1 kV vs 1 V == 2 mA, see
     hardware/amp_monitor.py) — a value that is an unremarkable reading on
     one monitor can be a railed, interlock-tripping one on the other, so a
     single shared value fed to both indiscriminately is not a realistic
@@ -124,7 +128,7 @@ def make_payload(voltage_v: float = 1.0, n: int = 40, current_v: float = 0.1):
         "profile": "WAVEFORM",
         "window_samples": n,
         "t": 0.0,
-        "sample_period": 1e-4,
+        "sample_period": sample_period,
         "channels": {ain: channel(ain) for ain in AMP_AIN_NAMES},
     }
 
@@ -220,12 +224,10 @@ class TestFullSweep:
     def test_railed_current_monitor_hard_trip_fires(self, qapp, funcgen_map, gens):
         """A current monitor pinned at the AIN's own rail is a physically
         real fault (dead short, arc, or failing amplifier), not a test
-        artifact. hardware_config.py records the current monitor's own
-        design range as +/-10 V ('the current monitor reaches +/-10 V during
-        the 100 mA / 4 ms transient the amplifier is rated for'); at the
-        documented 10 mA/V gain that is a 100 mA reading, over
-        CAL_TRIP_HARD_MA (60), and the hard interlock must abort and zero
-        every channel — this is the interlock doing its job, not a failure."""
+        artifact. 40 samples at 10.0 V, at 2.5 ms per sample, is 100 ms at
+        the rail, exceeding HARD_TRIP_RAIL_S (5 ms). The hard interlock must
+        abort and zero every channel — this is the interlock doing its job,
+        not a failure."""
         runner = CalibrationRunner(funcgen_map, LoadCondition.DISCONNECTED)
         finished = []
         errors = []
@@ -245,6 +247,61 @@ class TestFullSweep:
             assert gen.state[channel]["offset"] == pytest.approx(0.0)
             assert gen.state[channel]["output"] is False
         print("[OK] a railed current monitor trips the hard interlock and zeros all four")
+
+    def test_a_one_millisecond_rail_does_not_hard_trip(self, qapp, funcgen_map):
+        """A 1 ms excursion at the rail is shorter than HARD_TRIP_RAIL_S (5 ms)
+        and must not hard-trip."""
+        runner = CalibrationRunner(funcgen_map, LoadCondition.DISCONNECTED)
+        overcurrent = []
+        errors = []
+        runner.overcurrent.connect(lambda *a: overcurrent.append(a))
+        runner.error.connect(errors.append)
+        runner.start_sweep()
+        wave = np.zeros(400)
+        wave[10:20] = 10.0  # 10 samples at 10.0 V, at dt=1e-4 -> 1.0 ms at rail
+        payload = make_payload(voltage_v=0.0, n=400, sample_period=1e-4)
+        for ain in AMP_AIN_NAMES:
+            if ain in payload["channels"]:
+                payload["channels"][ain]["waveform"] = np.zeros(400)
+        ain_i = AMP_CHANNEL_MAP["X+"]["current"]
+        payload["channels"][ain_i]["waveform"] = wave
+        runner.on_window(payload)
+        assert not overcurrent
+        assert not errors
+        assert state_name(runner) != "IDLE"
+
+    def test_19p5_ma_sustained_soft_trips(self, qapp, funcgen_map):
+        runner = CalibrationRunner(funcgen_map, LoadCondition.DISCONNECTED)
+        overcurrent = []
+        errors = []
+        runner.overcurrent.connect(lambda *a: overcurrent.append(a))
+        runner.error.connect(errors.append)
+        runner.start_sweep()
+        # Step blanking windows: overcurrent ignored during step blanking
+        for _ in range(CAL_TRIP_BLANK_WINDOWS):
+            runner.on_window(make_payload(current_v=ma_to_monitor(19.5)))
+        assert not overcurrent
+        # Consecutive qualifying windows: CAL_TRIP_CONSEC_WINDOWS windows trigger sustained trip
+        for _ in range(CAL_TRIP_CONSEC_WINDOWS):
+            runner.on_window(make_payload(current_v=ma_to_monitor(19.5)))
+        assert overcurrent
+        assert any("sustained" in e for e in errors)
+
+    def test_18p5_ma_sustained_does_not_trip(self, qapp, funcgen_map):
+        runner = CalibrationRunner(funcgen_map, LoadCondition.DISCONNECTED)
+        overcurrent = []
+        errors = []
+        runner.overcurrent.connect(lambda *a: overcurrent.append(a))
+        runner.error.connect(errors.append)
+        runner.start_sweep()
+        for _ in range(CAL_TRIP_BLANK_WINDOWS):
+            runner.on_window(make_payload(current_v=ma_to_monitor(18.5)))
+        assert not overcurrent
+        for _ in range(CAL_TRIP_CONSEC_WINDOWS):
+            runner.on_window(make_payload(current_v=ma_to_monitor(18.5)))
+        assert not overcurrent
+        assert not errors
+        assert state_name(runner) != "IDLE"
 
     def test_undriven_channels_commanded_zero_every_setpoint(self, qapp, funcgen_map, gens):
         runner = CalibrationRunner(funcgen_map, LoadCondition.DISCONNECTED)
@@ -386,7 +443,7 @@ class TestRegulationState:
 
     def test_current_limited_when_voltage_low_current_pinned(self, qapp, funcgen_map):
         runner = CalibrationRunner(funcgen_map, LoadCondition.ON_PLATES)
-        self._seed_windows(runner, "X+", v_v=1.0, i_v=1.95)   # 1 kV of 5 kV, 19.5 mA
+        self._seed_windows(runner, "X+", v_v=1.0, i_v=ma_to_monitor(19.5))   # 1 kV of 5 kV, 19.5 mA
         state, reason = runner._regulation_state_for("X+", commanded_kv=5.0,
                                                        freq_hz=0.0, ac=False)
         assert state == "current_limited"
@@ -647,8 +704,8 @@ class TestDriftLoadConditionGuard:
             runner.on_window(make_payload())
         assert check.box["calls"] - before >= 5
 
-    def test_a_40_ma_window_during_a_pass_on_the_plates_does_not_end_it(
-            self, qapp, funcgen_map, caplog):
+    def test_a_railed_monitor_during_a_pass_on_the_plates_does_not_end_it(
+            self, qapp, funcgen_map, gens):
         # ADR 0006: the application is the witness, not the protection.
         runner = CalibrationRunner(funcgen_map, LoadCondition.ON_PLATES)
         finished, errors = [], []
@@ -656,12 +713,12 @@ class TestDriftLoadConditionGuard:
         runner.error.connect(errors.append)
         runner.start_drift(3.0, 12.0, protections_ok=protections(True, ""))
         settled(runner)
-        with caplog.at_level("WARNING"):
-            for _ in range(5):
-                runner.on_window(make_payload(current_v=4.0))   # 4 V on the monitor = 40 mA
+        for _ in range(5):
+            runner.on_window(make_payload(current_v=10.0))  # 10 V > HARD_TRIP_RAIL_S duration
         assert not finished and not errors
         assert state_name(runner) == "COLLECT"
-        assert any("40.0 mA" in m and "not stopping" in m for m in caplog.messages)
+        for label, (gen, channel) in funcgen_map.items():
+            assert gen.state[channel]["output"] is True
 
     def test_an_excursion_is_logged_once_not_every_window(self, qapp, funcgen_map, caplog):
         runner = CalibrationRunner(funcgen_map, LoadCondition.ON_PLATES)
@@ -669,7 +726,7 @@ class TestDriftLoadConditionGuard:
         settled(runner)
         with caplog.at_level("WARNING"):
             for _ in range(20):
-                runner.on_window(make_payload(current_v=4.0))
+                runner.on_window(make_payload(current_v=ma_to_monitor(19.5)))
         per_channel = [m for m in caplog.messages if "X+ drew" in m]
         assert len(per_channel) == 1
 

@@ -51,8 +51,9 @@ THE MODE C LADDER STOPS ON ANY OF FOUR RULES
 Characterization pushes toward the limits on purpose, and its data is only
 valid while the amplifier follows its input, so (docs/adr/0006: characterization
 and calibration runs keep their aborts) the ladder ends when:
-  hard_trip      any current sample over CAL_TRIP_HARD_MA, checked on every
-                 window including SETTLE (a dead short);
+  hard_trip      stays at the monitor rail (HARD_TRIP_RAIL_S, 5 ms) on any
+                 window including SETTLE (a dead short; an edge charging the
+                 load leaves the rail in under 1.5 ms);
   c_changed      a rung's C differs from the first rung's by more than 10 %
                  (the load is not a linear capacitor here: incipient discharge);
   leakage        current between edges above the Mode B threshold (50 uA);
@@ -61,10 +62,9 @@ and calibration runs keep their aborts) the ladder ends when:
 Before each rung the HV interlock must permit that voltage at the present
 pressure (unknown pressure blocks: no data is not good vacuum), rule
 "interlock". An ended ladder keeps the rungs it completed and the rule in its
-result file, and writes no headline C. BENCH NOTE: the amplifier supplies up to
-~100 mA for ~100 us when a square edge charges the load, which is above
-CAL_TRIP_HARD_MA (60 mA); whether hard_trip then fires on every real rung is for
-the bench to show (ticket 52).
+result file, and writes no headline C. A square edge charging the load pulls the
+monitor to the rail for under 1.5 ms; holding the rail for 5 ms is a dead short,
+not capacitive inrush.
 
 WHAT IS KEPT
 ------------
@@ -99,7 +99,7 @@ from PySide6.QtCore import QObject, QTimer, Signal
 from rbl.config import amplifier_assignments, characterization_history
 from rbl.config.calibration_config import (
     CAL_MAX_KV,
-    CAL_TRIP_HARD_MA,
+    HARD_TRIP_RAIL_S,
     SIZING_ASSUMPTION_PF,
     ac_max_peak_kv,
     resolve_load_pf,
@@ -111,7 +111,7 @@ from rbl.config.hardware_config import (
     VOLTAGE_MONITOR_KV_PER_VOLT,
 )
 from rbl.hardware.ac_metrics import fundamental, phase_difference_deg
-from rbl.hardware.amp_monitor import ma_unclamped, monitor_to_kv
+from rbl.hardware.amp_monitor import RailTracker, ma_unclamped, monitor_to_kv
 from rbl.hardware.funcgen_safety import _AMP_GAIN, peak_status
 from rbl.hardware.hv_interlock import interlock_status
 from rbl.hardware.load_model import admittance_from_fundamentals, capacitance_from_charge
@@ -243,6 +243,7 @@ class LoadCharacterizer(QObject):
         self._abort_rule: str | None = None   # why the run ended early, if it did
         self._abort_rung_kv: float | None = None
         self._clamp_result: dict | None = None
+        self._rail_tracker = RailTracker()
 
         self._settle_timer = QTimer(self)
         self._settle_timer.setSingleShot(True)
@@ -379,6 +380,7 @@ class LoadCharacterizer(QObject):
         self._command_step(step)
         ain_v = AMP_CHANNEL_MAP[self._amp_label]["voltage"]
         ain_i = AMP_CHANNEL_MAP[self._amp_label]["current"]
+        self._rail_tracker.reset()
         self._collect_windows = {ain_v: [], ain_i: []}
         self._collect_window_count = 0
         self._state = _State.SETTLE
@@ -509,19 +511,21 @@ class LoadCharacterizer(QObject):
         return None
 
     def _hard_tripped(self, payload: dict) -> bool:
-        """True if any current sample on the driven channel is over CAL_TRIP_HARD_MA.
+        """True if the driven channel stays at the rail for HARD_TRIP_RAIL_S.
 
-        Converted with ma_unclamped so a railed monitor (which monitor_to_ma
-        reports as NaN) still counts: NaN loses every comparison, and a dead
-        short is the biggest reading the hardware can produce.
+        Feeds the raw (signed, un-abs'd) window to RailTracker. A railed
+        monitor (>= ~9.9 V) held for 5 ms or more indicates a dead short,
+        not ordinary capacitive edge inrush which leaves the rail in under
+        1.5 ms.
         """
         ain = AMP_CHANNEL_MAP[self._amp_label]["current"]
         entry = (payload.get("channels") or {}).get(ain)
         wave = None if entry is None else entry.get("waveform")
         if wave is None or len(wave) == 0:
             return False
-        peak_v = float(np.nanmax(np.abs(np.asarray(wave, dtype=float))))
-        return ma_unclamped(peak_v) > CAL_TRIP_HARD_MA
+        arr = np.asarray(wave, dtype=float)
+        dt_s = payload.get("sample_period") or ((1.0 / GUI_REFRESH_HZ) / arr.size)
+        return self._rail_tracker.feed(arr, dt_s) >= HARD_TRIP_RAIL_S
 
     def _interlock_permits(self, rung_kv: float) -> bool:
         """May this rung's voltage be commanded at the present pressure?

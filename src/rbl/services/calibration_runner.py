@@ -96,11 +96,11 @@ from rbl.config.calibration_config import (
     CAL_SETTLE_S,
     CAL_TRIP_BLANK_WINDOWS,
     CAL_TRIP_CONSEC_WINDOWS,
-    CAL_TRIP_HARD_MA,
     CAL_TRIP_MIN_DURATION_S,
     CAL_ZERO_DWELL_S,
     DRIFT_LOG_INTERVAL_S,
     DRIFT_MAX_UNATTENDED_H,
+    HARD_TRIP_RAIL_S,
     LoadCondition,
     ac_max_peak_kv,
     ac_peak_current_ma,
@@ -113,6 +113,7 @@ from rbl.config.hardware_config import AMP_AIN_NAMES, AMP_CHANNEL_MAP, AMP_LABEL
 from rbl.config.labjack_stream_config import GUI_REFRESH_HZ
 from rbl.hardware.ac_metrics import ac_metrics
 from rbl.hardware.amp_monitor import (
+    RailTracker,
     ma_to_monitor,
     ma_unclamped,
     monitor_to_kv,
@@ -232,7 +233,7 @@ class CalibrationRunner(QObject):
         # Over-current interlock. Armed for every driven mode; the limit is
         # the EEL5000 continuous rating, not its 4 ms transient rating.
         self._trip_ma          = CAL_AC_TRIP_MA
-        self._trip_hard_ma     = CAL_TRIP_HARD_MA
+        self._rail_tracker     = RailTracker()
         self._tripped          = False   # latches so one event aborts once
         self._use_pair_profile = True    # stream only the driven amp's pair
         # Soft-limit qualification state. Both reset at every setpoint change.
@@ -510,6 +511,7 @@ class CalibrationRunner(QObject):
         self._collect_window_count = 0
         self._trip_consec     = 0
         self._trip_blank_left = CAL_TRIP_BLANK_WINDOWS
+        self._rail_tracker.reset()
         self._settle_timer.start(int(CAL_SETTLE_S * 1000))
 
     def _protections_state(self) -> tuple:
@@ -582,11 +584,12 @@ class CalibrationRunner(QObject):
         Two thresholds, because a short and a step transient are not the same
         event and must not be treated the same way:
 
-        HARD (CAL_TRIP_HARD_MA) — one sample over it is enough.  Nothing in a
-        well-posed sweep goes there; a short, an arc or a failing amplifier
-        does, and waiting to confirm those costs hardware.
+        HARD (HARD_TRIP_RAIL_S) — stays at the rail for 5 ms or more. It catches
+        a dead short; a square edge charging the load leaves the rail in under
+        1.5 ms. Because the monitor cannot read above about 20 mA, it is defined
+        by time at the rail, not by a current level.
 
-        SOFT (self._trip_ma, the continuous rating) — qualified before it
+        SOFT (self._trip_ma, the soft trip limit, CAL_AC_TRIP_MA) — qualified before it
         counts.  The sweep profile streams at 50 kS/s, so one sample is 20 us
         and a bare peak test trips on excursions shorter than the amplifier's
         own 4 ms transient rating and too brief to appear on the live plot.
@@ -614,18 +617,23 @@ class CalibrationRunner(QObject):
         if wave is None or len(wave) == 0:
             return False
 
-        wave = np.abs(np.asarray(wave, dtype=float))
-        n = wave.size
+        raw_wave = np.asarray(wave, dtype=float)
+        n = raw_wave.size
         # ma_unclamped, not monitor_to_ma: the latter returns NaN above the
         # plausibility ceiling, and NaN fails every `>` test — a dead short
         # railing the monitor would read as "no over-current".
-        peak_ma = abs(ma_unclamped(float(np.nanmax(wave))))
+        wave_abs = np.abs(raw_wave)
+        peak_ma = abs(ma_unclamped(float(np.nanmax(wave_abs))))
         if math.isnan(peak_ma):
             return False   # channel not producing data this window
 
-        # --- HARD limit: instant, unconditional -------------------------
-        if peak_ma > self._trip_hard_ma:
-            return self._trip(peak_ma, self._trip_hard_ma, "hard", 0.0)
+        dt_s = payload.get("sample_period") or ((1.0 / GUI_REFRESH_HZ) / n)
+
+        # --- HARD limit: time at the rail (HARD_TRIP_RAIL_S) ------------
+        # Feeds the raw (signed, un-abs'd) window to the tracker.
+        rail_s = self._rail_tracker.feed(raw_wave, dt_s)
+        if rail_s >= HARD_TRIP_RAIL_S:
+            return self._trip(peak_ma, CAL_AC_TRIP_MA, "hard", rail_s)
 
         # --- SOFT limit: qualified in time, then across windows ----------
         # Blanking is consumed even when the window is clean, so the exemption
@@ -639,19 +647,11 @@ class CalibrationRunner(QObject):
             self._trip_consec = 0
             return False
 
-        # Duration above the limit, from the sample count.  Prefer the exact
-        # per-sample interval the worker measured at eStreamStart; the fallback
-        # derives it from the window length, which is right only for a
-        # full-size window.  The first window after a stream restart is
-        # deliberately short (settling scans trimmed), so dividing a fixed
-        # 1/GUI_REFRESH_HZ by its length would overstate dt and inflate every
-        # duration measured in it.
-        dt_s = payload.get("sample_period") or ((1.0 / GUI_REFRESH_HZ) / n)
         trip_v = abs(ma_to_monitor(self._trip_ma))
         # np.count_nonzero on a NaN-containing array: NaN > x is False, so
         # dropouts simply do not count toward the duration. That is the
         # conservative direction for a soft limit.
-        over_s = float(np.count_nonzero(wave > trip_v)) * dt_s
+        over_s = float(np.count_nonzero(wave_abs > trip_v)) * dt_s
 
         if over_s < CAL_TRIP_MIN_DURATION_S:
             # A spike, not a load. Do not advance the consecutive counter and
@@ -870,6 +870,7 @@ class CalibrationRunner(QObject):
         # commanding 0 V is a fault whatever the ladder is doing.
         self._trip_consec     = 0
         self._trip_blank_left = CAL_TRIP_BLANK_WINDOWS
+        self._rail_tracker.reset()
         self.dwell_started.emit(self._zero_dwell_s)
         self._settle_timer.start(int(self._zero_dwell_s * 1000))
 
@@ -929,6 +930,7 @@ class CalibrationRunner(QObject):
         # the windows that follow the command, not ones that preceded it.
         self._trip_consec     = 0
         self._trip_blank_left = CAL_TRIP_BLANK_WINDOWS
+        self._rail_tracker.reset()
         settle_s = CAL_AC_SETTLE_S if self._mode == "ac_sweep" else CAL_SETTLE_S
         self._settle_timer.start(int(settle_s * 1000))
 
@@ -1337,7 +1339,7 @@ class CalibrationRunner(QObject):
             "collect_s": (CAL_AC_COLLECT_S if ac else CAL_COLLECT_S),
             "settle_s": (CAL_AC_SETTLE_S if ac else CAL_SETTLE_S),
             "trip_ma": self._trip_ma,
-            "trip_hard_ma": self._trip_hard_ma,
+            "hard_trip_rail_s": HARD_TRIP_RAIL_S,
             "current_measurement": (
                 "Fundamental-bin (single-bin DFT over whole cycles) at "
                 "drive_freq_hz, measured directly from the amplifier CURRENT "

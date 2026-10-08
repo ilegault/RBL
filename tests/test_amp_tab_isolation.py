@@ -21,6 +21,7 @@ if "DISPLAY" not in os.environ and "QT_QPA_PLATFORM" not in os.environ:
 from PySide6.QtWidgets import QApplication
 
 from rbl.config import hardware_config as SC
+from rbl.hardware.amp_monitor import ma_to_monitor
 from tests.payloads import LabJackFeed
 
 
@@ -35,10 +36,10 @@ def qapp():
 # then amp monitors as (current, voltage) pairs Y-(6,7) Y+(8,9) X-(10,11) X+(12,13).
 FULL_READING = {
     "AIN0": 3.0, "AIN1": 3.0, "AIN2": 3.0, "AIN3": 3.0,   # log amps -> 1 µA each
-    "AIN6":  0.5, "AIN7":  -2.0,     # Y- :  5 mA, -2 kV
-    "AIN8":  0.5, "AIN9":   2.0,     # Y+ :  5 mA,  2 kV
-    "AIN10": 1.0, "AIN11": -3.0,     # X- : 10 mA, -3 kV
-    "AIN12": 1.0, "AIN13":  3.0,     # X+ : 10 mA,  3 kV
+    "AIN6":  ma_to_monitor(5.0), "AIN7":  -2.0,     # Y- :  5 mA, -2 kV
+    "AIN8":  ma_to_monitor(5.0), "AIN9":   2.0,     # Y+ :  5 mA,  2 kV
+    "AIN10": ma_to_monitor(10.0), "AIN11": -3.0,     # X- : 10 mA, -3 kV
+    "AIN12": ma_to_monitor(10.0), "AIN13":  3.0,     # X+ : 10 mA,  3 kV
 }
 
 

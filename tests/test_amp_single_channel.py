@@ -23,6 +23,7 @@ from PySide6.QtWidgets import QApplication
 
 from rbl.config import hardware_config as SC
 from rbl.config.labjack_stream_config import window_samples
+from rbl.hardware.amp_monitor import ma_to_monitor
 from tests.payloads import LabJackFeed
 
 
@@ -112,7 +113,7 @@ class TestSingleChannelMode:
         target_combo.setCurrentIndex(target_combo.findData(target))
         apply_btn.click()
 
-        feed.send_payload(_single_payload("SINGLE_HIRES", target, 0.5))
+        feed.send_payload(_single_payload("SINGLE_HIRES", target, ma_to_monitor(5.0)))
 
         # A current target shows only the current axis (voltage axis hidden).
         assert tab.ax_i.get_visible()
