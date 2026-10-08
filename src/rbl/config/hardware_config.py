@@ -211,7 +211,7 @@ LABJACK_CHANNEL_MAP = {
 # --- EEL5000.20.100 HV amplifier monitors ------------------------------------
 # Each amplifier exposes two front-panel BNC monitors:
 #   VOLTAGE MONITOR : 1000:1  -> 1 V at the BNC == 1 kV at the HV output
-#   CURRENT MONITOR : 1 V     == 10 mA drawn from the amplifier
+#   CURRENT MONITOR : 1 V     == 2 mA drawn from the amplifier (ADR 0007)
 #
 # Wired to the CB37 terminal board on AIN6..AIN13. AIN0..AIN3 are reserved for
 # the log amps on the T7 body terminals and MUST NOT be duplicated on the CB37.
@@ -243,9 +243,13 @@ AIN_TO_AMP = {
     for kind in ("voltage", "current")
 }
 
-# Scale factors (see EEL5000 manual, Specifications, p. 1-3)
+# Scale factors (see EEL5000 manual, Specifications, p. 1-3;
+# docs/adr/0007-current-monitor-scale-is-2-ma-per-volt.md)
 VOLTAGE_MONITOR_KV_PER_VOLT = 1.0    # 1000:1 divider -> 1 V == 1 kV
-CURRENT_MONITOR_MA_PER_VOLT = 10.0   # 1 V == 10 mA
+# 1 V == 2 mA; +/-10 V == +/-20 mA. Manufacturer's statement of 2026-10-07;
+# the manual's 10 mA per volt is wrong. Not bench-verified.
+# docs/adr/0007-current-monitor-scale-is-2-ma-per-volt.md
+CURRENT_MONITOR_MA_PER_VOLT = 2.0
 # a current-monitor sample at or beyond this magnitude is AT THE RAIL - the
 # LabJack's +/-10 V input range is exhausted, so the current was at least
 # this much and how much more is unknown (CONTEXT.md 'At the rail')

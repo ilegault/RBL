@@ -6,7 +6,7 @@ From the EEL5000 manual (Specifications, p. 1-3):
     VOLTAGE MONITOR : 1000:1 representation of the HV output.
                       1 V at the BNC == 1000 V == 1 kV at the output.
                       Accuracy 0.1% of full scale.
-    CURRENT MONITOR : 1 V at the BNC == 10 mA drawn from the amplifier.
+    CURRENT MONITOR : 1 V at the BNC == 2 mA drawn from the amplifier (ADR 0007).
                       Accuracy 1% of full scale.
 
 Both monitors are ground-referenced BNCs with >11 kHz bandwidth. We sample at
@@ -48,7 +48,7 @@ def monitor_to_kv(voltage: float) -> float:
 def monitor_to_ma(voltage: float) -> float:
     """CURRENT MONITOR volts -> amplifier current draw in mA.
 
-    1 V == 10 mA. Returns NaN beyond the 100 mA peak rating (+10% headroom),
+    1 V == 2 mA (ADR 0007). Returns NaN beyond the 100 mA peak rating (+10% headroom),
     which on this scale is 11 V — past the T7's +/-10 V range anyway, so a
     reading there means something is wrong.
     """
@@ -245,12 +245,12 @@ if __name__ == "__main__":
     assert math.isnan(monitor_to_kv(9.0))       # 9 kV — impossible, flag it
     assert math.isnan(monitor_to_kv(float("nan")))
 
-    # Current monitor: 1 V == 10 mA
+    # Current monitor: 1 V == 2 mA (ADR 0007)
     assert abs(monitor_to_ma(0.0) - 0.0) < 1e-12
-    assert abs(monitor_to_ma(1.0) - 10.0) < 1e-9
-    assert abs(monitor_to_ma(2.0) - 20.0) < 1e-9     # DC rating
-    assert abs(monitor_to_ma(-2.0) - (-20.0)) < 1e-9
-    assert abs(monitor_to_ma(10.0) - 100.0) < 1e-9   # 4 ms peak rating
+    assert abs(monitor_to_ma(1.0) - 2.0) < 1e-9
+    assert abs(monitor_to_ma(5.0) - 10.0) < 1e-9
+    assert abs(monitor_to_ma(10.0) - 20.0) < 1e-9     # DC rating
+    assert abs(monitor_to_ma(-10.0) - (-20.0)) < 1e-9
     assert math.isnan(monitor_to_ma(float("nan")))
 
     # Status

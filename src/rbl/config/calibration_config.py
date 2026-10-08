@@ -100,11 +100,10 @@ CAL_AC_COLLECT_S = 2.0      # average over more cycles for a stable RMS reading
 # not enough either: it only ever fires after the amplifier has already been
 # over-driven.  Keep both.
 
-# Abort threshold on the driven channel's current monitor, mA peak.
-# Set to the EEL5000's continuous DC rating.  This is deliberately NOT the
-# 100 mA / 4 ms transient rating: that is a survival spec for inrush, not a
-# level a sweep should ever sit at.
-CAL_AC_TRIP_MA = 20.0
+# Calibration soft-trip level and the ac_max_peak_kv ladder-sizing level,
+# just under the rail (~19.8 mA). This is deliberately NOT the continuous
+# rating, which is AMP_CONTINUOUS_RATING_MA (20.0 mA).
+CAL_AC_TRIP_MA = 19.0
 
 # EEL5000 burst rating, mA: 100 mA for 4 ms or less, then 100 ms at 10 mA or
 # less (the "recovery period"). A reference level on the Raster Planner's
@@ -134,12 +133,10 @@ AMP_BURST_RATING_MA = 100.0
 # setpoint is commanded are exempt from the SOFT limit, because charging a
 # 1200 pF load to a new voltage is inrush by definition.
 #
-# The HARD limit is exempt from all of the above and trips on the first
-# window that sees it, with no confirmation and no blanking.  It sits under
-# the 100 mA / 4 ms survival spec, so a genuine short still stops fast.
-
-# Instant-trip threshold, mA peak.  No confirmation, no blanking.
-CAL_TRIP_HARD_MA = 60.0
+# The HARD limit is exempt from confirmation and blanking, but is defined by
+# time at the rail: a square edge into even 3000 pF at a 10 kV step, clamped
+# at 20 mA, leaves the rail in 1.5 ms; a dead short holds it.
+HARD_TRIP_RAIL_S = 0.005
 
 # Cumulative time above CAL_AC_TRIP_MA required within one window for that
 # window to count as an over-current.  2 ms at 50 kS/s = 100 samples.

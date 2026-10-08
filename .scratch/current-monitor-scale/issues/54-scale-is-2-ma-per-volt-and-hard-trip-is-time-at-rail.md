@@ -1,6 +1,6 @@
 # 54: The current monitor reads 2 mA per volt, and the hard trip is time at the rail
 
-**Status:** in-progress
+**Status:** blocked
 
 **Runner:** any
 
@@ -102,38 +102,38 @@ built with `ma_to_monitor`, or raw volts where a test is about the rail).
 
 ## Acceptance criteria
 
-- [ ] **Scale.**
+- [x] **Scale.**
   - `test_five_volts_is_ten_milliamps` (new, `tests/test_current_monitor_scale.py`):
     `monitor_to_ma(5.0) == 10.0`, `ma_to_monitor(20.0) == 10.0` and
     `ma_unclamped(-10.0) == -20.0`. Its docstring cites ADR 0007.
   - `test_scale` in `TestCurrentMonitor`, `tests/test_amp_monitor.py` (rewritten in
     place): the table is `(0.1, 0.2), (1.0, 2.0), (5.0, 10.0), (10.0, 20.0),
     (-10.0, -20.0)`. The class docstring says 1 V == 2 mA (ADR 0007).
-- [ ] **Contract.**
+- [x] **Contract.**
   - `test_the_scale_is_assigned_only_in_hardware_config` (new): over `src/rbl/**/*.py`,
     the regex `^\s*CURRENT_MONITOR_MA_PER_VOLT\s*=` matches only in
     `src/rbl/config/hardware_config.py`.
   - `test_no_source_file_states_the_old_scale` (new): the case-insensitive regex
     `1\s*V\s*={1,2}\s*10\s*mA` matches no file under `src/rbl/`.
-- [ ] **Calibration runner, hard trip.**
+- [x] **Calibration runner, hard trip.**
   - `test_railed_current_monitor_hard_trip_fires` (rewritten in place, assertions
     unchanged): its docstring explains that 40 samples at 10.0 V, at 2.5 ms per sample,
     is 100 ms at the rail.
   - `test_a_one_millisecond_rail_does_not_hard_trip` (new): a payload with
     `sample_period` 1e-4 has 10 samples at 10.0 V among 400 at 0 V. No `overcurrent` is
     emitted and the runner is not IDLE.
-- [ ] **Calibration runner, soft trip.**
+- [x] **Calibration runner, soft trip.**
   - `test_19p5_ma_sustained_soft_trips` (new): after the blanking windows, feeding
     `CAL_TRIP_CONSEC_WINDOWS` windows at `ma_to_monitor(19.5)` emits `overcurrent` with
     kind `sustained`.
   - `test_18p5_ma_sustained_does_not_trip` (new): the same sequence at
     `ma_to_monitor(18.5)` emits nothing.
-- [ ] **Drift pass on the plates.**
+- [x] **Drift pass on the plates.**
   `test_a_railed_monitor_during_a_pass_on_the_plates_does_not_end_it` (new, in
   `TestDriftLoadConditionGuard`): with the same setup as the test it replaces, windows at
   `current_v=10.0` for longer than `HARD_TRIP_RAIL_S` leave the ON_PLATES drift pass
   running, and the outputs stay on.
-- [ ] **Load characterizer.**
+- [x] **Load characterizer.**
   - `test_a_rail_held_for_6_ms_ends_the_clamp_test_with_hard_trip` (new, `TestClampTest`).
   - `test_a_rail_held_for_6_ms_ends_the_ladder_before_the_point_is_emitted` (new,
     `TestModeCLadderAborts`).
@@ -154,3 +154,41 @@ Run in CI's order (`.github/workflows/tests.yml`):
     pytest --tb=short -q -n auto --dist loadfile --durations=25
 
 ## Comments
+
+## Escalation — 2026-10-07
+Repo: RBL   Ticket: 54 The current monitor reads 2 mA per volt, and the hard trip is time at the rail   Branch: ticket/current-monitor-scale-54-scale-is-2-ma-per-volt-and-hard-trip-is-time-at-rail
+Goal: Update CURRENT_MONITOR_MA_PER_VOLT from 10.0 to 2.0, replace CAL_TRIP_HARD_MA with HARD_TRIP_RAIL_S = 0.005, set CAL_AC_TRIP_MA = 19.0, and update CalibrationRunner and LoadCharacterizer hard trips to use RailTracker.
+Attempt 1: Implemented all core changes across hardware_config, calibration_config, labjack_stream_config, amp_monitor, calibration_runner, load_characterizer, and all tests named in the ticket acceptance criteria. All ticket acceptance criteria pass, ruff passes, check_tests_first passes, type_gate passes, and layering ratchet passes.
+Attempt 2: Ran full test suite across the repo. Discovered that 9 existing tests outside ticket 54 fail because they hardcode assertions or fixtures assuming the old 10 mA/V scale factor rather than converting through `ma_to_monitor` or adjusting expectations for the 2 mA/V scale. Per ticket guardrail ("If a test outside the ones named here starts failing, do not change its assertion, tolerance or inputs. Escalate per AGENTS.md ('Fix or escalate'), saying which test and why.") and ADR 0001, these external tests must not be modified in this ticket without escalation.
+Failing output (exact, trimmed to the relevant lines):
+```
+FAILED tests/test_beamline.py::TestLabjackIngestion::test_amp_voltage_and_current_conversion
+    assert ch.rms_ma == pytest.approx(5.0)            # 1 V == 10 mA
+    assert 1.0 == 5.0 ± 5.0e-06 (Obtained: 1.0, Expected: 5.0)
+FAILED tests/test_beamline.py::TestSnapshotsCarryWhatTheTabsNeed::test_full_resolution_window_is_scaled_once_here
+    assert ch.window_ma.max() == pytest.approx(5.0)    # 0.5 V -> 5 mA
+    assert np.float64(1.0) == 5.0 ± 5.0e-06 (Obtained: 1.0, Expected: 5.0)
+FAILED tests/test_labjack_link.py::TestAmpWaveformConversion::test_dc_ma_is_pre_converted_mean_of_current_waveform
+    assert ch.dc_ma == pytest.approx(10.0)
+    assert 2.0 == 10.0 ± 1.0e-05
+FAILED tests/test_labjack_link.py::TestAmpWaveformConversion::test_rms_ma_from_dc_current_waveform
+    assert ch.rms_ma == pytest.approx(10.0, rel=1e-3)
+    assert 2.0 == 10.0 ± 0.01
+FAILED tests/test_amp_tab_isolation.py::TestAmpTabIgnoresLogAmps::test_current_conversion
+    assert abs(ma - 10.0) < 1e-9
+    assert np.float64(8.0) < 1e-09 (Obtained: 2.0, Expected: 10.0)
+FAILED tests/test_amp_tab_isolation.py::TestAmpTabIgnoresLogAmps::test_rendered_measured_voltage_and_current_dc
+    assert amp.lbl_cur["X+"].text() == "+10.000 mA mean"
+    AssertionError: assert '+2.000 mA mean' == '+10.000 mA mean'
+FAILED tests/test_amp_single_channel.py::TestSingleChannelMode::test_current_target_waveform_follows_selection
+    assert "5.000 mA" in tab.lbl_cur["Y-"].text()
+    AssertionError: assert '5.000 mA' in '+1.000 mA mean'
+FAILED tests/test_calibration_runner.py::TestRegulationState::test_current_limited_when_voltage_low_current_pinned
+    assert state == "current_limited"
+    AssertionError: assert 'amp_off' == 'current_limited' (seeded with i_v=1.95, which was 19.5 mA under 10 mA/V, but is 3.9 mA under 2 mA/V)
+FAILED tests/test_calibration_runner.py::TestDriftLoadConditionGuard::test_an_excursion_is_logged_once_not_every_window
+    assert len(per_channel) == 1
+    AssertionError: assert 0 == 1 (uses current_v=4.0, which was 40 mA under 10 mA/V, but is 8 mA under 2 mA/V, below 19 mA trip threshold)
+```
+Decision needed: Per Ticket 54 guardrail ("If a test outside the ones named here starts failing, do not change its assertion, tolerance or inputs. Escalate per AGENTS.md ('Fix or escalate'), saying which test and why.") and ADR 0001, should these 9 tests be updated in this branch to reflect the new 1 V = 2 mA scale (using `ma_to_monitor`), or should ticket 53 be reopened/a follow-up ticket created to convert them?
+

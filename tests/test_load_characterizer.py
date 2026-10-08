@@ -17,7 +17,7 @@ import numpy as np
 import pytest
 from PySide6.QtWidgets import QApplication
 
-from rbl.config.calibration_config import CAL_TRIP_HARD_MA, LoadCondition
+from rbl.config.calibration_config import LoadCondition
 from rbl.hardware.amp_monitor import ma_to_monitor
 from rbl.services.load_characterizer import (
     CLAMP_FREQ_LADDER_HZ,
@@ -375,12 +375,12 @@ class TestClampTest:
         assert lc.clamp_result == {"reached": True, "clamp_ma": pytest.approx(10.0, abs=1e-6),
                                    "clamp_freq_hz": 500.0, "peak_kv": 1.0}
 
-    def test_one_sample_over_the_hard_trip_ends_it_with_hard_trip(self, qapp, funcgen_map):
+    def test_a_rail_held_for_6_ms_ends_the_clamp_test_with_hard_trip(self, qapp, funcgen_map):
         lc = self.make(funcgen_map)
         lc.start_clamp_test("X+")
         _begin_collect(lc)
         wave = np.zeros(100)
-        wave[3] = (CAL_TRIP_HARD_MA + 5.0) / 10.0
+        wave[10:70] = 10.0  # 60 samples at dt=1e-4 -> 6 ms at rail
         lc.on_window({"sample_period": 1e-4,
                       "channels": {"AIN12": {"waveform": wave},
                                    "AIN13": {"waveform": np.zeros(100)}}})
@@ -608,7 +608,7 @@ class TestModeCLadderAborts:
         assert rec["abort_rule"] == "not_following"
         assert rec["abort_rung_kv"] == 1.0
 
-    def test_one_sample_over_the_hard_trip_ends_the_ladder_before_the_point_is_emitted(
+    def test_a_rail_held_for_6_ms_ends_the_ladder_before_the_point_is_emitted(
             self, qapp, funcgen_map):
         lc = self.make(funcgen_map)
         points, finished = [], []
@@ -617,7 +617,7 @@ class TestModeCLadderAborts:
         lc.start_mode_c("X+", ladder_kv=[0.5, 1.0])
         step = _begin_collect(lc)
         wave = np.zeros(100)
-        wave[40] = (CAL_TRIP_HARD_MA + 5.0) / 10.0             # one railed sample
+        wave[10:70] = 10.0  # 60 samples at dt=1e-4 -> 6 ms at rail
         lc.on_window({"sample_period": 1e-4,
                       "channels": {"AIN12": {"waveform": wave},
                                    "AIN13": {"waveform": np.zeros(100)}}})
@@ -629,29 +629,50 @@ class TestModeCLadderAborts:
         assert len(_square_commands(funcgen_map)) == 1
         assert step.peak_kv == 0.5
 
-    def test_a_sample_just_under_the_hard_trip_is_not_a_trip(self, qapp, funcgen_map):
-        lc = self.make(funcgen_map)
-        finished = []
-        lc.finished.connect(finished.append)
-        lc.start_mode_c("X+", ladder_kv=[0.5])
-        _begin_collect(lc)
-        wave = np.zeros(100)
-        wave[40] = (CAL_TRIP_HARD_MA - 5.0) / 10.0
-        lc.on_window({"sample_period": 1e-4,
-                      "channels": {"AIN12": {"waveform": wave},
-                                   "AIN13": {"waveform": np.zeros(100)}}})
-        assert finished == []
-
-    def test_a_negative_railed_sample_also_trips(self, qapp, funcgen_map):
+    def test_a_negative_rail_held_for_6_ms_also_trips(self, qapp, funcgen_map):
         lc = self.make(funcgen_map)
         lc.start_mode_c("X+", ladder_kv=[0.5])
         _begin_collect(lc)
         wave = np.zeros(100)
-        wave[7] = -(CAL_TRIP_HARD_MA + 5.0) / 10.0
+        wave[10:70] = -10.0  # 60 samples at dt=1e-4 -> 6 ms at negative rail
         lc.on_window({"sample_period": 1e-4,
                       "channels": {"AIN12": {"waveform": wave},
                                    "AIN13": {"waveform": np.zeros(100)}}})
         assert _only_result()["abort_rule"] == "hard_trip"
+
+    def test_a_150_us_rail_on_every_edge_is_not_a_trip(self, qapp, funcgen_map):
+        lc = self.make(funcgen_map)
+        finished = []
+        lc.finished.connect(finished.append)
+        lc.start_mode_c("X+", ladder_kv=[0.5])
+        step = _begin_collect(lc)
+        fs = 500_000.0
+        n = int(fs * step.collect_s)
+        period = int(fs / MODE_C_FREQ_HZ)
+        peak_kv = step.peak_kv
+        v = peak_kv * np.sign(np.sin(2 * np.pi * MODE_C_FREQ_HZ * np.arange(n) / fs))
+        q = 1200.0 * 1e-12 * 2 * peak_kv * 1000.0
+        tau_s = 300e-6
+        i_ma = np.zeros(n)
+        for k, pos in enumerate(np.arange(period // 2, n, period // 2)):
+            idx = np.arange(pos, min(pos + int(12 * tau_s * fs), n))
+            i_ma[idx] += (1.0 if k % 2 == 0 else -1.0) * (q / tau_s) * np.exp(
+                -(idx - pos) / (tau_s * fs)) * 1e3
+        i_mon = ma_to_monitor(i_ma)
+        rail_samples = int(150e-6 * fs)
+        for k, pos in enumerate(np.arange(period // 2, n, period // 2)):
+            sign = 1.0 if k % 2 == 0 else -1.0
+            i_mon[pos:min(pos + rail_samples, n)] = sign * 10.0
+        windows = max(1, round(step.collect_s * GUI_REFRESH_HZ))
+        chunk = n // windows
+        for w in range(windows):
+            lc.on_window({"sample_period": 1.0 / fs,
+                          "channels": {"AIN13": {"waveform": v[w*chunk:(w+1)*chunk]},
+                                       "AIN12": {"waveform": i_mon[w*chunk:(w+1)*chunk]}}})
+        assert finished
+        assert lc.abort_rule is None
+        rec = _only_result()
+        assert not rec.get("aborted") and rec.get("abort_rule") is None
 
     def test_a_pressure_the_interlock_refuses_stops_the_ladder_before_that_rung(
             self, qapp, funcgen_map):

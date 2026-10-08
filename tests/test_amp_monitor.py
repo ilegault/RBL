@@ -41,15 +41,14 @@ class TestVoltageMonitor:
 
 
 class TestCurrentMonitor:
-    """1 V at the BNC == 10 mA drawn."""
+    """1 V at the BNC == 2 mA drawn (ADR 0007)."""
 
     @pytest.mark.parametrize("volts,expect_ma", [
-        (0.0,    0.0),
-        (0.1,    1.0),
-        (1.0,   10.0),
-        (2.0,   20.0),     # DC rating
-        (-2.0, -20.0),
-        (10.0, 100.0),     # 4 ms peak rating
+        (0.1,    0.2),
+        (1.0,    2.0),
+        (5.0,   10.0),
+        (10.0,  20.0),
+        (-10.0, -20.0),
     ])
     def test_scale(self, volts, expect_ma):
         assert abs(monitor_to_ma(volts) - expect_ma) < 1e-9

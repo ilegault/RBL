@@ -21,7 +21,7 @@ AIN assignments (from rbl/config/hardware_config.py):
     AIN3   NEC log amp — Y- slit
     AIN4   spare  (configured in driver but excluded from all profiles)
     AIN5   spare  (configured in driver but excluded from all profiles)
-    AIN6   EEL5000 Y-  CURRENT MONITOR   (1 V = 10 mA,  CB37 terminal board)
+    AIN6   EEL5000 Y-  CURRENT MONITOR   (1 V = 2 mA,  CB37 terminal board)
     AIN7   EEL5000 Y-  VOLTAGE MONITOR   (1 V = 1 kV)
     AIN8   EEL5000 Y+  CURRENT MONITOR
     AIN9   EEL5000 Y+  VOLTAGE MONITOR
@@ -134,7 +134,7 @@ LOGAMP_CHANNELS: list = ["AIN0", "AIN1", "AIN2", "AIN3"]
 # Ascending order: AIN6 (Y- current) → ... → AIN13 (X+ voltage)
 # Pairs within each amplifier are (current, voltage) at consecutive even/odd AINs.
 AMP_CHANNELS: list = [
-    "AIN6",   # Y-  CURRENT MONITOR  — 1 V = 10 mA
+    "AIN6",   # Y-  CURRENT MONITOR  — 1 V = 2 mA
     "AIN7",   # Y-  VOLTAGE MONITOR  — 1 V = 1 kV
     "AIN8",   # Y+  CURRENT MONITOR
     "AIN9",   # Y+  VOLTAGE MONITOR
