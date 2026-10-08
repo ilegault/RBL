@@ -21,6 +21,7 @@ no migration — a reader simply ignores keys it doesn't recognise in old ones.
 import json
 from pathlib import Path
 
+from rbl.config import hardware_config
 from rbl.config.paths import TRIP_HISTORY_PATH
 
 
@@ -34,9 +35,11 @@ def append_trip(record: dict, path: Path = None) -> None:
     """
     path = path or TRIP_HISTORY_PATH
     try:
+        rec = dict(record)
+        rec["current_monitor_ma_per_volt"] = hardware_config.CURRENT_MONITOR_MA_PER_VOLT
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(record, default=str) + "\n")
+            f.write(json.dumps(rec, default=str) + "\n")
     except Exception:
         pass
 

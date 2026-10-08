@@ -11,7 +11,7 @@ import pytest
 
 from rbl.config import amplifier_assignments as aa
 from rbl.config import characterization_history as ch
-from rbl.config import paths
+from rbl.config import hardware_config, paths
 
 DAY1 = datetime(2026, 3, 1, 12, 0, 0)
 
@@ -220,3 +220,40 @@ def test_newest_on_plates_returns_the_record_with_its_age():
 ])
 def test_age_text(age_s, text):
     assert ch.age_text(age_s) == text
+
+
+def test_a_written_result_records_the_scale():
+    aa.record_assignment(A_AT_XP, day(1), "initial")
+    p = ch.write_result(result(current_monitor_ma_per_volt=10.0), day(2))
+    rec = json.loads(p.read_text())
+    assert rec["current_monitor_ma_per_volt"] == 2.0
+
+
+def test_a_result_without_a_scale_is_never_newest():
+    aa.record_assignment(A_AT_XP, day(1), "initial")
+    folder = paths.CHARACTERIZATION_DIR
+    folder.mkdir(parents=True, exist_ok=True)
+    hand_written = result(plate="X+", serial="SN-A", cond="ON_PLATES", c_pf=1500.0)
+    hand_written["when"] = day(1).isoformat()
+    hand_written["assignment"] = A_AT_XP
+    hand_path = folder / "X+_impedance_sweep_20260301T120000.json"
+    with open(hand_path, "w", encoding="utf-8") as f:
+        json.dump(hand_written, f)
+
+    ch.write_result(result(plate="X+", serial="SN-A", cond="CABLE_ONLY", c_pf=400.0), day(2))
+
+    assert ch.newest("X+", "ON_PLATES", day(3)) is None
+    wrong = ch.newest_wrong_scale("X+", "ON_PLATES", day(3))
+    assert wrong is not None
+    assert wrong["plate_position"] == "X+"
+    assert wrong["load_condition"] == "ON_PLATES"
+    assert wrong["values"]["c_pf"] == 1500.0
+
+
+def test_a_result_with_a_different_scale_is_never_newest(monkeypatch):
+    aa.record_assignment(A_AT_XP, day(1), "initial")
+    monkeypatch.setattr(hardware_config, "CURRENT_MONITOR_MA_PER_VOLT", 10.0)
+    ch.write_result(result(plate="X+", serial="SN-A", cond="ON_PLATES", c_pf=1500.0), day(2))
+    monkeypatch.undo()
+    assert ch.newest_on_plates_c_pf("X+", day(3)) is None
+

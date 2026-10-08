@@ -1,6 +1,6 @@
 # 58: Results carry their scale, and old-scale results are never planned from
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -61,25 +61,25 @@ Tests may fake: the clock (`now` is an argument) and the scale (monkeypatched on
 
 ## Acceptance criteria
 
-- [ ] **Write.** `test_a_written_result_records_the_scale` (new,
+- [x] **Write.** `test_a_written_result_records_the_scale` (new,
   `tests/test_characterization_history.py`): the JSON written by `write_result` has
   `current_monitor_ma_per_volt == 2.0`, even when the caller passed `10.0`.
-- [ ] **Missing scale.** `test_a_result_without_a_scale_is_never_newest` (new):
+- [x] **Missing scale.** `test_a_result_without_a_scale_is_never_newest` (new):
   - setup: a result file written by hand with no scale key, plus a newer
     `write_result`-written one for a different condition;
   - result: `newest(...)` for the first condition is None, and
     `newest_wrong_scale(...)` returns that record.
-- [ ] **Different scale.** `test_a_result_with_a_different_scale_is_never_newest` (new):
+- [x] **Different scale.** `test_a_result_with_a_different_scale_is_never_newest` (new):
   - setup: a record written while `hardware_config.CURRENT_MONITOR_MA_PER_VOLT` was
     monkeypatched to 10.0, then the patch restored;
   - result: `newest_on_plates_c_pf(...)` is None.
-- [ ] **View.** `test_the_view_says_wrong_monitor_scale_for_an_old_result` (new,
+- [x] **View.** `test_the_view_says_wrong_monitor_scale_for_an_old_result` (new,
   `tests/test_load_characterization_tab.py`): that plate and condition cell reads
   `wrong monitor scale - remeasure`.
-- [ ] **Trip history.** `test_a_trip_record_carries_the_scale` (new,
+- [x] **Trip history.** `test_a_trip_record_carries_the_scale` (new,
   `tests/test_trip_history.py`, using `path=tmp_path / "t.jsonl"`): the loaded record has
   `current_monitor_ma_per_volt == 2.0`, and the dict passed in has no such key.
-- [ ] **Calibration snapshot.** `test_the_calibration_snapshot_carries_the_scale` (new,
+- [x] **Calibration snapshot.** `test_the_calibration_snapshot_carries_the_scale` (new,
   `tests/test_calibration_writer.py`): `config_snapshot()["CURRENT_MONITOR_MA_PER_VOLT"]
   == 2.0`.
 
@@ -93,3 +93,14 @@ Run in CI's order (`.github/workflows/tests.yml`):
     pytest --tb=short -q -n auto --dist loadfile --durations=25
 
 ## Comments
+
+Summary (2026-10-08):
+- Stored `current_monitor_ma_per_volt` from `hardware_config.CURRENT_MONITOR_MA_PER_VOLT` in `write_result` (overwriting caller-passed values).
+- Filtered records in `_newest` to skip records with missing or different scales.
+- Added `newest_wrong_scale` returning newest non-aborted record for the in-force amplifier with missing/different scale.
+- Displayed `wrong monitor scale - remeasure` with `theme.WARN` in the Load Characterization tab comparison table when `newest_with_capacitance` is None and `newest_wrong_scale` is present.
+- Updated `append_trip` to copy record and store `current_monitor_ma_per_volt`.
+- Added `CURRENT_MONITOR_MA_PER_VOLT` to `config_snapshot()`.
+- Tests added in `tests/test_characterization_history.py`, `tests/test_load_characterization_tab.py`, `tests/test_trip_history.py`, and `tests/test_calibration_writer.py` covering all criteria.
+- Full gate passed (ruff, check_tests_first, type_gate, and all 2,355 pytest tests).
+

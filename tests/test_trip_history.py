@@ -37,3 +37,13 @@ class TestAppendAndLoad:
     def test_append_never_raises_on_unwritable_path(self):
         # A path a normal user can't create should be swallowed, not raised.
         append_trip({"label": "X+"}, path="/proc/nope/trip_history.jsonl")
+
+    def test_a_trip_record_carries_the_scale(self, tmp_path):
+        p = tmp_path / "t.jsonl"
+        trip = {"label": "X+", "state": "amp_off"}
+        append_trip(trip, path=p)
+        assert "current_monitor_ma_per_volt" not in trip
+        records = load_trip_history(p)
+        assert len(records) == 1
+        assert records[0]["current_monitor_ma_per_volt"] == 2.0
+

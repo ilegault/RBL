@@ -112,3 +112,7 @@ class TestConfigSnapshotAndGit:
         # Whatever the sandbox's git state is, this must never raise.
         result = git_commit_hash()
         assert isinstance(result, str)
+
+    def test_the_calibration_snapshot_carries_the_scale(self):
+        assert config_snapshot()["CURRENT_MONITOR_MA_PER_VOLT"] == 2.0
+
