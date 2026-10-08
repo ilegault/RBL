@@ -1,6 +1,6 @@
 # 54: The current monitor reads 2 mA per volt, and the hard trip is time at the rail
 
-**Status:** blocked
+**Status:** done
 
 **Runner:** any
 
@@ -192,3 +192,10 @@ FAILED tests/test_calibration_runner.py::TestDriftLoadConditionGuard::test_an_ex
 ```
 Decision needed: Per Ticket 54 guardrail ("If a test outside the ones named here starts failing, do not change its assertion, tolerance or inputs. Escalate per AGENTS.md ('Fix or escalate'), saying which test and why.") and ADR 0001, should these 9 tests be updated in this branch to reflect the new 1 V = 2 mA scale (using `ma_to_monitor`), or should ticket 53 be reopened/a follow-up ticket created to convert them?
 
+
+## Resolution — 2026-10-08
+Decision (owner, via planning session): the 9 escalated tests are updated on this branch. No follow-up ticket and no reopening of 53.
+Classification: **harness defect**. The fixtures fed raw volts chosen for 1 V = 10 mA; production code correctly follows ADR 0007. Nothing was muted: every expected mA value, state and label is unchanged, and only the input volts now go through `ma_to_monitor(...)`, so each test still fails if the code is wrong.
+Changed: `test_beamline.py` (2 tests), `test_labjack_link.py` (2), `test_amp_tab_isolation.py` (2, via `FULL_READING`), `test_amp_single_channel.py` (1), `test_calibration_runner.py` (2).
+Two inputs were re-chosen because the old value is unrepresentable at 20 mA full scale: the "40 mA" excursion is now 19.5 mA (above the 19.0 mA soft-trip level, so the excursion log still fires), and the pinned-current seed `i_v=1.95` is now `ma_to_monitor(19.5)`.
+Gate: `ruff check .`, `check_tests_first.py`, `type_gate.py` and the full pytest suite all pass locally (2342 passed).

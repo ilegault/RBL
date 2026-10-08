@@ -29,6 +29,7 @@ import numpy as np
 import pytest
 
 from rbl.config import hardware_config as SC
+from rbl.hardware.amp_monitor import ma_to_monitor
 from tests.payloads import LabJackFeed, window_payload
 
 # ---------------------------------------------------------------------------
@@ -182,10 +183,10 @@ class TestAmpWaveformConversion:
         """dc_ma = monitor_to_ma(raw_i) scaled once in snapshot layer."""
         feed = _logamp_feed()
         received = _capture(feed, "amps_changed")
-        wave = np.array([0.5, 1.0, 1.5])   # mean = 1.0 V -> 10 mA
+        wave = ma_to_monitor(np.array([5.0, 10.0, 15.0]))   # mean 10 mA
         self._send_amp(feed, received, "X+", np.array([1.0]), wave_i=wave)
         ch = received[0].channels["X+"]
-        assert ch.raw_i == pytest.approx(1.0)
+        assert ch.raw_i == pytest.approx(ma_to_monitor(10.0))
         assert ch.dc_ma == pytest.approx(10.0)
 
     def test_peak_kv_from_sine_waveform(self):
@@ -278,11 +279,11 @@ class TestAmpWaveformConversion:
         assert received[0].connected is True
 
     def test_rms_ma_from_dc_current_waveform(self):
-        """DC current of 1 V → 10 mA."""
+        """A DC current of 10 mA, fed through ma_to_monitor."""
         feed = _logamp_feed()
         received = _capture(feed, "amps_changed")
         self._send_amp(feed, received, "X+",
                        np.array([0.0]),
-                       np.array([1.0]))   # 1 V rms → 10 mA
+                       np.array([ma_to_monitor(10.0)]))   # 10 mA
         ch = received[0].channels["X+"]
         assert ch.rms_ma == pytest.approx(10.0, rel=1e-3)

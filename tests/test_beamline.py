@@ -8,6 +8,7 @@ import math
 import pytest
 
 from rbl.config import hardware_config as SC
+from rbl.hardware.amp_monitor import ma_to_monitor
 from rbl.state.beamline import Beamline
 from rbl.state.snapshots import (
     AmpState,
@@ -120,7 +121,7 @@ class TestLabjackIngestion:
         received = []
         beamline.amps_changed.connect(received.append)
         payload = self._payload(amp_channels={
-            "X+": {"v_peak": 2.0, "v_pkpk": 4.0, "v_rms": 1.5, "i_rms": 0.5},
+            "X+": {"v_peak": 2.0, "v_pkpk": 4.0, "v_rms": 1.5, "i_rms": ma_to_monitor(5.0)},
         })
         beamline.ingest_labjack_window(payload, active_profile="FULL")
         state = received[0]
@@ -131,7 +132,7 @@ class TestLabjackIngestion:
         assert ch.peak_kv == pytest.approx(2.0)          # 1000:1 -> V is kV
         assert ch.pkpk_kv == pytest.approx(4.0)
         assert ch.rms_kv == pytest.approx(1.5)
-        assert ch.rms_ma == pytest.approx(5.0)            # 1 V == 10 mA
+        assert ch.rms_ma == pytest.approx(5.0)            # 5 mA, fed as ma_to_monitor(5.0)
 
     def test_amp_missing_channel_is_nan(self, beamline):
         received = []
@@ -679,21 +680,22 @@ class TestSnapshotsCarryWhatTheTabsNeed:
         v_ain = SC.AMP_CHANNEL_MAP["X+"]["voltage"]
         i_ain = SC.AMP_CHANNEL_MAP["X+"]["current"]
         wave_v = np.full(64, 2.0)
-        wave_i = np.full(64, 0.5)
+        wave_i = np.full(64, ma_to_monitor(5.0))
         beamline.ingest_labjack_window({
             "channels": {
                 v_ain: {"peak": 2.0, "pk_pk": 0.0, "rms": 2.0, "waveform": wave_v},
-                i_ain: {"peak": 0.5, "pk_pk": 0.0, "rms": 0.5, "waveform": wave_i},
+                i_ain: {"peak": ma_to_monitor(5.0), "pk_pk": 0.0,
+                         "rms": ma_to_monitor(5.0), "waveform": wave_i},
             },
             "t": 1.0, "window_samples": 64,
         })
         ch = received[0].channels["X+"]
         assert ch.window_kv is not None and len(ch.window_kv) == 64
         assert ch.window_kv.max() == pytest.approx(2.0)    # 2 V -> 2 kV
-        assert ch.window_ma.max() == pytest.approx(5.0)    # 0.5 V -> 5 mA
+        assert ch.window_ma.max() == pytest.approx(5.0)    # ma_to_monitor(5.0) V -> 5 mA
         # The raw readouts are the window mean, in volts, unscaled.
         assert ch.raw_v == pytest.approx(2.0)
-        assert ch.raw_i == pytest.approx(0.5)
+        assert ch.raw_i == pytest.approx(ma_to_monitor(5.0))
 
     def test_no_waveform_leaves_the_full_window_empty(self, beamline):
         """A payload without samples must not fabricate an array — the scope

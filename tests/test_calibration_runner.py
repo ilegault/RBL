@@ -443,7 +443,7 @@ class TestRegulationState:
 
     def test_current_limited_when_voltage_low_current_pinned(self, qapp, funcgen_map):
         runner = CalibrationRunner(funcgen_map, LoadCondition.ON_PLATES)
-        self._seed_windows(runner, "X+", v_v=1.0, i_v=1.95)   # 1 kV of 5 kV, 19.5 mA
+        self._seed_windows(runner, "X+", v_v=1.0, i_v=ma_to_monitor(19.5))   # 1 kV of 5 kV, 19.5 mA
         state, reason = runner._regulation_state_for("X+", commanded_kv=5.0,
                                                        freq_hz=0.0, ac=False)
         assert state == "current_limited"
@@ -726,7 +726,7 @@ class TestDriftLoadConditionGuard:
         settled(runner)
         with caplog.at_level("WARNING"):
             for _ in range(20):
-                runner.on_window(make_payload(current_v=4.0))
+                runner.on_window(make_payload(current_v=ma_to_monitor(19.5)))
         per_channel = [m for m in caplog.messages if "X+ drew" in m]
         assert len(per_channel) == 1
 
