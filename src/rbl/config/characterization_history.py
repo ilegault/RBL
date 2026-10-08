@@ -32,6 +32,11 @@ RULES
 * An aborted result stays on disk (an abort is itself a finding) but is never
   returned as "the newest": nothing may plan from a number the run itself
   rejected.
+* Results record the current-monitor scale (`current_monitor_ma_per_volt`) they
+  were computed under. Results whose scale is missing or differs from the value
+  in force (e.g. pre-ADR 0007 results) are never returned by `_newest` or planned
+  from; `newest_wrong_scale` identifies them for display ("wrong monitor scale -
+  remeasure").
 * `newest_on_plates_c_pf` looks at ON_PLATES results that actually carry a
   capacitance, so a newer clamp-test result does not hide it. Cable-only and
   disconnected results are never planning inputs.
@@ -51,7 +56,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
-from rbl.config import amplifier_assignments, paths
+from rbl.config import amplifier_assignments, hardware_config, paths
 from rbl.config.calibration_config import LoadCondition
 from rbl.config.hardware_config import AMP_LABELS
 
@@ -93,6 +98,7 @@ def write_result(result: dict, when: datetime) -> Path:
                          f"(use {UNASSIGNED!r} before serials are entered)")
 
     record = dict(result)
+    record["current_monitor_ma_per_volt"] = hardware_config.CURRENT_MONITOR_MA_PER_VOLT
     record["when"] = when.isoformat()
     record["assignment"] = amplifier_assignments.assignment_at(when)
 
@@ -148,6 +154,9 @@ def _newest(now, matches, need_value=None):
         if need_value is not None and not isinstance(
                 rec["values"].get(need_value), (int, float)):
             continue
+        scale = rec.get("current_monitor_ma_per_volt")
+        if scale is None or scale != hardware_config.CURRENT_MONITOR_MA_PER_VOLT:
+            continue
         if matches(rec):
             best = rec          # sorted oldest first: the last match is newest
     return None if best is None else _present(best, now)
@@ -174,6 +183,28 @@ def newest(plate_position: str, load_condition: str, now: datetime,
                    and r["load_condition"] == load_condition
                    and r["amplifier_serial"] == serial),
         need_value=_need_value)
+
+
+def newest_wrong_scale(plate_position: str, load_condition: str,
+                       now: datetime) -> dict | None:
+    """Newest non-aborted record for the amplifier currently at `plate_position`
+    and condition whose scale is missing or differs from the value in force.
+
+    Returns None if there is none.
+    """
+    serial = _serial_in_force(plate_position, now)
+    best = None
+    for rec in _all_results():
+        if rec.get("aborted") or _comparable(rec["_when"]) > _comparable(now):
+            continue
+        scale = rec.get("current_monitor_ma_per_volt")
+        if scale is not None and scale == hardware_config.CURRENT_MONITOR_MA_PER_VOLT:
+            continue
+        if (rec["plate_position"] == plate_position
+                and rec["load_condition"] == load_condition
+                and rec["amplifier_serial"] == serial):
+            best = rec
+    return None if best is None else _present(best, now)
 
 
 def newest_for_amplifier(serial: str, load_condition: str,

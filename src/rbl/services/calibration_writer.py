@@ -25,7 +25,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from rbl.config import calibration_config
+from rbl.config import calibration_config, hardware_config
 
 log = logging.getLogger(__name__)
 
@@ -60,7 +60,8 @@ def now_iso() -> str:
 
 
 def config_snapshot() -> dict:
-    """Every public, upper-case constant in calibration_config, as plain data.
+    """Every public, upper-case constant in calibration_config, as plain data,
+    plus CURRENT_MONITOR_MA_PER_VOLT from hardware_config.
 
     Enums become their .value; Paths become str; nothing else is touched.
     Recorded in every sidecar so a CSV can be re-interpreted correctly even
@@ -75,6 +76,7 @@ def config_snapshot() -> dict:
         elif hasattr(value, "value") and not isinstance(value, (int, float, str)):
             value = value.value
         snap[name] = value
+    snap["CURRENT_MONITOR_MA_PER_VOLT"] = hardware_config.CURRENT_MONITOR_MA_PER_VOLT
     return snap
 
 

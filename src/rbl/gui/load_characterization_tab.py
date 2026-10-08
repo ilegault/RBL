@@ -42,6 +42,8 @@ differences between conditions - cable minus amplifier alone, plates minus
 cable - which is how the ~1.6 nF is traced to the amplifier, the cable or the
 plates. A result measured before the latest hardware change is shown in amber
 with the date of that change, because it may no longer describe the load.
+A result whose current-monitor scale is missing or differs from the scale in force
+is shown in amber as "wrong monitor scale - remeasure".
 
 A sibling tab to calibration_tab.py, not a sub-panel of it (per the plan's
 own "the user's call") — calibration_tab.py's own docstring already
@@ -542,12 +544,21 @@ class LoadCharacterizationTab(QWidget):
                 rec = characterization_history.newest_with_capacitance(
                     label, condition, now)
                 found[condition] = rec
-                item = QTableWidgetItem("not measured" if rec is None else
-                                        self._result_text(rec))
-                item.setBackground(clear)
-                if rec is not None and rec["predates_hardware_change"]:
-                    item.setBackground(QColor(theme.WARN))
-                    item.setToolTip(stale_tip)
+                if rec is None:
+                    wrong = characterization_history.newest_wrong_scale(
+                        label, condition, now)
+                    if wrong is not None:
+                        item = QTableWidgetItem("wrong monitor scale - remeasure")
+                        item.setBackground(QColor(theme.WARN))
+                    else:
+                        item = QTableWidgetItem("not measured")
+                        item.setBackground(clear)
+                else:
+                    item = QTableWidgetItem(self._result_text(rec))
+                    item.setBackground(clear)
+                    if rec["predates_hardware_change"]:
+                        item.setBackground(QColor(theme.WARN))
+                        item.setToolTip(stale_tip)
                 self.table.setItem(row, col, item)
 
             c = {cond: (rec["values"]["c_pf"] if rec else None)

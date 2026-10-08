@@ -10,6 +10,7 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import json
 from datetime import datetime, timedelta
 
 import pytest
@@ -17,6 +18,7 @@ from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from rbl.config import amplifier_assignments as aa
 from rbl.config import characterization_history as ch
+from rbl.config import paths
 from rbl.gui import theme
 from rbl.gui.load_characterization_tab import LoadCharacterizationTab
 from rbl.state.beamline import Beamline
@@ -267,6 +269,24 @@ class TestComparisonTable:
         measure("Y-", 200.0, cond="DISCONNECTED", g_us=9.0)
         tab.refresh_results()
         assert tab.table.item(row_of(tab, "Y-"), 0).background().color().alpha() == 0
+
+    def test_the_view_says_wrong_monitor_scale_for_an_old_result(self, tab):
+        folder = paths.CHARACTERIZATION_DIR
+        folder.mkdir(parents=True, exist_ok=True)
+        hand_written = {
+            "plate_position": "X+", "amplifier_serial": "unassigned",
+            "load_condition": "ON_PLATES", "method": "impedance_sweep",
+            "values": {"c_pf": 1600.0, "g_us": 0.5},
+            "when": (NOW - timedelta(days=2)).isoformat(),
+            "assignment": None,
+        }
+        with open(folder / "X+_impedance_sweep_old.json", "w", encoding="utf-8") as f:
+            json.dump(hand_written, f)
+
+        tab.refresh_results()
+        assert cell(tab, "X+", COL_PLATES) == "wrong monitor scale - remeasure"
+        item = tab.table.item(row_of(tab, "X+"), COL_PLATES)
+        assert item.background().color().name().lower() == theme.WARN.lower()
 
     def test_the_default_clock_is_the_real_one(self, qapp):
         # No now_fn: the tab must build and draw using the local clock.
