@@ -19,6 +19,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from rbl.config.cup_config import CUP_SETTLE_WINDOW_S
 from rbl.services import cup_log, cup_log_totals
 from rbl.services.cup_log import (
     ContinueChoice,
@@ -195,3 +196,35 @@ def test_pure_totals_module_imports_no_qt_and_is_reexported():
     assert not [m for m in mods if m.startswith(("PySide6", "rbl.gui", "shiboken"))]
     assert cup_log.read_dose_totals is cup_log_totals.read_dose_totals
     assert cup_log.find_previous_session_cup_log is cup_log_totals.find_previous_session_cup_log
+
+
+class TestWriterSettingsProvider:
+    """The settings in force when a log opens go into its header (ticket 28)."""
+
+    PROVIDED = {"arm_threshold_a": 7.5e-7, "release_threshold_a": 2.5e-7, "settle_window_s": 3.0}
+
+    def test_test_log_header_carries_provided_thresholds(self, tmp_path):
+        log = CupLog(test_root=tmp_path)
+        log.set_writer_settings_provider(lambda: dict(self.PROVIDED))
+        writer = log.open_test(NOW)
+        log.close()
+        header = [
+            ln for ln in Path(writer.csv_path).read_text(encoding="utf-8").splitlines()
+            if ln.startswith("# thresholds:")
+        ]
+        assert "arm=7.500e-07 A" in header[0]
+        assert "release=2.500e-07 A" in header[0]
+        assert "settle_window=3.0 s" in header[0]
+
+    def test_session_log_header_carries_provided_thresholds(self, tmp_path):
+        log = CupLog(test_root=tmp_path)
+        log.set_writer_settings_provider(lambda: dict(self.PROVIDED))
+        writer = log.open_for_session(tmp_path / "session_x")
+        assert writer.settle_window_s == pytest.approx(3.0)
+        log.close()
+
+    def test_without_provider_writer_defaults_apply(self, tmp_path):
+        log = CupLog(test_root=tmp_path)
+        writer = log.open_test(NOW)
+        log.close()
+        assert writer.settle_window_s == pytest.approx(CUP_SETTLE_WINDOW_S)

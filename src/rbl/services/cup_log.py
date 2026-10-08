@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from PySide6.QtCore import QObject, Signal
 
@@ -92,6 +92,22 @@ class CupLog(QObject):
         self._test_root: Path = Path(test_root) if test_root is not None else FARADAY_CUP_DIR
         self._writer: CupSessionWriter | None = None
         self._kind: CupLogKind | None = None
+        self._settings_provider: Callable[[], dict[str, Any]] | None = None
+
+    def set_writer_settings_provider(
+        self, provider: Callable[[], dict[str, Any]] | None
+    ) -> None:
+        """Register who knows the acquisition settings in force at open time.
+
+        The thresholds and settle window go into the CSV header, so they must be the
+        ones the detector is using when the file opens, not compiled-in defaults.
+        The Faraday Cup tab registers itself; with none registered the writer's own
+        defaults apply.
+        """
+        self._settings_provider = provider
+
+    def _writer_settings(self) -> dict[str, Any]:
+        return dict(self._settings_provider()) if self._settings_provider is not None else {}
 
     def open_for_session(
         self, folder: Path, continuation: dict[str, Any] | None = None
@@ -99,7 +115,10 @@ class CupLog(QObject):
         """Open ``folder/cup.csv`` for a session, closing any open cup log first."""
         self.close()
         writer = CupSessionWriter(
-            session_id="cup", output_dir=Path(folder), continuation=continuation
+            session_id="cup",
+            output_dir=Path(folder),
+            continuation=continuation,
+            **self._writer_settings(),
         )
         return self._adopt(writer, CupLogKind.SESSION)
 
@@ -109,7 +128,9 @@ class CupLog(QObject):
         folder = month_folder(self._test_root, now_local)
         folder.mkdir(parents=True, exist_ok=True)
         path = unused_path(folder, timestamped_stem("cup", now_local), ".csv")
-        writer = CupSessionWriter(session_id=path.stem, output_dir=folder)
+        writer = CupSessionWriter(
+            session_id=path.stem, output_dir=folder, **self._writer_settings()
+        )
         return self._adopt(writer, CupLogKind.TEST)
 
     def close(self) -> str | None:
