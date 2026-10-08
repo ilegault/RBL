@@ -1,6 +1,6 @@
 # 29: The Overview cup panel, with Start/Stop for a cup test log
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
