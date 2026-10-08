@@ -43,6 +43,7 @@ from rbl.gui.raster_planner_tab import RasterPlannerTab
 from rbl.gui.vacuum_tab import VacuumTab
 from rbl.hardware.camera_source import CameraSource
 from rbl.services.beamline_snapshot import BeamlineSnapshotProvider
+from rbl.services.cup_log import CupLog
 from rbl.services.session_recorder import SessionRecorder
 from rbl.services.spike_recorder import SpikeRecorder
 from rbl.state.beamline import Beamline
@@ -110,7 +111,7 @@ TAB_DECLARATIONS: tuple[TabDeclaration, ...] = (
     TabDeclaration(
         title="Faraday Cup",
         attr_name="faraday_cup_tab",
-        factory=lambda win: FaradayCupTab(win.beamline, win),
+        factory=lambda win: FaradayCupTab(win.beamline, win, cup_log=win.cup_log),
         consumes_stream=False,
     ),
     TabDeclaration(
@@ -255,6 +256,11 @@ class MainWindow(QMainWindow):
         # both DG1022Z) plus the state-snapshot layer built on top of them.
         # No tab constructs or owns a driver instance — see rbl/state/beamline.py.
         self.beamline = Beamline(self)
+
+        # The one cup log. The Faraday Cup tab writes only while it is open (spec C2);
+        # later tickets let sessions and the Overview cup panel open and close it.
+        # Its default test root is FARADAY_CUP_DIR.
+        self.cup_log = CupLog()
 
         # Session recorder — shared between Overview panel and Camera tab.
         self.snapshots        = BeamlineSnapshotProvider(self.beamline, self)
@@ -655,6 +661,7 @@ class MainWindow(QMainWindow):
         best_effort("dynamic_adjustment_tab.shutdown",  self.dynamic_adjustment_tab.shutdown)
         best_effort("vacuum_tab.shutdown",              self.vacuum_tab.shutdown)
         best_effort("profiler_tab.shutdown",            self.profiler_tab.shutdown)
+        best_effort("cup_log.close",                    self.cup_log.close)
         best_effort("beamline.shutdown",                self.beamline.shutdown)
         super().closeEvent(event)
 

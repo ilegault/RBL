@@ -15,6 +15,7 @@ ADR 0002 and Ticket 08:
 import csv
 import json
 import os
+from datetime import datetime
 
 import pytest
 
@@ -30,6 +31,7 @@ from rbl.config.cup_config import (
 )
 from rbl.gui.faraday_cup_tab import FaradayCupTab
 from rbl.hardware.cup_status import CupPosition
+from rbl.services.cup_log import CupLog
 from rbl.services.cup_session_writer import CSV_COLUMNS, CupSessionWriter
 from rbl.snapshots import CupActuationState
 from rbl.state.beamline import Beamline
@@ -463,8 +465,9 @@ class TestFaradayCupTabSessionIntegration:
     def test_full_insertion_lifecycle_recorded(self, qapp, tmp_path):
         """Drive a full insertion through CupFeed and assert on the session CSV file."""
         beamline = Beamline()
-        session_writer = CupSessionWriter(output_dir=tmp_path)
-        tab = FaradayCupTab(beamline=beamline, session_writer=session_writer)
+        cup_log = CupLog(test_root=tmp_path)
+        session_writer = cup_log.open_test(datetime(2026, 10, 8, 9, 0, 0))
+        tab = FaradayCupTab(beamline=beamline, cup_log=cup_log)
         feed = CupFeed(tab, beamline=beamline)
         tab.show()
         qapp.processEvents()
@@ -535,8 +538,9 @@ class TestFaradayCupTabSessionIntegration:
     def test_idle_gap_vs_disconnected_gap_are_distinguishable(self, qapp, tmp_path):
         """Verify that an idle gap (with heartbeats) is distinguishable from a disconnected gap."""
         beamline = Beamline()
-        session_writer = CupSessionWriter(output_dir=tmp_path)
-        tab = FaradayCupTab(beamline=beamline, session_writer=session_writer)
+        cup_log = CupLog(test_root=tmp_path)
+        session_writer = cup_log.open_test(datetime(2026, 10, 8, 9, 0, 0))
+        tab = FaradayCupTab(beamline=beamline, cup_log=cup_log)
         feed = CupFeed(tab, beamline=beamline)
         tab.show()
         qapp.processEvents()
@@ -599,8 +603,9 @@ class TestFaradayCupTabSessionIntegration:
     def test_force_start_and_stop_markers_recorded(self, qapp, tmp_path):
         """Force start and stop buttons write run_opened (forced) and run_closed markers."""
         beamline = Beamline()
-        session_writer = CupSessionWriter(output_dir=tmp_path)
-        tab = FaradayCupTab(beamline=beamline, session_writer=session_writer)
+        cup_log = CupLog(test_root=tmp_path)
+        session_writer = cup_log.open_test(datetime(2026, 10, 8, 9, 0, 0))
+        tab = FaradayCupTab(beamline=beamline, cup_log=cup_log)
         feed = CupFeed(tab, beamline=beamline)
         tab.show()
         qapp.processEvents()
@@ -640,8 +645,9 @@ class TestFaradayCupTabSessionIntegration:
     def test_tab_logs_position_transitions_and_faults(self, qapp, tmp_path):
         """Verify FaradayCupTab writes position transitions and faults via CupActuationState."""
         beamline = Beamline()
-        session_writer = CupSessionWriter(output_dir=tmp_path)
-        tab = FaradayCupTab(beamline=beamline, session_writer=session_writer)
+        cup_log = CupLog(test_root=tmp_path)
+        session_writer = cup_log.open_test(datetime(2026, 10, 8, 9, 0, 0))
+        tab = FaradayCupTab(beamline=beamline, cup_log=cup_log)
         tab.show()
         qapp.processEvents()
 
