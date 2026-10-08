@@ -11,7 +11,9 @@ Design intent
 The key invariant this class enforces: CSV-only is a first-class mode, not a
 fallback.  The camera being absent, closed, or broken never blocks or degrades
 data logging.  Video is a value-add that requires a working camera; CSV is the
-irreducible minimum.
+irreducible minimum.  Video may be started and stopped any number of times
+within an active session without overwriting earlier recordings (ADR 0004
+decision 7).
 
 The timebase: at session start we capture both time.perf_counter() and
 datetime.now(UTC) and derive every subsequent wall-clock time from the monotonic
@@ -135,6 +137,9 @@ class SessionRecorder(QObject):
         self._frames_dropped: int = 0
         self._segments_done: int  = 0
         self._transcode_pending: int = 0
+        self._next_segment_index: int = 0
+        self._video_runs: list[dict] = []
+        self._ffmpeg_warning_logged: bool = False
 
         # Photos
         self._photo_index: int = 0
@@ -230,6 +235,9 @@ class SessionRecorder(QObject):
         self._photo_index     = 0
         self._vacuum_logger   = None
         self._vacuum_files    = []
+        self._next_segment_index = 0
+        self._video_runs      = []
+        self._ffmpeg_warning_logged = False
 
         # Open CSV writer and events.csv.
         self._csv_writer = CsvLogWriter(self._folder, "data")
@@ -245,9 +253,6 @@ class SessionRecorder(QObject):
             ["t_rel_s", "wall_utc", "frame_index", "event", "detail"])
         ef.flush()
 
-        # Video (optional).
-        self._start_video()
-
         # Write initial CSV row and start timer.
         self._csv_timer.setInterval(self._csv_interval_s * 1000)
         self._csv_timer.start()
@@ -256,8 +261,12 @@ class SessionRecorder(QObject):
         self._recording = True
         self._write_event("session_start",
                           f"csv_interval_s={self._csv_interval_s} "
-                          f"video={self._video_recorder is not None} "
+                          f"video={self._video_enabled and self._camera.is_open()} "
                           f"record_fps={self._record_fps}")
+
+        # Video (optional, backwards compatibility for set_video_enabled).
+        self._start_video()
+
         self._write_manifest()
         self.state_changed.emit()
         self.session_started.emit(self._folder)
@@ -266,15 +275,11 @@ class SessionRecorder(QObject):
     def stop(self) -> None:
         if not self._recording:
             return
+        self.stop_video()
         self._recording = False
         self._csv_timer.stop()
         self._write_csv_row()   # final row
         self._write_event("session_stop", "")
-
-        # Stop video.
-        if self._video_recorder is not None:
-            self._video_recorder.stop()
-            self._video_recorder = None
 
         # Wait for pending transcodes with a progress dialog.
         if self._transcode_queue is not None and self._transcode_pending > 0:
@@ -445,16 +450,27 @@ class SessionRecorder(QObject):
             "master_codec":      self._master_codec,
         }
 
-    # ---- internal: video ---------------------------------------------------
+    # ---- video control (ADR 0004 decision 7) -------------------------------
 
-    def _start_video(self) -> None:
-        if not self._video_enabled:
-            return
+    def start_video(self) -> bool:
+        """Start video recording during an active session.
+
+        Refuses (returns False, emits status warning) when not recording,
+        video is already running, or camera is not open.
+        """
+        if not self._recording:
+            self.status.emit("Cannot start video: session is not recording", "warn")
+            return False
+        if self._video_recorder is not None:
+            self.status.emit("Cannot start video: video is already running", "warn")
+            return False
         if not self._camera.is_open():
-            return
+            self.status.emit("Cannot start video: camera is not open", "warn")
+            return False
         w, h = self._camera.actual_size()
         if w == 0 or h == 0:
-            return
+            self.status.emit("Cannot start video: camera frame size is invalid", "warn")
+            return False
 
         crf, preset = QUALITY_PRESETS[self._quality_label]
         rec = VideoRecorder(
@@ -464,6 +480,7 @@ class SessionRecorder(QObject):
             segment_seconds=self._segment_seconds,
             segment_max_bytes=SEGMENT_MAX_BYTES,
             master_codec=self._master_codec,
+            first_segment_index=self._next_segment_index,
         )
         rec.segment_closed.connect(self._on_segment_closed)
         rec.error.connect(self._on_video_error)
@@ -474,31 +491,70 @@ class SessionRecorder(QObject):
             rec.moveToThread(cam_thread)
 
         if not rec.start():
-            return
+            return False
 
         # Connect frame_ready with DirectConnection so offer_frame() executes
         # on the camera thread without queuing overhead.
         self._camera.frame_ready.connect(
             self._on_frame, Qt.ConnectionType.DirectConnection)
 
-        self._video_recorder   = rec
+        self._video_recorder = rec
 
         # Start transcode queue — only if ffmpeg is actually available.
-        # Without this guard the queue starts anyway, every closed segment is
-        # enqueued, and each one immediately fails with "ffmpeg not found",
-        # writing a transcode_failed event per segment into the session log and
-        # leaving dead .mp4 names in the manifest.  The lab build ships no
-        # ffmpeg by design, so that is the normal case, not an error case.
         if self._ffmpeg_path is not None:
-            tq = TranscodeQueue(self._ffmpeg_path, crf=crf, preset=preset)
-            tq.finished_one.connect(self._on_transcode_done)
-            tq.progress.connect(self._on_transcode_progress)
-            tq.start()
-            self._transcode_queue = tq
+            if self._transcode_queue is None:
+                tq = TranscodeQueue(self._ffmpeg_path, crf=crf, preset=preset)
+                tq.finished_one.connect(self._on_transcode_done)
+                tq.progress.connect(self._on_transcode_progress)
+                tq.start()
+                self._transcode_queue = tq
         else:
             self._transcode_queue = None
-            self._write_event("transcode_disabled",
-                              "ffmpeg not found — keeping .avi only")
+            if not self._ffmpeg_warning_logged:
+                self._write_event("transcode_disabled",
+                                  "ffmpeg not found — keeping .avi only")
+                self._ffmpeg_warning_logged = True
+
+        self._video_runs.append({
+            "started_t_rel": self._t_rel(),
+            "stopped_t_rel": None,
+            "first_segment": self._next_segment_index,
+            "last_segment": None,
+        })
+        self._write_event("video_started", "")
+        self._write_manifest()
+        self.state_changed.emit()
+        return True
+
+    def stop_video(self, detail: str = "") -> None:
+        """Stop video recording if active without ending the session."""
+        if self._video_recorder is None:
+            return
+
+        rec = self._video_recorder
+        self._video_recorder = None
+
+        try:
+            self._camera.frame_ready.disconnect(self._on_frame)
+        except (RuntimeError, TypeError):
+            pass
+
+        last_seg = rec.segment_index
+        if self._video_runs and self._video_runs[-1]["stopped_t_rel"] is None:
+            self._video_runs[-1]["stopped_t_rel"] = self._t_rel()
+            self._video_runs[-1]["last_segment"] = last_seg
+
+        self._next_segment_index = last_seg + 1
+
+        rec.stop()
+
+        self._write_event("video_stopped", detail)
+        self._write_manifest()
+        self.state_changed.emit()
+
+    def _start_video(self) -> None:
+        if self._video_enabled:
+            self.start_video()
 
     def _on_frame(self, frame, t_mono: float) -> None:
         """Called on camera thread via DirectConnection."""
@@ -573,8 +629,9 @@ class SessionRecorder(QObject):
         self.state_changed.emit()
 
     def _on_video_error(self, msg: str) -> None:
+        if self._video_recorder is not None:
+            self.stop_video(detail=f"video_error: {msg}")
         self._write_event("camera_lost", msg)
-        self._video_recorder = None
         self.status.emit(f"Video error: {msg}", "warn")
         self.state_changed.emit()
 
@@ -586,9 +643,7 @@ class SessionRecorder(QObject):
         if not self._recording:
             return
         if self._video_recorder is not None:
-            self._camera.frame_ready.disconnect(self._on_frame)
-            self._video_recorder.stop()
-            self._video_recorder = None
+            self.stop_video(detail="camera_closed")
         self._write_event("camera_lost", "camera closed during session")
         self.status.emit("Camera lost — continuing CSV only", "warn")
         self.state_changed.emit()
@@ -597,12 +652,7 @@ class SessionRecorder(QObject):
         if not self._recording:
             return
         if self._video_recorder is not None:
-            try:
-                self._camera.frame_ready.disconnect(self._on_frame)
-            except RuntimeError:
-                pass
-            self._video_recorder.stop()
-            self._video_recorder = None
+            self.stop_video(detail="camera_closed")
         self._write_event("camera_lost", msg)
         self.status.emit(f"Camera lost ({msg}) — continuing CSV only", "warn")
         self.state_changed.emit()
@@ -663,8 +713,10 @@ class SessionRecorder(QObject):
                 "parts":      self._csv_writer.parts if self._csv_writer else [],
             },
             "video": {
-                "enabled":                (self._video_recorder is not None
+                "enabled":                (len(self._video_runs) > 0
+                                            or self._video_recorder is not None
                                             or len(self._segment_meta) > 0),
+                "runs":                   [dict(r) for r in self._video_runs],
                 "record_fps":             self._record_fps,
                 "segment_seconds":        self._segment_seconds,
                 "segment_max_bytes":      SEGMENT_MAX_BYTES,

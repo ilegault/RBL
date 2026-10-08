@@ -49,11 +49,20 @@ index, and 0-based segment_frame.  This is the only authoritative mapping
 between CSV rows (which carry frame_index) and video frames.  In PNG mode,
 segment maps to a folder name and segment_frame maps to the filename inside it.
 
+Mid-session video and append mode
+---------------------------------
+Video can start and stop several times within a single session (ADR 0004
+decision 7).  To prevent a later video run from destroying earlier runs,
+VideoRecorder takes first_segment_index (so segment numbers continue video_003,
+video_004, ... instead of restarting at video_000) and opens frames.csv in
+append mode, writing the CSV header only when the file is new or empty.
+
 This object is constructed and owned by SessionRecorder but lives on the
 camera thread — it is moved there via moveToThread before start() is called.
 """
 import csv
 import os
+import typing
 
 from PySide6.QtCore import QObject, Signal
 
@@ -90,6 +99,7 @@ class VideoRecorder(QObject):
                  segment_seconds: int,
                  segment_max_bytes: int,
                  master_codec: str = MASTER_CODEC_DEFAULT,
+                 first_segment_index: int = 0,
                  parent=None):
         super().__init__(parent)
         self._folder            = folder
@@ -108,11 +118,11 @@ class VideoRecorder(QObject):
 
         # State
         self._writer: "cv2.VideoWriter | None" = None
-        self._frames_file   = None
-        self._frames_writer = None
+        self._frames_file: "typing.TextIO | None" = None
+        self._frames_writer: "csv.DictWriter | None" = None
         self._frames_buf: list[dict] = []
 
-        self._segment_index  = 0
+        self._segment_index  = first_segment_index
         self._segment_frame  = 0
         self._segment_start_t: float = 0.0
         self._frame_index    = 0          # monotonic across whole session
@@ -131,19 +141,25 @@ class VideoRecorder(QObject):
             return False
 
         frames_path = os.path.join(self._folder, "frames.csv")
+        file_is_empty = not os.path.exists(frames_path) or os.path.getsize(frames_path) == 0
         try:
-            self._frames_file = open(frames_path, "w", newline="", encoding="utf-8")
+            fh = open(frames_path, "a", newline="", encoding="utf-8")
         except OSError as exc:
             self.error.emit(f"Cannot open frames.csv: {exc}")
             return False
 
-        self._frames_writer = csv.DictWriter(
-            self._frames_file,
+        writer = csv.DictWriter(
+            fh,
             fieldnames=["frame_index", "t_rel_s", "wall_utc",
                         "segment", "segment_frame"],
             lineterminator="\n",
         )
-        self._frames_writer.writeheader()
+        if file_is_empty:
+            writer.writeheader()
+            fh.flush()
+
+        self._frames_file = fh
+        self._frames_writer = writer
 
         self._next_due = 0.0
         self._running  = True
@@ -322,7 +338,7 @@ class VideoRecorder(QObject):
         return self._open_segment()
 
     def _flush_frames(self) -> None:
-        if self._frames_writer is not None and self._frames_buf:
+        if self._frames_writer is not None and self._frames_file is not None and self._frames_buf:
             for row in self._frames_buf:
                 self._frames_writer.writerow(row)
             self._frames_file.flush()

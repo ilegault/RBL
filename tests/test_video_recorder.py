@@ -50,6 +50,10 @@ def _patch_cv2(monkeypatch, writers: list):
             self._fps, self._size = rest[-2], rest[-1]
             self._w = _FakeWriter()
             writers.append(self._w)
+            try:
+                open(path, "a").close()
+            except OSError:
+                pass
 
         def isOpened(self):
             return self._w.isOpened()
@@ -177,3 +181,69 @@ def test_size_cap_roll(tmp_path, monkeypatch):
         rec.offer_frame(_fake_frame(), float(i) / 30, "t")
     rec.stop()
     assert len(closed) >= 1, "size-cap roll never fired"
+
+
+def test_first_segment_index(tmp_path, monkeypatch):
+    """VideoRecorder constructed with first_segment_index=3 names its first segment video_003.*."""
+    from rbl.services.video_recorder import VideoRecorder
+    writers = []
+    _patch_cv2(monkeypatch, writers)
+    rec = VideoRecorder(
+        str(tmp_path),
+        width=4, height=4,
+        record_fps=2,
+        segment_seconds=3600,
+        segment_max_bytes=2**30,
+        first_segment_index=3,
+    )
+    assert rec.start()
+    rec.stop()
+    files = os.listdir(tmp_path)
+    assert any(f.startswith("video_003") for f in files), f"expected video_003.* in {files}"
+
+
+def test_two_video_runs_append_frames_csv(tmp_path, monkeypatch):
+    """Two VideoRecorder runs in one folder:
+    frames.csv has one header row and the rows of both runs.
+    """
+    from rbl.services.video_recorder import VideoRecorder
+    writers = []
+    _patch_cv2(monkeypatch, writers)
+
+    rec1 = VideoRecorder(
+        str(tmp_path),
+        width=4, height=4,
+        record_fps=2,
+        segment_seconds=3600,
+        segment_max_bytes=2**30,
+        first_segment_index=0,
+    )
+    assert rec1.start()
+    _offer_frames(rec1, 10, 5.0)
+    rec1.stop()
+
+    rec2 = VideoRecorder(
+        str(tmp_path),
+        width=4, height=4,
+        record_fps=2,
+        segment_seconds=3600,
+        segment_max_bytes=2**30,
+        first_segment_index=1,
+    )
+    assert rec2.start()
+    _offer_frames(rec2, 10, 5.0)
+    rec2.stop()
+
+    frames_csv = os.path.join(str(tmp_path), "frames.csv")
+    assert os.path.exists(frames_csv)
+    with open(frames_csv, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+
+    header_lines = [line for line in lines if line.startswith("frame_index,")]
+    assert len(header_lines) == 1, f"expected exactly 1 header row, got {len(header_lines)}"
+
+    rows = list(csv.DictReader(lines))
+    assert len(rows) > 0
+    segments = {int(r["segment"]) for r in rows}
+    assert 0 in segments and 1 in segments
+
