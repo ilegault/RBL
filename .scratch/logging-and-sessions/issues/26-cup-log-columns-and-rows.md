@@ -1,6 +1,6 @@
 # 26: Cup log columns for origin and totals, a continuation header, and a restart row
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -37,16 +37,16 @@ Tests may fake: nothing. Write to `tmp_path` and read back with `csv` (skip `#` 
 
 ## Acceptance criteria
 
-- [ ] A summary row written with `origin="manual", counted_in_dose=False,
+- [x] A summary row written with `origin="manual", counted_in_dose=False,
       total_beam_on_s=12.5` reads back with those three values in those columns; one
       written with defaults reads `automatic`, `true`.
-- [ ] `origin="banana"` raises `ValueError` and writes no row.
-- [ ] A writer built with `continuation={...}` has both header lines, with the source
+- [x] `origin="banana"` raises `ValueError` and writes no row.
+- [x] A writer built with `continuation={...}` has both header lines, with the source
       path and every value; one built without has neither.
-- [ ] `write_automatic_insertion_restarted(...)` produces one row of that record type
+- [x] `write_automatic_insertion_restarted(...)` produces one row of that record type
       carrying the gap times, `beam_on_during_gap` and `mode`, and the header's
       `# record types:` line names it.
-- [ ] Every existing test in `tests/test_cup_session_writer.py` passes unchanged.
+- [x] Every existing test in `tests/test_cup_session_writer.py` passes unchanged.
 
 ## Gate
 
@@ -58,3 +58,8 @@ Run in CI's order (`.github/workflows/tests.yml`):
     pytest --tb=short -q -n auto --dist loadfile --durations=25
 
 ## Comments
+2026-10-08: Done. `cup_session_writer.py` gains the `origin`, `counted_in_dose` and
+`total_beam_on_s` columns (appended last), the `continuation` header lines, and
+`write_automatic_insertion_restarted`. Tests in `tests/test_cup_session_writer.py`
+(`TestSummaryOriginAndTotals`, `TestContinuationHeader`, `TestAutomaticInsertionRestarted`)
+cover criteria 1-4; criterion 5 is the 44 pre-existing tests, unchanged. No bench check needed.
