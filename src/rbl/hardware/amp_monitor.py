@@ -48,16 +48,14 @@ def monitor_to_kv(voltage: float) -> float:
 def monitor_to_ma(voltage: float) -> float:
     """CURRENT MONITOR volts -> amplifier current draw in mA.
 
-    1 V == 2 mA (ADR 0007). Returns NaN beyond the 100 mA peak rating (+10% headroom),
-    which on this scale is 11 V — past the T7's +/-10 V range anyway, so a
-    reading there means something is wrong.
+    1 V == 2 mA (ADR 0007). Returns NaN only for NaN input or |voltage| > 11.0 V
+    (beyond the LabJack T7's +/-10 V range plus 10% headroom, which is garbage).
     """
     if voltage is None or math.isnan(voltage):
         return float("nan")
-    ma = voltage * SC.CURRENT_MONITOR_MA_PER_VOLT
-    if abs(ma) > SC.AMP_MAX_MA_PK * 1.1:
+    if abs(voltage) > 11.0:
         return float("nan")
-    return ma
+    return voltage * SC.CURRENT_MONITOR_MA_PER_VOLT
 
 
 def ma_to_monitor(ma: float) -> float:
@@ -105,23 +103,23 @@ def format_ma(ma: float) -> str:
 
 
 # --- Status classification ---------------------------------------------------
+ 
+CURRENT_STATUSES = ("ok", "at_limit", "over")
+
 
 def current_status(ma: float) -> str:
-    """Classify a current reading against the EEL5000's ratings.
+    """Classify a current reading against the EEL5000's ratings and monitor rail.
 
-    'ok'      : within the +/-20 mA continuous DC rating
-    'peak'    : above 20 mA — only legal as a <4 ms transient. Sustained
-                readings here mean the amplifier is being over-driven.
-    'over'    : beyond the 100 mA peak rating, or a NaN/garbage reading.
+    'ok'       : below the monitor rail
+    'at_limit' : at or beyond the current-monitor rail (|ma| >= 19.8 mA),
+                 true current is at least this high but unknown
+    'over'     : NaN or invalid reading
     """
     if ma is None or (isinstance(ma, float) and math.isnan(ma)):
         return "over"
-    a = abs(ma)
-    if a <= SC.AMP_CONTINUOUS_RATING_MA:
-        return "ok"
-    if a <= SC.AMP_MAX_MA_PK:
-        return "peak"
-    return "over"
+    if abs(ma) >= SC.CURRENT_MONITOR_RAIL_VOLTS * SC.CURRENT_MONITOR_MA_PER_VOLT:
+        return "at_limit"
+    return "ok"
 
 
 def voltage_status(kv: float) -> str:
@@ -258,9 +256,12 @@ if __name__ == "__main__":
     assert voltage_status(-5.0) == "ok"
     assert voltage_status(6.0)  == "over"
     assert current_status(10.0) == "ok"
-    assert current_status(-20.0) == "ok"
-    assert current_status(50.0) == "peak"
-    assert current_status(150.0) == "over"
+    assert current_status(19.7) == "ok"
+    assert current_status(-19.7) == "ok"
+    assert current_status(19.8) == "at_limit"
+    assert current_status(-20.0) == "at_limit"
+    assert current_status(50.0) == "at_limit"
+    assert current_status(150.0) == "at_limit"
     assert current_status(float("nan")) == "over"
 
     # Formatting

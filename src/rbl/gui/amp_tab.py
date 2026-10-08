@@ -93,10 +93,10 @@ from rbl.hardware.waveform_ring import WaveformRing, decimate_minmax
 from rbl.state.snapshots import AmpState
 
 # Status -> stylesheet color
-_STATUS_COLOR = {
-    "ok":   theme.OK,     # nominal
-    "peak": theme.WARN,   # legal only as a <4 ms transient
-    "over": theme.FAULT,  # out of spec / bad reading
+STATUS_COLOR = {
+    "ok":       theme.OK,     # nominal
+    "at_limit": theme.WARN,   # monitor at its rail: at least 20 mA, true value unknown
+    "over":     theme.FAULT,  # out of spec / bad reading
 }
 
 
@@ -1338,7 +1338,7 @@ class AmpTab(QWidget):
                 l_meas.setText(f"{meas_kv:+.3f} kV" if is_dc
                                else f"{meas_kv:.3f} kV pk")
                 l_meas.setStyleSheet(
-                    f"color: {_STATUS_COLOR[voltage_status(meas_kv)]}; "
+                    f"color: {STATUS_COLOR[voltage_status(meas_kv)]}; "
                     f"font-weight: bold;")
                 l_pp.setText(f"{ch.pkpk_kv:.3f} kV pk-pk")
                 l_pp.setStyleSheet("color: #444;")
@@ -1372,7 +1372,7 @@ class AmpTab(QWidget):
                 l_cur.setText(f"{cur_ma:+.3f} mA {suffix}" if is_dc
                               else f"{cur_ma:.3f} mA {suffix}")
                 l_cur.setStyleSheet(
-                    f"color: {_STATUS_COLOR[current_status(cur_ma)]}; "
+                    f"color: {STATUS_COLOR[current_status(cur_ma)]}; "
                     f"font-weight: bold;")
             if ch is not None and getattr(ch, "i_live", False) \
                     and math.isfinite(ch.rms_ma):

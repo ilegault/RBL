@@ -595,9 +595,6 @@ def _c_for_operating_ma(tab, target_ma):
 
 
 class TestCurrentVsFrequencyChart:
-    BURST = ("100 mA burst only: 4 ms or less, then 100 ms at 10 mA or less; "
-             "never an operating point")
-
     def test_with_no_results_nothing_is_drawn_and_no_label_mentions_pf(self, tab):
         tab.recompute()
         assert _current_lines(tab) == []
@@ -612,17 +609,19 @@ class TestCurrentVsFrequencyChart:
         legend = _legend(tab)
         assert sum(t.endswith("not measured") for t in legend) == 3
         assert "20 mA continuous rating" in legend
-        assert self.BURST in legend
+        assert not any("burst" in text.lower() for text in legend)
 
-    def test_the_two_rating_lines_have_the_right_level_and_style(self, tab):
+    def test_the_continuous_rating_line_has_the_right_level_and_style(self, tab):
         tab.recompute()
-        by_label = {ln.get_label(): ln for ln in tab.envelope_axes.get_lines()}
-        cont = by_label["20 mA continuous rating"]
-        burst = by_label[self.BURST]
+        horizontal = [
+            ln for ln in tab.envelope_axes.get_lines()
+            if len(ln.get_ydata()) == 2 and ln.get_ydata()[0] == ln.get_ydata()[1]
+        ]
+        assert len(horizontal) == 1
+        cont = horizontal[0]
         assert list(cont.get_ydata()) == [20.0, 20.0]
         assert cont.get_linestyle() == "-"
-        assert list(burst.get_ydata()) == [100.0, 100.0]
-        assert burst.get_linestyle() == ":"
+        assert cont.get_label() == "20 mA continuous rating"
 
     def test_the_axes_are_log_log_and_labelled(self, tab):
         tab.recompute()

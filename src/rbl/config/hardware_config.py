@@ -259,7 +259,6 @@ CURRENT_MONITOR_RAIL_VOLTS  = 9.9
 AMP_MAX_KV               = 5.0    # amplifier rated +/-5 kV
 # the EEL5000's continuous rating; for display and planning only, never a trip level
 AMP_CONTINUOUS_RATING_MA = 20.0
-AMP_MAX_MA_PK            = 100.0  # 4 ms peak rating
 
 # The complete channel set the shared poll worker must read every cycle:
 # 4 log amps + 8 amplifier monitors = 12 channels, ONE eReadNames round trip.

@@ -517,13 +517,14 @@ class TestSpikeChart:
                        "reference_ma": 2.0, "threshold_ma": 4.0})
         assert marker_count(tab) == 1
 
-    def test_the_rating_zones_and_lines_are_there(self, tab):
+    def test_only_the_continuous_rating_is_drawn(self, tab):
         ax = tab.spike_axes
         labels = [a.get_label() for a in (*ax.patches, *ax.collections, *ax.lines)]
-        assert "over burst rating" in labels
-        assert "beyond 4 ms burst" in labels
+        assert "over burst rating" not in labels
+        assert "beyond 4 ms burst" not in labels
         horizontal = {tuple(ln.get_ydata()) for ln in ax.lines}
-        assert (20.0, 20.0) in horizontal and (100.0, 100.0) in horizontal
+        assert (20.0, 20.0) in horizontal
+        assert not any(100.0 in y for y in horizontal)
 
     def test_the_axes_are_labelled(self, tab):
         ax = tab.spike_axes

@@ -37,7 +37,6 @@ import math
 import numpy as np
 
 from rbl.config.calibration_config import (
-    AMP_BURST_RATING_MA,
     CAL_AC_TRIP_MA,  # noqa: F401 — preserved so tests can verify continuous_ma is decoupled from it
     CAL_MAX_KV,
 )
@@ -312,8 +311,7 @@ def current_vs_frequency(
         "freq_hz":         [float(f) for f in freqs],
         "series":          series,
         "operating_point": operating_point,
-        "levels":          {"continuous_ma": AMP_CONTINUOUS_RATING_MA,
-                            "burst_ma": AMP_BURST_RATING_MA},
+        "levels":          {"continuous_ma": AMP_CONTINUOUS_RATING_MA},
         "verdict":         verdict,
     }
 

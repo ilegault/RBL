@@ -44,3 +44,11 @@ def test_no_source_file_states_the_old_scale():
             matches.append(py_file.relative_to(repo_root).as_posix())
 
     assert matches == []
+
+
+def test_no_burst_constant_survives():
+    """Ticket 55: no burst constants survive in configuration modules."""
+    from rbl.config import calibration_config, hardware_config
+
+    assert not hasattr(calibration_config, "AMP_BURST_RATING_MA")
+    assert not hasattr(hardware_config, "AMP_MAX_MA_PK")

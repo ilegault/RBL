@@ -1896,8 +1896,7 @@ class RasterPlannerTab(QWidget):
         Lines come only from MEASURED capacitances; a plate without one has a
         legend entry "<plate> not measured" and no line. Each measured plate
         has a marker at its axis's planned operating point. The 20 mA
-        continuous rating is a solid line; the 100 mA burst rating is dotted
-        and says in its label that it is never an operating point.
+        continuous rating is a solid line.
         """
         ax = self._ax_env
         ax.clear()
@@ -1920,14 +1919,11 @@ class RasterPlannerTab(QWidget):
         levels = model["levels"]
         ax.axhline(levels["continuous_ma"], color=theme.WARN, linestyle="-",
                    label=f"{levels['continuous_ma']:.0f} mA continuous rating")
-        ax.axhline(levels["burst_ma"], color=theme.FAULT, linestyle=":",
-                   label=f"{levels['burst_ma']:.0f} mA burst only: 4 ms or less, "
-                         f"then 100 ms at 10 mA or less; never an operating point")
         # Limits first: a log scale on an axes with no positive data (nothing
         # measured yet) raises otherwise.
         ax.set_xlim(freqs[0], freqs[-1])
         ax.set_ylim(max(1e-3, min(lows) / 2) if lows else 0.1,
-                    levels["burst_ma"] * 3)
+                    levels["continuous_ma"] * 3)
         ax.set_xscale("log")
         ax.set_yscale("log")
         ax.set_xlabel("Raster frequency (Hz)")

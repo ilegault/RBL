@@ -56,6 +56,10 @@ class TestCurrentMonitor:
     def test_nan_in_nan_out(self):
         assert math.isnan(monitor_to_ma(float("nan")))
 
+    def test_monitor_to_ma_is_nan_only_beyond_the_input_range(self):
+        assert monitor_to_ma(10.5) == 21.0
+        assert math.isnan(monitor_to_ma(11.5))
+
 
 class TestStatus:
     def test_voltage_within_rating_ok(self):
@@ -69,16 +73,21 @@ class TestStatus:
 
     def test_current_dc_band_ok(self):
         assert current_status(0.0)   == "ok"
-        assert current_status(20.0)  == "ok"
-        assert current_status(-20.0) == "ok"
+        assert current_status(19.7)  == "ok"
+        assert current_status(-19.7) == "ok"
 
-    def test_current_peak_band(self):
-        assert current_status(21.0)  == "peak"
-        assert current_status(100.0) == "peak"
+    def test_a_reading_at_the_rail_is_at_limit(self):
+        assert current_status(19.8) == "at_limit"
+        assert current_status(-20.0) == "at_limit"
+        assert current_status(19.7) == "ok"
+        assert current_status(float("nan")) == "over"
+        for val in np.linspace(-25, 25, 501):
+            assert current_status(val) != "peak"
 
     def test_current_over(self):
-        assert current_status(150.0) == "over"
         assert current_status(float("nan")) == "over"
+        for val in np.linspace(-50, 50, 101):
+            assert current_status(val) != "over"
 
 
 class TestFormatting:
