@@ -154,6 +154,14 @@ class TestClampTestInTheTab:
         tab.btn_run.click()
         assert "not reached" in tab.lbl_status.text()
 
+    def test_the_tab_says_at_least_20_ma_for_a_clamp_at_the_rail(self, tab, monkeypatch):
+        self.fake_runner(monkeypatch, tab, {"reached": True, "clamp_ma": 20.0,
+                                             "clamp_freq_hz": 2000, "peak_kv": 1.0,
+                                             "at_rail": True})
+        tab.rb_mode_clamp.setChecked(True)
+        tab.btn_run.click()
+        assert "at least 20 mA" in tab.lbl_status.text()
+
     def test_every_mode_and_condition_button_is_locked_while_a_run_is_active(
             self, tab, monkeypatch):
         self.fake_runner(monkeypatch, tab, None, finish=False)
