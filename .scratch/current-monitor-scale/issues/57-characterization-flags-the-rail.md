@@ -1,6 +1,6 @@
 # 57: Characterization flags the rail: Mode C edges and the clamp test
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
