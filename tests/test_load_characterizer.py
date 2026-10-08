@@ -216,7 +216,7 @@ class TestResultFiles:
 
 
 def _feed_rung(lc, step, c_pf=1200.0, tau_s=300e-6, fs=500_000.0, leak_ma=0.0,
-               swing_fraction=1.0):
+               swing_fraction=1.0, rail_samples=0, rail_volts=10.0):
     """Feed one complete synthetic Mode C rung: a +/-step.peak_kv square wave
     whose edges each deliver exactly C x dV, decaying with time constant tau.
 
@@ -239,10 +239,15 @@ def _feed_rung(lc, step, c_pf=1200.0, tau_s=300e-6, fs=500_000.0, leak_ma=0.0,
         idx = np.arange(pos, min(pos + int(12 * tau_s * fs), n))
         i_ma[idx] += (1.0 if k % 2 == 0 else -1.0) * (q / tau_s) * np.exp(
             -(idx - pos) / (tau_s * fs)) * 1e3
+    i_mon = ma_to_monitor(i_ma)
+    if rail_samples > 0:
+        for k, pos in enumerate(np.arange(period // 2, n, period // 2)):
+            sign = 1.0 if k % 2 == 0 else -1.0
+            i_mon[pos:min(pos + rail_samples, n)] = sign * rail_volts
     windows = max(1, round(step.collect_s * GUI_REFRESH_HZ))
     chunk = n // windows
     for w in range(windows):
-        i_chunk = ma_to_monitor(i_ma)[w*chunk:(w+1)*chunk]
+        i_chunk = i_mon[w*chunk:(w+1)*chunk]
         lc.on_window({"sample_period": 1.0 / fs,
                       "channels": {"AIN13": {"waveform": v[w*chunk:(w+1)*chunk]},
                                    "AIN12": {"waveform": i_chunk}}})
@@ -365,15 +370,34 @@ class TestClampTest:
         rec = _only_result()
         assert rec["values"]["clamp_ma"] is None
         assert rec["values"]["clamp_freq_hz"] is None
+        assert rec["values"]["clamp_at_rail"] is False
         assert not rec.get("aborted")
         assert lc.clamp_result["reached"] is False
+        assert lc.clamp_result["at_rail"] is False
 
     def test_the_clamp_result_is_available_to_the_tab(self, qapp, funcgen_map):
         lc = self.make(funcgen_map)
         _run_clamp(lc, [250.0, 500.0], v_peak_of=lambda f: 1.0 if f < 500 else 0.5,
                    i_fund_of=lambda f: 0.02 * f)
         assert lc.clamp_result == {"reached": True, "clamp_ma": pytest.approx(10.0, abs=1e-6),
-                                   "clamp_freq_hz": 500.0, "peak_kv": 1.0}
+                                   "clamp_freq_hz": 500.0, "peak_kv": 1.0, "at_rail": False}
+
+    def test_a_clamp_at_the_rail_is_recorded_as_at_rail(self, qapp, funcgen_map):
+        lc = self.make(funcgen_map)
+        _run_clamp(lc, [500.0],
+                   v_peak_of=lambda f: 0.8,
+                   i_fund_of=lambda f: 20.0)
+        rec = _only_result()
+        assert lc.clamp_result["at_rail"] is True
+        assert rec["values"]["clamp_at_rail"] is True
+
+    def test_a_clamp_below_the_rail_is_not_at_rail(self, qapp, funcgen_map):
+        lc = self.make(funcgen_map)
+        _run_clamp(lc, [500.0],
+                   v_peak_of=lambda f: 0.8,
+                   i_fund_of=lambda f: 10.0)
+        assert lc.clamp_result["at_rail"] is False
+        assert lc.clamp_result["clamp_ma"] == pytest.approx(10.0, abs=0.2)
 
     def test_a_rail_held_for_6_ms_ends_the_clamp_test_with_hard_trip(self, qapp, funcgen_map):
         lc = self.make(funcgen_map)
@@ -536,6 +560,30 @@ class TestModeCLadder:
         lc.progress.connect(lambda done, total, label: seen.append((done, total)))
         _run_ladder(lc, ladder_kv=[0.5, 1.0, 2.0])
         assert seen == [(0, 3), (1, 3), (2, 3)]
+
+    def test_a_railed_edge_marks_its_rung_edge_at_rail_and_the_ladder_continues(
+            self, qapp, funcgen_map):
+        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES,
+                               pressure_provider=good_vacuum)
+        points = []
+        lc.point_measured.connect(points.append)
+        _run_ladder(lc, ladder_kv=[0.5, 1.0],
+                    per_rung={0: {"rail_samples": 15, "rail_volts": 10.0},
+                              1: {"c_pf": 1650.0}})
+        assert len(points) == 2
+        assert points[0]["edge_at_rail"] is True
+        assert lc.abort_rule is None
+
+    def test_an_edge_below_the_rail_is_not_edge_at_rail(self, qapp, funcgen_map):
+        lc = LoadCharacterizer(funcgen_map, LoadCondition.ON_PLATES,
+                               pressure_provider=good_vacuum)
+        points = []
+        lc.point_measured.connect(points.append)
+        _run_ladder(lc, ladder_kv=[0.5, 1.0],
+                    per_rung={0: {"rail_samples": 15, "rail_volts": 8.0},
+                              1: {"c_pf": 1550.0}})
+        assert len(points) == 2
+        assert points[0]["edge_at_rail"] is False
 
 
 class TestModeCLadderAborts:

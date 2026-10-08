@@ -437,9 +437,13 @@ class LoadCharacterizationTab(QWidget):
         clamp = getattr(self._runner, "clamp_result", None)
         if clamp is not None and not rule:
             if clamp["reached"]:
+                if clamp.get("at_rail"):
+                    current_str = "the current reached the monitor's rail (at least 20 mA)"
+                else:
+                    current_str = f"{clamp['clamp_ma']:.1f} mA"
                 self.lbl_status.setText(
                     f"Clamp test: the output stopped following at {clamp['clamp_freq_hz']:.0f} Hz, "
-                    f"{clamp['clamp_ma']:.1f} mA (at {clamp['peak_kv']:.1f} kV peak).")
+                    f"{current_str} (at {clamp['peak_kv']:.1f} kV peak).")
             else:
                 self.lbl_status.setText(
                     "Clamp test: not reached - the output followed its input up to "

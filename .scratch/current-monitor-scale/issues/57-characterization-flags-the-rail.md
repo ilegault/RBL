@@ -1,6 +1,6 @@
 # 57: Characterization flags the rail: Mode C edges and the clamp test
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -59,23 +59,23 @@ Tests may fake: the function generator and stream windows (raw volts for rail sa
 
 ## Acceptance criteria
 
-- [ ] **Mode C, edge at the rail.**
+- [x] **Mode C, edge at the rail.**
   `test_a_railed_edge_marks_its_rung_edge_at_rail_and_the_ladder_continues` (new,
   `TestModeCLadder`): a rung whose edges each hold 15 raw samples (30 µs at 500 kS/s) at
   10.0 V has `edge_at_rail` True, and the ladder goes on to the next rung with no
   abort rule.
-- [ ] **Mode C, edge below the rail.** `test_an_edge_below_the_rail_is_not_edge_at_rail`
+- [x] **Mode C, edge below the rail.** `test_an_edge_below_the_rail_is_not_edge_at_rail`
   (new): the same rung with edges peaking at 8.0 V has `edge_at_rail` False.
-- [ ] **Clamp at the rail.** `test_a_clamp_at_the_rail_is_recorded_as_at_rail` (new,
+- [x] **Clamp at the rail.** `test_a_clamp_at_the_rail_is_recorded_as_at_rail` (new,
   `TestClampTest`):
   - setup: a stopping step (ratio 0.8) whose raw current wave reaches 10.0 V;
   - result: `clamp_result["at_rail"]` is True, and the written result file's
     `values["clamp_at_rail"]` is True.
-- [ ] **Clamp below the rail.** `test_a_clamp_below_the_rail_is_not_at_rail` (new):
+- [x] **Clamp below the rail.** `test_a_clamp_below_the_rail_is_not_at_rail` (new):
   - setup: a stopping step whose current fundamental is 10 mA, with raw peaks near 5 V.
     This is the operator's dial-50 bench check.
   - result: `at_rail` False, and `clamp_ma` is 10.0 (abs 0.2).
-- [ ] **Tab text.** `test_the_tab_says_at_least_20_ma_for_a_clamp_at_the_rail` (new,
+- [x] **Tab text.** `test_the_tab_says_at_least_20_ma_for_a_clamp_at_the_rail` (new,
   `tests/test_load_characterization_tab.py`): with a faked runner whose `clamp_result` has
   `at_rail` True, the status text contains `at least 20 mA`.
 
@@ -89,3 +89,15 @@ Run in CI's order (`.github/workflows/tests.yml`):
     pytest --tb=short -q -n auto --dist loadfile --durations=25
 
 ## Comments
+
+2026-10-08: Completed ticket 57.
+- Added `edge_at_rail` (bool) to each Mode C rung from `_finish_mode_c_point`, checked via `is_at_rail` on raw `i_wave[lo:hi]`. `_ladder_rule` does not inspect it.
+- Added `at_rail` (bool) to each clamp point from `_finish_clamp_point`, carried into `_clamp_result["at_rail"]` when clamp is reached (and False when not reached), and recorded as `values["clamp_at_rail"]` in written characterization results.
+- Updated clamp status text in `LoadCharacterizationTab` to state "the current reached the monitor's rail (at least 20 mA)" when `clamp_result["at_rail"]` is True.
+- Tests covering criteria:
+  - Criterion 1: `test_a_railed_edge_marks_its_rung_edge_at_rail_and_the_ladder_continues` (`TestModeCLadder`)
+  - Criterion 2: `test_an_edge_below_the_rail_is_not_edge_at_rail` (`TestModeCLadder`)
+  - Criterion 3: `test_a_clamp_at_the_rail_is_recorded_as_at_rail` (`TestClampTest`)
+  - Criterion 4: `test_a_clamp_below_the_rail_is_not_at_rail` (`TestClampTest`)
+  - Criterion 5: `test_the_tab_says_at_least_20_ma_for_a_clamp_at_the_rail` (`TestClampTestInTheTab`)
+- Bench verification: run clamp test with pot at dial 50 to confirm current flattens near 10 mA (~5 V monitor reading).
