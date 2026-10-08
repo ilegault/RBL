@@ -1,6 +1,6 @@
 # 54: The current monitor reads 2 mA per volt, and the hard trip is time at the rail
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
