@@ -1,6 +1,6 @@
 # 59: A one-shot script archives every store written with the old current scale
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -67,22 +67,22 @@ explaining why. It never deletes and never rescales anything.
 
 ## Acceptance criteria
 
-- [ ] **Dry run.** `test_dry_run_moves_nothing` (new, `tests/test_archive_pre_adr_0007.py`):
+- [x] **Dry run.** `test_dry_run_moves_nothing` (new, `tests/test_archive_pre_adr_0007.py`):
   - setup: every listed store plus a nested `sessions/s1/spikes.csv` and a `spikes/`
     folder, under temp roots;
   - result: `main([... no --apply])` returns 0, every file is still in place, and the
     output contains `would move` and `dry run: nothing moved`.
-- [ ] **Apply.** `test_apply_moves_exactly_the_listed_stores_and_writes_both_readmes` (new):
+- [x] **Apply.** `test_apply_moves_exactly_the_listed_stores_and_writes_both_readmes` (new):
   - after `--apply`, each store is at its archive destination with byte-identical content;
   - `sessions/s1/spikes.pre-adr-0007.csv` and `sessions/s1/spikes.pre-adr-0007/` exist;
   - both `README.txt` files contain `5x too high`;
   - an unrelated file `data/vacuum/v.csv` has not moved.
-- [ ] **Second run.** `test_a_second_apply_refuses_and_changes_nothing` (new): a second
+- [x] **Second run.** `test_a_second_apply_refuses_and_changes_nothing` (new): a second
   `--apply` returns 1, prints `refusing to run twice`, and the directory listing is
   identical before and after.
-- [ ] **Missing stores.** `test_missing_stores_are_skipped_not_errors` (new): with only
+- [x] **Missing stores.** `test_missing_stores_are_skipped_not_errors` (new): with only
   `trip_history.jsonl` present, `--apply` moves just it and returns 0.
-- [ ] **Pure core.** `test_plan_archive_reads_only_its_arguments` (new): with
+- [x] **Pure core.** `test_plan_archive_reads_only_its_arguments` (new): with
   `Path.home` monkeypatched to raise, `plan_archive(tmp_log, tmp_cfg)` still returns the
   expected pairs.
 
@@ -96,3 +96,15 @@ Run in CI's order (`.github/workflows/tests.yml`):
     pytest --tb=short -q -n auto --dist loadfile --durations=25
 
 ## Comments
+
+### 2026-10-07: Implemented and verified
+- Implemented `scripts/archive_pre_adr_0007.py` with pure `plan_archive(log_root, config_dir)`, `apply_archive(pairs, readme_dirs)`, and CLI `main(argv)` supporting dry-run by default and `--apply`.
+- Stores moved: `trip_history.jsonl`, `dynamic_adjustment_history.jsonl`, `conditioning_history.jsonl`, `calibration/`, `load_characterization/` under `data/archive/pre-2026-10-07-current-scale/`; `load_calibration.json` under `config/archive/pre-2026-10-07-current-scale/`; nested `spikes.csv` and `spikes/` renamed to `spikes.pre-adr-0007.csv` and `spikes.pre-adr-0007/`. Both archive folders receive `README.txt` citing ADR 0007.
+- Added comprehensive unit tests in `tests/test_archive_pre_adr_0007.py` covering all criteria:
+  - `test_dry_run_moves_nothing`: dry run output and no file movements
+  - `test_apply_moves_exactly_the_listed_stores_and_writes_both_readmes`: destination contents, spikes rename, README text, untouched unrelated files
+  - `test_a_second_apply_refuses_and_changes_nothing`: refusal with code 1 and unchanged filesystem
+  - `test_missing_stores_are_skipped_not_errors`: graceful handling of subsets of stores
+  - `test_plan_archive_reads_only_its_arguments`: pure core with monkeypatched `Path.home`
+  - `test_apply_archive_function_directly`: direct test of `apply_archive`
+- Bench verification needed: Operator runs `python scripts/archive_pre_adr_0007.py --apply` once on the beamline PC when ready.

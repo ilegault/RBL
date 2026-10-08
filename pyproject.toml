@@ -28,6 +28,7 @@ select = ["E", "F", "I"]
 # since scripts/ is not an installed package.
 "tests/test_layering.py" = ["E402"]
 "tests/test_check_tests_first.py" = ["E402"]
+"tests/test_archive_pre_adr_0007.py" = ["E402"]
 
 [tool.mypy]
 python_version = "3.13"
