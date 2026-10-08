@@ -50,9 +50,9 @@ def test_sine_is_2pi_over_4_times_triangle():
     assert sin == pytest.approx(tri * 2 * math.pi / 4)
 
 
-def test_levels_are_exactly_the_two_ratings():
+def test_levels_are_only_the_continuous_rating():
     assert _one(1600.0, 2.0, 500.0)["levels"] == {
-        "continuous_ma": 20.0, "burst_ma": 100.0}
+        "continuous_ma": 20.0}
 
 
 def test_frequency_grid_and_series_follow_i_equals_k_f_c_v():

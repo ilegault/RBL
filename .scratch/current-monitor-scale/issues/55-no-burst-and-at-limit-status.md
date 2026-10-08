@@ -1,6 +1,6 @@
 # 55: No burst rating anywhere, and a reading at the rail shows as "at limit"
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -84,10 +84,10 @@ into the conftest temp folder) and spike rows.
 
 ## Acceptance criteria
 
-- [ ] **Burst constants.** `test_no_burst_constant_survives` (new,
+- [x] **Burst constants.** `test_no_burst_constant_survives` (new,
   `tests/test_current_monitor_scale.py`): `hasattr(calibration_config,
   "AMP_BURST_RATING_MA")` and `hasattr(hardware_config, "AMP_MAX_MA_PK")` are both False.
-- [ ] **Planner.**
+- [x] **Planner.**
   - `test_levels_are_only_the_continuous_rating` (new,
     `tests/test_current_vs_frequency.py`): the levels dict equals
     `{"continuous_ma": 20.0}`.
@@ -97,20 +97,20 @@ into the conftest temp folder) and spike rows.
   - `test_one_measured_plate_has_one_line_and_three_not_measured_entries` (rewritten in
     place): it now asserts no legend entry contains "burst". The class attribute
     `BURST` no longer exists.
-- [ ] **Spike chart.** `test_only_the_continuous_rating_is_drawn` (new,
+- [x] **Spike chart.** `test_only_the_continuous_rating_is_drawn` (new,
   `tests/test_load_characterization_tab.py`): the spike axes' artist labels contain
   neither "over burst rating" nor "beyond 4 ms burst". Its horizontal lines include
   `(20.0, 20.0)` and nothing at 100.
-- [ ] **Status.**
+- [x] **Status.**
   - `test_a_reading_at_the_rail_is_at_limit` (new, `tests/test_amp_monitor.py`):
     `current_status(19.8)` and `current_status(-20.0)` are `"at_limit"`,
     `current_status(19.7)` is `"ok"`, and NaN is `"over"`. Over
     `np.linspace(-25, 25, 501)`, `"peak"` is never returned.
   - `test_current_dc_band_ok` (rewritten in place): uses 0.0, 19.7 and -19.7.
   - `test_current_over` (rewritten in place): asserts only NaN gives `"over"`.
-- [ ] **`monitor_to_ma`.** `test_monitor_to_ma_is_nan_only_beyond_the_input_range` (new):
+- [x] **`monitor_to_ma`.** `test_monitor_to_ma_is_nan_only_beyond_the_input_range` (new):
   `monitor_to_ma(10.5) == 21.0` and `monitor_to_ma(11.5)` is NaN.
-- [ ] **Amp tab colours.** `test_every_current_status_has_a_colour` (new,
+- [x] **Amp tab colours.** `test_every_current_status_has_a_colour` (new,
   `tests/test_amp_tab_status_colours.py`): every name in `amp_monitor.CURRENT_STATUSES` is
   a key of `amp_tab.STATUS_COLOR`. This prevents a KeyError on the live Amplifiers tab
   when a reading reaches the rail.
@@ -125,3 +125,13 @@ Run in CI's order (`.github/workflows/tests.yml`):
     pytest --tb=short -q -n auto --dist loadfile --durations=25
 
 ## Comments
+
+2026-10-08: Complete.
+- Removed burst constants `AMP_BURST_RATING_MA` from `calibration_config` and `AMP_MAX_MA_PK` from `hardware_config`. Covered by `test_no_burst_constant_survives`.
+- Planner levels dict restricted to `{"continuous_ma": AMP_CONTINUOUS_RATING_MA}`. Covered by `test_levels_are_only_the_continuous_rating`.
+- Planner chart draws only continuous rating line, with y_lim `levels["continuous_ma"] * 3`. Covered by `test_the_continuous_rating_line_has_the_right_level_and_style` and `test_one_measured_plate_has_one_line_and_three_not_measured_entries`.
+- Spike chart in Load Characterization tab draws only continuous rating line without burst zones. Covered by `test_only_the_continuous_rating_is_drawn`.
+- `monitor_to_ma` returns NaN only on NaN or |voltage| > 11.0. Covered by `test_monitor_to_ma_is_nan_only_beyond_the_input_range`.
+- `current_status` returns `"at_limit"` at rail (|ma| >= 19.8 mA), `"over"` for NaN, `"ok"` otherwise, and never `"peak"`. Added `CURRENT_STATUSES`. Covered by `test_a_reading_at_the_rail_is_at_limit`, `test_current_dc_band_ok`, and `test_current_over`.
+- `amp_tab.STATUS_COLOR` exposed publicly with `"at_limit": theme.WARN`, and mapped in `_refresh_monitors`. Covered by `test_every_current_status_has_a_colour`.
+- Bench verification: when operating near the rail on live hardware, verify amplifier tab displays current in amber without exceptions.

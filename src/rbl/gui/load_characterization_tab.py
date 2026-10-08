@@ -12,9 +12,9 @@ serial, the plate position, the load condition and the time.
 THE SPIKES PANEL
 ----------------
 Every current spike the spike recorder logs, as one marker on a log-log chart of
-peak current against duration, with the amplifier's own ratings drawn as zones:
-above 100 mA is over the burst rating, and above 20 mA for longer than 4 ms is
-beyond what a burst may last. Colour is the plate; a HOLLOW marker is a peak that
+peak current against duration. The 20 mA continuous rating is drawn as a line;
+a burst rating is not assumed (docs/hardware/eel5000-manufacturer-notes.md section 3.4).
+Colour is the plate; a HOLLOW marker is a peak that
 is only a lower bound (the spike was shorter than the monitor and sampling can
 resolve, so its true peak was at least that high). The chart shows the current
 run live; "Open spike file..." shows a past run's spikes.csv instead, and live
@@ -84,7 +84,7 @@ from PySide6.QtWidgets import (
 
 from rbl.config import amplifier_assignments, characterization_history
 from rbl.config.calibration_config import LoadCondition
-from rbl.config.hardware_config import AMP_LABELS
+from rbl.config.hardware_config import AMP_CONTINUOUS_RATING_MA, AMP_LABELS
 from rbl.gui import theme
 from rbl.gui.widgets.connection_bar import LabJackPanel
 from rbl.gui.widgets.inputs import NoScrollComboBox
@@ -93,10 +93,6 @@ from rbl.services.ramp_engine import RampEngine
 
 log = logging.getLogger(__name__)
 
-# The amplifier's ratings, drawn on the spike chart (mA and s).
-CONTINUOUS_RATING_MA = 20.0
-BURST_RATING_MA = 100.0
-BURST_LIMIT_S = 4e-3
 _SPIKE_LIVE_CAP = 5000       # live markers kept; a storm must not make redraws crawl
 
 TABLE_HEADERS = ["Plate position", "Disconnected", "Cable only", "On plates",
@@ -661,23 +657,15 @@ class LoadCharacterizationTab(QWidget):
         x_lo = min([5e-5, *durations]) / 2
         x_hi = max([10.0, *durations]) * 2
         y_lo = min([1.0, *peaks]) / 2
-        y_hi = max([BURST_RATING_MA * 3, *peaks]) * 2
+        y_hi = max([AMP_CONTINUOUS_RATING_MA * 3, *peaks]) * 2
         ax.set_xlim(x_lo, x_hi)
         ax.set_ylim(y_lo, y_hi)
         ax.set_xscale("log")
         ax.set_yscale("log")
 
-        ax.fill_between([x_lo, x_hi], [BURST_RATING_MA] * 2, [y_hi] * 2,
-                        color=theme.FAULT, alpha=0.12, label="over burst rating")
-        ax.fill_between([BURST_LIMIT_S, x_hi], [CONTINUOUS_RATING_MA] * 2, [y_hi] * 2,
-                        color=theme.WARN, alpha=0.12, label="beyond 4 ms burst")
-        ax.axhline(CONTINUOUS_RATING_MA, color=theme.WARN, linestyle="-", linewidth=1.0)
-        ax.axhline(BURST_RATING_MA, color=theme.FAULT, linestyle=":", linewidth=1.0)
-        ax.text(x_lo * 1.2, CONTINUOUS_RATING_MA * 1.08, "20 mA continuous", fontsize=7,
+        ax.axhline(AMP_CONTINUOUS_RATING_MA, color=theme.WARN, linestyle="-", linewidth=1.0)
+        ax.text(x_lo * 1.2, AMP_CONTINUOUS_RATING_MA * 1.08, "20 mA continuous", fontsize=7,
                 color=theme.WARN, va="bottom")
-        ax.text(x_lo * 1.2, BURST_RATING_MA * 1.08, "100 mA burst", fontsize=7,
-                color=theme.FAULT, va="bottom")
-        ax.axvline(BURST_LIMIT_S, color=theme.NEUTRAL, linestyle="--", linewidth=0.8)
 
         counts = {plate: 0 for plate in AMP_LABELS}
         for i, plate in enumerate(AMP_LABELS):
