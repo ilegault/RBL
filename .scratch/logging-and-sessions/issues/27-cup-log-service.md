@@ -1,6 +1,6 @@
 # 27: The CupLog service: one cup log at a time, and reading totals back
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -43,17 +43,17 @@ Tests may fake: nothing. Totals tests must read files written by a real
 
 ## Acceptance criteria
 
-- [ ] `open_test` at 2026-09-29 14:30:12 creates `<test_root>/2026-09/cup_20260929T143012.csv`;
+- [x] `open_test` at 2026-09-29 14:30:12 creates `<test_root>/2026-09/cup_20260929T143012.csv`;
       a second `open_test` at the same time gives `..._2.csv` and closes the first
       (`closed` emitted once, with the first path, before `opened`).
-- [ ] `open_for_session(folder)` creates `folder/cup.csv`; while a test log was open, it
+- [x] `open_for_session(folder)` creates `folder/cup.csv`; while a test log was open, it
       is closed first. After `close()`, `writer`, `kind` and `path` are `None`.
-- [ ] `read_dose_totals` on a real writer's file with automatic, automatic, manual rows
+- [x] `read_dose_totals` on a real writer's file with automatic, automatic, manual rows
       returns the second automatic row's totals; on a file with only manual rows, `None`.
-- [ ] `find_previous_session_cup_log` over three `session_*` folders (newest has no
+- [x] `find_previous_session_cup_log` over three `session_*` folders (newest has no
       counted rows, middle has, oldest has) returns the middle one, and returns `None`
       when `exclude` is the only folder with counted rows.
-- [ ] `cup_log.py`'s pure functions import nothing from PySide6 (a test inspects the
+- [x] `cup_log.py`'s pure functions import nothing from PySide6 (a test inspects the
       functions' module-level imports the way `test_no_pyside6_in_hardware_layer` does,
       or the pure functions live in a Qt-free submodule that test checks).
 
@@ -67,3 +67,12 @@ Run in CI's order (`.github/workflows/tests.yml`):
     pytest --tb=short -q -n auto --dist loadfile --durations=25
 
 ## Comments
+
+2026-10-08: Added `src/rbl/services/cup_log.py` (`CupLog`, `CupLogKind`, `RestartChoice`,
+`ContinueChoice`, `CupView`) and `src/rbl/services/cup_log_totals.py` (Qt-free
+`read_dose_totals`, `find_previous_session_cup_log`, re-exported from `cup_log`). The pure
+functions are in their own module so the no-Qt criterion is checkable by an AST test.
+All criteria are covered by `tests/test_cup_log.py` (totals tests use files written by a
+real `CupSessionWriter`). `insertion_count` = counted rows in the file plus the count in a
+continued log's `# continued totals` header. Mutation check: treating every summary row as
+counted turned 4 tests red. No bench verification needed.
