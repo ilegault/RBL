@@ -512,26 +512,51 @@ def test_camera_closed_ends_video_run_session_continues(tmp_path, qapp, monkeypa
 
 
 def test_session_start_with_video_enabled_backwards_compat(tmp_path, qapp, monkeypatch):
-    """When set_video_enabled(True) is set before start(), video starts automatically."""
-    from tests.test_video_recorder import _patch_cv2
+    """Starting a session never creates a video segment until video is explicitly started."""
+    from tests.test_video_recorder import _fake_frame, _patch_cv2
     writers = []
     _patch_cv2(monkeypatch, writers)
     monkeypatch.setattr("rbl.services.session_recorder._logs_dir", lambda: str(tmp_path))
 
     cam = _make_open_camera()
     rec = SessionRecorder(lambda: {}, cam)
-    rec.set_video_enabled(True)
     assert rec.start() is True
-    assert rec.state()["video_active"] is True
-    rec.stop()
+    # Video must NOT start automatically with session start
     assert rec.state()["video_active"] is False
 
     sessions = [d for d in os.listdir(tmp_path) if d.startswith("session_")]
     sess_dir = os.path.join(tmp_path, sessions[0])
+
+    # No video segments exist before video is started
+    video_files_before = [
+        f for f in os.listdir(sess_dir) if f.startswith("video_") and f.endswith(".avi")
+    ]
+    assert len(video_files_before) == 0
+
+    # Events log has no video_started event
+    events_path = os.path.join(sess_dir, "events.csv")
+    events_rows = list(csv.reader(open(events_path, encoding="utf-8")))
+    assert not any(len(r) >= 4 and r[3] == "video_started" for r in events_rows)
+
+    # Manifest reports video not enabled
     manifest = json.loads(open(os.path.join(sess_dir, "session.json"), encoding="utf-8").read())
-    runs = manifest.get("video", {}).get("runs", [])
-    assert len(runs) == 1
-    assert runs[0]["first_segment"] == 0
-    assert runs[0]["last_segment"] == 0
+    assert manifest.get("video", {}).get("enabled") is False
+    assert manifest.get("video", {}).get("runs") == []
+
+    # Now start video explicitly and verify segment creation
+    assert rec.start_video() is True
+    assert rec.state()["video_active"] is True
+    for i in range(5):
+        cam.frame_ready.emit(_fake_frame(), float(i))
+    rec.stop_video()
+    assert rec.state()["video_active"] is False
+
+    video_files_after = [
+        f for f in os.listdir(sess_dir) if f.startswith("video_") and f.endswith(".avi")
+    ]
+    assert len(video_files_after) == 1
+    assert video_files_after[0] == "video_000.avi"
+
+    rec.stop()
 
 

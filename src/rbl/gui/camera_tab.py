@@ -211,10 +211,9 @@ class CameraTab(QWidget):
         self._btn_oneto1.toggled.connect(self._on_oneto1_toggled)
         s1.addWidget(self._btn_oneto1)
 
-        self._chk_video = QCheckBox("Record video")
-        self._chk_video.setChecked(self._recorder._video_enabled)
-        self._chk_video.toggled.connect(self._on_video_enabled_changed)
-        s1.addWidget(self._chk_video)
+        self._btn_video = QPushButton("Start Video")
+        self._btn_video.clicked.connect(self._toggle_video)
+        s1.addWidget(self._btn_video)
 
         s1.addStretch(1)
         lay.addLayout(s1)
@@ -290,8 +289,6 @@ class CameraTab(QWidget):
         self._spin_rec_fps.setMaximum(min(RECORD_FPS_MAX, max(1, int(fps))))
         self._btn_open.setText("Close")
         self._combo_cam.setEnabled(False)
-        if not self._recorder.is_recording():
-            self._recorder.set_video_enabled(True)
         self._render()
 
     def _on_format_ready(self, fourcc: str):
@@ -338,10 +335,12 @@ class CameraTab(QWidget):
             return
         self._recorder.set_master_codec(label)
 
-    def _on_video_enabled_changed(self, on: bool):
-        if self._blocking:
-            return
-        self._recorder.set_video_enabled(on)
+    def _toggle_video(self):
+        st = self._recorder.state()
+        if st.get("video_active", False):
+            self._recorder.stop_video()
+        else:
+            self._recorder.start_video()
 
     def _on_crosshair_toggled(self, on: bool):
         self._feed.set_crosshair(on)
@@ -408,29 +407,39 @@ class CameraTab(QWidget):
     def _render(self):
         st = self._recorder.state()
         rec = st["recording"]
+        video_active = st.get("video_active", False)
 
         self._blocking = True
         self._spin_rec_fps.setValue(self._recorder._record_fps)
         self._combo_quality.setCurrentText(self._recorder._quality_label)
         self._combo_master.setCurrentText(self._recorder._master_codec)
-        self._chk_video.setChecked(self._recorder._video_enabled)
         self._blocking = False
 
-        for w in (self._spin_rec_fps, self._combo_master,
-                  self._combo_quality, self._chk_video):
-            w.setEnabled(not rec)
-
-        if not self._camera.is_open() or not _CV2_OK:
-            self._chk_video.setEnabled(False)
+        for w in (self._spin_rec_fps, self._combo_master):
+            w.setEnabled(not video_active)
 
         ffmpeg_found = st.get("ffmpeg_found", False)
-        self._combo_quality.setEnabled(not rec and ffmpeg_found)
+        self._combo_quality.setEnabled(not video_active and ffmpeg_found)
         if not ffmpeg_found:
             self._combo_quality.setToolTip(
                 "ffmpeg not found — no MP4 copy is made. "
                 "The Master setting is what is recorded.")
         else:
             self._combo_quality.setToolTip("")
+
+        # Video button: enabled only while session recording and camera is open.
+        if not rec:
+            self._btn_video.setEnabled(False)
+            self._btn_video.setToolTip("Start a session first")
+            self._btn_video.setText("Start Video")
+        elif not self._camera.is_open():
+            self._btn_video.setEnabled(False)
+            self._btn_video.setToolTip("Open the camera first")
+            self._btn_video.setText("Start Video")
+        else:
+            self._btn_video.setEnabled(True)
+            self._btn_video.setToolTip("")
+            self._btn_video.setText("Stop Video" if video_active else "Start Video")
 
         if rec:
             elapsed = st["elapsed_s"]

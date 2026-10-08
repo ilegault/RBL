@@ -28,7 +28,6 @@ import os
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QImage
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QGroupBox,
     QHBoxLayout,
@@ -218,10 +217,9 @@ class RecordingPanel(QGroupBox):
         self._combo_quality.currentTextChanged.connect(self._on_quality_changed)
         s4.addWidget(self._combo_quality)
 
-        self._chk_video = QCheckBox("Record video")
-        self._chk_video.setChecked(self._recorder._video_enabled)
-        self._chk_video.toggled.connect(self._on_video_enabled_changed)
-        s4.addWidget(self._chk_video)
+        self._btn_video = QPushButton("Start Video")
+        self._btn_video.clicked.connect(self._toggle_video)
+        s4.addWidget(self._btn_video)
         lay.addLayout(s4)
 
         # ---- Start/Stop button ---------------------------------------------
@@ -349,10 +347,12 @@ class RecordingPanel(QGroupBox):
         self._recorder.set_master_codec(label)
         self._update_png_guard()
 
-    def _on_video_enabled_changed(self, on: bool):
-        if self._blocking:
-            return
-        self._recorder.set_video_enabled(on)
+    def _toggle_video(self):
+        st = self._recorder.state()
+        if st.get("video_active", False):
+            self._recorder.stop_video()
+        else:
+            self._recorder.start_video()
 
     def _update_png_guard(self):
         """Disable the PNG option when record_fps > 10."""
@@ -413,29 +413,23 @@ class RecordingPanel(QGroupBox):
     def _render(self):
         st = self._recorder.state()
         rec = st["recording"]
+        video_active = st.get("video_active", False)
 
         self._blocking = True
         self._spin_rec_fps.setValue(self._recorder._record_fps)
         self._spin_csv.setValue(self._recorder._csv_interval_s)
         self._combo_quality.setCurrentText(self._recorder._quality_label)
         self._combo_master.setCurrentText(self._recorder._master_codec)
-        self._chk_video.setChecked(self._recorder._video_enabled)
         self._blocking = False
 
-        for w in (self._spin_rec_fps, self._spin_csv, self._combo_seg,
-                  self._combo_master, self._combo_quality, self._chk_video):
-            w.setEnabled(not rec)
+        self._spin_csv.setEnabled(not rec)
+        for w in (self._spin_rec_fps, self._combo_seg, self._combo_master):
+            w.setEnabled(not video_active)
 
-        # Video checkbox: disabled if no camera or no cv2.
-        if not self._camera.is_open() or not _CV2_OK:
-            self._chk_video.setEnabled(False)
-            tip = ("Camera must be open to record video."
-                   if _CV2_OK else "opencv-python not installed.")
-            self._chk_video.setToolTip(tip)
-
-        # CRF combo: disabled when ffmpeg absent — on lab machines it is inert.
+        # CRF combo: disabled when video running or when ffmpeg absent —
+        # on lab machines it is inert.
         ffmpeg_found = st.get("ffmpeg_found", False)
-        self._combo_quality.setEnabled(not rec and ffmpeg_found)
+        self._combo_quality.setEnabled(not video_active and ffmpeg_found)
         if not ffmpeg_found:
             self._combo_quality.setToolTip(
                 "ffmpeg not found — no MP4 copy is made. "
@@ -444,6 +438,20 @@ class RecordingPanel(QGroupBox):
             self._combo_quality.setToolTip("")
 
         self._update_png_guard()
+
+        # Video button: enabled only while session recording and camera is open.
+        if not rec:
+            self._btn_video.setEnabled(False)
+            self._btn_video.setToolTip("Start a session first")
+            self._btn_video.setText("Start Video")
+        elif not self._camera.is_open():
+            self._btn_video.setEnabled(False)
+            self._btn_video.setToolTip("Open the camera first")
+            self._btn_video.setText("Start Video")
+        else:
+            self._btn_video.setEnabled(True)
+            self._btn_video.setToolTip("")
+            self._btn_video.setText("Stop Video" if video_active else "Start Video")
 
         if rec:
             self._btn_session.setText("■ STOP SESSION")
