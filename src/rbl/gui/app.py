@@ -80,6 +80,7 @@ class TabDeclaration:
 def _make_overview_tab(win: "MainWindow") -> OverviewTab:
     tab = OverviewTab(win.beamline, win)
     tab.attach_recorder(win.session_recorder)
+    tab.attach_cup_log(win.cup_log)
     return tab
 
 
@@ -399,6 +400,15 @@ class MainWindow(QMainWindow):
         # Beamline publishes CupActuationState snapshots with commanded/confirmed positions
         # derived from FIO_STATE; FaradayCupTab renders indicators and issues commands.
         self.beamline.cup_actuation_changed.connect(self.faraday_cup_tab.on_cup_actuation_state)
+        # Overview cup panel: it renders the same cup current and confirmed position, and
+        # the dose totals arrive as a CupView from the Faraday tab. The dose is computed
+        # once, by the tab's accumulator; the panel never keeps a second one
+        # (AGENTS.md invariant 2), or two screens could disagree about the same charge.
+        cup_panel = self.overview_tab.cup_panel
+        assert cup_panel is not None   # _make_overview_tab attaches it
+        self.beamline.cup_changed.connect(cup_panel.on_cup_state)
+        self.beamline.cup_actuation_changed.connect(cup_panel.on_cup_actuation_state)
+        self.faraday_cup_tab.cup_view_changed.connect(cup_panel.on_cup_view)
 
         # Irradiated area from Raster Planner to Faraday Cup tab for fluence and dose (ADR 0003).
         # The Raster Planner holds the sample patch dimensions set by the operator. Emitting

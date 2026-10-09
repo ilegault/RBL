@@ -158,7 +158,7 @@ import math
 import time
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -198,7 +198,7 @@ from rbl.services.cup_acquisition import (
     RunClosed,
     RunOpened,
 )
-from rbl.services.cup_log import CupLog
+from rbl.services.cup_log import CupLog, CupView
 from rbl.services.cup_session_writer import CupRunStats
 from rbl.services.sampling_cycle import (
     CycleInsert,
@@ -223,6 +223,14 @@ class FaradayCupTab(QWidget):
     BUFFER_CAPACITY = 36_000   # ~1 hour at 10 Hz
     WINDOW_SECONDS  = 120      # default 2-minute viewport
     MIN_WINDOW_SECONDS = 1.0   # minimum zoom step (1.0 s)
+
+    # What the Overview cup panel renders. Emitted when the log opens or closes, when
+    # a run opens or closes, when automatic insertion starts or stops, and when the
+    # dose totals change. The panel computes nothing: this tab owns the one
+    # DoseAccumulator (AGENTS.md invariant 2).
+    cup_view_changed = Signal(object)
+    _last_cup_view: CupView | None = None
+    _cup_view_ready: bool = False
 
     def __init__(
         self,
@@ -885,6 +893,7 @@ class FaradayCupTab(QWidget):
 
         self.cup_log.opened.connect(self._on_cup_log_opened)
         self.cup_log.closed.connect(self._on_cup_log_closed)
+        self._cup_view_ready = True   # the dose widgets _emit_cup_view reads now exist
         self._update_logging_view()
 
     # ── Connection Handling ───────────────────────────────────────────────────
@@ -970,6 +979,36 @@ class FaradayCupTab(QWidget):
 
     def _update_logging_view(self) -> None:
         self.lbl_not_logging.setVisible(self.cup_log.writer is None)
+        self._emit_cup_view()
+
+    def _emit_cup_view(self) -> None:
+        """Publish a ``CupView`` for the Overview panel; repeats of the same view are dropped.
+
+        Called from the several places that change what the view holds, so the
+        de-duplication here is what keeps a once-a-second cycle refresh from
+        re-rendering the panel when nothing changed. Nothing is published until the
+        constructor has built the dose widgets the view is read from.
+        """
+        if not self._cup_view_ready:
+            return
+        q = self._accumulator.total_charge_c
+        cs = self.charge_state
+        area = self._area_cm2
+        k = self.displacement_coeff
+        has_fluence = cs > 0 and area > 0.0
+        view = CupView(
+            logging=self.cup_log.writer is not None,
+            log_path=self.cup_log.path,
+            run_open=bool(self.acquisition.is_acquiring),
+            automatic_running=bool(self.cycle.is_armed),
+            charge_c=q,
+            fluence=self._accumulator.fluence(cs, area) if has_fluence else None,
+            dpa=self._accumulator.dpa(cs, area, k) if has_fluence and k > 0.0 else None,
+        )
+        if view == self._last_cup_view:
+            return
+        self._last_cup_view = view
+        self.cup_view_changed.emit(view)
 
     def _active_run_stats(self) -> CupRunStats:
         """Run statistics come from logged samples; with no log there are none."""
@@ -1074,6 +1113,7 @@ class FaradayCupTab(QWidget):
         """Lock acquisition settings while an acquisition run is open or cycle is armed."""
         locked = bool(self.acquisition.is_acquiring or self.cycle.is_armed)
         self.settings_group.set_locked(locked)
+        self._emit_cup_view()
 
     def _update_acquisition_view(self) -> None:
         """Update run status, duration, sample count, and running average."""
@@ -1849,6 +1889,7 @@ class FaradayCupTab(QWidget):
 
     def _update_cycle_view(self, t: float) -> None:
         """Update the Sampling Cycle panel to reflect the current scheduler state."""
+        self._emit_cup_view()
         state = self.cycle.state
         if state == CycleState.DISARMED:
             self.btn_cycle_arm.setText("Arm Cycle")
@@ -2292,7 +2333,11 @@ class FaradayCupTab(QWidget):
         return self.spn_cycle_dwell.value()
 
     def _update_dose_view(self) -> None:
+        """Refresh the running dose labels, then publish the same totals to the Overview panel."""
+        self._render_dose_labels()
+        self._emit_cup_view()
 
+    def _render_dose_labels(self) -> None:
         """Refresh running Q, fluence, and dpa labels from the dose accumulator.
 
         WHY THIS IS CALLED ON RUN CLOSE, NOT ON EVERY SAMPLE

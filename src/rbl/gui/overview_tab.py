@@ -62,6 +62,7 @@ from rbl.config.vacuum_config import GAUGE_DISPLAY_NAMES, UI_GOOD_VACUUM_TORR
 from rbl.gui import theme
 from rbl.gui.widgets.axis_drive import AxisDriveControl
 from rbl.gui.widgets.beam_indicator import BeamPositionIndicator
+from rbl.gui.widgets.cup_panel import CupPanel
 from rbl.gui.widgets.drag_panel import DragPanel, PanelArea
 from rbl.gui.widgets.mini import MiniBar
 from rbl.gui.widgets.recording_panel import RecordingPanel
@@ -162,6 +163,7 @@ class OverviewTab(QWidget):
         # SessionRecorder itself is owned by MainWindow and injected via
         # attach_recorder() so the Camera tab can share one camera device.
         self.recording = None
+        self.cup_panel: CupPanel | None = None
 
         # Six independent draggable panels; slit control and beam current are
         # separate so they can be stacked or spread.  FuncGen and HV are also
@@ -574,6 +576,17 @@ class OverviewTab(QWidget):
         """
         self.recording = RecordingPanel(recorder)
         self._panel_area.add(DragPanel(self.recording, stretch=1), col=2)
+
+    def attach_cup_log(self, cup_log) -> None:
+        """Bind the shared CupLog, owned by MainWindow, and add the cup panel.
+
+        Injected for the same reason as the recorder: there is one cup log per
+        process, and the Faraday Cup tab and this panel must both ask it, not
+        each keep their own idea of whether a log is open.
+        """
+        panel = CupPanel(cup_log)
+        self.cup_panel = panel
+        self._panel_area.add(DragPanel(panel, stretch=1), col=2)
 
     # ---- Commands out ----------------------------------------------------------
     #
