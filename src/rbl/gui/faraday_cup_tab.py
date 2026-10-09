@@ -44,6 +44,24 @@ Consequences, all deliberate:
   file header reports what the detector actually uses.
 - The tab closes the log only if it built the log itself; otherwise MainWindow owns it.
 
+ONLY AUTOMATIC INSERTIONS COUNT TOWARD THE DOSE (ADR 0003 amendment C2/C4, ticket 30)
+------------------------------------------------------------------------------------
+The dose chain holds the previous measured current across the gap between insertions
+(zero-order hold). A cup that a person put in the beam before irradiation blocks that
+beam, so crediting the check as dose would be wrong twice: its own charge never reached
+the specimen, and the next gap would be credited as if the beam had run through it.
+So each insertion is classified when it ends:
+- ``automatic``: the confirmed IN followed a ``CycleInsert`` this tab acted on in
+  ``_tick_cycle``. The only origin that calls ``record_insertion``.
+- ``manual`` (Insert button), ``forced`` (Force Start) or ``uncommanded`` (confirmed IN
+  with no command, e.g. the controller was switched to LOCAL): recorded, never counted.
+  Their confirmed IN -> confirmed OUT span goes to ``exclude_interval`` (the run's open
+  and close times when position feedback is unavailable) so the next automatic hold
+  interval loses exactly the time the cup was in. The summary row carries the running
+  totals unchanged and ``counted_in_dose=false``.
+The origin is latched at the confirmed IN and every mark clears on the confirmed OUT or
+when the run closes, so an automatic mark can never leak onto a later hand insertion.
+
 PLOT NAVIGATION (SHARED PATTERN WITH SLIT CURRENTS)
 ---------------------------------------------------
 - Default 2-minute viewport window (WINDOW_SECONDS = 120).
@@ -302,6 +320,15 @@ class FaradayCupTab(QWidget):
         self._accumulator: DoseAccumulator = DoseAccumulator()
         self._current_run_start_t: float = float("nan")
         self._last_commanded_in_t: float | None = None
+        # Who caused the insertion in progress (ADR 0003 amendment C4, ticket 30).
+        # The pending flags record intent; they are latched into _insertion_origin when
+        # the controller confirms IN, and every one of them is consumed on close.
+        self._auto_pending: bool = False
+        self._manual_pending: bool = False
+        self._run_forced: bool = False
+        self._insertion_origin: str | None = None
+        self._confirmed_in_t: float = float("nan")
+        self._confirmed_out_t: float = float("nan")
         self._species: str = "NOT_SPECIFIED"
         self._beam_energy: str = "NOT_SPECIFIED"
 
@@ -1030,10 +1057,95 @@ class FaradayCupTab(QWidget):
             return writer.last_insertion_stats
         return InsertionCurrentStats(mean_a=0.0, std_a=0.0, sample_count=0, excluded_count=0)
 
+    def _resolve_insertion_origin(self) -> str:
+        """Name who caused the insertion that just ended (ADR 0003 amendment C4)."""
+        if self._run_forced:
+            return "forced"
+        if self._insertion_origin is not None:
+            return self._insertion_origin
+        if self._auto_pending:
+            return "automatic"
+        if self._manual_pending:
+            return "manual"
+        return "uncommanded"
+
+    def _close_insertion(self, run_id: int, t_close: float, details: str = "") -> None:
+        """Settle the dose for a closed run and write its insertion summary row.
+
+        Only an automatic insertion is credited (``record_insertion``). Any other
+        origin leaves the accumulator's charge and beam-on totals alone and instead
+        passes its confirmed IN to confirmed OUT span to ``exclude_interval``, so the
+        time the cup blocked the beam is not credited at the held current by the next
+        automatic insertion. Without position feedback the run's open and close
+        times stand in for the confirmed ones.
+        """
+        stats = self._last_insertion_stats()
+        run_start = (
+            self._current_run_start_t
+            if not math.isnan(self._current_run_start_t)
+            else t_close
+        )
+        dwell = max(0.0, t_close - run_start)
+        origin = self._resolve_insertion_origin()
+        counted = origin == "automatic"
+        if counted:
+            self._accumulator.record_insertion(
+                t_in=run_start, t_out=t_close, mean_current_a=stats.mean_a
+            )
+            beam_on_s = self._accumulator.last_beam_on_s
+        else:
+            have_feedback = (
+                not math.isnan(self._confirmed_in_t)
+                and not math.isnan(self._confirmed_out_t)
+                and self._confirmed_out_t > self._confirmed_in_t
+            )
+            self._accumulator.exclude_interval(
+                self._confirmed_in_t if have_feedback else run_start,
+                self._confirmed_out_t if have_feedback else t_close,
+            )
+            beam_on_s = 0.0
+        q = self._accumulator.total_charge_c
+        cs = self.charge_state
+        area = self._area_cm2
+        k = self.displacement_coeff
+        writer = self.cup_log.writer
+        if writer is not None:
+            writer.write_insertion_summary(
+                run_id=run_id,
+                commanded_timestamp=self._last_commanded_in_t,
+                confirmed_timestamp=run_start,
+                dwell=dwell,
+                sample_count=stats.sample_count,
+                mean_current_a=stats.mean_a,
+                std_current_a=stats.std_a,
+                beam_on_seconds=beam_on_s,
+                charge=q,
+                charge_state=cs,
+                area=area,
+                k=k,
+                fluence=self._accumulator.fluence(cs, area),
+                dpa=self._accumulator.dpa(cs, area, k),
+                t_host=t_close,
+                details=details,
+                origin=origin,
+                counted_in_dose=counted,
+                total_beam_on_s=self._accumulator.total_beam_on_s,
+            )
+        self._last_commanded_in_t = None
+        self._current_run_start_t = float("nan")
+        self._auto_pending = False
+        self._manual_pending = False
+        self._run_forced = False
+        self._insertion_origin = None
+        self._confirmed_in_t = float("nan")
+        self._confirmed_out_t = float("nan")
+        self._update_dose_view()
+
     def _on_force_start_clicked(self) -> None:
         t_now = time.time()
         transition = self.acquisition.force_start(t=t_now)
         if transition is not None:
+            self._run_forced = True
             writer = self.cup_log.writer
             if writer is not None:
                 writer.write_run_opened(
@@ -1058,53 +1170,7 @@ class FaradayCupTab(QWidget):
                     run_id=transition.run_id,
                     reason=transition.reason,
                 )
-            stats = self._last_insertion_stats()
-            mean_current = stats.mean_a
-            std_current = stats.std_a
-            cnt = stats.sample_count
-            conf_t = (
-                self._current_run_start_t
-                if not math.isnan(self._current_run_start_t)
-                else t_now
-            )
-            dwell = max(0.0, t_now - conf_t)
-            self._accumulator.record_insertion(
-                t_in=conf_t,
-                t_out=t_now,
-                mean_current_a=mean_current,
-            )
-            beam_on_s = self._accumulator.last_beam_on_s
-            q = self._accumulator.total_charge_c
-            cs = self.charge_state
-            area = self._area_cm2
-            k = self.displacement_coeff
-            fluence = self._accumulator.fluence(cs, area)
-            dpa = self._accumulator.dpa(cs, area, k)
-
-            cmd_t = self._last_commanded_in_t
-            writer = self.cup_log.writer
-            if writer is not None:
-                writer.write_insertion_summary(
-                    run_id=transition.run_id,
-                    commanded_timestamp=cmd_t,
-                    confirmed_timestamp=conf_t,
-                    dwell=dwell,
-                    sample_count=cnt,
-                    mean_current_a=mean_current,
-                    std_current_a=std_current,
-                    beam_on_seconds=beam_on_s,
-                    charge=q,
-                    charge_state=cs,
-                    area=area,
-                    k=k,
-                    fluence=fluence,
-                    dpa=dpa,
-                    t_host=t_now,
-                    details="force_stop",
-                )
-            self._last_commanded_in_t = None
-            self._current_run_start_t = float("nan")
-            self._update_dose_view()
+            self._close_insertion(transition.run_id, t_now, details="force_stop")
             if self.beamline is not None:
                 self.beamline.set_cup_acquiring(False)
         self._update_acquisition_view()
@@ -1275,6 +1341,8 @@ class FaradayCupTab(QWidget):
         if transition is not None:
             if isinstance(transition, RunOpened):
                 self._current_run_start_t = transition.t
+                if transition.forced:
+                    self._run_forced = True
                 writer = self.cup_log.writer
                 if writer is not None:
                     writer.write_run_opened(
@@ -1294,53 +1362,7 @@ class FaradayCupTab(QWidget):
                         reason=transition.reason,
                         t_inst=state.timestamp,
                     )
-                stats = self._last_insertion_stats()
-                mean_current = stats.mean_a
-                std_current = stats.std_a
-                cnt = stats.sample_count
-                conf_t = (
-                    self._current_run_start_t
-                    if not math.isnan(self._current_run_start_t)
-                    else t_sample
-                )
-                dwell = max(0.0, t_sample - conf_t)
-
-                self._accumulator.record_insertion(
-                    t_in=conf_t,
-                    t_out=t_sample,
-                    mean_current_a=mean_current,
-                )
-                beam_on_s = self._accumulator.last_beam_on_s
-                q = self._accumulator.total_charge_c
-                cs = self.charge_state
-                area = self._area_cm2
-                k = self.displacement_coeff
-                fluence = self._accumulator.fluence(cs, area)
-                dpa = self._accumulator.dpa(cs, area, k)
-
-                cmd_t = self._last_commanded_in_t
-                writer = self.cup_log.writer
-                if writer is not None:
-                    writer.write_insertion_summary(
-                        run_id=transition.run_id,
-                        commanded_timestamp=cmd_t,
-                        confirmed_timestamp=conf_t,
-                        dwell=dwell,
-                        sample_count=cnt,
-                        mean_current_a=mean_current,
-                        std_current_a=std_current,
-                        beam_on_seconds=beam_on_s,
-                        charge=q,
-                        charge_state=cs,
-                        area=area,
-                        k=k,
-                        fluence=fluence,
-                        dpa=dpa,
-                        t_host=t_sample,
-                    )
-                self._last_commanded_in_t = None
-                self._current_run_start_t = float("nan")
-                self._update_dose_view()
+                self._close_insertion(transition.run_id, t_sample)
             if self.beamline is not None:
                 self.beamline.set_cup_acquiring(self.acquisition.is_acquiring)
             self._update_settings_lock()
@@ -1572,6 +1594,7 @@ class FaradayCupTab(QWidget):
         t_now = self._last_state_t if not math.isnan(self._last_state_t) else time.time()
         self.cycle.notify_manual_insert(t_now)
         self._start_move(CupPosition.IN)
+        self._manual_pending = True
         if self.beamline is not None:
             self.beamline.command_cup_in()
         self._update_cycle_view(t_now)
@@ -1865,6 +1888,7 @@ class FaradayCupTab(QWidget):
             # Scheduled insertion — command cup IN if no move is already in flight
             if not self._move_in_flight and self._actuation_connected:
                 self._start_move(CupPosition.IN)
+                self._auto_pending = True
                 if self.beamline is not None:
                     self.beamline.command_cup_in()
 
@@ -2051,6 +2075,23 @@ class FaradayCupTab(QWidget):
                         position=state.confirmed,
                         details=f"confirmed_{state.confirmed.value.lower()}",
                     )
+                if state.confirmed == CupPosition.IN:
+                    self._confirmed_in_t = t_trans
+                    self._insertion_origin = (
+                        "automatic"
+                        if self._auto_pending
+                        else "manual"
+                        if self._manual_pending
+                        else "uncommanded"
+                    )
+                    self._auto_pending = False
+                    self._manual_pending = False
+                else:
+                    # The automatic mark clears on the confirmed OUT (C4), so a later
+                    # hand insertion can never inherit it.
+                    self._auto_pending = False
+                    self._manual_pending = False
+                    self._confirmed_out_t = t_trans
                 self._last_logged_confirmed = state.confirmed
                 self._last_logged_indeterminate = False
         elif state.confirmed == CupPosition.INDETERMINATE:

@@ -1,6 +1,6 @@
 # 30: Only automatic insertions count toward the dose
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -36,16 +36,16 @@ Tests may fake: instrument payloads only (`tests/payloads.py`). The accumulator,
 
 ## Acceptance criteria
 
-- [ ] With a cup log open, a manual insertion (Insert clicked) writes a summary row with
+- [x] With a cup log open, a manual insertion (Insert clicked) writes a summary row with
       `origin=manual`, `counted_in_dose=false`, and `lbl_running_q` text is unchanged
       from before it.
-- [ ] An automatic insertion (cycle started, scheduler tick produces `CycleInsert`) writes
+- [x] An automatic insertion (cycle started, scheduler tick produces `CycleInsert`) writes
       `origin=automatic`, `counted_in_dose=true`, and the charge increases.
-- [ ] Automatic, then a 10 s manual insertion, then automatic: the second automatic row's
+- [x] Automatic, then a 10 s manual insertion, then automatic: the second automatic row's
       `beam_on_seconds` is 10 s less than the same sequence without the manual insertion
       (run both sequences in the test).
-- [ ] A Force Start run is recorded `origin=forced`, `counted_in_dose=false`.
-- [ ] The tab's module docstring states the counting rule and cites the ADR 0003
+- [x] A Force Start run is recorded `origin=forced`, `counted_in_dose=false`.
+- [x] The tab's module docstring states the counting rule and cites the ADR 0003
       amendment.
 
 ## Gate
@@ -58,3 +58,26 @@ Run in CI's order (`.github/workflows/tests.yml`):
     pytest --tb=short -q -n auto --dist loadfile --durations=25
 
 ## Comments
+
+2026-10-09. `FaradayCupTab` now classifies each insertion (`automatic` / `manual` / `forced` /
+`uncommanded`) in one place, `_close_insertion`, which replaced the two duplicated
+run-close blocks (threshold close and Force Stop). Only `automatic` calls
+`record_insertion`; the others call `exclude_interval` (confirmed IN -> OUT, or run
+open/close without position feedback) and write a row with `counted_in_dose=false` and the
+unchanged running totals (`beam_on_seconds` 0). Module docstring states the rule and cites
+the ADR 0003 amendment.
+
+Tests, `tests/test_cup_insertion_origin.py` (real tab, real `CupLog`/file, real
+accumulator; only actuation snapshots and picoammeter payloads faked):
+- criterion 1: `test_manual_insertion_is_recorded_but_not_counted`
+- criterion 2: `test_automatic_insertion_is_counted_and_charge_increases`
+- criterion 3: `test_manual_cup_in_time_is_taken_out_of_next_hold_interval` (runs both sequences)
+- criterion 4: `test_forced_run_is_recorded_as_forced_and_not_counted`
+- extra: uncommanded origin, manual row totals unchanged, no leak of the automatic mark.
+
+Harness change, not a muted test: `tests/test_cup_panel.py::test_charge_text_matches_the_tab_when_charge_is_nonzero`
+made charge with Force Start runs, which by this ticket no longer count. It now accrues
+charge through two scheduled insertions; its assertions are unchanged.
+
+Bench verification: none needed.
+
