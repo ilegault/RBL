@@ -1,6 +1,6 @@
 # 30: Only automatic insertions count toward the dose
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
