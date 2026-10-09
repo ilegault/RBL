@@ -8,7 +8,6 @@ the real ``CupLog`` (rooted in ``tmp_path``), the real ``FaradayCupTab`` and the
 ``CupPanel``; only the instrument payloads are faked.
 """
 import os
-import time
 from datetime import datetime
 
 import pytest
@@ -20,9 +19,19 @@ from PySide6.QtWidgets import QApplication
 from rbl.gui import theme
 from rbl.gui.faraday_cup_tab import FaradayCupTab
 from rbl.gui.widgets.cup_panel import SESSION_OWNS_LOG_TOOLTIP, CupPanel
+from rbl.hardware.cup_status import CupPosition
 from rbl.services.cup_log import CupLog, CupView
+from rbl.snapshots import CupActuationState
 from rbl.state.beamline import Beamline
 from tests.payloads import CupFeed
+
+
+def _actuation(t, position):
+    """The controller's contacts as the stream publishes them, commanded == confirmed."""
+    return CupActuationState(
+        connected=True, commanded=position, confirmed=position, auto_mode=True,
+        stale=False, last_transition_t=t, t=t,
+    )
 
 
 @pytest.fixture(scope="session")
@@ -135,15 +144,19 @@ def test_charge_text_matches_the_tab_when_charge_is_nonzero(rig, qapp):
     feed.send_reading(0.0, timestamp=0.0, t_host=0.0)
     qapp.processEvents()
 
-    # Charge accrues over the beam-on gap BEFORE an insertion, so it takes two.
-    for _ in range(2):
-        tab.btn_force_start.click()
-        t0 = time.time()
-        for i in range(1, 30):   # samples land after the settle window, inside the run
-            feed.send_reading(2e-6, timestamp=t0 + i, t_host=t0 + i)
-        qapp.processEvents()
-        time.sleep(0.05)
-        tab.btn_force_stop.click()
+    # Only automatic insertions are credited (ticket 30), and charge accrues over the
+    # beam-on gap BEFORE an insertion, so it takes two scheduled insertions.
+    tab.on_cup_actuation_state(_actuation(0.0, CupPosition.OUT))
+    for t_in in (1000.0, 1500.0):
+        tab.on_cup_actuation_state(_actuation(t_in - tab.spn_cycle_period.value(), CupPosition.OUT))
+        tab.btn_cycle_arm.click()
+        tab.on_cup_actuation_state(_actuation(t_in, CupPosition.OUT))  # CycleInsert
+        tab.on_cup_actuation_state(_actuation(t_in + 0.2, CupPosition.IN))
+        feed.send_reading(2e-6, timestamp=t_in + 0.3, t_host=t_in + 0.3)
+        feed.send_reading(2e-6, timestamp=t_in + 1.5, t_host=t_in + 1.5)
+        tab.on_cup_actuation_state(_actuation(t_in + 3.0, CupPosition.OUT))
+        feed.send_reading(2e-6, timestamp=t_in + 3.1, t_host=t_in + 3.1)
+        tab.btn_cycle_stop.click()
         qapp.processEvents()
 
     assert tab.lbl_running_q.text() != "0.000000e+00 C"
