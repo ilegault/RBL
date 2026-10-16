@@ -25,6 +25,8 @@ Usage
     area.add(DragPanel(slits,   stretch=1), col=1)
     area.add(DragPanel(funcgen, stretch=1), col=2)
     area.add(DragPanel(hv,      stretch=1), col=2)   # stacked under funcgen
+    area.column_names()                 # [["beam"], ["slits"], ["funcgen", "hv"]]
+    area.arrange([["hv"], ["beam", "slits", "funcgen"]])   # re-lay out by name
 
   Resize outer panels  →  drag the handle on the OUTER edge of the first/last
                           panel.  Those handles are backed by a zero-size
@@ -173,6 +175,10 @@ class DragPanel(QWidget):
         to.  The column's stretch = max(p.stretch for p in column).
         stretch=0  →  column does not grow when the splitter is resized.
         stretch=1  →  column grows proportionally.
+    name : str
+        Public label used by PanelArea.arrange() to place the panel by name.
+        Optional for ordinary dragging, but a panel with an empty name makes
+        arrange() refuse, so a layout can never silently drop an unnamed one.
     """
 
     # Smallest a panel may be dragged.  Wide enough that the ⠿ grip (22 px
@@ -180,9 +186,11 @@ class DragPanel(QWidget):
     # dragged back out.
     _MIN_PX = 34
 
-    def __init__(self, content: QWidget, stretch: int = 0, parent=None):
+    def __init__(self, content: QWidget, stretch: int = 0, name: str = "",
+                 parent=None):
         super().__init__(parent)
         self.stretch = stretch
+        self.name = name
         self._area: "PanelArea | None" = None
 
         # The content keeps its own generous minimum size (MiniBar is 100 px
@@ -289,6 +297,43 @@ class PanelArea(QWidget):
         while len(self._cols) <= col:
             self._cols.append([])
         self._cols[col].append(panel)
+        self._rebuild()
+
+    def column_names(self) -> list[list[str]]:
+        """The `name` of every panel, column by column, top to bottom.
+
+        Empty columns are skipped, so the result is what the operator sees.
+        """
+        return [[p.name for p in col] for col in self._cols if col]
+
+    def arrange(self, columns: list[list[str]]) -> None:
+        """Re-lay the panels out as *columns*, each a list of panel names.
+
+        Every panel currently in the area must appear exactly once.  An
+        unknown name, a repeat, a missing panel or an unnamed panel raises
+        ValueError and leaves the layout untouched: a layout must never be
+        able to make a panel disappear.  Empty inner lists are dropped.
+        """
+        panels = [p for col in self._cols for p in col]
+        unnamed = [p for p in panels if p.name == ""]
+        if unnamed:
+            raise ValueError(
+                f"{len(unnamed)} panel(s) have no name, so arrange() cannot "
+                "place them")
+        by_name = {p.name: p for p in panels}
+        if len(by_name) != len(panels):
+            raise ValueError("panel names are not unique")
+
+        requested = [n for col in columns for n in col]
+        unknown = sorted({n for n in requested if n not in by_name})
+        repeated = sorted({n for n in requested if requested.count(n) > 1})
+        missing = sorted(set(by_name) - set(requested))
+        if unknown or repeated or missing:
+            raise ValueError(
+                f"layout must name every panel exactly once: "
+                f"unknown {unknown}, repeated {repeated}, missing {missing}")
+
+        self._cols = [[by_name[n] for n in col] for col in columns if col] or [[]]
         self._rebuild()
 
     # ---- Drag callbacks (called by _GripHandle) ----------------------------

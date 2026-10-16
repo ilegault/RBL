@@ -776,26 +776,14 @@ class MainWindow(QMainWindow):
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
 
-def main():
+def make_application(argv: list[str]) -> QApplication:
+    """Build the QApplication with the app's scaling, Fusion style and palette.
+
+    Its own function so the dev-only screenshot launcher gets exactly the look
+    of the real app from this one palette block instead of keeping a second
+    copy that would drift.
+    """
     import os
-    from logging.handlers import RotatingFileHandler
-
-    from rbl.config.paths import LOGS_DIR as _log_dir
-    _log_dir.mkdir(parents=True, exist_ok=True)
-    _file_handler = RotatingFileHandler(
-        _log_dir / "rbl.log",
-        maxBytes=5 * 1024 * 1024,   # 5 MB per file
-        backupCount=5,
-        encoding="utf-8",
-    )
-    _fmt = logging.Formatter("%(asctime)s %(levelname)-8s %(name)s: %(message)s")
-    _file_handler.setFormatter(_fmt)
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
-        handlers=[logging.StreamHandler(sys.stderr), _file_handler],
-    )
     os.environ.setdefault("QT_AUTO_SCREEN_SCALE_FACTOR", "1")
 
     QApplication.setHighDpiScaleFactorRoundingPolicy(
@@ -820,6 +808,29 @@ def main():
     pal.setColor(QPalette.ColorRole.Highlight,       QColor(0,   120, 215))
     pal.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
     app.setPalette(pal)
+    return app
+
+
+def main():
+    from logging.handlers import RotatingFileHandler
+
+    from rbl.config.paths import LOGS_DIR as _log_dir
+    _log_dir.mkdir(parents=True, exist_ok=True)
+    _file_handler = RotatingFileHandler(
+        _log_dir / "rbl.log",
+        maxBytes=5 * 1024 * 1024,   # 5 MB per file
+        backupCount=5,
+        encoding="utf-8",
+    )
+    _fmt = logging.Formatter("%(asctime)s %(levelname)-8s %(name)s: %(message)s")
+    _file_handler.setFormatter(_fmt)
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
+        handlers=[logging.StreamHandler(sys.stderr), _file_handler],
+    )
+    app = make_application(sys.argv)
 
     win = MainWindow()
     win.show()

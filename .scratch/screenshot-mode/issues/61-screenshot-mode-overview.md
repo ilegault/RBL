@@ -1,6 +1,6 @@
 # 61: Screenshot mode — a dev-only launcher that fills the Overview with a canned mid-irradiation scene
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -195,50 +195,50 @@ feeding fake data once any real instrument reports; the HV interlock line is **n
 
 All tests new, in `tests/test_screenshot_overview.py` unless noted.
 
-- [ ] `test_importing_the_script_loads_no_rbl_module`: a subprocess (`sys.executable -c`,
+- [x] `test_importing_the_script_loads_no_rbl_module`: a subprocess (`sys.executable -c`,
   cwd = repo root) imports `scripts.screenshot_overview` and prints whether any `rbl` /
   `rbl.*` key is in `sys.modules`; output is `False`.
-- [ ] `test_isolation_redirects_every_persistence_root`: a subprocess calls
+- [x] `test_isolation_redirects_every_persistence_root`: a subprocess calls
   `isolate_environment(<tmp_path>)`, then imports `rbl.config.paths` and prints `CONFIG_DIR`
   and `LOG_ROOT`; both resolve under `tmp_path`.
-- [ ] `test_isolation_refuses_after_rbl_is_imported`: in-process (rbl is already imported by
+- [x] `test_isolation_refuses_after_rbl_is_imported`: in-process (rbl is already imported by
   the test session), `isolate_environment(tmp_path)` raises `RuntimeError` and
   `os.environ["HOME"]` is unchanged.
-- [ ] `test_nothing_in_the_app_references_the_script`: no `*.py` under `src/` and not
+- [x] `test_nothing_in_the_app_references_the_script`: no `*.py` under `src/` and not
   `rbl.spec` contains the text `screenshot_overview`.
-- [ ] `test_scene_is_healthy_by_the_apps_own_rules` (pure): every readback `amp / 2` is below
+- [x] `test_scene_is_healthy_by_the_apps_own_rules` (pure): every readback `amp / 2` is below
   `PEAK_WARN_VOLTS`; `CHAMBER_TORR <= UI_GOOD_VACUUM_TORR`;
   `interlock_status(CHAMBER_TORR, max peak, pressure_known=True)[0] == "ok"`.
-- [ ] `test_scene_round_trips_through_the_real_conversion`: a plain `Beamline()`; capture
+- [x] `test_scene_round_trips_through_the_real_conversion`: a plain `Beamline()`; capture
   `logamps_changed`, `amps_changed`, `motors_changed`; `push_scene(...)`; each slit current is
   within 0.5 % of `SLIT_CURRENTS_A`, each `peak_kv` within 0.01 of its axis peak, each
   `pos_mm` within 0.01 mm of `SLIT_POSITIONS_MM`.
-- [ ] `test_scene_reaches_the_overview_screen`: `OverviewTab(Beamline())`, `tab.show()`,
+- [x] `test_scene_reaches_the_overview_screen`: `OverviewTab(Beamline())`, `tab.show()`,
   `qapp.processEvents()`, `push_scene`, `tab.redraw()`; then every `tab.pills[k].styleSheet()`
   for `motors, logamps, amps, A, B` equals `theme.pill(True)` (the redraw sets it with no
   suffix);
   `tab.hv_phase["X"].text()` and `["Y"]` start with `"push-pull locked"`;
   `tab.lbl_timebase.text() == "A: INT  B: EXT"`; `tab.lbl_gaps.text()` contains `"X: "` and
   `"Y: "` followed by the sums of the two published `pos_mm` values formatted `.3f`.
-- [ ] `test_feed_stops_when_real_data_arrives`: `ScreenshotFeed(Beamline(), build_scene(), on_stop=reasons.append)`;
+- [x] `test_feed_stops_when_real_data_arrives`: `ScreenshotFeed(Beamline(), build_scene(), on_stop=reasons.append)`;
   after `start()`, `active` is True and `reasons == []`; after
   `beamline.motors_changed.emit(MotorState(connected=True, zeroed=True, axes={}))`, `active`
   is False and `reasons == ["real motors_changed data arrived"]`.
-- [ ] `test_feed_stops_when_an_instrument_connects`: same, with `beamline.labjack_connected.emit("470000000")`;
+- [x] `test_feed_stops_when_an_instrument_connects`: same, with `beamline.labjack_connected.emit("470000000")`;
   reason `"a real instrument connected"`.
-- [ ] `test_feed_survives_its_own_pushes`: after `start()` and three `push()` calls, `active` is True.
-- [ ] `test_screenshot_mode_arranges_titles_and_unhooks_connect_all`: `MainWindow()`,
+- [x] `test_feed_survives_its_own_pushes`: after `start()` and three `push()` calls, `active` is True.
+- [x] `test_screenshot_mode_arranges_titles_and_unhooks_connect_all`: `MainWindow()`,
   `monkeypatch.setattr(win.beamline, "set_interlock_gauges", recorded.append)`;
   `feed = start_screenshot_mode(win)`; title ends with `TITLE_SUFFIX`;
   `recorded == [{CHAMBER_GAUGE}]`; `win.overview_tab.panel_area.column_names() == SCREENSHOT_LAYOUT`;
   `win.overview_tab.btn_connect_all.click()` then `processEvents()` leaves the button text
   `"Connect All"` (wired, it would read `"Connecting…"`); `feed.stop("test")` at the end.
-- [ ] `test_overview_names_every_panel`: `MainWindow()`; the sorted flattened
+- [x] `test_overview_names_every_panel`: `MainWindow()`; the sorted flattened
   `panel_area.column_names()` equals the sorted eight names in step 5.
-- [ ] (`tests/test_drag_panel.py`) `test_arrange_reorders_panels_by_name`: a `PanelArea` with
+- [x] (`tests/test_drag_panel.py`) `test_arrange_reorders_panels_by_name`: a `PanelArea` with
   `DragPanel(QLabel(), name=n)` for `a, b, c` added in columns 0, 0, 1;
   `arrange([["c"], ["a", "b"]])` → `column_names() == [["c"], ["a", "b"]]`.
-- [ ] (`tests/test_drag_panel.py`) `test_arrange_rejects_a_layout_that_loses_or_repeats_a_panel`:
+- [x] (`tests/test_drag_panel.py`) `test_arrange_rejects_a_layout_that_loses_or_repeats_a_panel`:
   missing `b`, duplicated `a`, and unknown `z` each raise `ValueError`, and `column_names()`
   is unchanged after each.
 - [ ] By hand (state it in the PR, it cannot run in CI): `python scripts/screenshot_overview.py`
@@ -265,3 +265,5 @@ Run in CI's order (`.github/workflows/tests.yml`):
 - Disabling the per-tab Connect buttons (the feed's stop rule covers real data arriving).
 
 ## Comments
+
+2026-10-16: all code criteria done. Tests: tests/test_screenshot_overview.py (12) and tests/test_drag_panel.py (arrange/column_names). Gate: ruff clean; type_gate 138 soft errors, ratchet 139; full pytest 2453 passed. Mutation check: breaking the feed's pushing flag fails test_feed_survives_its_own_pushes. Bench still needed (unchecked): run `python scripts/screenshot_overview.py` on the Windows PC and confirm the look, and that `python -m rbl.main` still opens on the 5-column layout.
