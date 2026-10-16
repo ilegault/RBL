@@ -73,3 +73,28 @@ def _never_touch_the_real_cup_settings_store(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "STORE_PATH",
                         Path(tmp_path) / "cup_settings.json")
     yield
+
+
+@pytest.fixture(autouse=True)
+def _cup_tab_never_opens_a_real_modal(monkeypatch):
+    """Replace the Faraday cup tab's two blocking dialogs with non-blocking stand-ins.
+
+    `_confirm_stop_automatic` and `_ask_restart` wrap modal dialogs; run for real
+    under offscreen Qt they would wait forever for a click nobody makes, and the
+    whole suite would hang rather than fail. Stopping auto-confirms (so the many
+    tests that merely need the cycle stopped do not each repeat the patch), and
+    restarting raises, because a restart answer decides how a dose is counted and a
+    test that reaches it must say what the operator answered. A test that cares
+    monkeypatches either method on the tab instance, which wins over this class patch.
+    """
+    from rbl.gui.faraday_cup_tab import FaradayCupTab
+
+    def _no_real_restart_dialog(self, gap_start_t, now_t, saved_boundary_t):
+        raise AssertionError(
+            "this test restarted automatic cup insertion after a stop without "
+            "patching tab._ask_restart to return a RestartChoice (or None)"
+        )
+
+    monkeypatch.setattr(FaradayCupTab, "_confirm_stop_automatic", lambda self: True)
+    monkeypatch.setattr(FaradayCupTab, "_ask_restart", _no_real_restart_dialog)
+    yield

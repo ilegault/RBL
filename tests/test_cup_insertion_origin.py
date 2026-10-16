@@ -23,7 +23,7 @@ from PySide6.QtWidgets import QApplication
 
 from rbl.gui.faraday_cup_tab import FaradayCupTab
 from rbl.hardware.cup_status import CupPosition
-from rbl.services.cup_log import CupLog
+from rbl.services.cup_log import CupLog, RestartChoice
 from rbl.snapshots import CupActuationState
 from rbl.state.beamline import Beamline
 from tests.payloads import CupFeed
@@ -51,13 +51,19 @@ def _state(t, commanded, confirmed):
 class Bench:
     """A tab with an open cup log, plus helpers that play insertions into it."""
 
-    def __init__(self, qapp, tmp_path):
+    def __init__(self, qapp, tmp_path, monkeypatch):
         self.qapp = qapp
         beamline = Beamline()
         self.cup_log = CupLog(test_root=tmp_path)
         self.writer = self.cup_log.open_test(datetime(2026, 10, 8, 9, 0, 0))
         self.tab = FaradayCupTab(beamline=beamline, cup_log=self.cup_log)
         self.tab.beamline = None  # no hardware behind the Insert/Retract buttons
+        # These tests stop and start again between insertions. Beam held through each
+        # pause and a fresh schedule is the accounting they were written against.
+        monkeypatch.setattr(
+            self.tab, "_ask_restart",
+            lambda *a: RestartChoice(resume_schedule=False, beam_on_during_gap=True),
+        )
         self.feed = CupFeed(self.tab, beamline=beamline)
         self.tab.spn_k.setValue(1e-15)
         self.tab.spn_charge_state.setValue(1)
@@ -119,8 +125,8 @@ class Bench:
 
 
 @pytest.fixture
-def bench(qapp, tmp_path):
-    b = Bench(qapp, tmp_path)
+def bench(qapp, tmp_path, monkeypatch):
+    b = Bench(qapp, tmp_path, monkeypatch)
     yield b
     b.close()
 
@@ -151,14 +157,14 @@ def test_automatic_insertion_is_counted_and_charge_increases(bench):
     assert bench.tab.lbl_running_q.text() != first
 
 
-def test_manual_cup_in_time_is_taken_out_of_next_hold_interval(qapp, tmp_path):
-    plain = Bench(qapp, tmp_path / "plain")
+def test_manual_cup_in_time_is_taken_out_of_next_hold_interval(qapp, tmp_path, monkeypatch):
+    plain = Bench(qapp, tmp_path / "plain", monkeypatch)
     plain.automatic(1000.0)
     plain.automatic(1500.0)
     plain_rows = plain.summaries()
     plain.close()
 
-    with_manual = Bench(qapp, tmp_path / "with_manual")
+    with_manual = Bench(qapp, tmp_path / "with_manual", monkeypatch)
     with_manual.automatic(1000.0)
     with_manual.manual(1200.0, 1210.0)
     with_manual.automatic(1500.0)
