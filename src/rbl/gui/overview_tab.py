@@ -16,6 +16,8 @@ typed snapshots and the shared FuncGenSetpoints), and every command goes out
 through Beamline's command surface, which is where the interlocks live. This
 tab never touches a driver.
 
+Panels are named so a layout can be applied by name with PanelArea.arrange().
+
 Scope of the controls here:
   - SLIT MOTION: absolute target + Move, per slit. No step size, no jog, no
     stop — relative motion and the abort live on the Stepper Motors tab, which
@@ -169,12 +171,22 @@ class OverviewTab(QWidget):
         # separate so they can be stacked or spread.  FuncGen and HV are also
         # separate so they can be stacked in the same column or spread across.
         self._panel_area = PanelArea()
-        self._panel_area.add(DragPanel(self.beam,                        stretch=0), col=0)
-        self._panel_area.add(DragPanel(self._build_slit_control_box(), stretch=1), col=1)
-        self._panel_area.add(DragPanel(self._build_current_box(),      stretch=1), col=1)
-        self._panel_area.add(DragPanel(self._build_vacuum_box(),       stretch=1), col=2)
-        self._panel_area.add(DragPanel(self._build_funcgen_box(),      stretch=1), col=3)
-        self._panel_area.add(DragPanel(self._build_hv_box(),           stretch=1), col=4)
+        self._panel_area.add(
+            DragPanel(self.beam, stretch=0, name="beam"),
+            col=0)
+        self._panel_area.add(
+            DragPanel(self._build_slit_control_box(), stretch=1, name="slits"),
+            col=1)
+        self._panel_area.add(
+            DragPanel(self._build_current_box(), stretch=1, name="current"),
+            col=1)
+        self._panel_area.add(
+            DragPanel(self._build_vacuum_box(), stretch=1, name="vacuum"),
+            col=2)
+        self._panel_area.add(
+            DragPanel(self._build_funcgen_box(), stretch=1, name="funcgen"),
+            col=3)
+        self._panel_area.add(DragPanel(self._build_hv_box(),           stretch=1, name="hv"), col=4)
         outer.addWidget(self._panel_area, stretch=1)
 
         # A move commanded on the Stepper Motors tab publishes its target
@@ -551,6 +563,10 @@ class OverviewTab(QWidget):
         self._hv_interlock = payload
         self._redraw_hv_interlock()
 
+    @property
+    def panel_area(self) -> PanelArea:
+        return self._panel_area
+
     def redraw(self):
         """Public redraw method to update all widgets."""
         self._redraw()
@@ -575,7 +591,7 @@ class OverviewTab(QWidget):
         process — one CameraSource, two views.
         """
         self.recording = RecordingPanel(recorder)
-        self._panel_area.add(DragPanel(self.recording, stretch=1), col=2)
+        self._panel_area.add(DragPanel(self.recording, stretch=1, name="recording"), col=2)
 
     def attach_cup_log(self, cup_log) -> None:
         """Bind the shared CupLog, owned by MainWindow, and add the cup panel.
@@ -586,7 +602,7 @@ class OverviewTab(QWidget):
         """
         panel = CupPanel(cup_log)
         self.cup_panel = panel
-        self._panel_area.add(DragPanel(panel, stretch=1), col=2)
+        self._panel_area.add(DragPanel(panel, stretch=1, name="cup"), col=2)
 
     # ---- Commands out ----------------------------------------------------------
     #
