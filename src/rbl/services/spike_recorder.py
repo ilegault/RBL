@@ -31,8 +31,7 @@ WHAT IT KEEPS
   run that dies at hour 11 must leave 11 hours of rows).
 * `spikes/<plate>_<stamp>.csv`: BEFORE_S before and AFTER_S after a spike, both
   monitors. A spike that starts inside an open file's after-window extends that
-  file rather than starting another, because the recovery question ("did two
-  bursts come less than 100 ms apart?") needs them on one trace. A file is
+  file rather than starting another, so one event stays on one trace. A file is
   capped at MAX_EVENT_S so a storm of spikes cannot grow memory for hours.
 * `spikes/<plate>_pre_event_<stamp>.csv` on `save_pre_event`: the last 10 s,
   for studying what leads up to an amplifier shutting itself off.
@@ -40,8 +39,18 @@ WHAT IT KEEPS
 GAP BETWEEN SPIKES
 ------------------
 `gap_to_previous_s` runs from the END of the previous spike to the START of this
-one: the manual's recovery period (100 ms at no more than 10 mA) is measured
-from the end of a burst.
+one. The units are assumed to have no burst, so there is no recovery period to
+check it against (docs/hardware/eel5000-manufacturer-notes.md section 3.4); the
+gap is kept as plain evidence of how often spikes come.
+
+THE RAIL
+--------
+The current monitor cannot read above about 20 mA (ADR 0007), so a spike that
+reaches the rail has no measurable peak. Each driven plate's window is checked
+with `is_at_rail` on the RAW current volts and the mask goes to the detector,
+which adds up the time at the rail. Every row carries `rail_s`, `at_rail` and the
+scale the row was measured with, so a file stays interpretable if the scale ever
+changes again.
 
 TIME
 ----
@@ -66,12 +75,12 @@ from pathlib import Path
 import numpy as np
 from PySide6.QtCore import QObject, Signal
 
-from rbl.config import amplifier_assignments
+from rbl.config import amplifier_assignments, hardware_config
 from rbl.config.hardware_config import (
     AMP_CHANNEL_MAP,
-    CURRENT_MONITOR_MA_PER_VOLT,
     VOLTAGE_MONITOR_KV_PER_VOLT,
 )
+from rbl.hardware.amp_monitor import is_at_rail
 from rbl.hardware.funcgen_safety import CHANNEL_ROLE
 from rbl.hardware.spike_detector import (
     SpikeDetector,
@@ -92,6 +101,7 @@ SPIKE_COLUMNS = [
     "time_iso", "plate_position", "amplifier_serial", "duration_s", "peak_ma",
     "peak_is_lower_bound", "charge_uc", "gap_to_previous_s",
     "sample_interval_s", "reference_ma", "threshold_ma",
+    "rail_s", "at_rail", "current_monitor_ma_per_volt",
 ]
 WAVE_COLUMNS = ["t_s", "voltage_kv", "current_ma"]
 NO_SERIAL = "not recorded"
@@ -220,13 +230,13 @@ class SpikeRecorder(QObject):
             if not (i_entry and v_entry and "waveform" in i_entry
                     and "waveform" in v_entry):
                 continue
-            i_ma = np.asarray(i_entry["waveform"], dtype=float) \
-                * CURRENT_MONITOR_MA_PER_VOLT
+            i_volts = np.asarray(i_entry["waveform"], dtype=float)
+            i_ma = i_volts * hardware_config.CURRENT_MONITOR_MA_PER_VOLT
             v_kv = np.asarray(v_entry["waveform"], dtype=float) \
                 * VOLTAGE_MONITOR_KV_PER_VOLT
             n = n or int(i_ma.size)
             self._on_plate_window(plate, self._plates.setdefault(plate, _Plate()),
-                                  t0, v_kv, i_ma)
+                                  t0, v_kv, i_ma, is_at_rail(i_volts))
 
         self._t = t0 + n * self._dt
 
@@ -245,7 +255,7 @@ class SpikeRecorder(QObject):
 
     # ---- per-plate processing ----------------------------------------------
 
-    def _on_plate_window(self, plate, st, t0, v_kv, i_ma):
+    def _on_plate_window(self, plate, st, t0, v_kv, i_ma, at_rail=None):
         dt = self._dt
         te = t0 + i_ma.size * dt
         st.ring.append((t0, v_kv, i_ma))
@@ -264,7 +274,7 @@ class SpikeRecorder(QObject):
                     "threshold_ma": spike_threshold(ref),
                 })
         else:
-            for spike in st.detector.feed(i_ma, t0):
+            for spike in st.detector.feed(i_ma, t0, at_rail):
                 self._record(plate, st, spike)
 
         if st.pending is not None and te >= st.pending["t_end"]:
@@ -290,6 +300,9 @@ class SpikeRecorder(QObject):
             "sample_interval_s": self._dt,
             "reference_ma": st.reference.current_ma,
             "threshold_ma": st.detector.threshold_ma,
+            "rail_s": spike.rail_s,
+            "at_rail": spike.at_rail,
+            "current_monitor_ma_per_volt": hardware_config.CURRENT_MONITOR_MA_PER_VOLT,
         }
         self._csv.writerow(row)
         self._csv_file.flush()

@@ -156,3 +156,51 @@ def test_negative_excursions_count_by_magnitude():
 def test_reference_needs_samples():
     with pytest.raises(ValueError):
         capture_reference(np.array([]), DT)
+
+
+# ---- ticket 56: time at the rail -------------------------------------------
+
+def test_a_rail_segment_inside_a_spike_sets_rail_time_and_lower_bound():
+    det = SpikeDetector(Reference(current_ma=2.0, noise_ma=0.0), 1e-4)
+    x = np.full(20, 25.0)
+    rail = np.zeros(20, dtype=bool)
+    rail[5:15] = True
+    spikes = det.feed(np.concatenate((x, [2.0] * 5)),
+                      0.0, at_rail=np.concatenate((rail, [False] * 5)))
+    assert len(spikes) == 1
+    assert spikes[0].rail_s == pytest.approx(0.001, abs=1e-12)
+    assert spikes[0].at_rail is True
+    assert spikes[0].peak_is_lower_bound is True
+
+
+def test_a_rail_sample_is_a_spike_even_when_the_threshold_is_above_the_rail():
+    # Reference 12 mA puts the threshold at 24 mA, above anything the monitor
+    # can read (ADR 0007): only the rail mask can make this a spike.
+    det = SpikeDetector(Reference(current_ma=12.0, noise_ma=0.0), 1e-4)
+    assert det.threshold_ma == pytest.approx(24.0)
+    x = np.concatenate((np.full(30, 19.9), np.full(5, 12.0)))
+    rail = np.concatenate((np.ones(30, dtype=bool), np.zeros(5, dtype=bool)))
+    spikes = det.feed(x, 0.0, at_rail=rail)
+    assert len(spikes) == 1
+    assert spikes[0].rail_s == pytest.approx(0.003, abs=1e-12)
+
+
+def test_rail_time_keeps_adding_across_windows():
+    det = SpikeDetector(Reference(current_ma=2.0, noise_ma=0.0), 1e-4)
+    on = np.ones(10, dtype=bool)
+    assert det.feed(np.full(10, 19.9), 0.0, at_rail=on) == []
+    spikes = det.feed(np.concatenate((np.full(10, 19.9), [2.0] * 3)), 1e-3,
+                      at_rail=np.concatenate((on, [False] * 3)))
+    assert len(spikes) == 1
+    assert spikes[0].rail_s == pytest.approx(0.002, abs=1e-12)
+
+
+def test_without_a_rail_mask_spikes_are_unchanged():
+    det = SpikeDetector(Reference(current_ma=2.0, noise_ma=0.0), 1e-4)
+    x = np.concatenate((np.full(10, 2.0), np.full(8, 6.0), np.full(10, 2.0)))
+    spikes = det.feed(x, 0.0)
+    assert len(spikes) == 1
+    assert spikes[0].rail_s == 0
+    assert spikes[0].at_rail is False
+    assert spikes[0].duration_s == pytest.approx(8e-4)
+    assert spikes[0].peak_ma == pytest.approx(6.0)

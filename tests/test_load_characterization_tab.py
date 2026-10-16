@@ -527,6 +527,21 @@ class TestSpikeChart:
         assert faces[0][3] == 0.0         # lower bound: face colour none
         assert faces[1][3] > 0.0          # resolved peak: filled
 
+    def test_a_rail_spike_is_drawn_hollow_at_the_continuous_rating(self, tab):
+        tab.add_spike({**live_spike("X+", duration=0.003, peak=19.9),
+                       "at_rail": "True"})
+        coll = spike_collections(tab)["X+"]
+        assert tuple(coll.get_offsets()[0]) == pytest.approx((0.003, 20.0))
+        assert coll.get_facecolor()[0][3] == 0.0
+
+    def test_an_old_spike_file_without_rail_columns_still_opens(
+            self, tab, monkeypatch, tmp_path):
+        path = tmp_path / "spikes.csv"
+        write_spike_csv(path, [("X+", 0.001, 8.0, False), ("Y-", 0.0005, 6.0, True)])
+        monkeypatch.setattr(tab, "_ask_spike_file", lambda: path)
+        tab.btn_open_spikes.click()
+        assert marker_count(tab) == 2
+
     def test_a_live_spike_adds_a_marker_without_reloading(self, tab, monkeypatch):
         asked = []
         monkeypatch.setattr(tab, "_ask_spike_file", lambda: asked.append(1))

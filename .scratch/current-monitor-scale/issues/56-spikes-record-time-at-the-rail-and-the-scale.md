@@ -1,6 +1,6 @@
 # 56: Spikes record their time at the rail and the scale they were measured with
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -81,27 +81,27 @@ folder.
 
 ## Acceptance criteria
 
-- [ ] **Rail inside a spike.** `test_a_rail_segment_inside_a_spike_sets_rail_time_and_lower_bound`
+- [x] **Rail inside a spike.** `test_a_rail_segment_inside_a_spike_sets_rail_time_and_lower_bound`
   (new, `tests/test_spike_detector.py`):
   - setup: reference 2 mA, noise 0, `dt=1e-4`; 20 samples at 25 mA whose middle 10 are
     marked `at_rail`;
   - result: exactly one spike, with `rail_s == 0.001` (abs 1e-12), `at_rail` True and
     `peak_is_lower_bound` True.
-- [ ] **Rail above the threshold.**
+- [x] **Rail above the threshold.**
   `test_a_rail_sample_is_a_spike_even_when_the_threshold_is_above_the_rail` (new):
   - setup: reference 12 mA, noise 0 (so the threshold is 24 mA); 30 samples at 19.9 mA
     marked `at_rail`;
   - result: one spike with `rail_s == 0.003`.
-- [ ] **No mask.** `test_without_a_rail_mask_spikes_are_unchanged` (new): a 6 mA spike on a
+- [x] **No mask.** `test_without_a_rail_mask_spikes_are_unchanged` (new): a 6 mA spike on a
   2 mA quiet reference, fed with no `at_rail`, gives `rail_s == 0` and `at_rail` False,
   with the same duration and peak as today.
-- [ ] **CSV columns.** `test_spikes_csv_carries_rail_time_and_the_scale` (new,
+- [x] **CSV columns.** `test_spikes_csv_carries_rail_time_and_the_scale` (new,
   `tests/test_spike_recorder.py`):
   - the header ends with `rail_s, at_rail, current_monitor_ma_per_volt`;
   - for a spike whose raw current samples sit at 10.0 V for 20 samples, the row has
     `at_rail == "True"`, `float(rail_s) == 20 * dt` (abs 1e-9) and
     `float(current_monitor_ma_per_volt) == 2.0`.
-- [ ] **Chart.**
+- [x] **Chart.**
   - `test_a_rail_spike_is_drawn_hollow_at_the_continuous_rating` (new,
     `tests/test_load_characterization_tab.py`): a live row with `at_rail` "True" and
     `peak_ma` 19.9 is drawn at y 20.0 with face alpha 0.
@@ -118,3 +118,9 @@ Run in CI's order (`.github/workflows/tests.yml`):
     pytest --tb=short -q -n auto --dist loadfile --durations=25
 
 ## Comments
+
+Landed (2026-10-16). `Spike` gains `rail_s`/`at_rail`; `SpikeDetector.feed(samples, t0, at_rail=None)` treats a rail
+sample as always over threshold and keeps adding rail time across windows; `SpikeRecorder` passes
+`is_at_rail(raw volts)` and writes `rail_s`, `at_rail`, `current_monitor_ma_per_volt` (read at call time);
+the spike chart draws a rail spike hollow at the 20 mA line, and old files without the columns still open.
+Tests: detector (4 new, incl. cross-window), recorder CSV (1), chart (2). Full suite 2435 passed. No bench check needed.

@@ -607,7 +607,11 @@ class LoadCharacterizationTab(QWidget):
 
     @staticmethod
     def _parse_spike(row: dict):
-        """(plate, duration_s, peak_ma, lower_bound) from a recorder or CSV row."""
+        """(plate, duration_s, peak_ma, lower_bound, at_rail) from a recorder or CSV row.
+
+        `at_rail` is False when the column is missing or empty, so spike files
+        written before the current monitor's rail was recorded still open.
+        """
         try:
             plate = row["plate_position"]
             if plate not in AMP_LABELS:
@@ -617,9 +621,12 @@ class LoadCharacterizationTab(QWidget):
             lower = row["peak_is_lower_bound"]
             if not isinstance(lower, bool):
                 lower = str(lower).strip().lower() in ("true", "1")
+            at_rail = row.get("at_rail", False)
+            if not isinstance(at_rail, bool):
+                at_rail = str(at_rail).strip().lower() in ("true", "1")
             if not (duration > 0 and peak > 0):          # log axes cannot show these
                 return None
-            return plate, duration, peak, lower
+            return plate, duration, peak, lower, at_rail
         except (KeyError, TypeError, ValueError):
             return None
 
@@ -664,7 +671,9 @@ class LoadCharacterizationTab(QWidget):
 
         # Limits first: a log scale on an axes with no positive data raises.
         durations = [s[1] for s in spikes]
-        peaks = [s[2] for s in spikes]
+        # A spike at the rail has no measurable peak: it sits on the continuous
+        # rating line, hollow, and its duration is the evidence.
+        peaks = [AMP_CONTINUOUS_RATING_MA if s[4] else s[2] for s in spikes]
         x_lo = min([5e-5, *durations]) / 2
         x_hi = max([10.0, *durations]) * 2
         y_lo = min([1.0, *peaks]) / 2
@@ -685,9 +694,10 @@ class LoadCharacterizationTab(QWidget):
             if not mine:
                 continue
             colour = f"C{i}"
-            ax.scatter([s[1] for s in mine], [s[2] for s in mine],
+            ax.scatter([s[1] for s in mine],
+                       [AMP_CONTINUOUS_RATING_MA if s[4] else s[2] for s in mine],
                        s=36, edgecolors=colour, linewidths=1.4,
-                       facecolors=["none" if s[3] else colour for s in mine],
+                       facecolors=["none" if (s[3] or s[4]) else colour for s in mine],
                        label=plate, zorder=3)
         ax.set_xlabel("Spike duration (s)")
         ax.set_ylabel("Peak current (mA)")

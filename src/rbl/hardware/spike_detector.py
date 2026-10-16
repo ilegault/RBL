@@ -48,6 +48,17 @@ caller must not present it as the true peak. At 7.5 kS/s one sample is already
 133 us, so the sample-count rule is what flags brief spikes there; the 100 us
 rule only matters at faster sampling.
 
+THE RAIL
+--------
+The current monitor tops out near 20 mA (docs/adr/0007-...): above that it sits
+at the rail and the true current is unknown. A spike that reaches the rail has
+no measurable peak, only a time at the rail, so the caller passes a boolean
+`at_rail` mask and the detector adds up that time (`Spike.rail_s`) and reports
+the peak as a lower bound. A rail sample is ALWAYS over the threshold: with a
+12 mA reference the threshold is 24 mA, above anything the monitor can read,
+and without this rule a clamped amplifier would never produce a spike row. The
+detector stays pure - it never decides what "the rail" is; the caller does.
+
 STATE
 -----
 Windows arrive back to back and a spike does not respect the boundary. The
@@ -87,6 +98,8 @@ class Spike:
     peak_ma: float
     charge_uc: float                  # integral of (|I| - reference), microcoulombs
     peak_is_lower_bound: bool
+    rail_s: float = 0.0               # time spent at the rail inside the spike
+    at_rail: bool = False             # rail_s > 0
 
 
 def capture_reference(samples_ma, dt_s: float) -> Reference:
@@ -122,13 +135,18 @@ class SpikeDetector:
         self._n = 0
         self._peak = 0.0
         self._excess_ma = 0.0     # sum of (|I| - reference) over the run
+        self._rail_n = 0          # samples at the rail within the run
 
     @property
     def threshold_ma(self) -> float:
         return self._threshold
 
-    def feed(self, samples_ma, t0_s: float) -> list[Spike]:
+    def feed(self, samples_ma, t0_s: float, at_rail=None) -> list[Spike]:
         """Process one window whose first sample is at `t0_s`.
+
+        `at_rail` is an optional boolean array, one entry per sample, marking
+        samples at the current monitor's rail. Such a sample always counts as
+        over the threshold. Without it the detector behaves as it always did.
 
         A run still above threshold at the end of the window is held back and
         reported by the window in which it ends.
@@ -138,6 +156,12 @@ class SpikeDetector:
         if n == 0:
             return []
         over = a > self._threshold           # NaN compares False: never a spike
+        rail = None
+        if at_rail is not None:
+            rail = np.asarray(at_rail, dtype=bool)
+            if rail.shape != a.shape:
+                raise ValueError("at_rail must have one entry per sample")
+            over = over | rail
         d = np.diff(np.concatenate(([self._open], over)).astype(np.int8))
         starts = [int(i) for i in np.flatnonzero(d == 1)]
         ends = [int(i) for i in np.flatnonzero(d == -1)]
@@ -147,13 +171,13 @@ class SpikeDetector:
             # The run in progress continues from sample 0 to its end (or beyond
             # this window).
             end = ends.pop(0) if ends else n
-            self._extend(a, 0, end)
+            self._extend(a, 0, end, rail)
             if end < n:
                 self._close_into(out)
         for s in starts:
             e = ends.pop(0) if ends else n
             self._begin(t0_s + s * self._dt)
-            self._extend(a, s, e)
+            self._extend(a, s, e, rail)
             if e < n:
                 self._close_into(out)
         return out
@@ -164,14 +188,17 @@ class SpikeDetector:
         self._n = 0
         self._peak = 0.0
         self._excess_ma = 0.0
+        self._rail_n = 0
 
-    def _extend(self, a: np.ndarray, s: int, e: int) -> None:
+    def _extend(self, a: np.ndarray, s: int, e: int, rail=None) -> None:
         seg = a[s:e]
         if seg.size == 0:
             return
         self._n += int(seg.size)
         self._peak = max(self._peak, float(seg.max()))
         self._excess_ma += float(seg.sum() - seg.size * self._ref.current_ma)
+        if rail is not None:
+            self._rail_n += int(rail[s:e].sum())
 
     def _close_into(self, out: list[Spike]) -> None:
         spike = self._close()
@@ -183,13 +210,17 @@ class SpikeDetector:
             self._open = False
             return None
         duration = self._n * self._dt
+        rail_s = self._rail_n * self._dt
         spike = Spike(
             start_s=self._start_s,
             duration_s=duration,
             peak_ma=self._peak,
             charge_uc=self._excess_ma * self._dt * 1e3,      # mA x s = mC
             peak_is_lower_bound=(self._n < MIN_RESOLVED_SAMPLES
-                                 or duration < LOWER_BOUND_DURATION_S),
+                                 or duration < LOWER_BOUND_DURATION_S
+                                 or self._rail_n > 0),
+            rail_s=rail_s,
+            at_rail=self._rail_n > 0,
         )
         self._open = False
         return spike
