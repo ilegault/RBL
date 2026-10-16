@@ -465,9 +465,9 @@ someone else's bug fix smuggled into it cannot be reviewed.
 <!-- ACTIVE-PLAN:START -->
 ## Active implementation plan
 
-_Written by the planning model on 2026-10-07 17:00. Implement this. If something in it is wrong, say so before changing course._
+_Written by the planning model on 2026-10-16 23:07. Implement this. If something in it is wrong, say so before changing course._
 
-# Active work: logging and sessions (set 2), amplifier load and spikes (set 3), current-monitor scale (set 4)
+# Active work: sessions (set 2), amplifier load and spikes (set 3), current-monitor scale (set 4), screenshot mode (set 5)
 
 This is a pointer, not the work.
 
@@ -476,8 +476,8 @@ This is a pointer, not the work.
 - Spec: `.scratch/logging-and-sessions/spec.md`
 - ADRs: `docs/adr/0004-monitoring-log-and-sessions.md`; amendments dated 2026-10-05 in
   `docs/adr/0002-...md` (B1-B5) and `docs/adr/0003-...md` (C1-C5)
-- Tickets: `.scratch/logging-and-sessions/issues/19...33`. 19-22 and 25 are done; 23, 24 and
-  26-33 remain.
+- Tickets: `.scratch/logging-and-sessions/issues/19...33`. 19-30 are done; 31, 32 and 33 remain,
+  chained in that order.
 
 ## Set 3 (nearly done): measured amplifier loads, current-vs-frequency planner, spike recorder
 
@@ -500,16 +500,22 @@ This is a pointer, not the work.
   - new terms: "Current limit setting", "Current monitor scale", "At the rail";
   - rewritten: "Hard trip", "Soft trip", "Burst rating", "Recovery period", and the
     "Trip" known collision.
-- Tickets: `.scratch/current-monitor-scale/issues/53...60`
+- Tickets: `.scratch/current-monitor-scale/issues/53...60`. 53-55 and 57-59 are done; 56 and 60
+  remain.
 - Tracker conventions: `docs/agents/issue-tracker.md`
+
+## Set 5 (new): screenshot mode
+
+- Ticket: `.scratch/screenshot-mode/issues/61-screenshot-mode-overview.md`. One ticket, no
+  spec, no ADR. Independent of every other set.
+- A dev-only `scripts/screenshot_overview.py` that fills the Overview with a canned scene.
+  Nothing in `src/` or `rbl.spec` may reference it.
 
 ## Next
 
-- **53 first.** It makes the tests independent of the scale while it is still 10.0, so 54's
-  scale change is a small diff. Nothing else in set 4 can start without it.
-- **59 can run alongside 53.** It is a new script under `scripts/` plus its own test file, and
-  touches no file that 53 touches.
-- Set 2's **23** and **26** are also unblocked.
+- **31**, **56** and **61** are unblocked and touch disjoint code; any order, or in parallel.
+- Then 32 → 33 (set 2), and 48 once 33 and 56 are done.
+- 52 and 60 are `ready-for-developer`: an agent must not claim them.
 
 ## Dependency order (set 4)
 
