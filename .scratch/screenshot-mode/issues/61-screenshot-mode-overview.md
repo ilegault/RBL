@@ -1,6 +1,6 @@
 # 61: Screenshot mode — a dev-only launcher that fills the Overview with a canned mid-irradiation scene
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
