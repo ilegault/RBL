@@ -98,3 +98,18 @@ def _cup_tab_never_opens_a_real_modal(monkeypatch):
     monkeypatch.setattr(FaradayCupTab, "_confirm_stop_automatic", lambda self: True)
     monkeypatch.setattr(FaradayCupTab, "_ask_restart", _no_real_restart_dialog)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _main_window_never_opens_a_real_continue_dialog(monkeypatch):
+    """Answer "start from zero" to the continue-the-dose question without a modal.
+
+    `MainWindow._ask_continue_dose` wraps a modal dialog that appears whenever a session
+    starts and an earlier session left counted dose under LOGS_DIR. Under offscreen Qt it
+    would wait forever. A test that cares about the answer monkeypatches it on the
+    window instance, which wins over this class patch.
+    """
+    from rbl.gui.app import MainWindow
+
+    monkeypatch.setattr(MainWindow, "_ask_continue_dose", lambda self, totals: None)
+    yield
