@@ -1,6 +1,6 @@
 # 32: Sessions open the cup log and offer to continue the previous dose
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
