@@ -21,11 +21,62 @@ acquisition runs with running averages, and renders a live current plot over tim
 RUNNING AVERAGE COMPUTED FROM LOGGED SAMPLES
 --------------------------------------------
 The running average is computed strictly from the samples logged by
-CupSessionWriter, never from a parallel accumulator. Two numbers derived
+the open CupSessionWriter, never from a parallel accumulator. Two numbers derived
 independently are two numbers that can drift apart; computing the average from
 logged samples ensures that the number on screen and the number in the session file
 agree unconditionally. Over-range samples are excluded from the average, and their
 exclusion count is rendered visibly.
+
+WRITES ONLY WHILE A CUP LOG IS OPEN (ADR 0003 amendment C1/C2, ticket 28)
+------------------------------------------------------------------------
+This tab used to build its own CupSessionWriter, so a cup file existed whether
+or not anyone had started a session. It now takes the process's one CupLog and
+writes only through ``cup_log.writer``; every write is skipped when that is None.
+Consequences, all deliberate:
+- With no log the tab shows ``Not logging`` beside the current readout, and
+  automatic insertion cannot be armed (the first precondition). Manual
+  Insert/Retract stay available.
+- Run statistics come from logged samples (see above), so with no log the live
+  duration/sample count/average read empty rather than being computed a second way.
+- ``cup_log.opened`` starts a fresh dose accumulator; ``cup_log.closed`` stops
+  automatic insertion as an operator stop does (withdraw, keep the saved boundary).
+- The tab registers the acquisition settings in force with the CupLog so the
+  file header reports what the detector actually uses.
+- The tab closes the log only if it built the log itself; otherwise MainWindow owns it.
+
+STOPPING AND RESTARTING AUTOMATIC INSERTION (ADR 0003 amendment C3/C4, ticket 31)
+------------------------------------------------------------------------------------
+Start and Stop are two buttons. Start is start-only; Stop is the only way an operator
+stops, and it always withdraws the cup. A stop pauses the dose record, so it asks first
+(``_confirm_stop_automatic``) and an unanswered "Keep running" changes nothing. Stops
+forced by a fault (an unconfirmed move, lost position feedback) and the stop that
+closing the cup log performs never ask: the first has no operator to ask, the second
+was already confirmed by the operator closing the log.
+
+Every stop remembers when it happened (``_stop_gap_start_t``). While stopped nothing is
+sampled, so the next Start in the same cup log asks ``_ask_restart`` whether the beam was
+on the specimen during the gap: "no" takes the gap out of the next hold interval
+(``exclude_interval``), "yes" keeps it. The first Start in a cup log has no gap and asks
+nothing, and a new cup log never inherits one. Cancelling the dialog starts nothing and
+leaves the gap open, so the question is asked again about the same gap.
+
+ONLY AUTOMATIC INSERTIONS COUNT TOWARD THE DOSE (ADR 0003 amendment C2/C4, ticket 30)
+------------------------------------------------------------------------------------
+The dose chain holds the previous measured current across the gap between insertions
+(zero-order hold). A cup that a person put in the beam before irradiation blocks that
+beam, so crediting the check as dose would be wrong twice: its own charge never reached
+the specimen, and the next gap would be credited as if the beam had run through it.
+So each insertion is classified when it ends:
+- ``automatic``: the confirmed IN followed a ``CycleInsert`` this tab acted on in
+  ``_tick_cycle``. The only origin that calls ``record_insertion``.
+- ``manual`` (Insert button), ``forced`` (Force Start) or ``uncommanded`` (confirmed IN
+  with no command, e.g. the controller was switched to LOCAL): recorded, never counted.
+  Their confirmed IN -> confirmed OUT span goes to ``exclude_interval`` (the run's open
+  and close times when position feedback is unavailable) so the next automatic hold
+  interval loses exactly the time the cup was in. The summary row carries the running
+  totals unchanged and ``counted_in_dose=false``.
+The origin is latched at the confirmed IN and every mark clears on the confirmed OUT or
+when the run closes, so an automatic mark can never leak onto a later hand insertion.
 
 PLOT NAVIGATION (SHARED PATTERN WITH SLIT CURRENTS)
 ---------------------------------------------------
@@ -126,30 +177,32 @@ and persist to ~/.config/rbl/cup_settings.json.
 
 KEEP PREVIOUS SCHEDULE AND CYCLE LIFECYCLE ROWS (ADR 0002 AMENDMENT A6, A8, TICKET 16)
 --------------------------------------------------------------------------------------
-An operator who stops an armed cycle to edit locked settings can re-arm onto the boundary
-the cycle would have hit via the "Keep previous schedule" checkbox, rather than waiting a
-fresh period. The checkbox is enabled only while a saved boundary is in the future and greys
-out with explanatory tooltip once it passes.
-Both cycle exits (disarm and stop) write cycle_disarmed rows carrying the saved boundary,
-and arming writes cycle_armed rows recording whether the countdown was fresh or resumed,
-ensuring gaps in the insertion archive are fully explained.
+An operator who stops an armed cycle to edit locked settings can start it again onto the
+boundary the cycle would have hit ("Pick up where you left off" in the restart dialog,
+ticket 31, which replaced the original "Keep previous schedule" checkbox), rather than
+waiting a fresh period. That choice is offered only while the saved boundary is still in
+the future.
+Stopping writes cycle_disarmed rows carrying the saved boundary, and starting writes
+cycle_armed rows recording whether the countdown was fresh or resumed, ensuring gaps in
+the insertion archive are fully explained.
 """
 from __future__ import annotations
 
 import logging
 import math
 import time
+from datetime import datetime
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
-    QCheckBox,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -171,9 +224,10 @@ from rbl.gui.widgets.inputs import (
     unit_row,
 )
 from rbl.gui.widgets.live_plot import LivePlotPanel
+from rbl.gui.widgets.restart_dialog import RestartDialog
 from rbl.hardware.cup_status import CupPosition
 from rbl.hardware.current_monitor import RollingBuffer, format_current
-from rbl.hardware.dose_model import DoseAccumulator, patch_area_cm2
+from rbl.hardware.dose_model import DoseAccumulator, InsertionCurrentStats, patch_area_cm2
 from rbl.services.cup_acquisition import (
     AuthorityDetector,
     CupAcquisitionStateMachine,
@@ -181,7 +235,8 @@ from rbl.services.cup_acquisition import (
     RunClosed,
     RunOpened,
 )
-from rbl.services.cup_session_writer import CupSessionWriter
+from rbl.services.cup_log import CupLog, CupView, RestartChoice
+from rbl.services.cup_session_writer import CupRunStats
 from rbl.services.sampling_cycle import (
     CycleInsert,
     CycleRetract,
@@ -196,6 +251,15 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+NO_CUP_LOG_REASON = "Start a session or a cup test log to use automatic cup insertion."
+
+
+def _format_stop_time(t: float) -> str:
+    """A scheduler time as the operator reads it: wall clock for an epoch, else seconds."""
+    if t > 1.0e9:
+        return datetime.fromtimestamp(t).strftime("%H:%M:%S")
+    return f"{t:.0f} s"
+
 
 class FaradayCupTab(QWidget):
     """The 'Faraday Cup' outer tab."""
@@ -204,11 +268,19 @@ class FaradayCupTab(QWidget):
     WINDOW_SECONDS  = 120      # default 2-minute viewport
     MIN_WINDOW_SECONDS = 1.0   # minimum zoom step (1.0 s)
 
+    # What the Overview cup panel renders. Emitted when the log opens or closes, when
+    # a run opens or closes, when automatic insertion starts or stops, and when the
+    # dose totals change. The panel computes nothing: this tab owns the one
+    # DoseAccumulator (AGENTS.md invariant 2).
+    cup_view_changed = Signal(object)
+    _last_cup_view: CupView | None = None
+    _cup_view_ready: bool = False
+
     def __init__(
         self,
         beamline: Beamline | None = None,
         parent: QWidget | None = None,
-        session_writer: CupSessionWriter | None = None,
+        cup_log: CupLog | None = None,
     ):
         super().__init__(parent)
         self.beamline = beamline
@@ -226,20 +298,15 @@ class FaradayCupTab(QWidget):
             loaded_settings.release_threshold_a,
         )
 
-        self.session_writer: CupSessionWriter = (
-            session_writer
-            if session_writer is not None
-            else CupSessionWriter(
-                arm_threshold_a=loaded_settings.arm_threshold_a,
-                release_threshold_a=loaded_settings.release_threshold_a,
-                arm_debounce_s=loaded_settings.arm_debounce_s,
-                release_interval_s=loaded_settings.release_interval_s,
-                settle_window_s=loaded_settings.settle_window_s,
-                cycle_period_s=loaded_settings.cycle_period_s,
-                cycle_dwell_s=loaded_settings.cycle_dwell_s,
-            )
-        )
-        self.session_writer.set_settle_window(loaded_settings.settle_window_s)
+        # The cup log is the only way this tab reaches a file (spec C2). A tab built
+        # bare gets a closed log of its own, so it never writes anything.
+        self._owns_cup_log: bool = cup_log is None
+        self.cup_log: CupLog = cup_log if cup_log is not None else CupLog()
+        self._settle_window_s: float = loaded_settings.settle_window_s
+        self.cup_log.set_writer_settings_provider(self._writer_settings)
+        writer = self.cup_log.writer
+        if writer is not None:
+            writer.set_settle_window(self._settle_window_s)
         self._last_heartbeat_t: float = 0.0
         self.buffer = RollingBuffer(self.BUFFER_CAPACITY)
 
@@ -279,11 +346,23 @@ class FaradayCupTab(QWidget):
         self._accumulator: DoseAccumulator = DoseAccumulator()
         self._current_run_start_t: float = float("nan")
         self._last_commanded_in_t: float | None = None
+        # Who caused the insertion in progress (ADR 0003 amendment C4, ticket 30).
+        # The pending flags record intent; they are latched into _insertion_origin when
+        # the controller confirms IN, and every one of them is consumed on close.
+        self._auto_pending: bool = False
+        self._manual_pending: bool = False
+        self._run_forced: bool = False
+        self._insertion_origin: str | None = None
+        self._confirmed_in_t: float = float("nan")
+        self._confirmed_out_t: float = float("nan")
         self._species: str = "NOT_SPECIFIED"
         self._beam_energy: str = "NOT_SPECIFIED"
 
         # Cycle fault message — set on arming refusal or cycle disarm; cleared on arm
         self._cycle_fault: str = ""
+        # When automatic insertion last stopped in this cup log (operator or fault);
+        # None before the first stop and after a restart. Drives the restart question.
+        self._stop_gap_start_t: float | None = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -332,6 +411,12 @@ class FaradayCupTab(QWidget):
         )
         header_lay.addWidget(lbl_channel)
         header_lay.addStretch()
+        self.lbl_not_logging = QLabel("Not logging")
+        self.lbl_not_logging.setStyleSheet(theme.status_label(theme.WARN))
+        self.lbl_not_logging.setToolTip(
+            "No cup log is open, so nothing from this tab is being written to disk."
+        )
+        header_lay.addWidget(self.lbl_not_logging)
         reading_lay.addLayout(header_lay)
 
         mono_font = QFont("Consolas", 24)
@@ -569,7 +654,7 @@ class FaradayCupTab(QWidget):
         self.spn_cycle_dwell.editingFinished.connect(self._on_cycle_dwell_changed)
         cycle_lay.addLayout(unit_row(self.spn_cycle_dwell, "s"))
 
-        # Arm / Disarm button
+        # Start button (start-only: Stop below is the only way an operator stops)
         self.btn_cycle_arm = QPushButton("Arm Cycle")
         self.btn_cycle_arm.setStyleSheet("font-weight: bold; padding: 4px 14px;")
         self.btn_cycle_arm.setToolTip(
@@ -577,13 +662,6 @@ class FaradayCupTab(QWidget):
         )
         self.btn_cycle_arm.clicked.connect(self._on_cycle_arm_clicked)
         cycle_lay.addWidget(self.btn_cycle_arm)
-
-        # Keep previous schedule checkbox (ADR 0002 amendment A6, ticket 16)
-        self.chk_keep_schedule = QCheckBox("Keep previous schedule")
-        self.chk_keep_schedule.setChecked(False)
-        self.chk_keep_schedule.setEnabled(False)
-        self.chk_keep_schedule.setToolTip("No saved schedule boundary to resume")
-        cycle_lay.addWidget(self.chk_keep_schedule)
 
         # Stop button
         self.btn_cycle_stop = QPushButton("Stop Cycle")
@@ -862,6 +940,11 @@ class FaradayCupTab(QWidget):
         self._set_actuation_disconnected_view()
         self._update_cycle_view(0.0)
 
+        self.cup_log.opened.connect(self._on_cup_log_opened)
+        self.cup_log.closed.connect(self._on_cup_log_closed)
+        self._cup_view_ready = True   # the dose widgets _emit_cup_view reads now exist
+        self._update_logging_view()
+
     # ── Connection Handling ───────────────────────────────────────────────────
 
     def get_resource(self) -> str:
@@ -893,17 +976,209 @@ class FaradayCupTab(QWidget):
             except Exception as exc:
                 log.exception("FaradayCupTab connect failed: %s", exc)
 
+    # ── Cup log (spec C2) ─────────────────────────────────────────────────────
+
+    def _writer_settings(self) -> dict[str, float]:
+        """Constructor settings for a cup log that is about to open.
+
+        A header that reports a different number than the detector actually used
+        makes the archive unreadable, so the values in force when the file opens
+        come from this tab, not from compiled-in defaults.
+        """
+        return {
+            "arm_threshold_a": self.acquisition.detector.arm_threshold,
+            "release_threshold_a": self.acquisition.detector.release_threshold,
+            "arm_debounce_s": self._settings.arm_debounce_s,
+            "release_interval_s": self._settings.release_interval_s,
+            "settle_window_s": self._settle_window_s,
+            "cycle_period_s": self.cycle.period_s,
+            "cycle_dwell_s": self.cycle.dwell_s,
+        }
+
+    def _on_cup_log_opened(self, path: str, kind: str) -> None:
+        """A new log is a new dose record: start the accumulator from zero."""
+        self._accumulator = DoseAccumulator()
+        self._stop_gap_start_t = None
+        writer = self.cup_log.writer
+        if writer is not None:
+            writer.update_session_parameters(
+                species=self.species,
+                energy=self.beam_energy,
+                charge_state=self.charge_state,
+                area_cm2=self.irradiated_area_cm2,
+                k=self.displacement_coeff,
+                k_depth=self.damage_depth,
+                srim_version=self.srim_version,
+                entry_date=self.entry_date,
+                cycle_period_s=self.cycle_period,
+                cycle_dwell_s=self.cycle_dwell,
+            )
+        self._update_logging_view()
+        self._update_dose_view()
+        self._update_acquisition_view()
+
+    def _on_cup_log_closed(self, path: str) -> None:
+        """Closing the log stops automatic insertion the way an operator stop does.
+
+        There is no dialog: the operator already confirmed closing the log. The cup
+        is withdrawn and the saved schedule boundary is kept.
+        """
+        self._stop_automatic("stop")
+        self._stop_gap_start_t = None  # the gap belonged to the log that just closed
+        self._update_logging_view()
+        self._update_acquisition_view()
+
+    def _update_logging_view(self) -> None:
+        self.lbl_not_logging.setVisible(self.cup_log.writer is None)
+        self._emit_cup_view()
+
+    def _emit_cup_view(self) -> None:
+        """Publish a ``CupView`` for the Overview panel; repeats of the same view are dropped.
+
+        Called from the several places that change what the view holds, so the
+        de-duplication here is what keeps a once-a-second cycle refresh from
+        re-rendering the panel when nothing changed. Nothing is published until the
+        constructor has built the dose widgets the view is read from.
+        """
+        if not self._cup_view_ready:
+            return
+        q = self._accumulator.total_charge_c
+        cs = self.charge_state
+        area = self._area_cm2
+        k = self.displacement_coeff
+        has_fluence = cs > 0 and area > 0.0
+        view = CupView(
+            logging=self.cup_log.writer is not None,
+            log_path=self.cup_log.path,
+            run_open=bool(self.acquisition.is_acquiring),
+            automatic_running=bool(self.cycle.is_armed),
+            charge_c=q,
+            fluence=self._accumulator.fluence(cs, area) if has_fluence else None,
+            dpa=self._accumulator.dpa(cs, area, k) if has_fluence and k > 0.0 else None,
+        )
+        if view == self._last_cup_view:
+            return
+        self._last_cup_view = view
+        self.cup_view_changed.emit(view)
+
+    def _active_run_stats(self) -> CupRunStats:
+        """Run statistics come from logged samples; with no log there are none."""
+        writer = self.cup_log.writer
+        if writer is not None:
+            return writer.active_run_stats
+        return CupRunStats(
+            run_id=None,
+            duration_s=0.0,
+            total_samples=0,
+            valid_samples=0,
+            over_range_samples=0,
+            average_current_a=None,
+        )
+
+    def _last_insertion_stats(self) -> InsertionCurrentStats:
+        writer = self.cup_log.writer
+        if writer is not None:
+            return writer.last_insertion_stats
+        return InsertionCurrentStats(mean_a=0.0, std_a=0.0, sample_count=0, excluded_count=0)
+
+    def _resolve_insertion_origin(self) -> str:
+        """Name who caused the insertion that just ended (ADR 0003 amendment C4)."""
+        if self._run_forced:
+            return "forced"
+        if self._insertion_origin is not None:
+            return self._insertion_origin
+        if self._auto_pending:
+            return "automatic"
+        if self._manual_pending:
+            return "manual"
+        return "uncommanded"
+
+    def _close_insertion(self, run_id: int, t_close: float, details: str = "") -> None:
+        """Settle the dose for a closed run and write its insertion summary row.
+
+        Only an automatic insertion is credited (``record_insertion``). Any other
+        origin leaves the accumulator's charge and beam-on totals alone and instead
+        passes its confirmed IN to confirmed OUT span to ``exclude_interval``, so the
+        time the cup blocked the beam is not credited at the held current by the next
+        automatic insertion. Without position feedback the run's open and close
+        times stand in for the confirmed ones.
+        """
+        stats = self._last_insertion_stats()
+        run_start = (
+            self._current_run_start_t
+            if not math.isnan(self._current_run_start_t)
+            else t_close
+        )
+        dwell = max(0.0, t_close - run_start)
+        origin = self._resolve_insertion_origin()
+        counted = origin == "automatic"
+        if counted:
+            self._accumulator.record_insertion(
+                t_in=run_start, t_out=t_close, mean_current_a=stats.mean_a
+            )
+            beam_on_s = self._accumulator.last_beam_on_s
+        else:
+            have_feedback = (
+                not math.isnan(self._confirmed_in_t)
+                and not math.isnan(self._confirmed_out_t)
+                and self._confirmed_out_t > self._confirmed_in_t
+            )
+            self._accumulator.exclude_interval(
+                self._confirmed_in_t if have_feedback else run_start,
+                self._confirmed_out_t if have_feedback else t_close,
+            )
+            beam_on_s = 0.0
+        q = self._accumulator.total_charge_c
+        cs = self.charge_state
+        area = self._area_cm2
+        k = self.displacement_coeff
+        writer = self.cup_log.writer
+        if writer is not None:
+            writer.write_insertion_summary(
+                run_id=run_id,
+                commanded_timestamp=self._last_commanded_in_t,
+                confirmed_timestamp=run_start,
+                dwell=dwell,
+                sample_count=stats.sample_count,
+                mean_current_a=stats.mean_a,
+                std_current_a=stats.std_a,
+                beam_on_seconds=beam_on_s,
+                charge=q,
+                charge_state=cs,
+                area=area,
+                k=k,
+                fluence=self._accumulator.fluence(cs, area),
+                dpa=self._accumulator.dpa(cs, area, k),
+                t_host=t_close,
+                details=details,
+                origin=origin,
+                counted_in_dose=counted,
+                total_beam_on_s=self._accumulator.total_beam_on_s,
+            )
+        self._last_commanded_in_t = None
+        self._current_run_start_t = float("nan")
+        self._auto_pending = False
+        self._manual_pending = False
+        self._run_forced = False
+        self._insertion_origin = None
+        self._confirmed_in_t = float("nan")
+        self._confirmed_out_t = float("nan")
+        self._update_dose_view()
+
     def _on_force_start_clicked(self) -> None:
         t_now = time.time()
         transition = self.acquisition.force_start(t=t_now)
         if transition is not None:
-            self.session_writer.write_run_opened(
-                t_host=t_now,
-                run_id=transition.run_id,
-                arm_threshold=transition.arm_threshold,
-                release_threshold=transition.release_threshold,
-                forced=True,
-            )
+            self._run_forced = True
+            writer = self.cup_log.writer
+            if writer is not None:
+                writer.write_run_opened(
+                    t_host=t_now,
+                    run_id=transition.run_id,
+                    arm_threshold=transition.arm_threshold,
+                    release_threshold=transition.release_threshold,
+                    forced=True,
+                )
             if self.beamline is not None:
                 self.beamline.set_cup_acquiring(True)
         self._update_acquisition_view()
@@ -912,56 +1187,14 @@ class FaradayCupTab(QWidget):
         t_now = time.time()
         transition = self.acquisition.force_stop(t=t_now)
         if transition is not None:
-            self.session_writer.write_run_closed(
-                t_host=t_now,
-                run_id=transition.run_id,
-                reason=transition.reason,
-            )
-            stats = self.session_writer.last_insertion_stats
-            mean_current = stats.mean_a
-            std_current = stats.std_a
-            cnt = stats.sample_count
-            conf_t = (
-                self._current_run_start_t
-                if not math.isnan(self._current_run_start_t)
-                else t_now
-            )
-            dwell = max(0.0, t_now - conf_t)
-            self._accumulator.record_insertion(
-                t_in=conf_t,
-                t_out=t_now,
-                mean_current_a=mean_current,
-            )
-            beam_on_s = self._accumulator.last_beam_on_s
-            q = self._accumulator.total_charge_c
-            cs = self.charge_state
-            area = self._area_cm2
-            k = self.displacement_coeff
-            fluence = self._accumulator.fluence(cs, area)
-            dpa = self._accumulator.dpa(cs, area, k)
-
-            cmd_t = self._last_commanded_in_t
-            self.session_writer.write_insertion_summary(
-                run_id=transition.run_id,
-                commanded_timestamp=cmd_t,
-                confirmed_timestamp=conf_t,
-                dwell=dwell,
-                sample_count=cnt,
-                mean_current_a=mean_current,
-                std_current_a=std_current,
-                beam_on_seconds=beam_on_s,
-                charge=q,
-                charge_state=cs,
-                area=area,
-                k=k,
-                fluence=fluence,
-                dpa=dpa,
-                t_host=t_now,
-                details="force_stop",
-            )
-            self._last_commanded_in_t = None
-            self._current_run_start_t = float("nan")
-            self._update_dose_view()
+            writer = self.cup_log.writer
+            if writer is not None:
+                writer.write_run_closed(
+                    t_host=t_now,
+                    run_id=transition.run_id,
+                    reason=transition.reason,
+                )
+            self._close_insertion(transition.run_id, t_now, details="force_stop")
             if self.beamline is not None:
                 self.beamline.set_cup_acquiring(False)
         self._update_acquisition_view()
@@ -970,6 +1203,7 @@ class FaradayCupTab(QWidget):
         """Lock acquisition settings while an acquisition run is open or cycle is armed."""
         locked = bool(self.acquisition.is_acquiring or self.cycle.is_armed)
         self.settings_group.set_locked(locked)
+        self._emit_cup_view()
 
     def _update_acquisition_view(self) -> None:
         """Update run status, duration, sample count, and running average."""
@@ -987,7 +1221,7 @@ class FaradayCupTab(QWidget):
             self.lbl_samples.setText("  —    ")
             return
 
-        stats = self.session_writer.active_run_stats
+        stats = self._active_run_stats()
 
         if self.acquisition.is_acquiring:
             run_id = self.acquisition.current_run_id
@@ -1058,13 +1292,17 @@ class FaradayCupTab(QWidget):
 
         transition = self.acquisition.disconnect(t=t_now)
         if transition is not None:
-            self.session_writer.write_run_closed(
-                t_host=t_now,
-                run_id=transition.run_id,
-                reason=transition.reason,
-            )
+            writer = self.cup_log.writer
+            if writer is not None:
+                writer.write_run_closed(
+                    t_host=t_now,
+                    run_id=transition.run_id,
+                    reason=transition.reason,
+                )
         if was_connected:
-            self.session_writer.write_disconnected(t_host=t_now)
+            writer = self.cup_log.writer
+            if writer is not None:
+                writer.write_disconnected(t_host=t_now)
         if self.beamline is not None:
             self.beamline.set_cup_acquiring(False)
 
@@ -1094,11 +1332,13 @@ class FaradayCupTab(QWidget):
         self.btn_connect.setText("Disconnect")
 
         if not was_connected:
-            self.session_writer.write_connected(
-                t_host=t_sample,
-                ident=self.lbl_ident.text(),
-                resource=self.get_resource(),
-            )
+            writer = self.cup_log.writer
+            if writer is not None:
+                writer.write_connected(
+                    t_host=t_sample,
+                    ident=self.lbl_ident.text(),
+                    resource=self.get_resource(),
+                )
             self._last_heartbeat_t = t_sample
 
         # Build reading including confirmed position and auto_mode from the latest
@@ -1125,66 +1365,28 @@ class FaradayCupTab(QWidget):
         if transition is not None:
             if isinstance(transition, RunOpened):
                 self._current_run_start_t = transition.t
-                self.session_writer.write_run_opened(
-                    t_host=t_sample,
-                    run_id=transition.run_id,
-                    arm_threshold=transition.arm_threshold,
-                    release_threshold=transition.release_threshold,
-                    forced=transition.forced,
-                    t_inst=state.timestamp,
-                )
+                if transition.forced:
+                    self._run_forced = True
+                writer = self.cup_log.writer
+                if writer is not None:
+                    writer.write_run_opened(
+                        t_host=t_sample,
+                        run_id=transition.run_id,
+                        arm_threshold=transition.arm_threshold,
+                        release_threshold=transition.release_threshold,
+                        forced=transition.forced,
+                        t_inst=state.timestamp,
+                    )
             elif isinstance(transition, RunClosed):
-                self.session_writer.write_run_closed(
-                    t_host=t_sample,
-                    run_id=transition.run_id,
-                    reason=transition.reason,
-                    t_inst=state.timestamp,
-                )
-                stats = self.session_writer.last_insertion_stats
-                mean_current = stats.mean_a
-                std_current = stats.std_a
-                cnt = stats.sample_count
-                conf_t = (
-                    self._current_run_start_t
-                    if not math.isnan(self._current_run_start_t)
-                    else t_sample
-                )
-                dwell = max(0.0, t_sample - conf_t)
-
-                self._accumulator.record_insertion(
-                    t_in=conf_t,
-                    t_out=t_sample,
-                    mean_current_a=mean_current,
-                )
-                beam_on_s = self._accumulator.last_beam_on_s
-                q = self._accumulator.total_charge_c
-                cs = self.charge_state
-                area = self._area_cm2
-                k = self.displacement_coeff
-                fluence = self._accumulator.fluence(cs, area)
-                dpa = self._accumulator.dpa(cs, area, k)
-
-                cmd_t = self._last_commanded_in_t
-                self.session_writer.write_insertion_summary(
-                    run_id=transition.run_id,
-                    commanded_timestamp=cmd_t,
-                    confirmed_timestamp=conf_t,
-                    dwell=dwell,
-                    sample_count=cnt,
-                    mean_current_a=mean_current,
-                    std_current_a=std_current,
-                    beam_on_seconds=beam_on_s,
-                    charge=q,
-                    charge_state=cs,
-                    area=area,
-                    k=k,
-                    fluence=fluence,
-                    dpa=dpa,
-                    t_host=t_sample,
-                )
-                self._last_commanded_in_t = None
-                self._current_run_start_t = float("nan")
-                self._update_dose_view()
+                writer = self.cup_log.writer
+                if writer is not None:
+                    writer.write_run_closed(
+                        t_host=t_sample,
+                        run_id=transition.run_id,
+                        reason=transition.reason,
+                        t_inst=state.timestamp,
+                    )
+                self._close_insertion(transition.run_id, t_sample)
             if self.beamline is not None:
                 self.beamline.set_cup_acquiring(self.acquisition.is_acquiring)
             self._update_settings_lock()
@@ -1194,12 +1396,14 @@ class FaradayCupTab(QWidget):
         if isinstance(authority_det, AuthorityDetector):
             if authority_det.disagreement:
                 if not self._disagreement_logged:
-                    self.session_writer.write_fault_disagreement(
-                        t_host=t_sample,
-                        position=actuation_confirmed or CupPosition.INDETERMINATE,
-                        current=state.current,
-                        t_inst=state.timestamp,
-                    )
+                    writer = self.cup_log.writer
+                    if writer is not None:
+                        writer.write_fault_disagreement(
+                            t_host=t_sample,
+                            position=actuation_confirmed or CupPosition.INDETERMINATE,
+                            current=state.current,
+                            t_inst=state.timestamp,
+                        )
                     self._disagreement_logged = True
             else:
                 self._disagreement_logged = False
@@ -1207,20 +1411,24 @@ class FaradayCupTab(QWidget):
         # Log sample if acquiring, or periodic heartbeat if idle
         if self.acquisition.is_acquiring:
             run_id = self.acquisition.current_run_id or 1
-            self.session_writer.write_sample(
-                t_host=t_sample,
-                t_inst=state.timestamp,
-                current=state.current,
-                status_word=state.status_word,
-                over_range=state.over_range,
-                run_id=run_id,
-            )
-        else:
-            if (t_sample - self._last_heartbeat_t) >= CUP_IDLE_HEARTBEAT_INTERVAL_S:
-                self.session_writer.write_idle_heartbeat(
+            writer = self.cup_log.writer
+            if writer is not None:
+                writer.write_sample(
                     t_host=t_sample,
                     t_inst=state.timestamp,
+                    current=state.current,
+                    status_word=state.status_word,
+                    over_range=state.over_range,
+                    run_id=run_id,
                 )
+        else:
+            if (t_sample - self._last_heartbeat_t) >= CUP_IDLE_HEARTBEAT_INTERVAL_S:
+                writer = self.cup_log.writer
+                if writer is not None:
+                    writer.write_idle_heartbeat(
+                        t_host=t_sample,
+                        t_inst=state.timestamp,
+                    )
                 self._last_heartbeat_t = t_sample
 
         # Append to live plot rolling buffer
@@ -1274,11 +1482,13 @@ class FaradayCupTab(QWidget):
         self.btn_force_start.setEnabled(True)
         self.btn_force_stop.setEnabled(False)
         if not was_connected:
-            self.session_writer.write_connected(
-                t_host=time.time(),
-                ident=ident,
-                resource=self.get_resource(),
-            )
+            writer = self.cup_log.writer
+            if writer is not None:
+                writer.write_connected(
+                    t_host=time.time(),
+                    ident=ident,
+                    resource=self.get_resource(),
+                )
 
     def on_cup_disconnected(self) -> None:
         """Called when Keithley 6482 disconnects."""
@@ -1313,7 +1523,8 @@ class FaradayCupTab(QWidget):
     def shutdown(self) -> None:
         """Stop plot redraw timer and close session writer cleanly."""
         self.plot.stop()
-        self.session_writer.close()
+        if self._owns_cup_log:
+            self.cup_log.close()
 
     def closeEvent(self, event) -> None:
         """Close session writer when widget closes."""
@@ -1407,6 +1618,7 @@ class FaradayCupTab(QWidget):
         t_now = self._last_state_t if not math.isnan(self._last_state_t) else time.time()
         self.cycle.notify_manual_insert(t_now)
         self._start_move(CupPosition.IN)
+        self._manual_pending = True
         if self.beamline is not None:
             self.beamline.command_cup_in()
         self._update_cycle_view(t_now)
@@ -1440,7 +1652,7 @@ class FaradayCupTab(QWidget):
     # ── Sampling Cycle (ADR 0003, ticket 09) ─────────────────────────────────
 
     def _on_cycle_arm_clicked(self) -> None:
-        """Arm or disarm the sampling cycle.
+        """Start automatic cup insertion (Start is start-only; Stop is the only way out).
 
         WHY THE GUARD EXISTS (ticket 10 / ADR 0003)
         -------------------------------------------
@@ -1455,19 +1667,6 @@ class FaradayCupTab(QWidget):
         """
         t_now = self._last_state_t if not math.isnan(self._last_state_t) else time.time()
         if self.cycle.is_armed:
-            self.cycle.disarm()
-            saved_b = (
-                self.cycle.saved_boundary_t
-                if self.cycle.saved_boundary_t is not None
-                else 0.0
-            )
-            self.session_writer.write_cycle_disarmed(
-                t_host=t_now,
-                reason="disarm",
-                saved_boundary_t=saved_b,
-            )
-            self._cycle_fault = ""
-            self._update_cycle_view(t_now)
             return
 
         reason = self._check_arm_preconditions()
@@ -1476,44 +1675,84 @@ class FaradayCupTab(QWidget):
             self._update_cycle_view(t_now)
             return
 
+        resume_at: float | None = None
+        restart: RestartChoice | None = None
+        gap_start_t = self._stop_gap_start_t
+        if gap_start_t is not None:
+            restart = self._ask_restart(gap_start_t, t_now, self.cycle.saved_boundary_t)
+            if restart is None:
+                return  # cancelled: nothing starts, nothing is written, the gap stays open
+            if restart.resume_schedule:
+                resume_at = self.cycle.saved_boundary_t
+
         self._cycle_fault = ""
-        self.session_writer.update_session_parameters(
-            species=self.species,
-            energy=self.beam_energy,
-            charge_state=self.charge_state,
-            area_cm2=self.irradiated_area_cm2,
-            k=self.displacement_coeff,
-            k_depth=self.damage_depth,
-            srim_version=self.srim_version,
-            entry_date=self.entry_date,
-            cycle_period_s=self.cycle_period,
-            cycle_dwell_s=self.cycle_dwell,
-        )
-        resume_at = (
-            self.cycle.saved_boundary_t
-            if (self.chk_keep_schedule.isChecked() and self.chk_keep_schedule.isEnabled())
-            else None
-        )
+        writer = self.cup_log.writer
+        if writer is not None:
+            writer.update_session_parameters(
+                species=self.species,
+                energy=self.beam_energy,
+                charge_state=self.charge_state,
+                area_cm2=self.irradiated_area_cm2,
+                k=self.displacement_coeff,
+                k_depth=self.damage_depth,
+                srim_version=self.srim_version,
+                entry_date=self.entry_date,
+                cycle_period_s=self.cycle_period,
+                cycle_dwell_s=self.cycle_dwell,
+            )
+        if restart is not None and not restart.beam_on_during_gap:
+            self._accumulator.exclude_interval(gap_start_t, t_now)
         mode = self.cycle.arm(t=t_now, resume_at=resume_at)
         next_ins_t = (
             self.cycle.next_insertion_t
             if self.cycle.next_insertion_t is not None
             else 0.0
         )
-        self.session_writer.write_cycle_armed(
-            t_host=t_now,
-            mode=mode,
-            next_insertion_t=next_ins_t,
-        )
+        writer = self.cup_log.writer
+        if writer is not None:
+            writer.write_cycle_armed(
+                t_host=t_now,
+                mode=mode,
+                next_insertion_t=next_ins_t,
+            )
+            if restart is not None:
+                writer.write_automatic_insertion_restarted(
+                    t_host=t_now,
+                    gap_start_t=gap_start_t,
+                    gap_end_t=t_now,
+                    beam_on_during_gap=restart.beam_on_during_gap,
+                    mode=mode,
+                )
+        self._stop_gap_start_t = None
         self._update_cycle_view(t_now)
+
+    def _ask_restart(
+        self, gap_start_t: float, now_t: float, saved_boundary_t: float | None
+    ) -> RestartChoice | None:
+        """Ask the operator about the pause; None means they cancelled.
+
+        A replaceable method so tests can answer without a modal (see conftest).
+        """
+        resume_available = saved_boundary_t is not None and saved_boundary_t > now_t
+        dlg = RestartDialog(
+            _format_stop_time(gap_start_t),
+            _format_stop_time(now_t),
+            resume_available,
+            self,
+        )
+        if dlg.exec() != RestartDialog.DialogCode.Accepted:
+            return None
+        return dlg.choice()
 
     def _check_arm_preconditions(self) -> str:
         """Return '' if all arming preconditions are met, else the first missing item.
 
-        Checks in order: displacement coefficient, charge state, irradiated area,
+        Checks in order: an open cup log, displacement coefficient, charge state, irradiated area,
         then position feedback availability.  Returns the first blocking reason so
         the operator is told exactly one thing to fix at a time.
         """
+        if self.cup_log.writer is None:
+            return NO_CUP_LOG_REASON
         if self.displacement_coeff == 0.0:
             return "displacement coefficient (k) is required"
         if self.charge_state <= 0:
@@ -1525,21 +1764,51 @@ class FaradayCupTab(QWidget):
         return ""
 
     def _on_cycle_stop_clicked(self) -> None:
-        """Stop the cycle; retract the cup if currently inserting."""
+        """Operator Stop: confirm, then withdraw the cup and stop automatic insertion."""
+        if not self._confirm_stop_automatic():
+            return
+        self._stop_automatic("stop")
+
+    def _confirm_stop_automatic(self) -> bool:
+        """Ask before stopping; False means keep running.
+
+        A replaceable method so tests can answer without a modal (see conftest).
+        """
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Stop automatic cup insertion")
+        box.setText(
+            "Stopping automatic cup insertion withdraws the cup and pauses the dose "
+            "record. No insertions happen until you start it again. When you do, you "
+            "will be asked whether the beam was on the specimen during the pause."
+        )
+        stop_btn = box.addButton(
+            "Stop automatic insertion", QMessageBox.ButtonRole.DestructiveRole
+        )
+        keep_btn = box.addButton("Keep running", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(keep_btn)
+        box.exec()
+        return box.clickedButton() is stop_btn
+
+    def _stop_automatic(self, reason: str) -> None:
+        """Stop the cycle; retract the cup if currently inserting; remember the gap."""
         t_now = self._last_state_t if not math.isnan(self._last_state_t) else time.time()
         was_armed = self.cycle.is_armed
         retract_action = self.cycle.stop(t=t_now)
         if was_armed:
+            self._stop_gap_start_t = t_now
             saved_b = (
                 self.cycle.saved_boundary_t
                 if self.cycle.saved_boundary_t is not None
                 else 0.0
             )
-            self.session_writer.write_cycle_disarmed(
-                t_host=t_now,
-                reason="stop",
-                saved_boundary_t=saved_b,
-            )
+            writer = self.cup_log.writer
+            if writer is not None:
+                writer.write_cycle_disarmed(
+                    t_host=t_now,
+                    reason=reason,
+                    saved_boundary_t=saved_b,
+                )
         if retract_action is not None and self._actuation_connected:
             self._start_move(CupPosition.OUT)
             if self.beamline is not None:
@@ -1554,7 +1823,7 @@ class FaradayCupTab(QWidget):
         raw = {
             "arm_threshold_a": self.acquisition.detector.arm_threshold,
             "release_threshold_a": self.acquisition.detector.release_threshold,
-            "settle_window_s": self.session_writer.settle_window_s,
+            "settle_window_s": self._settle_window_s,
             "cycle_period_s": new_val,
             "cycle_dwell_s": self.spn_cycle_dwell.value(),
             "arm_debounce_s": self._settings.arm_debounce_s,
@@ -1573,9 +1842,11 @@ class FaradayCupTab(QWidget):
             self.lbl_cycle_warning.setText("")
             self.lbl_cycle_warning.setVisible(False)
             self.cycle.set_period(new_val)
-            self.session_writer.write_settings_changed(
-                time.time(), "cycle_period_s", old_val, new_val
-            )
+            writer = self.cup_log.writer
+            if writer is not None:
+                writer.write_settings_changed(
+                    time.time(), "cycle_period_s", old_val, new_val
+                )
             self._save_current_settings()
             self._update_cycle_view(time.time())
 
@@ -1587,7 +1858,7 @@ class FaradayCupTab(QWidget):
         raw = {
             "arm_threshold_a": self.acquisition.detector.arm_threshold,
             "release_threshold_a": self.acquisition.detector.release_threshold,
-            "settle_window_s": self.session_writer.settle_window_s,
+            "settle_window_s": self._settle_window_s,
             "cycle_period_s": self.spn_cycle_period.value(),
             "cycle_dwell_s": new_val,
             "arm_debounce_s": self._settings.arm_debounce_s,
@@ -1606,9 +1877,11 @@ class FaradayCupTab(QWidget):
             self.lbl_cycle_warning.setText("")
             self.lbl_cycle_warning.setVisible(False)
             self.cycle.set_dwell(new_val)
-            self.session_writer.write_settings_changed(
-                time.time(), "cycle_dwell_s", old_val, new_val
-            )
+            writer = self.cup_log.writer
+            if writer is not None:
+                writer.write_settings_changed(
+                    time.time(), "cycle_dwell_s", old_val, new_val
+                )
             self._save_current_settings()
             self._update_cycle_view(time.time())
 
@@ -1617,7 +1890,7 @@ class FaradayCupTab(QWidget):
         settings = CupSettings(
             arm_threshold_a=self.acquisition.detector.arm_threshold,
             release_threshold_a=self.acquisition.detector.release_threshold,
-            settle_window_s=self.session_writer.settle_window_s,
+            settle_window_s=self._settle_window_s,
             cycle_period_s=(
                 self.cycle.pending_period_s
                 if self.cycle.pending_period_s is not None
@@ -1657,9 +1930,14 @@ class FaradayCupTab(QWidget):
                     arm = widget_arm
             self.acquisition.detector.set_thresholds(arm, new_value)
         elif key == "settle_window_s":
-            self.session_writer.set_settle_window(new_value)
+            self._settle_window_s = float(new_value)
+            writer = self.cup_log.writer
+            if writer is not None:
+                writer.set_settle_window(self._settle_window_s)
 
-        self.session_writer.write_settings_changed(time.time(), key, old_value, new_value)
+        writer = self.cup_log.writer
+        if writer is not None:
+            writer.write_settings_changed(time.time(), key, old_value, new_value)
         self._save_current_settings()
 
     def _tick_cycle(self, t: float) -> None:
@@ -1681,6 +1959,7 @@ class FaradayCupTab(QWidget):
             # Scheduled insertion — command cup IN if no move is already in flight
             if not self._move_in_flight and self._actuation_connected:
                 self._start_move(CupPosition.IN)
+                self._auto_pending = True
                 if self.beamline is not None:
                     self.beamline.command_cup_in()
 
@@ -1694,29 +1973,27 @@ class FaradayCupTab(QWidget):
         elif isinstance(result, CycleSkipped):
             # Scheduled insertion skipped because a manual run was open.
             # Record the skip in the session file; do not command the cup.
-            self.session_writer.write_cycle_insertion_skipped(
-                t_host=t,
-                insertion_due_t=result.insertion_due_t,
-            )
+            writer = self.cup_log.writer
+            if writer is not None:
+                writer.write_cycle_insertion_skipped(
+                    t_host=t,
+                    insertion_due_t=result.insertion_due_t,
+                )
 
         self._update_cycle_view(t)
 
     def _update_cycle_view(self, t: float) -> None:
         """Update the Sampling Cycle panel to reflect the current scheduler state."""
+        self._emit_cup_view()
         state = self.cycle.state
+        self.btn_cycle_arm.setEnabled(state == CycleState.DISARMED)
         if state == CycleState.DISARMED:
-            self.btn_cycle_arm.setText("Arm Cycle")
-            self.btn_cycle_arm.setStyleSheet("font-weight: bold; padding: 4px 14px;")
             self.btn_cycle_stop.setEnabled(False)
             self.lbl_cycle_state.setText("Disarmed")
             self.lbl_cycle_state.setStyleSheet(
                 f"color: {theme.MUTED}; font-style: italic; font-size: {theme.FS_LABEL}px;"
             )
         elif state == CycleState.WAITING:
-            self.btn_cycle_arm.setText("Disarm Cycle")
-            self.btn_cycle_arm.setStyleSheet(
-                f"font-weight: bold; padding: 4px 14px; color: {theme.WARN};"
-            )
             self.btn_cycle_stop.setEnabled(True)
             tti = self.cycle.time_to_next_insertion(t)
             if tti is not None:
@@ -1731,10 +2008,6 @@ class FaradayCupTab(QWidget):
                 f"color: {theme.OK}; font-size: {theme.FS_LABEL}px;"
             )
         elif state == CycleState.INSERTING:
-            self.btn_cycle_arm.setText("Disarm Cycle")
-            self.btn_cycle_arm.setStyleSheet(
-                f"font-weight: bold; padding: 4px 14px; color: {theme.WARN};"
-            )
             self.btn_cycle_stop.setEnabled(True)
             ttr = self.cycle.time_to_retract(t)
             if ttr is not None:
@@ -1770,18 +2043,6 @@ class FaradayCupTab(QWidget):
         else:
             self.lbl_cycle_pending.setText("")
             self.lbl_cycle_pending.setVisible(False)
-
-        # Update keep-previous-schedule checkbox (ADR 0002 amendment A6, ticket 16)
-        saved_t = self.cycle.saved_boundary_t
-        if saved_t is None:
-            self.chk_keep_schedule.setEnabled(False)
-            self.chk_keep_schedule.setToolTip("No saved schedule boundary to resume")
-        elif saved_t <= t:
-            self.chk_keep_schedule.setEnabled(False)
-            self.chk_keep_schedule.setToolTip("Saved schedule boundary has already passed")
-        else:
-            self.chk_keep_schedule.setEnabled(True)
-            self.chk_keep_schedule.setToolTip("Resume previous schedule at saved boundary")
 
         self._update_settings_lock()
 
@@ -1829,12 +2090,14 @@ class FaradayCupTab(QWidget):
                         f"Move Fault: Command {target_name} did not confirm "
                         f"within {CUP_MOVE_CONFIRMATION_TIMEOUT_S:.1f} s"
                     )
-                    self.session_writer.write_fault_move_not_confirmed(
-                        t_host=t_now,
-                        commanded=self._move_target,
-                        timeout_s=CUP_MOVE_CONFIRMATION_TIMEOUT_S,
-                        details=self._move_fault,
-                    )
+                    writer = self.cup_log.writer
+                    if writer is not None:
+                        writer.write_fault_move_not_confirmed(
+                            t_host=t_now,
+                            commanded=self._move_target,
+                            timeout_s=CUP_MOVE_CONFIRMATION_TIMEOUT_S,
+                            details=self._move_fault,
+                        )
                     self._move_target = None
                     # ADR 0003 decision 3: disarm the cycle — a retry loop is exactly
                     # the failure mode this decision exists to prevent.  The cup is left
@@ -1845,6 +2108,7 @@ class FaradayCupTab(QWidget):
                             f"within {CUP_MOVE_CONFIRMATION_TIMEOUT_S:.1f} s"
                         )
                         self.cycle.disarm()
+                        self._stop_gap_start_t = t_now
                         self._update_cycle_view(t_now)
 
         # Log confirmed position transitions (IN / OUT) and indeterminate faults
@@ -1855,19 +2119,40 @@ class FaradayCupTab(QWidget):
                     if not math.isnan(state.last_transition_t)
                     else t_now
                 )
-                self.session_writer.write_position_transition(
-                    t_host=t_trans,
-                    position=state.confirmed,
-                    details=f"confirmed_{state.confirmed.value.lower()}",
-                )
+                writer = self.cup_log.writer
+                if writer is not None:
+                    writer.write_position_transition(
+                        t_host=t_trans,
+                        position=state.confirmed,
+                        details=f"confirmed_{state.confirmed.value.lower()}",
+                    )
+                if state.confirmed == CupPosition.IN:
+                    self._confirmed_in_t = t_trans
+                    self._insertion_origin = (
+                        "automatic"
+                        if self._auto_pending
+                        else "manual"
+                        if self._manual_pending
+                        else "uncommanded"
+                    )
+                    self._auto_pending = False
+                    self._manual_pending = False
+                else:
+                    # The automatic mark clears on the confirmed OUT (C4), so a later
+                    # hand insertion can never inherit it.
+                    self._auto_pending = False
+                    self._manual_pending = False
+                    self._confirmed_out_t = t_trans
                 self._last_logged_confirmed = state.confirmed
                 self._last_logged_indeterminate = False
         elif state.confirmed == CupPosition.INDETERMINATE:
             if not self._last_logged_indeterminate:
-                self.session_writer.write_fault_impossible_status(
-                    t_host=t_now,
-                    details="both IN and OUT contacts asserted",
-                )
+                writer = self.cup_log.writer
+                if writer is not None:
+                    writer.write_fault_impossible_status(
+                        t_host=t_now,
+                        details="both IN and OUT contacts asserted",
+                    )
                 self._last_logged_indeterminate = True
                 self._last_logged_confirmed = state.confirmed
         elif state.confirmed == CupPosition.IN_TRANSIT:
@@ -1876,10 +2161,12 @@ class FaradayCupTab(QWidget):
 
         # Log transition into LOCAL mode (not AUTO)
         if self._was_auto_mode is not None and self._was_auto_mode and not state.auto_mode:
-            self.session_writer.write_fault_controller_not_in_auto(
-                t_host=t_now,
-                details="controller switched to LOCAL mode; remote commands ignored",
-            )
+            writer = self.cup_log.writer
+            if writer is not None:
+                writer.write_fault_controller_not_in_auto(
+                    t_host=t_now,
+                    details="controller switched to LOCAL mode; remote commands ignored",
+                )
         self._was_auto_mode = state.auto_mode
 
         self._commanded = state.commanded
@@ -1897,6 +2184,7 @@ class FaradayCupTab(QWidget):
                 "(stream profile changed from FULL)"
             )
             self.cycle.disarm()
+            self._stop_gap_start_t = t_now
             self._update_cycle_view(t_now)
 
         # Tick the sampling cycle scheduler on every actuation state update
@@ -2104,11 +2392,13 @@ class FaradayCupTab(QWidget):
         self._beam_energy = f"{energy_ev / 1e6:.3f} MeV"
         if charge > 0:
             self.spn_charge_state.setValue(charge)
-        self.session_writer.update_session_parameters(
-            species=self._species,
-            energy=self._beam_energy,
-            charge_state=self.charge_state,
-        )
+        writer = self.cup_log.writer
+        if writer is not None:
+            writer.update_session_parameters(
+                species=self._species,
+                energy=self._beam_energy,
+                charge_state=self.charge_state,
+            )
 
     @property
     def srim_version(self) -> str:
@@ -2136,7 +2426,11 @@ class FaradayCupTab(QWidget):
         return self.spn_cycle_dwell.value()
 
     def _update_dose_view(self) -> None:
+        """Refresh the running dose labels, then publish the same totals to the Overview panel."""
+        self._render_dose_labels()
+        self._emit_cup_view()
 
+    def _render_dose_labels(self) -> None:
         """Refresh running Q, fluence, and dpa labels from the dose accumulator.
 
         WHY THIS IS CALLED ON RUN CLOSE, NOT ON EVERY SAMPLE

@@ -1,6 +1,6 @@
 # 31: Stop asks first, restart asks about the gap, and Start/Stop are two buttons
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -44,19 +44,19 @@ in place under the same names to drive `_ask_restart` instead. No test function 
 
 ## Acceptance criteria
 
-- [ ] `_confirm_stop_automatic` returning `False`: the scheduler stays armed, the cup is
+- [x] `_confirm_stop_automatic` returning `False`: the scheduler stays armed, the cup is
       not commanded, and no row is written. Returning `True`: the cup is commanded out and
       a disarm row is written.
-- [ ] A fault stop (unconfirmed move timeout) stops automatic insertion without calling
+- [x] A fault stop (unconfirmed move timeout) stops automatic insertion without calling
       `_confirm_stop_automatic` (the patched method records zero calls).
-- [ ] Restart with `RestartChoice(resume_schedule=True, beam_on_during_gap=False)` before
+- [x] Restart with `RestartChoice(resume_schedule=True, beam_on_during_gap=False)` before
       the saved boundary: the next insertion lands on the saved boundary, the next counted
       row's `beam_on_seconds` excludes the gap, and the restart row says `resumed` and
       `beam_on_during_gap=false`.
-- [ ] Restart with `beam_on_during_gap=True` and `resume_schedule=False`: the gap is held
+- [x] Restart with `beam_on_during_gap=True` and `resume_schedule=False`: the gap is held
       (not excluded), and the row says `fresh`. `_ask_restart` returning `None`: nothing
       starts and nothing is written.
-- [ ] `grep -n "chk_keep_schedule" src/` returns nothing, and the first start of a new cup
+- [x] `grep -n "chk_keep_schedule" src/` returns nothing, and the first start of a new cup
       log calls `_ask_restart` zero times.
 
 ## Gate
@@ -69,3 +69,14 @@ Run in CI's order (`.github/workflows/tests.yml`):
     pytest --tb=short -q -n auto --dist loadfile --durations=25
 
 ## Comments
+
+2026-10-16: Done. Start is start-only; Stop asks via `_confirm_stop_automatic`, then withdraws;
+fault stops and the cup-log-closed stop never ask. Every stop remembers `_stop_gap_start_t`; the next
+Start in that cup log asks `_ask_restart` (new `RestartDialog`, beam question has no default).
+`chk_keep_schedule` removed.
+Tests: `tests/test_cup_stop_restart.py` covers every criterion (declined/confirmed stop, fault stop,
+resume + no-beam exclusion by exactly the hold-interval overlap, fresh + beam-on, cancel, first start,
+the dialog itself). Ticket 16's tests were rewritten in place under the same names; ticket 30's and
+cup-panel's re-arming tests now answer `_ask_restart` (beam held, fresh schedule = their old accounting).
+`tests/conftest.py` auto-confirms Stop and makes an unpatched `_ask_restart` raise, so no test can block
+on a modal. Bench verification: none needed.

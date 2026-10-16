@@ -1,6 +1,6 @@
 # 28: The Faraday Cup tab writes only while a cup log is open
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -44,17 +44,17 @@ file. No test function is deleted.
 
 ## Acceptance criteria
 
-- [ ] A tab built with a closed `CupLog(test_root=tmp_path)` and fed a manual insertion
+- [x] A tab built with a closed `CupLog(test_root=tmp_path)` and fed a manual insertion
       (Insert clicked, confirmed IN, current above the run start current, confirmed OUT)
       leaves `tmp_path` empty, and the `Not logging` label is visible.
-- [ ] With no cup log, clicking the automatic-insertion start button leaves the scheduler
+- [x] With no cup log, clicking the automatic-insertion start button leaves the scheduler
       not armed and shows the reason text above, even when the dose chain is fully
       configured.
-- [ ] After `cup_log.open_test(...)`, the same manual insertion writes run and summary
+- [x] After `cup_log.open_test(...)`, the same manual insertion writes run and summary
       rows to that file and the `Not logging` label is hidden.
-- [ ] With automatic insertion running and the cup IN, `cup_log.close()` commands the cup
+- [x] With automatic insertion running and the cup IN, `cup_log.close()` commands the cup
       out (the tab's commanded position becomes OUT) and the scheduler is no longer armed.
-- [ ] `grep -n "CupSessionWriter(" src/rbl/gui/faraday_cup_tab.py` returns nothing, and
+- [x] `grep -n "CupSessionWriter(" src/rbl/gui/faraday_cup_tab.py` returns nothing, and
       every previously existing Faraday-tab test passes after the in-place rewrite.
 
 ## Gate
@@ -67,3 +67,23 @@ Run in CI's order (`.github/workflows/tests.yml`):
     pytest --tb=short -q -n auto --dist loadfile --durations=25
 
 ## Comments
+
+2026-10-08. `FaradayCupTab` now takes `cup_log` (default: a closed `CupLog` it owns) and every
+write goes through `cup_log.writer`, skipped when `None`; it never constructs a
+`CupSessionWriter`. `Not logging` (`theme.WARN`) sits beside the current readout; arming
+returns the reason text as its first check; `opened` resets the dose accumulator and pushes
+the session parameters; `closed` takes the operator-stop path. `MainWindow` builds
+`self.cup_log` and passes it to the tab, and closes it on exit.
+Two things beyond the letter of the ticket, both needed for correctness:
+- `CupLog.set_writer_settings_provider` (tab registers itself) so a log opened later has the
+  detector's real thresholds and settle window in its header, not compiled-in defaults.
+- With no log, the live run duration/sample count/average read empty: they are computed from
+  logged samples by design, and a second computation would be the drift the module docstring
+  warns about. Three bare-tab tests in `test_faraday_cup_tab.py` that asserted those numbers now
+  open a test log first (`make_connected_cup_tab` takes `tmp_path`), same names, no assertion changed.
+Tests: criterion 1-4 in `TestFaradayCupTabWritesOnlyWithOpenCupLog`, criterion 5 in
+`test_tab_never_constructs_its_own_session_writer` plus the in-place rewrites (20 sites in
+`test_faraday_cup_tab.py`, 4 in `test_cup_session_writer.py`, no function deleted);
+`TestWriterSettingsProvider` (test_cup_log.py); `TestMainWindowSharesOneCupLog`.
+No bench verification needed.
+

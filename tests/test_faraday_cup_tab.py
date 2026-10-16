@@ -17,6 +17,7 @@ Covers:
 import csv
 import math
 import os
+from datetime import datetime
 
 import pytest
 
@@ -29,7 +30,7 @@ from rbl.gui.app import MainWindow
 from rbl.gui.faraday_cup_tab import FaradayCupTab
 from rbl.gui.widgets.acquisition_settings import AcquisitionSettingsGroup
 from rbl.hardware.current_monitor import format_current
-from rbl.services.cup_session_writer import CupSessionWriter
+from rbl.services.cup_log import CupLog
 from rbl.state.beamline import Beamline
 from tests.payloads import CupActuationFeed, CupFeed, window_payload
 
@@ -339,9 +340,11 @@ class TestFaradayCupTabAcquisitionRuns:
 class TestFaradayCupTabRunMetricsAndAverage:
     """Tests for active run duration, sample counts, running average, and over-range exclusion."""
 
-    def test_run_duration_and_samples_updated_during_run(self, qapp):
+    def test_run_duration_and_samples_updated_during_run(self, qapp, tmp_path):
         beamline = Beamline()
-        tab = FaradayCupTab(beamline=beamline)
+        cup_log = CupLog(test_root=tmp_path)
+        cup_log.open_test(datetime(2026, 10, 8, 9, 0, 0))
+        tab = FaradayCupTab(beamline=beamline, cup_log=cup_log)
         feed = CupFeed(tab, beamline=beamline)
         tab.show()
         qapp.processEvents()
@@ -368,8 +371,9 @@ class TestFaradayCupTabRunMetricsAndAverage:
     def test_running_average_agrees_with_session_file(self, qapp, tmp_path):
         """Running average matches the average computed from logged session file."""
         beamline = Beamline()
-        session_writer = CupSessionWriter(output_dir=tmp_path)
-        tab = FaradayCupTab(beamline=beamline, session_writer=session_writer)
+        cup_log = CupLog(test_root=tmp_path)
+        session_writer = cup_log.open_test(datetime(2026, 10, 8, 9, 0, 0))
+        tab = FaradayCupTab(beamline=beamline, cup_log=cup_log)
         feed = CupFeed(tab, beamline=beamline)
         tab.show()
         qapp.processEvents()
@@ -412,10 +416,12 @@ class TestFaradayCupTabRunMetricsAndAverage:
         # Displayed text and computed file average must agree
         assert displayed_average == format_current(file_average)
 
-    def test_over_range_samples_excluded_from_average_and_visibly_flagged(self, qapp):
+    def test_over_range_samples_excluded_from_average_and_visibly_flagged(self, qapp, tmp_path):
         """Over-range samples are excluded from average calculation and flagged on UI."""
         beamline = Beamline()
-        tab = FaradayCupTab(beamline=beamline)
+        cup_log = CupLog(test_root=tmp_path)
+        cup_log.open_test(datetime(2026, 10, 8, 9, 0, 0))
+        tab = FaradayCupTab(beamline=beamline, cup_log=cup_log)
         feed = CupFeed(tab, beamline=beamline)
         tab.show()
         qapp.processEvents()
@@ -456,9 +462,11 @@ class TestFaradayCupTabRunMetricsAndAverage:
         assert "Not connected" in tab.lbl_avg_detail.text()
         assert "0" not in tab.lbl_average.text()
 
-    def test_mid_run_disconnection_resets_metrics_honestly(self, qapp):
+    def test_mid_run_disconnection_resets_metrics_honestly(self, qapp, tmp_path):
         beamline = Beamline()
-        tab = FaradayCupTab(beamline=beamline)
+        cup_log = CupLog(test_root=tmp_path)
+        cup_log.open_test(datetime(2026, 10, 8, 9, 0, 0))
+        tab = FaradayCupTab(beamline=beamline, cup_log=cup_log)
         feed = CupFeed(tab, beamline=beamline)
         tab.show()
         qapp.processEvents()
@@ -885,10 +893,10 @@ class TestSamplingCycleTab:
     from rbl.snapshots import CupActuationState as _CupActuationState
 
     def make_tab_and_feed(self, qapp, tmp_path):
-        from rbl.services.cup_session_writer import CupSessionWriter
 
-        sw = CupSessionWriter(session_id="cycle_test", output_dir=tmp_path)
-        tab = FaradayCupTab(session_writer=sw)
+        cup_log = CupLog(test_root=tmp_path)
+        sw = cup_log.open_test(datetime(2026, 10, 8, 9, 0, 0))
+        tab = FaradayCupTab(cup_log=cup_log)
         tab.show()
         qapp.processEvents()
         feed = CupActuationFeed(tab)
@@ -937,7 +945,8 @@ class TestSamplingCycleTab:
         qapp.processEvents()
 
         assert tab.cycle.is_armed
-        assert "Disarm" in tab.btn_cycle_arm.text()
+        # Start-only button (ticket 31): while running, Stop is the only way out.
+        assert not tab.btn_cycle_arm.isEnabled()
         assert tab.btn_cycle_stop.isEnabled()
         sw.close()
         tab.close()
@@ -1081,10 +1090,10 @@ class TestCycleArmingPreconditions:
 
     def make_base_tab(self, qapp, tmp_path):
         """Tab with actuation connected (stale=False) but no dose chain inputs."""
-        from rbl.services.cup_session_writer import CupSessionWriter
 
-        sw = CupSessionWriter(session_id="precond_test", output_dir=tmp_path)
-        tab = FaradayCupTab(session_writer=sw)
+        cup_log = CupLog(test_root=tmp_path)
+        sw = cup_log.open_test(datetime(2026, 10, 8, 9, 0, 0))
+        tab = FaradayCupTab(cup_log=cup_log)
         tab.show()
         qapp.processEvents()
         tab.on_cup_actuation_state(self.actuation_state(t=0.0))
@@ -1147,10 +1156,10 @@ class TestCycleArmingPreconditions:
 
     def test_arm_refused_when_stale(self, qapp, tmp_path):
         """Arming is refused when FIO_STATE is absent (non-FULL stream profile)."""
-        from rbl.services.cup_session_writer import CupSessionWriter
 
-        sw = CupSessionWriter(session_id="stale_test", output_dir=tmp_path)
-        tab = FaradayCupTab(session_writer=sw)
+        cup_log = CupLog(test_root=tmp_path)
+        sw = cup_log.open_test(datetime(2026, 10, 8, 9, 0, 0))
+        tab = FaradayCupTab(cup_log=cup_log)
         tab.show()
         qapp.processEvents()
         # Actuation connected but stale (diagnostic profile active)
@@ -1506,8 +1515,9 @@ class TestFaradayCupTabAcquisitionSettingsWiring:
 
     def test_settings_changed_updates_detector_and_writer(self, qapp, tmp_path):
         """Emitting settings_changed updates detector thresholds and writer settle window."""
-        sw = CupSessionWriter(output_dir=tmp_path)
-        tab = FaradayCupTab(session_writer=sw)
+        cup_log = CupLog(test_root=tmp_path)
+        sw = cup_log.open_test(datetime(2026, 10, 8, 9, 0, 0))
+        tab = FaradayCupTab(cup_log=cup_log)
 
         # Update arm threshold
         tab.settings_group.settings_changed.emit("arm_threshold_a", 0.5e-6, 0.4e-6)
@@ -1519,14 +1529,15 @@ class TestFaradayCupTabAcquisitionSettingsWiring:
 
         # Update settle window
         tab.settings_group.settings_changed.emit("settle_window_s", 1.0, 2.5)
-        assert tab.session_writer.settle_window_s == pytest.approx(2.5)
+        assert sw.settle_window_s == pytest.approx(2.5)
         sw.close()
         tab.close()
 
     def test_settings_changed_writes_csv_row(self, qapp, tmp_path):
         """Settings change emits exactly one settings_changed row in the session CSV."""
-        sw = CupSessionWriter(output_dir=tmp_path)
-        tab = FaradayCupTab(session_writer=sw)
+        cup_log = CupLog(test_root=tmp_path)
+        sw = cup_log.open_test(datetime(2026, 10, 8, 9, 0, 0))
+        tab = FaradayCupTab(cup_log=cup_log)
 
         tab.settings_group.settings_changed.emit("arm_threshold_a", 0.5e-6, 0.35e-6)
         sw.close()
@@ -1544,8 +1555,9 @@ class TestFaradayCupTabAcquisitionSettingsWiring:
     def test_e2e_lowered_arm_threshold_opens_run_and_records_new_threshold(self, qapp, tmp_path):
         """End-to-end: lowering arm threshold via widget opens run below old default."""
         beamline = Beamline()
-        sw = CupSessionWriter(output_dir=tmp_path)
-        tab = FaradayCupTab(beamline=beamline, session_writer=sw)
+        cup_log = CupLog(test_root=tmp_path)
+        sw = cup_log.open_test(datetime(2026, 10, 8, 9, 0, 0))
+        tab = FaradayCupTab(beamline=beamline, cup_log=cup_log)
         feed = CupFeed(tab, beamline=beamline)
         tab.show()
         qapp.processEvents()
@@ -1596,15 +1608,17 @@ class TestFaradayCupTabSettingsPersistence:
         )
         assert save_settings(custom) is True
 
-        sw = CupSessionWriter(output_dir=tmp_path, settle_window_s=1.0)
-        tab = FaradayCupTab(session_writer=sw)
+        cup_log = CupLog(test_root=tmp_path)
+        sw = cup_log.open_test(datetime(2026, 10, 8, 9, 0, 0))
+        sw.set_settle_window(1.0)
+        tab = FaradayCupTab(cup_log=cup_log)
         tab.show()
         qapp.processEvents()
 
         # All five landed in the four places
         assert tab.acquisition.detector.arm_threshold == pytest.approx(2.0e-6)
         assert tab.acquisition.detector.release_threshold == pytest.approx(1.0e-6)
-        assert tab.session_writer.settle_window_s == pytest.approx(2.5)
+        assert sw.settle_window_s == pytest.approx(2.5)
         assert (
             tab.cycle.period_s == pytest.approx(600.0)
             or tab.cycle.pending_period_s == pytest.approx(600.0)
@@ -1750,10 +1764,12 @@ class TestFaradayCupTabSettingsPersistence:
         tab.close()
 
 
-def make_connected_cup_tab(qapp: QApplication) -> tuple[FaradayCupTab, CupFeed]:
-    """Create a FaradayCupTab connected via a real Beamline and CupFeed."""
+def make_connected_cup_tab(qapp: QApplication, tmp_path) -> tuple[FaradayCupTab, CupFeed]:
+    """Create a FaradayCupTab connected via a real Beamline and CupFeed, with a cup log open."""
     beamline = Beamline()
-    tab = FaradayCupTab(beamline=beamline)
+    cup_log = CupLog(test_root=tmp_path)
+    cup_log.open_test(datetime(2026, 10, 8, 9, 0, 0))
+    tab = FaradayCupTab(beamline=beamline, cup_log=cup_log)
     feed = CupFeed(tab, beamline=beamline)
     tab.show()
     qapp.processEvents()
@@ -1788,14 +1804,14 @@ def arm_cycle_helper(tab: FaradayCupTab, qapp: QApplication) -> None:
 class TestFaradayCupTabSettingsLock:
     """Tests for acquisition settings lock during runs or armed cycle (Ticket 14)."""
 
-    def test_set_locked_called_in_all_three_locking_situations(self, qapp, monkeypatch):
+    def test_set_locked_called_in_all_three_locking_situations(self, qapp, tmp_path, monkeypatch):
         """Assert set_locked(True) reaches widget in each of the three locking situations:
 
         1. run open with cycle disarmed
         2. cycle armed with no run
         3. both run open and cycle armed
         """
-        tab, feed = make_connected_cup_tab(qapp)
+        tab, feed = make_connected_cup_tab(qapp, tmp_path)
 
         calls: list[bool] = []
         original_set_locked = tab.settings_group.set_locked
@@ -1838,12 +1854,12 @@ class TestFaradayCupTabSettingsLock:
 
         tab.close()
 
-    def test_lock_releases_after_run_closes_and_fields_enabled(self, qapp):
+    def test_lock_releases_after_run_closes_and_fields_enabled(self, qapp, tmp_path):
         """With neither condition true, the three fields report isEnabled() is True.
 
         Proves the lock releases after run closes rather than latching.
         """
-        tab, feed = make_connected_cup_tab(qapp)
+        tab, feed = make_connected_cup_tab(qapp, tmp_path)
 
         # Open run
         tab.btn_force_start.click()
@@ -1865,9 +1881,9 @@ class TestFaradayCupTabSettingsLock:
 
         tab.close()
 
-    def test_cycle_period_and_dwell_remain_enabled_in_all_four_combinations(self, qapp):
+    def test_cycle_period_and_dwell_remain_enabled_in_all_four_combinations(self, qapp, tmp_path):
         """Sampling Cycle period and dwell spin boxes stay enabled in all 4 combinations."""
-        tab, feed = make_connected_cup_tab(qapp)
+        tab, feed = make_connected_cup_tab(qapp, tmp_path)
 
         # (1) Run closed, cycle disarmed
         assert not tab.acquisition.is_acquiring
@@ -1904,9 +1920,9 @@ class TestFaradayCupTabSettingsLock:
 
         tab.close()
 
-    def test_lock_label_text_and_visibility(self, qapp):
+    def test_lock_label_text_and_visibility(self, qapp, tmp_path):
         """Lock line text is exact and visible only while locked."""
-        tab, feed = make_connected_cup_tab(qapp)
+        tab, feed = make_connected_cup_tab(qapp, tmp_path)
 
         expected_text = (
             "Locked while a run is open or the cycle is armed. Edits apply to the next run."
@@ -1931,8 +1947,8 @@ class TestFaradayCupTabSettingsLock:
         arm_cycle_helper(tab, qapp)
         assert tab.settings_group.lbl_lock.isVisible() is True
 
-        # Disarm cycle -> unlocked
-        tab.btn_cycle_arm.click()
+        # Stop cycle -> unlocked (Start is start-only since ticket 31)
+        tab.btn_cycle_stop.click()
         qapp.processEvents()
         assert tab.settings_group.lbl_lock.isVisible() is False
 
@@ -1944,8 +1960,9 @@ class TestFaradayCupTabSettingsLock:
         Current opens run -> disable; closes -> enable.
         """
         beamline = Beamline()
-        sw = CupSessionWriter(output_dir=tmp_path)
-        tab = FaradayCupTab(beamline=beamline, session_writer=sw)
+        cup_log = CupLog(test_root=tmp_path)
+        sw = cup_log.open_test(datetime(2026, 10, 8, 9, 0, 0))
+        tab = FaradayCupTab(beamline=beamline, cup_log=cup_log)
         feed = CupFeed(tab, beamline=beamline)
         tab.show()
         qapp.processEvents()
@@ -1985,9 +2002,9 @@ class TestFaradayCupTabSettingsLock:
 class TestCyclePeriodAndDwellRulesAndPending:
     """Ticket 15 — Period and dwell rules, refused edits, settings changes, and pending label."""
 
-    def test_spin_box_ranges_are_wide_absolute_bounds(self, qapp):
+    def test_spin_box_ranges_are_wide_absolute_bounds(self, qapp, tmp_path):
         """setRange is 0.1 to 604800.0 on both period and dwell spin boxes; assert maximums."""
-        tab, _ = make_connected_cup_tab(qapp)
+        tab, _ = make_connected_cup_tab(qapp, tmp_path)
         assert tab.spn_cycle_period.maximum() == pytest.approx(604800.0)
         assert tab.spn_cycle_dwell.maximum() == pytest.approx(604800.0)
         tab.close()
@@ -1995,10 +2012,10 @@ class TestCyclePeriodAndDwellRulesAndPending:
     def test_dwell_longer_than_period_minus_two_moves_is_refused(self, qapp, tmp_path):
         """Entering dwell of 400 with period 300 is refused;
         value restored, reason in FAULT role."""
-        from rbl.services.cup_session_writer import CupSessionWriter
 
-        sw = CupSessionWriter(session_id="cycle_dwell_refusal", output_dir=tmp_path)
-        tab = FaradayCupTab(session_writer=sw)
+        cup_log = CupLog(test_root=tmp_path)
+        sw = cup_log.open_test(datetime(2026, 10, 8, 9, 0, 0))
+        tab = FaradayCupTab(cup_log=cup_log)
         tab.show()
         qapp.processEvents()
 
@@ -2036,10 +2053,10 @@ class TestCyclePeriodAndDwellRulesAndPending:
     def test_period_shorter_than_dwell_plus_two_moves_is_refused(self, qapp, tmp_path):
         """Entering period of 5 with dwell 3 is refused;
         value restored, reason in FAULT role."""
-        from rbl.services.cup_session_writer import CupSessionWriter
 
-        sw = CupSessionWriter(session_id="cycle_period_refusal", output_dir=tmp_path)
-        tab = FaradayCupTab(session_writer=sw)
+        cup_log = CupLog(test_root=tmp_path)
+        sw = cup_log.open_test(datetime(2026, 10, 8, 9, 0, 0))
+        tab = FaradayCupTab(cup_log=cup_log)
         tab.show()
         qapp.processEvents()
 
@@ -2073,10 +2090,10 @@ class TestCyclePeriodAndDwellRulesAndPending:
 
     def test_accepted_edit_calls_scheduler_and_writes_settings_changed_row(self, qapp, tmp_path):
         """Accepted edits update scheduler pending value and write exactly one row each."""
-        from rbl.services.cup_session_writer import CupSessionWriter
 
-        sw = CupSessionWriter(session_id="cycle_accepted_edits", output_dir=tmp_path)
-        tab = FaradayCupTab(session_writer=sw)
+        cup_log = CupLog(test_root=tmp_path)
+        sw = cup_log.open_test(datetime(2026, 10, 8, 9, 0, 0))
+        tab = FaradayCupTab(cup_log=cup_log)
         tab.show()
         qapp.processEvents()
 
@@ -2119,11 +2136,11 @@ class TestCyclePeriodAndDwellRulesAndPending:
     ):
         """Pending label displays in MUTED role while armed and clears on boundary tick."""
         from rbl.hardware.cup_status import CupPosition
-        from rbl.services.cup_session_writer import CupSessionWriter
         from rbl.snapshots import CupActuationState
 
-        sw = CupSessionWriter(session_id="cycle_pending_label", output_dir=tmp_path)
-        tab = FaradayCupTab(session_writer=sw)
+        cup_log = CupLog(test_root=tmp_path)
+        sw = cup_log.open_test(datetime(2026, 10, 8, 9, 0, 0))
+        tab = FaradayCupTab(cup_log=cup_log)
         tab.show()
         qapp.processEvents()
 
@@ -2185,9 +2202,9 @@ class TestCyclePeriodAndDwellRulesAndPending:
         sw.close()
         tab.close()
 
-    def test_permanent_label_exact_string_and_role(self, qapp):
+    def test_permanent_label_exact_string_and_role(self, qapp, tmp_path):
         """Permanent label reads exactly 'Changes apply from the next insertion.' in MUTED role."""
-        tab, _ = make_connected_cup_tab(qapp)
+        tab, _ = make_connected_cup_tab(qapp, tmp_path)
 
         # Check text and MUTED role when disarmed
         assert tab.cycle.is_armed is False
@@ -2207,27 +2224,30 @@ class TestCyclePeriodAndDwellRulesAndPending:
 class TestKeepPreviousScheduleAndCycleLifecycleRows:
     """Ticket 16 — Re-arming can keep previous schedule, and file says which happened."""
 
-    def test_checkbox_initial_state_and_tooltip(self, qapp):
-        """chk_keep_schedule is unchecked on construction, disabled with no saved boundary,
-        and its tooltip explains why it is unavailable."""
-        tab, _ = make_connected_cup_tab(qapp)
-        assert hasattr(tab, "chk_keep_schedule")
-        assert tab.chk_keep_schedule.text() == "Keep previous schedule"
-        assert tab.chk_keep_schedule.isChecked() is False
-        assert tab.chk_keep_schedule.isEnabled() is False
-        tooltip = tab.chk_keep_schedule.toolTip()
-        assert "no saved" in tooltip.lower() or "unavailable" in tooltip.lower()
+    def test_checkbox_initial_state_and_tooltip(self, qapp, tmp_path, monkeypatch):
+        """The checkbox is gone (ticket 31), and the first start in a cup log has no
+        stop gap, so it asks the restart question zero times."""
+        tab, _ = make_connected_cup_tab(qapp, tmp_path)
+        asked = []
+        monkeypatch.setattr(tab, "_ask_restart", lambda *a: asked.append(a))
+        assert not hasattr(tab, "chk_keep_schedule")
+        arm_cycle_helper(tab, qapp)
+        assert tab.cycle.is_armed is True
+        assert asked == []
         tab.close()
 
-    def test_checkbox_enabled_after_stop_and_disabled_once_boundary_passes(self, qapp, tmp_path):
-        """chk_keep_schedule is enabled after stop with future boundary, and greys out on its own
-        once the boundary passes, with an explanatory tooltip."""
+    def test_checkbox_enabled_after_stop_and_disabled_once_boundary_passes(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """After a stop, the restart question is handed the stop time, the restart time and
+        the saved boundary; once the boundary has passed the saved boundary it is handed is
+        still 300.0 and the dialog (tested on its own) refuses to resume it."""
         from rbl.hardware.cup_status import CupPosition
-        from rbl.services.cup_session_writer import CupSessionWriter
         from rbl.snapshots import CupActuationState
 
-        sw = CupSessionWriter(session_id="test_chk_stop", output_dir=tmp_path)
-        tab = FaradayCupTab(session_writer=sw)
+        cup_log = CupLog(test_root=tmp_path)
+        sw = cup_log.open_test(datetime(2026, 10, 8, 9, 0, 0))
+        tab = FaradayCupTab(cup_log=cup_log)
         tab.show()
         qapp.processEvents()
 
@@ -2267,9 +2287,10 @@ class TestKeepPreviousScheduleAndCycleLifecycleRows:
 
         assert tab.cycle.is_armed is False
         assert tab.cycle.saved_boundary_t == pytest.approx(300.0)
-        assert tab.chk_keep_schedule.isEnabled() is True
 
-        # Advance time to t=305.0 (boundary 300.0 has passed)
+        # Restart at t=305.0 (boundary 300.0 has passed)
+        asked = []
+        monkeypatch.setattr(tab, "_ask_restart", lambda *a: asked.append(a) or None)
         tab.on_cup_actuation_state(CupActuationState(
             connected=True,
             commanded=CupPosition.OUT,
@@ -2280,24 +2301,28 @@ class TestKeepPreviousScheduleAndCycleLifecycleRows:
             t=305.0,
         ))
         qapp.processEvents()
+        tab.btn_cycle_arm.click()
+        qapp.processEvents()
 
-        assert tab.chk_keep_schedule.isEnabled() is False
-        tooltip = tab.chk_keep_schedule.toolTip()
-        assert "passed" in tooltip.lower() or "unavailable" in tooltip.lower()
+        assert asked == [(10.0, 305.0, 300.0)]
+        assert tab.cycle.is_armed is False
 
         sw.close()
         tab.close()
 
-    def test_arming_passes_resume_at_only_when_checked_and_enabled(self, qapp, tmp_path):
-        """Arming lands on saved boundary when checkbox is checked and enabled,
-        and lands at now + period when unchecked."""
+    def test_arming_passes_resume_at_only_when_checked_and_enabled(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """Restarting lands on the saved boundary when the operator picks up where they
+        left off, and at now + period when they start a new schedule."""
         from rbl.hardware.cup_status import CupPosition
-        from rbl.services.cup_session_writer import CupSessionWriter
+        from rbl.services.cup_log import RestartChoice
         from rbl.services.sampling_cycle import CycleState
         from rbl.snapshots import CupActuationState
 
-        sw = CupSessionWriter(session_id="test_resume_at", output_dir=tmp_path)
-        tab = FaradayCupTab(session_writer=sw)
+        cup_log = CupLog(test_root=tmp_path)
+        sw = cup_log.open_test(datetime(2026, 10, 8, 9, 0, 0))
+        tab = FaradayCupTab(cup_log=cup_log)
         tab.show()
         qapp.processEvents()
 
@@ -2332,10 +2357,10 @@ class TestKeepPreviousScheduleAndCycleLifecycleRows:
         tab.btn_cycle_stop.click()
         qapp.processEvents()
 
-        assert tab.chk_keep_schedule.isEnabled() is True
-
-        # Check the checkbox and re-arm at t=20.0
-        tab.chk_keep_schedule.setChecked(True)
+        # Pick up where we left off, and re-arm at t=20.0
+        monkeypatch.setattr(tab, "_ask_restart", lambda *a: RestartChoice(
+            resume_schedule=True, beam_on_during_gap=True
+        ))
         tab.on_cup_actuation_state(CupActuationState(
             connected=True,
             commanded=CupPosition.OUT,
@@ -2426,8 +2451,10 @@ class TestKeepPreviousScheduleAndCycleLifecycleRows:
         tab.btn_cycle_stop.click()
         qapp.processEvents()
 
-        # Re-arm at t=360.0 with checkbox UNCHECKED
-        tab.chk_keep_schedule.setChecked(False)
+        # Re-arm at t=360.0 starting a new schedule
+        monkeypatch.setattr(tab, "_ask_restart", lambda *a: RestartChoice(
+            resume_schedule=False, beam_on_during_gap=True
+        ))
         tab.on_cup_actuation_state(CupActuationState(
             connected=True,
             commanded=CupPosition.OUT,
@@ -2447,15 +2474,16 @@ class TestKeepPreviousScheduleAndCycleLifecycleRows:
         sw.close()
         tab.close()
 
-    def test_both_exits_write_cycle_disarmed_with_saved_boundary(self, qapp, tmp_path):
-        """Arm button acting as Disarm writes reason 'disarm';
-        Stop Cycle writes reason 'stop', each with the right boundary value."""
+    def test_both_exits_write_cycle_disarmed_with_saved_boundary(self, qapp, tmp_path, monkeypatch):
+        """The Start button no longer disarms (ticket 31): every operator exit is Stop,
+        so both exits write reason 'stop', each with the right boundary value."""
         from rbl.hardware.cup_status import CupPosition
-        from rbl.services.cup_session_writer import CupSessionWriter
+        from rbl.services.cup_log import RestartChoice
         from rbl.snapshots import CupActuationState
 
-        sw = CupSessionWriter(session_id="test_disarm_rows", output_dir=tmp_path)
-        tab = FaradayCupTab(session_writer=sw)
+        cup_log = CupLog(test_root=tmp_path)
+        sw = cup_log.open_test(datetime(2026, 10, 8, 9, 0, 0))
+        tab = FaradayCupTab(cup_log=cup_log)
         tab.show()
         qapp.processEvents()
 
@@ -2477,7 +2505,7 @@ class TestKeepPreviousScheduleAndCycleLifecycleRows:
         tab.btn_cycle_arm.click()
         qapp.processEvents()
 
-        # Exit 1: Disarm via Arm button at t=10.0
+        # Exit 1: Stop at t=10.0
         tab.on_cup_actuation_state(CupActuationState(
             connected=True,
             commanded=CupPosition.OUT,
@@ -2488,10 +2516,13 @@ class TestKeepPreviousScheduleAndCycleLifecycleRows:
             t=10.0,
         ))
         qapp.processEvents()
-        tab.btn_cycle_arm.click()
+        tab.btn_cycle_stop.click()
         qapp.processEvents()
 
         # 2. Re-arm at t=20.0 (fresh arm -> boundary 20+300=320.0)
+        monkeypatch.setattr(tab, "_ask_restart", lambda *a: RestartChoice(
+            resume_schedule=False, beam_on_during_gap=True
+        ))
         tab.on_cup_actuation_state(CupActuationState(
             connected=True,
             commanded=CupPosition.OUT,
@@ -2525,8 +2556,8 @@ class TestKeepPreviousScheduleAndCycleLifecycleRows:
             disarm_rows = [r for r in reader if r["record_type"] == "cycle_disarmed"]
 
         assert len(disarm_rows) == 2
-        # Exit 1: disarm
-        assert "reason=disarm" in disarm_rows[0]["details"]
+        # Exit 1: stop
+        assert "reason=stop" in disarm_rows[0]["details"]
         assert float(disarm_rows[0]["commanded_timestamp"]) == pytest.approx(300.0)
 
         # Exit 2: stop
@@ -2535,14 +2566,17 @@ class TestKeepPreviousScheduleAndCycleLifecycleRows:
 
         tab.close()
 
-    def test_arming_writes_cycle_armed_with_mode_matching_scheduler(self, qapp, tmp_path):
+    def test_arming_writes_cycle_armed_with_mode_matching_scheduler(
+        self, qapp, tmp_path, monkeypatch
+    ):
         """Arming writes cycle_armed with mode matching scheduler ('fresh' or 'resumed')."""
         from rbl.hardware.cup_status import CupPosition
-        from rbl.services.cup_session_writer import CupSessionWriter
+        from rbl.services.cup_log import RestartChoice
         from rbl.snapshots import CupActuationState
 
-        sw = CupSessionWriter(session_id="test_armed_modes", output_dir=tmp_path)
-        tab = FaradayCupTab(session_writer=sw)
+        cup_log = CupLog(test_root=tmp_path)
+        sw = cup_log.open_test(datetime(2026, 10, 8, 9, 0, 0))
+        tab = FaradayCupTab(cup_log=cup_log)
         tab.show()
         qapp.processEvents()
 
@@ -2569,7 +2603,9 @@ class TestKeepPreviousScheduleAndCycleLifecycleRows:
         qapp.processEvents()
 
         # 2. Resumed arm at t=30.0
-        tab.chk_keep_schedule.setChecked(True)
+        monkeypatch.setattr(tab, "_ask_restart", lambda *a: RestartChoice(
+            resume_schedule=True, beam_on_during_gap=True
+        ))
         tab.on_cup_actuation_state(CupActuationState(
             connected=True,
             commanded=CupPosition.OUT,
@@ -2599,17 +2635,18 @@ class TestKeepPreviousScheduleAndCycleLifecycleRows:
 
         tab.close()
 
-    def test_full_operator_sequence_and_row_ordering(self, qapp, tmp_path):
+    def test_full_operator_sequence_and_row_ordering(self, qapp, tmp_path, monkeypatch):
         """Walks full operator sequence: arm at known time, run past one insertion, stop,
-        change threshold, re-arm with checkbox ticked, assert insertion lands on original
-        boundary with no burst, and assert row order in session file."""
+        change threshold, restart picking up where we left off, assert insertion lands on
+        original boundary with no burst, and assert row order in session file."""
         from rbl.hardware.cup_status import CupPosition
-        from rbl.services.cup_session_writer import CupSessionWriter
+        from rbl.services.cup_log import RestartChoice
         from rbl.services.sampling_cycle import CycleState
         from rbl.snapshots import CupActuationState
 
-        sw = CupSessionWriter(session_id="test_full_sequence", output_dir=tmp_path)
-        tab = FaradayCupTab(session_writer=sw)
+        cup_log = CupLog(test_root=tmp_path)
+        sw = cup_log.open_test(datetime(2026, 10, 8, 9, 0, 0))
+        tab = FaradayCupTab(cup_log=cup_log)
         tab.show()
         qapp.processEvents()
 
@@ -2698,15 +2735,16 @@ class TestKeepPreviousScheduleAndCycleLifecycleRows:
         qapp.processEvents()
 
         assert tab.cycle.saved_boundary_t == pytest.approx(600.0)
-        assert tab.chk_keep_schedule.isEnabled() is True
 
         # Change threshold through settings group (arm threshold 1.0e-6 > release threshold 2.5e-7)
         tab.settings_group.spn_arm_threshold.setValue(1.0e-6)
         tab.settings_group.spn_arm_threshold.editingFinished.emit()
         qapp.processEvents()
 
-        # Re-arm with checkbox ticked at t=400.0
-        tab.chk_keep_schedule.setChecked(True)
+        # Restart picking up where we left off, at t=400.0
+        monkeypatch.setattr(tab, "_ask_restart", lambda *a: RestartChoice(
+            resume_schedule=True, beam_on_during_gap=True
+        ))
         tab.on_cup_actuation_state(CupActuationState(
             connected=True,
             commanded=CupPosition.OUT,
@@ -2814,7 +2852,6 @@ class TestKeepPreviousScheduleAndCycleLifecycleRows:
     def test_stop_cycle_retracts_cup_during_insertion(self, qapp, tmp_path):
         """Stop Cycle retracts the cup when called during an insertion."""
         from rbl.hardware.cup_status import CupPosition
-        from rbl.services.cup_session_writer import CupSessionWriter
         from rbl.services.sampling_cycle import CycleState
         from rbl.snapshots import CupActuationState
 
@@ -2823,8 +2860,9 @@ class TestKeepPreviousScheduleAndCycleLifecycleRows:
         beamline.command_cup_in = lambda: commands.append("IN")
         beamline.command_cup_out = lambda: commands.append("OUT")
 
-        sw = CupSessionWriter(session_id="test_stop_retract", output_dir=tmp_path)
-        tab = FaradayCupTab(beamline=beamline, session_writer=sw)
+        cup_log = CupLog(test_root=tmp_path)
+        sw = cup_log.open_test(datetime(2026, 10, 8, 9, 0, 0))
+        tab = FaradayCupTab(beamline=beamline, cup_log=cup_log)
         tab.show()
         qapp.processEvents()
 
@@ -2901,3 +2939,177 @@ class TestKeepPreviousScheduleAndCycleLifecycleRows:
 
 
 
+
+
+class TestFaradayCupTabWritesOnlyWithOpenCupLog:
+    """Ticket 28 (spec C2): no cup file exists unless an operator opened a cup log."""
+
+    NO_LOG_REASON = "Start a session or a cup test log to use automatic cup insertion."
+
+    @staticmethod
+    def _actuation(position, t, commanded=None):
+        from rbl.snapshots import CupActuationState
+
+        return CupActuationState(
+            connected=True,
+            commanded=commanded if commanded is not None else position,
+            confirmed=position,
+            auto_mode=True,
+            stale=False,
+            last_transition_t=t,
+            t=t,
+        )
+
+    @staticmethod
+    def _configure_dose_chain(tab, qapp):
+        tab.spn_k.setValue(1e-15)
+        tab.spn_charge_state.setValue(1)
+        tab.on_patch_dimensions_changed(10.0, 10.0)
+        qapp.processEvents()
+
+    def _manual_insertion(self, tab, qapp):
+        """Insert clicked, confirmed IN, current above the start current, confirmed OUT."""
+        from rbl.hardware.cup_status import CupPosition
+        from rbl.snapshots import CupState
+
+        tab.on_cup_actuation_state(self._actuation(CupPosition.OUT, 0.0))
+        qapp.processEvents()
+        tab.btn_insert.click()
+        qapp.processEvents()
+        tab.on_cup_actuation_state(self._actuation(CupPosition.IN, 1.0))
+        qapp.processEvents()
+        for t in (1.2, 2.5, 3.0):
+            tab.on_cup_state(CupState(connected=True, current=1.0e-6, valid=True, t_host=t))
+            qapp.processEvents()
+        tab.on_cup_actuation_state(self._actuation(CupPosition.OUT, 3.5))
+        qapp.processEvents()
+        tab.on_cup_state(CupState(connected=True, current=0.0, valid=True, t_host=4.0))
+        qapp.processEvents()
+
+    def test_manual_insertion_with_closed_cup_log_writes_no_file(self, qapp, tmp_path):
+        cup_log = CupLog(test_root=tmp_path)
+        tab = FaradayCupTab(cup_log=cup_log)
+        tab.show()
+        qapp.processEvents()
+
+        self._manual_insertion(tab, qapp)
+
+        assert list(tmp_path.rglob("*")) == []
+        assert tab.lbl_not_logging.isVisible()
+        assert tab.lbl_not_logging.text() == "Not logging"
+        assert theme.WARN in tab.lbl_not_logging.styleSheet()
+        tab.close()
+
+    def test_arming_without_cup_log_is_refused_even_with_full_dose_chain(self, qapp, tmp_path):
+        from rbl.hardware.cup_status import CupPosition
+
+        cup_log = CupLog(test_root=tmp_path)
+        tab = FaradayCupTab(cup_log=cup_log)
+        tab.show()
+        qapp.processEvents()
+        self._configure_dose_chain(tab, qapp)
+        tab.on_cup_actuation_state(self._actuation(CupPosition.OUT, 0.0))
+        qapp.processEvents()
+
+        tab.btn_cycle_arm.click()
+        qapp.processEvents()
+
+        assert not tab.cycle.is_armed
+        assert self.NO_LOG_REASON in tab.lbl_cycle_fault.text()
+        tab.close()
+
+    def test_no_cup_log_reason_is_checked_before_dose_chain(self, qapp, tmp_path):
+        from rbl.hardware.cup_status import CupPosition
+
+        tab = FaradayCupTab(cup_log=CupLog(test_root=tmp_path))
+        tab.show()
+        tab.on_cup_actuation_state(self._actuation(CupPosition.OUT, 0.0))
+        qapp.processEvents()
+        assert tab.displacement_coeff == 0.0  # the dose chain is not configured either
+
+        tab.btn_cycle_arm.click()
+        qapp.processEvents()
+
+        assert self.NO_LOG_REASON in tab.lbl_cycle_fault.text()
+        assert "displacement" not in tab.lbl_cycle_fault.text()
+        tab.close()
+
+    def test_manual_buttons_stay_enabled_without_cup_log(self, qapp, tmp_path):
+        from rbl.hardware.cup_status import CupPosition
+
+        tab = FaradayCupTab(cup_log=CupLog(test_root=tmp_path))
+        tab.show()
+        tab.on_cup_actuation_state(self._actuation(CupPosition.OUT, 0.0))
+        qapp.processEvents()
+        assert tab.btn_insert.isEnabled()
+        assert tab.btn_retract.isEnabled()
+        tab.close()
+
+    def test_manual_insertion_after_open_test_writes_rows_and_hides_label(self, qapp, tmp_path):
+        cup_log = CupLog(test_root=tmp_path)
+        tab = FaradayCupTab(cup_log=cup_log)
+        tab.show()
+        qapp.processEvents()
+        self._configure_dose_chain(tab, qapp)
+        assert tab.lbl_not_logging.isVisible()
+
+        writer = cup_log.open_test(datetime(2026, 10, 8, 9, 0, 0))
+        qapp.processEvents()
+        assert not tab.lbl_not_logging.isVisible()
+
+        self._manual_insertion(tab, qapp)
+        cup_log.close()
+
+        with open(writer.csv_path, encoding="utf-8") as f:
+            reader = csv.DictReader([line for line in f if not line.startswith("#")])
+            kinds = [r["record_type"] for r in reader]
+        assert "run_opened" in kinds
+        assert "run_closed" in kinds
+        assert kinds.count("insertion_summary") == 1
+        assert tab.lbl_not_logging.isVisible()
+        tab.close()
+
+    def test_closing_cup_log_retracts_cup_and_disarms_automatic_insertion(self, qapp, tmp_path):
+        from rbl.hardware.cup_status import CupPosition
+
+        cup_log = CupLog(test_root=tmp_path)
+        cup_log.open_test(datetime(2026, 10, 8, 9, 0, 0))
+        tab = FaradayCupTab(cup_log=cup_log)
+        tab.show()
+        qapp.processEvents()
+        self._configure_dose_chain(tab, qapp)
+        tab.on_cup_actuation_state(self._actuation(CupPosition.OUT, 0.0))
+        qapp.processEvents()
+        tab.btn_cycle_arm.click()
+        qapp.processEvents()
+        assert tab.cycle.is_armed
+        # the insertion falls due: the scheduler commands the cup IN, hardware confirms
+        due_t = 10_000.0
+        tab.on_cup_actuation_state(self._actuation(CupPosition.OUT, due_t))
+        qapp.processEvents()
+        assert "IN" in tab.lbl_commanded.text()
+        tab.on_cup_actuation_state(self._actuation(CupPosition.IN, due_t + 1.0))
+        qapp.processEvents()
+
+        cup_log.close()
+        qapp.processEvents()
+
+        assert not tab.cycle.is_armed
+        assert "OUT" in tab.lbl_commanded.text()
+        tab.close()
+
+    def test_tab_never_constructs_its_own_session_writer(self):
+        import inspect
+
+        import rbl.gui.faraday_cup_tab as module
+
+        assert "CupSessionWriter(" not in inspect.getsource(module)
+
+
+class TestMainWindowSharesOneCupLog:
+    """Ticket 28: MainWindow builds the one CupLog and hands it to the Faraday Cup tab."""
+
+    def test_window_and_tab_share_one_closed_cup_log(self, win):
+        assert win.faraday_cup_tab.cup_log is win.cup_log
+        assert win.cup_log.writer is None
+        assert win.faraday_cup_tab.lbl_not_logging.text() == "Not logging"
