@@ -1,6 +1,6 @@
 # 32: Sessions open the cup log and offer to continue the previous dose
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -42,18 +42,18 @@ root point at `tmp_path`. Session folders and cup files must be real.
 
 ## Acceptance criteria
 
-- [ ] Starting a session creates `<session folder>/cup.csv` and `CupLog.kind` is
+- [x] Starting a session creates `<session folder>/cup.csv` and `CupLog.kind` is
       `SESSION`. With a test cup log open beforehand, that file is closed and untouched
       afterwards.
-- [ ] With an earlier session folder whose `cup.csv` has counted rows (written by a real
+- [x] With an earlier session folder whose `cup.csv` has counted rows (written by a real
       writer), `_ask_continue_dose` is called once with those totals. Choosing continue
       writes the `# dose continued from:` header, and the tab's charge label starts at the
       earlier total. Choosing not to continue starts at zero.
-- [ ] With no earlier counted session, `_ask_continue_dose` is not called.
-- [ ] Stopping a session while automatic insertion runs, with `_confirm_stop_automatic`
+- [x] With no earlier counted session, `_ask_continue_dose` is not called.
+- [x] Stopping a session while automatic insertion runs, with `_confirm_stop_automatic`
       returning `False`, leaves the session recording and the cup log open. Returning
       `True`, the session stops and the cup log closes.
-- [ ] Disk auto-stop stops the session without calling either guard.
+- [x] Disk auto-stop stops the session without calling either guard.
 
 ## Gate
 
@@ -65,3 +65,5 @@ Run in CI's order (`.github/workflows/tests.yml`):
     pytest --tb=short -q -n auto --dist loadfile --durations=25
 
 ## Comments
+
+2026-10-16: Done. `SessionRecorder.set_start_guard/set_stop_guard` and `stop(force=True)` (disk auto-stop); `MainWindow` installs the guards, opens `<folder>/cup.csv` on `session_started`, asks `_ask_continue_dose` (new `ContinueDialog`), seeds the tab via `FaradayCupTab.continue_dose`, closes the log on `session_stopped`. Tests: `tests/test_session_cup_log.py` (criterion 1: open/close + test log untouched; 2: continue/decline + header + label + beam answer; 3: no ask; 4: stop declined/confirmed; 5: auto-stop skips guards). `tests/conftest.py` stubs `_ask_continue_dose` to "start from zero". Previous-session search uses the new session folder's parent (== LOGS_DIR). No bench verification needed.

@@ -227,7 +227,12 @@ from rbl.gui.widgets.live_plot import LivePlotPanel
 from rbl.gui.widgets.restart_dialog import RestartDialog
 from rbl.hardware.cup_status import CupPosition
 from rbl.hardware.current_monitor import RollingBuffer, format_current
-from rbl.hardware.dose_model import DoseAccumulator, InsertionCurrentStats, patch_area_cm2
+from rbl.hardware.dose_model import (
+    DoseAccumulator,
+    DoseTotals,
+    InsertionCurrentStats,
+    patch_area_cm2,
+)
 from rbl.services.cup_acquisition import (
     AuthorityDetector,
     CupAcquisitionStateMachine,
@@ -1768,6 +1773,47 @@ class FaradayCupTab(QWidget):
         if not self._confirm_stop_automatic():
             return
         self._stop_automatic("stop")
+
+    # ---- session hooks (ticket 32): the window asks, the tab answers -------------
+
+    def automatic_insertion_running(self) -> bool:
+        """True while automatic cup insertion is started."""
+        return self.cycle.is_armed
+
+    def stop_automatic_confirmed(self) -> bool:
+        """Confirm, then stop automatic insertion; True when it is no longer running.
+
+        Declining ("Keep running") returns False and changes nothing. The one place a
+        session start or stop asks about automatic insertion, so the wording and the
+        stop itself are the operator's Stop button, not a second copy of it.
+        """
+        if not self.cycle.is_armed:
+            return True
+        if not self._confirm_stop_automatic():
+            return False
+        self._stop_automatic("stop")
+        return True
+
+    def dpa_of_totals(self, totals: DoseTotals) -> float | None:
+        """dpa that earlier totals correspond to under the current settings, or None."""
+        if self.displacement_coeff == 0.0 or self.charge_state <= 0 or self._area_cm2 <= 0.0:
+            return None
+        probe = DoseAccumulator()
+        probe.seed(totals)
+        return probe.dpa(self.charge_state, self.irradiated_area_cm2, self.displacement_coeff)
+
+    def continue_dose(self, totals: DoseTotals, beam_on_during_gap: bool) -> None:
+        """Carry an earlier session's totals into this log (ADR 0003 C5).
+
+        Called right after the new log opens (which zeroed the accumulator). A "no beam"
+        answer takes the gap from the earlier last withdrawal to now out of the hold
+        interval of the next insertion, the same way a stop/restart gap is handled.
+        """
+        self._accumulator.seed(totals)
+        if not beam_on_during_gap and totals.last_out_t is not None:
+            t_now = self._last_state_t if not math.isnan(self._last_state_t) else time.time()
+            self._accumulator.exclude_interval(totals.last_out_t, t_now)
+        self._update_dose_view()
 
     def _confirm_stop_automatic(self) -> bool:
         """Ask before stopping; False means keep running.
