@@ -341,3 +341,26 @@ def test_a_restart_forgets_the_previous_forced_plates(qapp, tmp_path):
     s.feed(65.0, spikes=[(62.0, 10, 9.0)])
     r.stop()
     assert _rows(tmp_path / "b") == []
+
+
+def test_spikes_csv_carries_rail_time_and_the_scale(rec, tmp_path):
+    s = Stream(rec)
+    s.feed(60.0)
+    # 20 samples of raw current volts at 10.0 V: above the 9.9 V rail.
+    total = int(round(10.0 / DT))
+    trace = np.full(total, 2.0 * VOLTS_PER_MA)
+    trace[5000:5020] = 10.0
+    for k in range(0, total, WINDOW):
+        seg = trace[k:k + WINDOW]
+        rec.on_window(window_payload(
+            {}, waveforms={AIN_I: seg, AIN_V: np.full(seg.size, 1.5)},
+            sample_period=DT))
+    with open(tmp_path / "run" / "spikes.csv", newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        header = list(reader.fieldnames)
+        rows = list(reader)
+    assert header[-3:] == ["rail_s", "at_rail", "current_monitor_ma_per_volt"]
+    assert len(rows) == 1
+    assert rows[0]["at_rail"] == "True"
+    assert float(rows[0]["rail_s"]) == pytest.approx(20 * DT, abs=1e-9)
+    assert float(rows[0]["current_monitor_ma_per_volt"]) == 2.0
