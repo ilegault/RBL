@@ -44,6 +44,22 @@ Consequences, all deliberate:
   file header reports what the detector actually uses.
 - The tab closes the log only if it built the log itself; otherwise MainWindow owns it.
 
+STOPPING AND RESTARTING AUTOMATIC INSERTION (ADR 0003 amendment C3/C4, ticket 31)
+------------------------------------------------------------------------------------
+Start and Stop are two buttons. Start is start-only; Stop is the only way an operator
+stops, and it always withdraws the cup. A stop pauses the dose record, so it asks first
+(``_confirm_stop_automatic``) and an unanswered "Keep running" changes nothing. Stops
+forced by a fault (an unconfirmed move, lost position feedback) and the stop that
+closing the cup log performs never ask: the first has no operator to ask, the second
+was already confirmed by the operator closing the log.
+
+Every stop remembers when it happened (``_stop_gap_start_t``). While stopped nothing is
+sampled, so the next Start in the same cup log asks ``_ask_restart`` whether the beam was
+on the specimen during the gap: "no" takes the gap out of the next hold interval
+(``exclude_interval``), "yes" keeps it. The first Start in a cup log has no gap and asks
+nothing, and a new cup log never inherits one. Cancelling the dialog starts nothing and
+leaves the gap open, so the question is asked again about the same gap.
+
 ONLY AUTOMATIC INSERTIONS COUNT TOWARD THE DOSE (ADR 0003 amendment C2/C4, ticket 30)
 ------------------------------------------------------------------------------------
 The dose chain holds the previous measured current across the gap between insertions
@@ -161,30 +177,32 @@ and persist to ~/.config/rbl/cup_settings.json.
 
 KEEP PREVIOUS SCHEDULE AND CYCLE LIFECYCLE ROWS (ADR 0002 AMENDMENT A6, A8, TICKET 16)
 --------------------------------------------------------------------------------------
-An operator who stops an armed cycle to edit locked settings can re-arm onto the boundary
-the cycle would have hit via the "Keep previous schedule" checkbox, rather than waiting a
-fresh period. The checkbox is enabled only while a saved boundary is in the future and greys
-out with explanatory tooltip once it passes.
-Both cycle exits (disarm and stop) write cycle_disarmed rows carrying the saved boundary,
-and arming writes cycle_armed rows recording whether the countdown was fresh or resumed,
-ensuring gaps in the insertion archive are fully explained.
+An operator who stops an armed cycle to edit locked settings can start it again onto the
+boundary the cycle would have hit ("Pick up where you left off" in the restart dialog,
+ticket 31, which replaced the original "Keep previous schedule" checkbox), rather than
+waiting a fresh period. That choice is offered only while the saved boundary is still in
+the future.
+Stopping writes cycle_disarmed rows carrying the saved boundary, and starting writes
+cycle_armed rows recording whether the countdown was fresh or resumed, ensuring gaps in
+the insertion archive are fully explained.
 """
 from __future__ import annotations
 
 import logging
 import math
 import time
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
-    QCheckBox,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -206,6 +224,7 @@ from rbl.gui.widgets.inputs import (
     unit_row,
 )
 from rbl.gui.widgets.live_plot import LivePlotPanel
+from rbl.gui.widgets.restart_dialog import RestartDialog
 from rbl.hardware.cup_status import CupPosition
 from rbl.hardware.current_monitor import RollingBuffer, format_current
 from rbl.hardware.dose_model import DoseAccumulator, InsertionCurrentStats, patch_area_cm2
@@ -216,7 +235,7 @@ from rbl.services.cup_acquisition import (
     RunClosed,
     RunOpened,
 )
-from rbl.services.cup_log import CupLog, CupView
+from rbl.services.cup_log import CupLog, CupView, RestartChoice
 from rbl.services.cup_session_writer import CupRunStats
 from rbl.services.sampling_cycle import (
     CycleInsert,
@@ -233,6 +252,13 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 NO_CUP_LOG_REASON = "Start a session or a cup test log to use automatic cup insertion."
+
+
+def _format_stop_time(t: float) -> str:
+    """A scheduler time as the operator reads it: wall clock for an epoch, else seconds."""
+    if t > 1.0e9:
+        return datetime.fromtimestamp(t).strftime("%H:%M:%S")
+    return f"{t:.0f} s"
 
 
 class FaradayCupTab(QWidget):
@@ -334,6 +360,9 @@ class FaradayCupTab(QWidget):
 
         # Cycle fault message — set on arming refusal or cycle disarm; cleared on arm
         self._cycle_fault: str = ""
+        # When automatic insertion last stopped in this cup log (operator or fault);
+        # None before the first stop and after a restart. Drives the restart question.
+        self._stop_gap_start_t: float | None = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -625,7 +654,7 @@ class FaradayCupTab(QWidget):
         self.spn_cycle_dwell.editingFinished.connect(self._on_cycle_dwell_changed)
         cycle_lay.addLayout(unit_row(self.spn_cycle_dwell, "s"))
 
-        # Arm / Disarm button
+        # Start button (start-only: Stop below is the only way an operator stops)
         self.btn_cycle_arm = QPushButton("Arm Cycle")
         self.btn_cycle_arm.setStyleSheet("font-weight: bold; padding: 4px 14px;")
         self.btn_cycle_arm.setToolTip(
@@ -633,13 +662,6 @@ class FaradayCupTab(QWidget):
         )
         self.btn_cycle_arm.clicked.connect(self._on_cycle_arm_clicked)
         cycle_lay.addWidget(self.btn_cycle_arm)
-
-        # Keep previous schedule checkbox (ADR 0002 amendment A6, ticket 16)
-        self.chk_keep_schedule = QCheckBox("Keep previous schedule")
-        self.chk_keep_schedule.setChecked(False)
-        self.chk_keep_schedule.setEnabled(False)
-        self.chk_keep_schedule.setToolTip("No saved schedule boundary to resume")
-        cycle_lay.addWidget(self.chk_keep_schedule)
 
         # Stop button
         self.btn_cycle_stop = QPushButton("Stop Cycle")
@@ -976,6 +998,7 @@ class FaradayCupTab(QWidget):
     def _on_cup_log_opened(self, path: str, kind: str) -> None:
         """A new log is a new dose record: start the accumulator from zero."""
         self._accumulator = DoseAccumulator()
+        self._stop_gap_start_t = None
         writer = self.cup_log.writer
         if writer is not None:
             writer.update_session_parameters(
@@ -1000,7 +1023,8 @@ class FaradayCupTab(QWidget):
         There is no dialog: the operator already confirmed closing the log. The cup
         is withdrawn and the saved schedule boundary is kept.
         """
-        self._on_cycle_stop_clicked()
+        self._stop_automatic("stop")
+        self._stop_gap_start_t = None  # the gap belonged to the log that just closed
         self._update_logging_view()
         self._update_acquisition_view()
 
@@ -1628,7 +1652,7 @@ class FaradayCupTab(QWidget):
     # ── Sampling Cycle (ADR 0003, ticket 09) ─────────────────────────────────
 
     def _on_cycle_arm_clicked(self) -> None:
-        """Arm or disarm the sampling cycle.
+        """Start automatic cup insertion (Start is start-only; Stop is the only way out).
 
         WHY THE GUARD EXISTS (ticket 10 / ADR 0003)
         -------------------------------------------
@@ -1643,21 +1667,6 @@ class FaradayCupTab(QWidget):
         """
         t_now = self._last_state_t if not math.isnan(self._last_state_t) else time.time()
         if self.cycle.is_armed:
-            self.cycle.disarm()
-            saved_b = (
-                self.cycle.saved_boundary_t
-                if self.cycle.saved_boundary_t is not None
-                else 0.0
-            )
-            writer = self.cup_log.writer
-            if writer is not None:
-                writer.write_cycle_disarmed(
-                    t_host=t_now,
-                    reason="disarm",
-                    saved_boundary_t=saved_b,
-                )
-            self._cycle_fault = ""
-            self._update_cycle_view(t_now)
             return
 
         reason = self._check_arm_preconditions()
@@ -1665,6 +1674,16 @@ class FaradayCupTab(QWidget):
             self._cycle_fault = f"Cannot arm: {reason}"
             self._update_cycle_view(t_now)
             return
+
+        resume_at: float | None = None
+        restart: RestartChoice | None = None
+        gap_start_t = self._stop_gap_start_t
+        if gap_start_t is not None:
+            restart = self._ask_restart(gap_start_t, t_now, self.cycle.saved_boundary_t)
+            if restart is None:
+                return  # cancelled: nothing starts, nothing is written, the gap stays open
+            if restart.resume_schedule:
+                resume_at = self.cycle.saved_boundary_t
 
         self._cycle_fault = ""
         writer = self.cup_log.writer
@@ -1681,11 +1700,8 @@ class FaradayCupTab(QWidget):
                 cycle_period_s=self.cycle_period,
                 cycle_dwell_s=self.cycle_dwell,
             )
-        resume_at = (
-            self.cycle.saved_boundary_t
-            if (self.chk_keep_schedule.isChecked() and self.chk_keep_schedule.isEnabled())
-            else None
-        )
+        if restart is not None and not restart.beam_on_during_gap:
+            self._accumulator.exclude_interval(gap_start_t, t_now)
         mode = self.cycle.arm(t=t_now, resume_at=resume_at)
         next_ins_t = (
             self.cycle.next_insertion_t
@@ -1699,7 +1715,34 @@ class FaradayCupTab(QWidget):
                 mode=mode,
                 next_insertion_t=next_ins_t,
             )
+            if restart is not None:
+                writer.write_automatic_insertion_restarted(
+                    t_host=t_now,
+                    gap_start_t=gap_start_t,
+                    gap_end_t=t_now,
+                    beam_on_during_gap=restart.beam_on_during_gap,
+                    mode=mode,
+                )
+        self._stop_gap_start_t = None
         self._update_cycle_view(t_now)
+
+    def _ask_restart(
+        self, gap_start_t: float, now_t: float, saved_boundary_t: float | None
+    ) -> RestartChoice | None:
+        """Ask the operator about the pause; None means they cancelled.
+
+        A replaceable method so tests can answer without a modal (see conftest).
+        """
+        resume_available = saved_boundary_t is not None and saved_boundary_t > now_t
+        dlg = RestartDialog(
+            _format_stop_time(gap_start_t),
+            _format_stop_time(now_t),
+            resume_available,
+            self,
+        )
+        if dlg.exec() != RestartDialog.DialogCode.Accepted:
+            return None
+        return dlg.choice()
 
     def _check_arm_preconditions(self) -> str:
         """Return '' if all arming preconditions are met, else the first missing item.
@@ -1721,11 +1764,39 @@ class FaradayCupTab(QWidget):
         return ""
 
     def _on_cycle_stop_clicked(self) -> None:
-        """Stop the cycle; retract the cup if currently inserting."""
+        """Operator Stop: confirm, then withdraw the cup and stop automatic insertion."""
+        if not self._confirm_stop_automatic():
+            return
+        self._stop_automatic("stop")
+
+    def _confirm_stop_automatic(self) -> bool:
+        """Ask before stopping; False means keep running.
+
+        A replaceable method so tests can answer without a modal (see conftest).
+        """
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Stop automatic cup insertion")
+        box.setText(
+            "Stopping automatic cup insertion withdraws the cup and pauses the dose "
+            "record. No insertions happen until you start it again. When you do, you "
+            "will be asked whether the beam was on the specimen during the pause."
+        )
+        stop_btn = box.addButton(
+            "Stop automatic insertion", QMessageBox.ButtonRole.DestructiveRole
+        )
+        keep_btn = box.addButton("Keep running", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(keep_btn)
+        box.exec()
+        return box.clickedButton() is stop_btn
+
+    def _stop_automatic(self, reason: str) -> None:
+        """Stop the cycle; retract the cup if currently inserting; remember the gap."""
         t_now = self._last_state_t if not math.isnan(self._last_state_t) else time.time()
         was_armed = self.cycle.is_armed
         retract_action = self.cycle.stop(t=t_now)
         if was_armed:
+            self._stop_gap_start_t = t_now
             saved_b = (
                 self.cycle.saved_boundary_t
                 if self.cycle.saved_boundary_t is not None
@@ -1735,7 +1806,7 @@ class FaradayCupTab(QWidget):
             if writer is not None:
                 writer.write_cycle_disarmed(
                     t_host=t_now,
-                    reason="stop",
+                    reason=reason,
                     saved_boundary_t=saved_b,
                 )
         if retract_action is not None and self._actuation_connected:
@@ -1915,19 +1986,14 @@ class FaradayCupTab(QWidget):
         """Update the Sampling Cycle panel to reflect the current scheduler state."""
         self._emit_cup_view()
         state = self.cycle.state
+        self.btn_cycle_arm.setEnabled(state == CycleState.DISARMED)
         if state == CycleState.DISARMED:
-            self.btn_cycle_arm.setText("Arm Cycle")
-            self.btn_cycle_arm.setStyleSheet("font-weight: bold; padding: 4px 14px;")
             self.btn_cycle_stop.setEnabled(False)
             self.lbl_cycle_state.setText("Disarmed")
             self.lbl_cycle_state.setStyleSheet(
                 f"color: {theme.MUTED}; font-style: italic; font-size: {theme.FS_LABEL}px;"
             )
         elif state == CycleState.WAITING:
-            self.btn_cycle_arm.setText("Disarm Cycle")
-            self.btn_cycle_arm.setStyleSheet(
-                f"font-weight: bold; padding: 4px 14px; color: {theme.WARN};"
-            )
             self.btn_cycle_stop.setEnabled(True)
             tti = self.cycle.time_to_next_insertion(t)
             if tti is not None:
@@ -1942,10 +2008,6 @@ class FaradayCupTab(QWidget):
                 f"color: {theme.OK}; font-size: {theme.FS_LABEL}px;"
             )
         elif state == CycleState.INSERTING:
-            self.btn_cycle_arm.setText("Disarm Cycle")
-            self.btn_cycle_arm.setStyleSheet(
-                f"font-weight: bold; padding: 4px 14px; color: {theme.WARN};"
-            )
             self.btn_cycle_stop.setEnabled(True)
             ttr = self.cycle.time_to_retract(t)
             if ttr is not None:
@@ -1981,18 +2043,6 @@ class FaradayCupTab(QWidget):
         else:
             self.lbl_cycle_pending.setText("")
             self.lbl_cycle_pending.setVisible(False)
-
-        # Update keep-previous-schedule checkbox (ADR 0002 amendment A6, ticket 16)
-        saved_t = self.cycle.saved_boundary_t
-        if saved_t is None:
-            self.chk_keep_schedule.setEnabled(False)
-            self.chk_keep_schedule.setToolTip("No saved schedule boundary to resume")
-        elif saved_t <= t:
-            self.chk_keep_schedule.setEnabled(False)
-            self.chk_keep_schedule.setToolTip("Saved schedule boundary has already passed")
-        else:
-            self.chk_keep_schedule.setEnabled(True)
-            self.chk_keep_schedule.setToolTip("Resume previous schedule at saved boundary")
 
         self._update_settings_lock()
 
@@ -2058,6 +2108,7 @@ class FaradayCupTab(QWidget):
                             f"within {CUP_MOVE_CONFIRMATION_TIMEOUT_S:.1f} s"
                         )
                         self.cycle.disarm()
+                        self._stop_gap_start_t = t_now
                         self._update_cycle_view(t_now)
 
         # Log confirmed position transitions (IN / OUT) and indeterminate faults
@@ -2133,6 +2184,7 @@ class FaradayCupTab(QWidget):
                 "(stream profile changed from FULL)"
             )
             self.cycle.disarm()
+            self._stop_gap_start_t = t_now
             self._update_cycle_view(t_now)
 
         # Tick the sampling cycle scheduler on every actuation state update

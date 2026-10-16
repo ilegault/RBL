@@ -945,7 +945,8 @@ class TestSamplingCycleTab:
         qapp.processEvents()
 
         assert tab.cycle.is_armed
-        assert "Disarm" in tab.btn_cycle_arm.text()
+        # Start-only button (ticket 31): while running, Stop is the only way out.
+        assert not tab.btn_cycle_arm.isEnabled()
         assert tab.btn_cycle_stop.isEnabled()
         sw.close()
         tab.close()
@@ -1946,8 +1947,8 @@ class TestFaradayCupTabSettingsLock:
         arm_cycle_helper(tab, qapp)
         assert tab.settings_group.lbl_lock.isVisible() is True
 
-        # Disarm cycle -> unlocked
-        tab.btn_cycle_arm.click()
+        # Stop cycle -> unlocked (Start is start-only since ticket 31)
+        tab.btn_cycle_stop.click()
         qapp.processEvents()
         assert tab.settings_group.lbl_lock.isVisible() is False
 
@@ -2223,21 +2224,24 @@ class TestCyclePeriodAndDwellRulesAndPending:
 class TestKeepPreviousScheduleAndCycleLifecycleRows:
     """Ticket 16 — Re-arming can keep previous schedule, and file says which happened."""
 
-    def test_checkbox_initial_state_and_tooltip(self, qapp, tmp_path):
-        """chk_keep_schedule is unchecked on construction, disabled with no saved boundary,
-        and its tooltip explains why it is unavailable."""
+    def test_checkbox_initial_state_and_tooltip(self, qapp, tmp_path, monkeypatch):
+        """The checkbox is gone (ticket 31), and the first start in a cup log has no
+        stop gap, so it asks the restart question zero times."""
         tab, _ = make_connected_cup_tab(qapp, tmp_path)
-        assert hasattr(tab, "chk_keep_schedule")
-        assert tab.chk_keep_schedule.text() == "Keep previous schedule"
-        assert tab.chk_keep_schedule.isChecked() is False
-        assert tab.chk_keep_schedule.isEnabled() is False
-        tooltip = tab.chk_keep_schedule.toolTip()
-        assert "no saved" in tooltip.lower() or "unavailable" in tooltip.lower()
+        asked = []
+        monkeypatch.setattr(tab, "_ask_restart", lambda *a: asked.append(a))
+        assert not hasattr(tab, "chk_keep_schedule")
+        arm_cycle_helper(tab, qapp)
+        assert tab.cycle.is_armed is True
+        assert asked == []
         tab.close()
 
-    def test_checkbox_enabled_after_stop_and_disabled_once_boundary_passes(self, qapp, tmp_path):
-        """chk_keep_schedule is enabled after stop with future boundary, and greys out on its own
-        once the boundary passes, with an explanatory tooltip."""
+    def test_checkbox_enabled_after_stop_and_disabled_once_boundary_passes(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """After a stop, the restart question is handed the stop time, the restart time and
+        the saved boundary; once the boundary has passed the saved boundary it is handed is
+        still 300.0 and the dialog (tested on its own) refuses to resume it."""
         from rbl.hardware.cup_status import CupPosition
         from rbl.snapshots import CupActuationState
 
@@ -2283,9 +2287,10 @@ class TestKeepPreviousScheduleAndCycleLifecycleRows:
 
         assert tab.cycle.is_armed is False
         assert tab.cycle.saved_boundary_t == pytest.approx(300.0)
-        assert tab.chk_keep_schedule.isEnabled() is True
 
-        # Advance time to t=305.0 (boundary 300.0 has passed)
+        # Restart at t=305.0 (boundary 300.0 has passed)
+        asked = []
+        monkeypatch.setattr(tab, "_ask_restart", lambda *a: asked.append(a) or None)
         tab.on_cup_actuation_state(CupActuationState(
             connected=True,
             commanded=CupPosition.OUT,
@@ -2296,18 +2301,22 @@ class TestKeepPreviousScheduleAndCycleLifecycleRows:
             t=305.0,
         ))
         qapp.processEvents()
+        tab.btn_cycle_arm.click()
+        qapp.processEvents()
 
-        assert tab.chk_keep_schedule.isEnabled() is False
-        tooltip = tab.chk_keep_schedule.toolTip()
-        assert "passed" in tooltip.lower() or "unavailable" in tooltip.lower()
+        assert asked == [(10.0, 305.0, 300.0)]
+        assert tab.cycle.is_armed is False
 
         sw.close()
         tab.close()
 
-    def test_arming_passes_resume_at_only_when_checked_and_enabled(self, qapp, tmp_path):
-        """Arming lands on saved boundary when checkbox is checked and enabled,
-        and lands at now + period when unchecked."""
+    def test_arming_passes_resume_at_only_when_checked_and_enabled(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        """Restarting lands on the saved boundary when the operator picks up where they
+        left off, and at now + period when they start a new schedule."""
         from rbl.hardware.cup_status import CupPosition
+        from rbl.services.cup_log import RestartChoice
         from rbl.services.sampling_cycle import CycleState
         from rbl.snapshots import CupActuationState
 
@@ -2348,10 +2357,10 @@ class TestKeepPreviousScheduleAndCycleLifecycleRows:
         tab.btn_cycle_stop.click()
         qapp.processEvents()
 
-        assert tab.chk_keep_schedule.isEnabled() is True
-
-        # Check the checkbox and re-arm at t=20.0
-        tab.chk_keep_schedule.setChecked(True)
+        # Pick up where we left off, and re-arm at t=20.0
+        monkeypatch.setattr(tab, "_ask_restart", lambda *a: RestartChoice(
+            resume_schedule=True, beam_on_during_gap=True
+        ))
         tab.on_cup_actuation_state(CupActuationState(
             connected=True,
             commanded=CupPosition.OUT,
@@ -2442,8 +2451,10 @@ class TestKeepPreviousScheduleAndCycleLifecycleRows:
         tab.btn_cycle_stop.click()
         qapp.processEvents()
 
-        # Re-arm at t=360.0 with checkbox UNCHECKED
-        tab.chk_keep_schedule.setChecked(False)
+        # Re-arm at t=360.0 starting a new schedule
+        monkeypatch.setattr(tab, "_ask_restart", lambda *a: RestartChoice(
+            resume_schedule=False, beam_on_during_gap=True
+        ))
         tab.on_cup_actuation_state(CupActuationState(
             connected=True,
             commanded=CupPosition.OUT,
@@ -2463,10 +2474,11 @@ class TestKeepPreviousScheduleAndCycleLifecycleRows:
         sw.close()
         tab.close()
 
-    def test_both_exits_write_cycle_disarmed_with_saved_boundary(self, qapp, tmp_path):
-        """Arm button acting as Disarm writes reason 'disarm';
-        Stop Cycle writes reason 'stop', each with the right boundary value."""
+    def test_both_exits_write_cycle_disarmed_with_saved_boundary(self, qapp, tmp_path, monkeypatch):
+        """The Start button no longer disarms (ticket 31): every operator exit is Stop,
+        so both exits write reason 'stop', each with the right boundary value."""
         from rbl.hardware.cup_status import CupPosition
+        from rbl.services.cup_log import RestartChoice
         from rbl.snapshots import CupActuationState
 
         cup_log = CupLog(test_root=tmp_path)
@@ -2493,7 +2505,7 @@ class TestKeepPreviousScheduleAndCycleLifecycleRows:
         tab.btn_cycle_arm.click()
         qapp.processEvents()
 
-        # Exit 1: Disarm via Arm button at t=10.0
+        # Exit 1: Stop at t=10.0
         tab.on_cup_actuation_state(CupActuationState(
             connected=True,
             commanded=CupPosition.OUT,
@@ -2504,10 +2516,13 @@ class TestKeepPreviousScheduleAndCycleLifecycleRows:
             t=10.0,
         ))
         qapp.processEvents()
-        tab.btn_cycle_arm.click()
+        tab.btn_cycle_stop.click()
         qapp.processEvents()
 
         # 2. Re-arm at t=20.0 (fresh arm -> boundary 20+300=320.0)
+        monkeypatch.setattr(tab, "_ask_restart", lambda *a: RestartChoice(
+            resume_schedule=False, beam_on_during_gap=True
+        ))
         tab.on_cup_actuation_state(CupActuationState(
             connected=True,
             commanded=CupPosition.OUT,
@@ -2541,8 +2556,8 @@ class TestKeepPreviousScheduleAndCycleLifecycleRows:
             disarm_rows = [r for r in reader if r["record_type"] == "cycle_disarmed"]
 
         assert len(disarm_rows) == 2
-        # Exit 1: disarm
-        assert "reason=disarm" in disarm_rows[0]["details"]
+        # Exit 1: stop
+        assert "reason=stop" in disarm_rows[0]["details"]
         assert float(disarm_rows[0]["commanded_timestamp"]) == pytest.approx(300.0)
 
         # Exit 2: stop
@@ -2551,9 +2566,12 @@ class TestKeepPreviousScheduleAndCycleLifecycleRows:
 
         tab.close()
 
-    def test_arming_writes_cycle_armed_with_mode_matching_scheduler(self, qapp, tmp_path):
+    def test_arming_writes_cycle_armed_with_mode_matching_scheduler(
+        self, qapp, tmp_path, monkeypatch
+    ):
         """Arming writes cycle_armed with mode matching scheduler ('fresh' or 'resumed')."""
         from rbl.hardware.cup_status import CupPosition
+        from rbl.services.cup_log import RestartChoice
         from rbl.snapshots import CupActuationState
 
         cup_log = CupLog(test_root=tmp_path)
@@ -2585,7 +2603,9 @@ class TestKeepPreviousScheduleAndCycleLifecycleRows:
         qapp.processEvents()
 
         # 2. Resumed arm at t=30.0
-        tab.chk_keep_schedule.setChecked(True)
+        monkeypatch.setattr(tab, "_ask_restart", lambda *a: RestartChoice(
+            resume_schedule=True, beam_on_during_gap=True
+        ))
         tab.on_cup_actuation_state(CupActuationState(
             connected=True,
             commanded=CupPosition.OUT,
@@ -2615,11 +2635,12 @@ class TestKeepPreviousScheduleAndCycleLifecycleRows:
 
         tab.close()
 
-    def test_full_operator_sequence_and_row_ordering(self, qapp, tmp_path):
+    def test_full_operator_sequence_and_row_ordering(self, qapp, tmp_path, monkeypatch):
         """Walks full operator sequence: arm at known time, run past one insertion, stop,
-        change threshold, re-arm with checkbox ticked, assert insertion lands on original
-        boundary with no burst, and assert row order in session file."""
+        change threshold, restart picking up where we left off, assert insertion lands on
+        original boundary with no burst, and assert row order in session file."""
         from rbl.hardware.cup_status import CupPosition
+        from rbl.services.cup_log import RestartChoice
         from rbl.services.sampling_cycle import CycleState
         from rbl.snapshots import CupActuationState
 
@@ -2714,15 +2735,16 @@ class TestKeepPreviousScheduleAndCycleLifecycleRows:
         qapp.processEvents()
 
         assert tab.cycle.saved_boundary_t == pytest.approx(600.0)
-        assert tab.chk_keep_schedule.isEnabled() is True
 
         # Change threshold through settings group (arm threshold 1.0e-6 > release threshold 2.5e-7)
         tab.settings_group.spn_arm_threshold.setValue(1.0e-6)
         tab.settings_group.spn_arm_threshold.editingFinished.emit()
         qapp.processEvents()
 
-        # Re-arm with checkbox ticked at t=400.0
-        tab.chk_keep_schedule.setChecked(True)
+        # Restart picking up where we left off, at t=400.0
+        monkeypatch.setattr(tab, "_ask_restart", lambda *a: RestartChoice(
+            resume_schedule=True, beam_on_during_gap=True
+        ))
         tab.on_cup_actuation_state(CupActuationState(
             connected=True,
             commanded=CupPosition.OUT,

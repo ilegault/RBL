@@ -20,7 +20,7 @@ from rbl.gui import theme
 from rbl.gui.faraday_cup_tab import FaradayCupTab
 from rbl.gui.widgets.cup_panel import SESSION_OWNS_LOG_TOOLTIP, CupPanel
 from rbl.hardware.cup_status import CupPosition
-from rbl.services.cup_log import CupLog, CupView
+from rbl.services.cup_log import CupLog, CupView, RestartChoice
 from rbl.snapshots import CupActuationState
 from rbl.state.beamline import Beamline
 from tests.payloads import CupFeed
@@ -133,9 +133,15 @@ def test_charge_text_matches_the_faraday_tab_after_an_insertion_closes(rig, qapp
     assert panel.lbl_charge.text() == tab.lbl_running_q.text()
 
 
-def test_charge_text_matches_the_tab_when_charge_is_nonzero(rig, qapp):
+def test_charge_text_matches_the_tab_when_charge_is_nonzero(rig, qapp, monkeypatch):
     """Real charge reaches the panel through the same view the tab renders from."""
     tab, panel, _, beamline, _ = rig
+    # The test stops and starts between insertions; beam held through each pause and a
+    # fresh schedule is the accounting it was written against.
+    monkeypatch.setattr(
+        tab, "_ask_restart",
+        lambda *a: RestartChoice(resume_schedule=False, beam_on_during_gap=True),
+    )
     feed = CupFeed(tab, beamline=beamline)
     tab.spn_k.setValue(1e-15)
     tab.spn_charge_state.setValue(1)
