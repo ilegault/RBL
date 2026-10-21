@@ -964,7 +964,7 @@ class TestSamplingCycleTab:
         qapp.processEvents()
 
         assert not tab.cycle.is_armed
-        assert "Arm" in tab.btn_cycle_arm.text()
+        assert tab.btn_cycle_arm.text() == "Start automatic cup insertion"
         sw.close()
         tab.close()
 
@@ -980,7 +980,7 @@ class TestSamplingCycleTab:
         qapp.processEvents()
 
         text = tab.lbl_cycle_state.text()
-        assert "Armed" in text
+        assert "Running" in text
         sw.close()
         tab.close()
 
@@ -1504,7 +1504,8 @@ class TestFaradayCupTabAcquisitionSettingsWiring:
         for i in range(layout.count()):
             item = layout.itemAt(i)
             widget = item.widget()
-            if widget is not None and getattr(widget, "title", lambda: "")() == "Sampling Cycle":
+            title = getattr(widget, "title", lambda: "")()
+            if widget is not None and title == "Automatic cup insertion":
                 idx_cycle = i
             elif widget is tab.settings_group:
                 idx_settings = i
@@ -1581,7 +1582,7 @@ class TestFaradayCupTabAcquisitionSettingsWiring:
             open_rows = [r for r in reader if r["record_type"] == "run_opened"]
 
         assert len(open_rows) == 1
-        assert "arm=3.500e-07 A" in open_rows[0]["details"]
+        assert "run start current=3.500e-07 A" in open_rows[0]["details"]
         assert "5.000e-07" not in open_rows[0]["details"]
         tab.close()
 
@@ -1925,7 +1926,8 @@ class TestFaradayCupTabSettingsLock:
         tab, feed = make_connected_cup_tab(qapp, tmp_path)
 
         expected_text = (
-            "Locked while a run is open or the cycle is armed. Edits apply to the next run."
+            "Locked while a run is open or automatic cup insertion is running. "
+            "Edits apply to the next run."
         )
         assert tab.settings_group.lbl_lock.text() == expected_text
 
