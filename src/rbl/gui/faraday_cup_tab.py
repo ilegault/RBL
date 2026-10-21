@@ -34,7 +34,7 @@ or not anyone had started a session. It now takes the process's one CupLog and
 writes only through ``cup_log.writer``; every write is skipped when that is None.
 Consequences, all deliberate:
 - With no log the tab shows ``Not logging`` beside the current readout, and
-  automatic insertion cannot be armed (the first precondition). Manual
+  automatic insertion cannot be started (the first precondition). Manual
   Insert/Retract stay available.
 - Run statistics come from logged samples (see above), so with no log the live
   duration/sample count/average read empty rather than being computed a second way.
@@ -125,28 +125,46 @@ current-inference (CupDetector) and confirmed-position (CupPositionDetector)
 in parallel. The active source — "confirmed position" or "inference (current)" —
 is shown in the actuation panel. When FIO_STATE is absent (non-FULL profile) or
 the controller is in LOCAL mode, inference governs so hand insertions still record.
-When both sources disagree (position says IN but current is below the arm
-threshold, or vice versa), the disagreement is displayed as a fault carrying both
+When both sources disagree (position says IN but current is below the run start
+current, or vice versa), the disagreement is displayed as a fault carrying both
 readings. Nothing in this code resolves the disagreement.
+
+THE WORDS ON SCREEN (ticket 33, ADR 0002 amendment B5)
+-------------------------------------------------------
+"Arm" meant two unrelated things on this tab (the run detector's trigger level and the
+cycle scheduler's start), and an operator reading "Armed" could not tell which. The
+text a person reads now says what happens; the identifiers are unchanged because
+analysis scripts and the settings file read them:
+
+    on screen                              in code
+    Start / Stop automatic cup insertion   btn_cycle_arm / btn_cycle_stop
+    (the scheduler)                        SamplingCycleScheduler.arm / .disarm
+    Automatic cup insertion (group title)  cycle_box
+    Running / Stopped (state label)        CycleState.WAITING, INSERTING / DISARMED
+    Run start current / Run end current    arm_threshold_a / release_threshold_a
+    Cannot start automatic cup insertion   _check_arm_preconditions
+
+The cup log's ``# thresholds:`` header and its run-open marker ``details`` use the same
+words; CSV column names are untouched.
 
 AUTOMATED SAMPLING CYCLE (ADR 0003)
 ------------------------------------
-The Sampling Cycle panel lets an operator arm a repeating insert-dwell-retract
+The Automatic cup insertion panel lets an operator start a repeating insert-dwell-retract
 sequence (ticket 09). The scheduler is a pure object (SamplingCycleScheduler)
 that receives the current time as a parameter and returns the action to take —
 INSERT, RETRACT, or SKIPPED. It calls no clock. The tab drives it on every
 actuation state update from the T7, which arrives on the stream worker's
 schedule. Period and dwell are editable via QuietDoubleSpinBox and take effect
-at the next period boundary, never mid-insertion. The cycle is disarmed on
-construction and after every application start; arming is always an explicit
+at the next period boundary, never mid-insertion. The cycle is stopped on
+construction and after every application start; starting is always an explicit
 operator action. A manual insert or retract calls notify_manual_insert /
 notify_manual_retract immediately, so the next scheduled boundary that falls
 while a manual run is open is skipped and recorded in the session file.
 
 OPERATOR-EDITABLE ACQUISITION SETTINGS (ADR 0002 AMENDMENT A1, TICKETS 12 & 13)
 -------------------------------------------------------------------------------
-The Acquisition Settings group allows the operator to adjust the arm threshold,
-release threshold, and autorange settle window. At construction, the tab loads
+The Acquisition Settings group allows the operator to adjust the run start current,
+run end current, and autorange settle window. At construction, the tab loads
 persisted settings from ~/.config/rbl/cup_settings.json via load_settings(),
 applies thresholds to the detector, settle window to the writer, period and dwell
 to the scheduler, and renders any load warnings.
@@ -157,8 +175,8 @@ preserving the in-memory update for the active session.
 
 SETTINGS LOCK (ADR 0002 AMENDMENT A6, TICKET 14)
 -----------------------------------------------
-The arm threshold, release threshold, and settle window cannot be edited while an
-acquisition run is open or while the sampling cycle is armed. When either condition holds,
+The run start current, run end current, and settle window cannot be edited while an
+acquisition run is open or while automatic cup insertion is running. When either condition holds,
 the fields are disabled via set_locked(True) and an explanatory message is displayed.
 Edits unlock immediately when the run ends or the cycle disarms. Schedule parameters
 (period and dwell) are never locked.
@@ -626,7 +644,7 @@ class FaradayCupTab(QWidget):
         layout.addLayout(mid_row)
 
         # ── 2b. Sampling Cycle (ADR 0003, ticket 09) ──────────────────────────
-        cycle_box = QGroupBox("Sampling Cycle")
+        cycle_box = QGroupBox("Automatic cup insertion")
         # Outer vertical layout so the fault label (ticket 10) occupies a full row
         # below the controls row without needing a second QGroupBox.
         _cycle_vlay = QVBoxLayout(cycle_box)
@@ -660,19 +678,19 @@ class FaradayCupTab(QWidget):
         cycle_lay.addLayout(unit_row(self.spn_cycle_dwell, "s"))
 
         # Start button (start-only: Stop below is the only way an operator stops)
-        self.btn_cycle_arm = QPushButton("Arm Cycle")
+        self.btn_cycle_arm = QPushButton("Start automatic cup insertion")
         self.btn_cycle_arm.setStyleSheet("font-weight: bold; padding: 4px 14px;")
         self.btn_cycle_arm.setToolTip(
-            "Arm the sampling cycle — first insertion at start + period"
+            "Start automatic cup insertion — first insertion at start + period"
         )
         self.btn_cycle_arm.clicked.connect(self._on_cycle_arm_clicked)
         cycle_lay.addWidget(self.btn_cycle_arm)
 
         # Stop button
-        self.btn_cycle_stop = QPushButton("Stop Cycle")
+        self.btn_cycle_stop = QPushButton("Stop automatic cup insertion")
         self.btn_cycle_stop.setStyleSheet("font-weight: bold; padding: 4px 14px;")
         self.btn_cycle_stop.setToolTip(
-            "Stop the sampling cycle; retracts the cup if currently inserting"
+            "Stop automatic cup insertion; retracts the cup if currently inserting"
         )
         self.btn_cycle_stop.setEnabled(False)
         self.btn_cycle_stop.clicked.connect(self._on_cycle_stop_clicked)
@@ -681,7 +699,7 @@ class FaradayCupTab(QWidget):
         cycle_lay.addSpacing(8)
 
         # Status label (cycle state + time to next insertion)
-        self.lbl_cycle_state = QLabel("Disarmed")
+        self.lbl_cycle_state = QLabel("Stopped")
         self.lbl_cycle_state.setStyleSheet(
             f"color: {theme.MUTED}; font-style: italic; font-size: {theme.FS_LABEL}px;"
         )
@@ -1264,7 +1282,7 @@ class FaradayCupTab(QWidget):
                 self.lbl_average.setStyleSheet(theme.status_label(theme.MUTED))
         else:
             if self.acquisition.cup_in_beam:
-                self.lbl_run_status.setText("In Beam (Arming)")
+                self.lbl_run_status.setText("In Beam (starting run)")
                 self.lbl_run_status.setStyleSheet(theme.status_label(theme.WARN))
             else:
                 self.lbl_run_status.setText("Idle")
@@ -1676,7 +1694,7 @@ class FaradayCupTab(QWidget):
 
         reason = self._check_arm_preconditions()
         if reason:
-            self._cycle_fault = f"Cannot arm: {reason}"
+            self._cycle_fault = f"Cannot start automatic cup insertion: {reason}"
             self._update_cycle_view(t_now)
             return
 
@@ -2029,13 +2047,13 @@ class FaradayCupTab(QWidget):
         self._update_cycle_view(t)
 
     def _update_cycle_view(self, t: float) -> None:
-        """Update the Sampling Cycle panel to reflect the current scheduler state."""
+        """Update the Automatic cup insertion panel to reflect the current scheduler state."""
         self._emit_cup_view()
         state = self.cycle.state
         self.btn_cycle_arm.setEnabled(state == CycleState.DISARMED)
         if state == CycleState.DISARMED:
             self.btn_cycle_stop.setEnabled(False)
-            self.lbl_cycle_state.setText("Disarmed")
+            self.lbl_cycle_state.setText("Stopped")
             self.lbl_cycle_state.setStyleSheet(
                 f"color: {theme.MUTED}; font-style: italic; font-size: {theme.FS_LABEL}px;"
             )
@@ -2046,10 +2064,10 @@ class FaradayCupTab(QWidget):
                 mins, secs = divmod(int(tti), 60)
                 countdown = f"{mins:02d}:{secs:02d}"
                 self.lbl_cycle_state.setText(
-                    f"Armed — next insertion in {countdown}"
+                    f"Running — next insertion in {countdown}"
                 )
             else:
-                self.lbl_cycle_state.setText("Armed — waiting")
+                self.lbl_cycle_state.setText("Running — waiting")
             self.lbl_cycle_state.setStyleSheet(
                 f"color: {theme.OK}; font-size: {theme.FS_LABEL}px;"
             )
@@ -2058,10 +2076,10 @@ class FaradayCupTab(QWidget):
             ttr = self.cycle.time_to_retract(t)
             if ttr is not None:
                 self.lbl_cycle_state.setText(
-                    f"Armed — inserting (retract in {ttr:.1f} s)"
+                    f"Running — inserting (retract in {ttr:.1f} s)"
                 )
             else:
-                self.lbl_cycle_state.setText("Armed — inserting")
+                self.lbl_cycle_state.setText("Running — inserting")
             self.lbl_cycle_state.setStyleSheet(
                 f"color: {theme.OK}; font-weight: bold; font-size: {theme.FS_LABEL}px;"
             )
@@ -2150,7 +2168,8 @@ class FaradayCupTab(QWidget):
                     # wherever it is; drive release is the wiring's job, not software's.
                     if self.cycle.is_armed:
                         self._cycle_fault = (
-                            f"Cycle disarmed: move Command {target_name} did not confirm "
+                            f"Automatic cup insertion stopped: move Command {target_name} "
+                            f"did not confirm "
                             f"within {CUP_MOVE_CONFIRMATION_TIMEOUT_S:.1f} s"
                         )
                         self.cycle.disarm()
@@ -2226,7 +2245,7 @@ class FaradayCupTab(QWidget):
         # whole effort exists to fix.  Disarm immediately, name the reason.
         if not _was_stale and self._stale and self.cycle.is_armed:
             self._cycle_fault = (
-                "Cycle disarmed: position feedback lost "
+                "Automatic cup insertion stopped: position feedback lost "
                 "(stream profile changed from FULL)"
             )
             self.cycle.disarm()

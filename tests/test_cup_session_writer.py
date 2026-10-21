@@ -306,8 +306,8 @@ class TestCupSessionWriterDirect:
         ]
 
         # Check details in run_opened and run_closed
-        assert "arm=5.000e-07" in rows[2]["details"]
-        assert "release=2.500e-07" in rows[2]["details"]
+        assert "run start current=5.000e-07" in rows[2]["details"]
+        assert "run end current=2.500e-07" in rows[2]["details"]
         assert "reason=released" in rows[4]["details"]
         assert "reason=user_unplugged" in rows[5]["details"]
 
@@ -514,8 +514,8 @@ class TestFaradayCupTabSessionIntegration:
         # Find run_opened marker
         run_open_row = next(r for r in rows if r["record_type"] == "run_opened")
         assert run_open_row["run_id"] == "1"
-        assert f"arm={CUP_ARM_THRESHOLD_A:.3e}" in run_open_row["details"]
-        assert f"release={CUP_RELEASE_THRESHOLD_A:.3e}" in run_open_row["details"]
+        assert f"run start current={CUP_ARM_THRESHOLD_A:.3e}" in run_open_row["details"]
+        assert f"run end current={CUP_RELEASE_THRESHOLD_A:.3e}" in run_open_row["details"]
 
         # Find sample rows
         sample_rows = [r for r in rows if r["record_type"] == "sample"]
@@ -1415,7 +1415,7 @@ class TestWriteSettingsChanged:
         settings_rows = [r for r in rows if r["record_type"] == "settings_changed"]
 
         assert len(run_opened_rows) == 1
-        assert "arm=5.000e-07" in run_opened_rows[0]["details"]
+        assert "run start current=5.000e-07" in run_opened_rows[0]["details"]
         assert len(run_closed_rows) == 1
         assert len(settings_rows) == 1
         assert settings_rows[0]["run_id"] == "1"
