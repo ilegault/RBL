@@ -21,6 +21,12 @@ clock.  This means an NTP correction during an 8-hour run cannot reorder rows
 or create a backwards jump between the CSV and the video.  See §4 of the design
 doc for the reasoning.
 
+Guards (ticket 32): the window installs ``set_start_guard`` / ``set_stop_guard``
+so a session cannot start or stop while that would leave the Faraday cup log in a
+state the operator has not confirmed (automatic insertion still running).  The disk
+auto-stop calls ``stop(force=True)``, which skips the stop guard: a filling disk must
+not wait on a dialog.
+
 Threading:
   GUI thread   : this class, CsvLogWriter, events.csv, session.json, QTimer
   Camera thread: VideoRecorder (moved there via moveToThread), frames.csv
@@ -38,6 +44,7 @@ import sys
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Callable
 
 from PySide6.QtCore import (
     QObject,
@@ -100,6 +107,9 @@ class SessionRecorder(QObject):
         super().__init__(parent)
         self._snapshot_fn = snapshot_fn
         self._camera      = camera
+        # Vetoes installed by the window (cup log state); None means always allowed.
+        self._start_guard: Callable[[], bool] | None = None
+        self._stop_guard:  Callable[[], bool] | None = None
 
         # Settings
         self._csv_interval_s   = CSV_INTERVAL_DEFAULT_S
@@ -198,8 +208,26 @@ class SessionRecorder(QObject):
 
     # ---- session control ---------------------------------------------------
 
+    def set_start_guard(self, fn: Callable[[], bool] | None) -> None:
+        """Register a veto on ``start()``: when ``fn()`` is False nothing starts.
+
+        The owner of other state (the cup log) decides whether a session may begin;
+        the recorder only honours the answer.
+        """
+        self._start_guard = fn
+
+    def set_stop_guard(self, fn: Callable[[], bool] | None) -> None:
+        """Register a veto on ``stop()``: when ``fn()`` is False the session keeps going.
+
+        ``stop(force=True)`` skips it: the disk auto-stop must not wait on a dialog
+        while the disk fills.
+        """
+        self._stop_guard = fn
+
     def start(self) -> bool:
         if self._recording:
+            return False
+        if self._start_guard is not None and not self._start_guard():
             return False
 
         now = datetime.now()
@@ -261,8 +289,10 @@ class SessionRecorder(QObject):
         self.session_started.emit(self._folder)
         return True
 
-    def stop(self) -> None:
+    def stop(self, force: bool = False) -> None:
         if not self._recording:
+            return
+        if not force and self._stop_guard is not None and not self._stop_guard():
             return
         self.stop_video()
         self._recording = False
@@ -581,7 +611,7 @@ class SessionRecorder(QObject):
             free = math.inf
         if free < DISK_AUTOSTOP_BYTES:
             self._write_event("auto_stop", f"disk_free={free}")
-            self.stop()
+            self.stop(force=True)
             return
         if free < DISK_WARN_BYTES:
             self._write_event("disk_low", f"disk_free={free}")

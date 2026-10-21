@@ -8,6 +8,8 @@ PySide6 front-end. Analysis has been split out to the rbl-analysis repo.
 import logging
 import sys
 from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable
 
 from PySide6.QtCore import Qt, QTimer, Signal
@@ -41,9 +43,17 @@ from rbl.gui.overview_tab import OverviewTab
 from rbl.gui.profiler_tab import ProfilerTab
 from rbl.gui.raster_planner_tab import RasterPlannerTab
 from rbl.gui.vacuum_tab import VacuumTab
+from rbl.gui.widgets.continue_dialog import ContinueDialog
 from rbl.hardware.camera_source import CameraSource
+from rbl.hardware.dose_model import DoseTotals
 from rbl.services.beamline_snapshot import BeamlineSnapshotProvider
-from rbl.services.cup_log import CupLog
+from rbl.services.cup_log import (
+    ContinueChoice,
+    CupLog,
+    CupLogKind,
+    find_previous_session_cup_log,
+    read_dose_totals,
+)
 from rbl.services.session_recorder import SessionRecorder
 from rbl.services.spike_recorder import SpikeRecorder
 from rbl.state.beamline import Beamline
@@ -433,6 +443,15 @@ class MainWindow(QMainWindow):
         if _species_info is not None:
             self.faraday_cup_tab.on_species_changed(*_species_info)
 
+        # A session is the irradiation: it opens the cup log and may carry the dose of
+        # the previous session (spec C6, ticket 32). The guards stop a session from
+        # starting or ending while automatic cup insertion would be left running
+        # unconfirmed; the recorder only honours the answers.
+        self.session_recorder.set_start_guard(self._session_start_allowed)
+        self.session_recorder.set_stop_guard(self._session_stop_allowed)
+        self.session_recorder.session_started.connect(self._on_session_started)
+        self.session_recorder.session_stopped.connect(self._on_session_stopped)
+
         # Start on Overview.  It is the screen that answers "what is this
         # beamline doing right now" without pressing anything, and it is
         # where Connect All lives - so it is the first thing an operator
@@ -772,6 +791,75 @@ class MainWindow(QMainWindow):
         default = QColor()  # invalid = use palette default
         for i in range(self._outer_tabbar.count()):
             self._outer_tabbar.setTabTextColor(i, blue if i == index else default)
+
+
+    # ── Sessions and the cup log (spec C6) ─────────────────────────────────────
+
+    def _session_start_allowed(self) -> bool:
+        """A session replaces a test cup log; stop its automatic insertion first."""
+        if (
+            self.cup_log.kind is CupLogKind.TEST
+            and self.faraday_cup_tab.automatic_insertion_running()
+        ):
+            return self.faraday_cup_tab.stop_automatic_confirmed()
+        return True
+
+    def _session_stop_allowed(self) -> bool:
+        """Ending a session closes the cup log; confirm stopping automatic insertion."""
+        if self.faraday_cup_tab.automatic_insertion_running():
+            return self.faraday_cup_tab.stop_automatic_confirmed()
+        return True
+
+    def _ask_continue_dose(self, totals: DoseTotals) -> ContinueChoice | None:
+        """Ask whether to carry the earlier dose; None means start from zero.
+
+        A replaceable method so tests can answer without a modal (see conftest).
+        """
+        tab = self.faraday_cup_tab
+        dpa = tab.dpa_of_totals(totals)
+        dpa_text = f"{dpa:.4g} dpa" if dpa is not None else "dpa not available"
+        source = Path(totals.source_path)
+        last = (
+            datetime.fromtimestamp(totals.last_out_t).strftime("%Y-%m-%d %H:%M:%S")
+            if totals.last_out_t is not None and totals.last_out_t > 1.0e9
+            else "unknown"
+        )
+        summary = (
+            f"Continue the dose from {source.parent.name} (charge "
+            f"{totals.total_charge_c:.4g} C, {dpa_text}, last insertion {last})?"
+        )
+        dlg = ContinueDialog(summary, f"from {last} until now", self)
+        dlg.exec()
+        choice = dlg.choice()
+        return choice if choice is not None and choice.continue_dose else None
+
+    def _on_session_started(self, folder: str) -> None:
+        folder_path = Path(folder)
+        totals = None
+        # Session folders sit directly under the logs directory, so the parent IS it.
+        previous = find_previous_session_cup_log(
+            folder_path.parent, exclude=folder_path / "cup.csv"
+        )
+        if previous is not None:
+            totals = read_dose_totals(previous)
+        choice = self._ask_continue_dose(totals) if totals is not None else None
+        if totals is None or choice is None or not choice.continue_dose:
+            self.cup_log.open_for_session(folder_path)
+            return
+        self.cup_log.open_for_session(
+            folder_path,
+            continuation={
+                "source_path": str(previous),
+                "total_charge_c": totals.total_charge_c,
+                "total_beam_on_s": totals.total_beam_on_s,
+                "insertion_count": totals.insertion_count,
+                "beam_on_during_gap": choice.beam_on_during_gap,
+            },
+        )
+        self.faraday_cup_tab.continue_dose(totals, choice.beam_on_during_gap)
+
+    def _on_session_stopped(self, _folder: str) -> None:
+        self.cup_log.close()
 
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
