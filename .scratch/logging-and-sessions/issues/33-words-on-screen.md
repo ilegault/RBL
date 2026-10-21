@@ -1,6 +1,6 @@
 # 33: The words on screen say what they do
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
