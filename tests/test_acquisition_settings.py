@@ -98,7 +98,8 @@ def test_set_locked():
     assert not widget.spn_settle_window.isEnabled()
     assert widget.lbl_lock.isVisible()
     assert widget.lbl_lock.text() == (
-        "Locked while a run is open or the cycle is armed. Edits apply to the next run."
+        "Locked while a run is open or automatic cup insertion is running. "
+        "Edits apply to the next run."
     )
     assert theme.MUTED in widget.lbl_lock.styleSheet()
 
