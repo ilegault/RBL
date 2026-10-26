@@ -323,6 +323,50 @@ irradiation can span more than one session.
 
 ---
 
+## Camera
+
+**USB camera** — the generic webcam the application opens through OpenCV. It records
+inside the application, as it always has.
+
+**ZWO camera** — the ZWO ASI585MC, a scientific camera read through ZWO's own library at
+full bit depth. Only one camera, USB or ZWO, is in use at a time; the operator picks
+which. See ADR 0008.
+
+**Capture Process** — the separate program that is the only thing ever to open the ZWO
+camera. It runs in the background, started and stopped by the application, and has no
+window of its own. The application sends it commands and shows what it sends back. It
+is never called "the recorder". See ADR 0008.
+
+**Master Recording** — the full-quality frames the Capture Process writes to disk for a
+session: every pixel exactly as the camera delivered it, never converted, compressed or
+colour-corrected. It is the data. Everything else is a view of it.
+
+**Segment** — one file of a recording, made under one unchanging set of camera
+settings. A change to exposure, gain, bit depth or region of interest ends the segment
+and starts the next, so no segment ever mixes settings.
+
+**Settings record** — the description written for each segment of the Master Recording:
+every camera setting in force for it, the camera's identity, and why the segment ended.
+
+**Frame log** — one row per frame written to the Master Recording: when it arrived, which
+segment and frame it is, the cup position and the alumina position at that moment. It
+records facts, never conclusions. Its cup position is the end-station Faraday cup's
+confirmed position only; the upstream cups are manual and unrecorded, so whether beam
+reached the target cannot be read from the frame log alone.
+
+**Region of interest (ROI)** — the rectangle of the sensor the ZWO camera reads out and
+records. Everything outside it is never captured.
+
+**Preview** — the small, slow, brightness-stretched picture of the ZWO camera shown on
+screen. It is for watching only: it is never saved, and its brightness says nothing
+about intensity.
+
+**Dark Frame** — a frame taken with the lens capped at a given exposure, gain, bit depth
+and region of interest. It measures the sensor's own offset and hot pixels, does not
+depend on the beamline, and is kept in a library reused across sessions.
+
+---
+
 ## Known collisions
 
 **"Beam current" means two things.** The four slit currents and the one cup
@@ -354,3 +398,7 @@ to Stop Session on the Overview tab. The cup's file is a *cup log*. Do not use
 **"Arm" used to mean two things.** The arm threshold (a current) and arming the cycle (an
 action). On screen these are now *run start current* and *start automatic cup
 insertion*. The code identifiers keep the old names.
+
+**"Recorder" means two things already.** `SessionRecorder` runs a session and
+`VideoRecorder` writes the USB camera's video. The program that owns the ZWO camera is
+the *Capture Process*; do not call it a recorder.
