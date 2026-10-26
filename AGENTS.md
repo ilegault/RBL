@@ -465,75 +465,95 @@ someone else's bug fix smuggled into it cannot be reviewed.
 <!-- ACTIVE-PLAN:START -->
 ## Active implementation plan
 
-_Written by the planning model on 2026-10-16 23:07. Implement this. If something in it is wrong, say so before changing course._
+_Written by the planning model on 2026-10-24 18:36. Implement this. If something in it is wrong, say so before changing course._
 
-# Active work: sessions (set 2), amplifier load and spikes (set 3), current-monitor scale (set 4), screenshot mode (set 5)
+# Active work: the ZWO camera (set 6), plus what remains of sets 2, 3 and 4
 
 This is a pointer, not the work.
 
-## Set 2 (still open): daily vacuum monitoring log, sessions, the cup log
+## Set 6 (new): the ZWO ASI585MC, recorded at full bit depth by a Capture Process
 
-- Spec: `.scratch/logging-and-sessions/spec.md`
-- ADRs: `docs/adr/0004-monitoring-log-and-sessions.md`; amendments dated 2026-10-05 in
-  `docs/adr/0002-...md` (B1-B5) and `docs/adr/0003-...md` (C1-C5)
-- Tickets: `.scratch/logging-and-sessions/issues/19...33`. 19-30 are done; 31, 32 and 33 remain,
-  chained in that order.
-
-## Set 3 (nearly done): measured amplifier loads, current-vs-frequency planner, spike recorder
-
-- Spec: `.scratch/amplifier-load-and-spikes/spec.md`, amended by set 4's spec.
-- ADRs: `docs/adr/0005-...md`, `docs/adr/0006-...md`.
-- Tickets: `.scratch/amplifier-load-and-spikes/issues/34...52`. All are done except:
-  - **48**, rewritten 2026-10-07 for ADR 0007 and now blocked by 33, 56 and 58;
-  - **49**, blocked by 48;
-  - **52**, `ready-for-developer` and now also blocked by 60.
-
-## Set 4 (new): the current monitor reads 2 mA per volt
-
-- Spec: `.scratch/current-monitor-scale/spec.md`
-- ADR (new, binding): `docs/adr/0007-current-monitor-scale-is-2-ma-per-volt.md`. Also
-  binding: `docs/adr/0006-...md` (unchanged) and `docs/adr/0001-tests-first-and-no-muted-failures.md`.
-- Manufacturer's answers and the decisions taken from them:
-  `docs/hardware/eel5000-manufacturer-notes.md`. Read sections 1, 3 and 6 before any set-4
-  ticket.
-- Glossary changes in `CONTEXT.md`:
-  - new terms: "Current limit setting", "Current monitor scale", "At the rail";
-  - rewritten: "Hard trip", "Soft trip", "Burst rating", "Recovery period", and the
-    "Trip" known collision.
-- Tickets: `.scratch/current-monitor-scale/issues/53...60`. 53-55 and 57-59 are done; 56 and 60
-  remain.
+- Spec: `.scratch/zwo-capture/spec.md`
+- ADR (new, binding): `docs/adr/0008-zwo-camera-owned-by-a-capture-process.md`. Also binding:
+  `docs/adr/0004-monitoring-log-and-sessions.md` (decision 7), `docs/adr/0003-...md`,
+  `docs/adr/0001-tests-first-and-no-muted-failures.md`.
+- Glossary changes in `CONTEXT.md`: new section "Camera" (USB camera, ZWO camera, Capture
+  Process, Master Recording, Segment, Settings record, Frame log, Region of interest (ROI),
+  Preview, Dark Frame) and a new known collision: "Recorder" means two things already; the
+  program that owns the ZWO camera is the *Capture Process*, never "the recorder".
+- Tickets: `.scratch/zwo-capture/issues/62...80`. 78, 79, 80 are `ready-for-developer` (bench).
+  77 is `Auto-merge: no` (gate config) and a leaf.
 - Tracker conventions: `docs/agents/issue-tracker.md`
 
-## Set 5 (new): screenshot mode
+## Remaining from sets 2-4
 
-- Ticket: `.scratch/screenshot-mode/issues/61-screenshot-mode-overview.md`. One ticket, no
-  spec, no ADR. Independent of every other set.
-- A dev-only `scripts/screenshot_overview.py` that fills the Overview with a canned scene.
-  Nothing in `src/` or `rbl.spec` may reference it.
+- Set 2 (`.scratch/logging-and-sessions/`): **33** is `ready-for-agent` and unblocked.
+- Set 3 (`.scratch/amplifier-load-and-spikes/`): **48** (blocked by 33), **49** (blocked by 48),
+  **52** (`ready-for-developer`, blocked by 60).
+- Set 4 (`.scratch/current-monitor-scale/`): **60** (`ready-for-developer`, bench).
 
 ## Next
 
-- **31**, **56** and **61** are unblocked and touch disjoint code; any order, or in parallel.
-- Then 32 → 33 (set 2), and 48 once 33 and 56 are done.
-- 52 and 60 are `ready-for-developer`: an agent must not claim them.
+- **62**, **63** and **33** are unblocked and touch disjoint code; any order, or in parallel.
+  Start with **63**: it is the contract every later set-6 ticket imports, and 64 waits on it.
+- Then 64 (after 63), then 65 (after 63, 64), then 48 once 33 is done.
+- 52, 60, 78, 79, 80 are `ready-for-developer`: an agent must not claim them.
 
-## Dependency order (set 4)
+## Dependency order (set 6)
 
 ```
-53 ── 54 ─┬─ 55 ── 56 ─┐
-          ├─ 57 ───────┼── 60 (ready-for-developer, bench) ── 52 (set 3, bench)
-          └─ 58 ───────┤
-59 ────────────────────┘
-56, 58 ── 48 (set 3; also 33, 36, 47) ── 49
+62 ─────────────────────┐
+63 ── 64 ── 65 ─┬─────── 66 ─┬─ 67 ─┐
+                │            └─ 68 ─┼── 71 ─┬─ 72 ─┐
+                ├─ 70 ──────────────┘       └─ 73 ─┴─ 74 ── 75
+                └─ 69 ── 76 ── 78 (dev)
+77 (held, leaf) ← 67, 68, 69
+79 (dev) ← 74, 76;   80 (dev) ← 79
 ```
 
-- 55 and 56 are chained because both edit `_redraw_spikes` in `load_characterization_tab.py`.
-- 57 and 58 can run in parallel after 54. 57 edits `load_characterizer.py`; 58 edits
-  `characterization_history.py`, `trip_history.py` and `calibration_writer.py`. Both add
-  one small thing to `load_characterization_tab.py`, in different methods.
-- 60 is `ready-for-developer`: an agent must not claim it.
+Edges, exactly: 64←63; 65←63,64; 66←62,65; 67←66; 68←66; 69←65; 70←65; 71←67,68,70;
+72←71; 73←71; 74←72,73; 75←74; 76←69; 77←67,68,69; 78←76; 79←74,76; 80←79.
 
-## Requirements that will be quietly treated as preferences
+- 67, 68 and 69 can run in parallel but all edit `src/rbl/capture/process.py`, in different
+  functions; whichever lands second rebases.
+- 71 and 72 edit `session_recorder.py` and `app.py`, which set 3's 48 also edits. Whichever
+  lands second rebases; neither blocks the other.
+
+## Set 6 requirements that will be quietly treated as preferences
+
+1. **The Capture Process imports no Qt**, and nothing outside `rbl/capture/` imports
+   `rbl.capture` except `rbl/main.py`. `main.py` checks `--capture-process` before importing
+   anything from `rbl.gui`. Contract test in 65; `-X importtime` test in 65.
+2. **The Capture Process's standard output carries only protocol lines.** `sys.stdout` is
+   pointed at stderr first thing.
+3. **The acquisition thread never blocks on the disk.** A full write queue drops and counts.
+4. **No segment ever mixes settings.** Any `set` (including keep 1 in N) bumps the generation;
+   the writer opens a new segment on a new generation.
+5. **Values shown in the panels come from the `set` reply** (snapped), never from what was
+   typed.
+6. **`CaptureProcess` takes `send`, `disk_free` and `monotonic` as constructor arguments**, so
+   67 can test low disk in-process.
+7. **`CaptureClient` puts the `rbl` package's parent on the child's `PYTHONPATH` when not
+   frozen**; CI never pip-installs `rbl`.
+8. **`SessionRecorder`'s new `capture` argument is keyword-only and optional**, the default
+   camera kind is `"usb"`, and a USB-only session's `session.json` has no `"zwo"` key. Every
+   existing test passes unedited.
+9. **Refusals on `CaptureClient.error` never end a ZWO run**; only the child's
+   `recording_stopped` event or its exit does.
+10. **Tests compare files byte for byte with FakeCamera's formula**, and parse SER and FITS with
+    readers written in the test files, never with `ser_format` / `fits_format`.
+11. **The ZWO DLL is passed by explicit path** (`zwoasi.init(path)`), ships byte for byte in
+    the one-folder build, and is never committed. No second executable (ADR 0008 decision 2).
+
+## What set 6 does not do
+
+- Motorized focus (only the `focus_preset: null` slot), the alumina stage (only an empty
+  column), any SER/MP4 converter, colour correction of recorded data, Dark Frame subtraction.
+- Reattaching to a Capture Process after a restart; a compiled Capture Process; both cameras
+  at once; code signing.
+- Any change to the USB camera path, and the app-wide scroll-wheel fix for existing widgets.
+
+## Set 4 requirements that still bind 48 and 49
 
 1. **One scale.** `CURRENT_MONITOR_MA_PER_VOLT` is assigned only in `hardware_config.py`. No
    second factor, no "legacy 10.0", and no "1 V = 10 mA" text anywhere in `src/`. Contract
