@@ -1,6 +1,6 @@
 # 48: Sessions run the spike recorder, and the Overview tab warns without blocking
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
