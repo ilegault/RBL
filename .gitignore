@@ -244,6 +244,8 @@ cython_debug/
 .idea
 
 .claude
+.swarm/
+.swarm-prompt.md
 
 *.claude-session.bak
 *.orig
