@@ -1,6 +1,6 @@
 # 62: SER and FITS byte formats, as two pure modules
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
