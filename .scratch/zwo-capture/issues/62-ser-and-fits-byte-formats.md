@@ -1,6 +1,6 @@
 # 62: SER and FITS byte formats, as two pure modules
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -72,34 +72,34 @@ from the published layouts** (`struct`, `numpy.frombuffer` with explicit `>`/`<`
 never with `ser_format` or `fits_format` themselves; a test that decodes with the module under
 test proves nothing.
 
-- [ ] `test_header_fields_round_trip` (in `tests/test_ser_format.py`): `pack_header(...)` with
+- [x] `test_header_fields_round_trip` (in `tests/test_ser_format.py`): `pack_header(...)` with
   distinctive values is exactly 178 bytes, and the test-side reader recovers every field,
   including `LuID == 0`, `LittleEndian == SER_LITTLE_ENDIAN_FLAG`, the space padding of
   `Observer`/`Instrument`/`Telescope`, and both int64 dates; `FrameCount` read at
   `SER_FRAME_COUNT_OFFSET` equals the value passed.
-- [ ] `test_frames_and_trailer_round_trip` (in `tests/test_ser_format.py`): for `pixel_depth` 16 and 8,
+- [x] `test_frames_and_trailer_round_trip` (in `tests/test_ser_format.py`): for `pixel_depth` 16 and 8,
   header + 5 frames (each frame's bytes are `frame.astype("<u2").tobytes()` /
   `frame.tobytes()`) + `pack_trailer` written to a `tmp_path` file; the test reader returns
   every pixel of every frame equal to the source arrays and every trailer timestamp equal to
   the input list.
-- [ ] `test_color_id_and_ticks` (in `tests/test_ser_format.py`): all four Bayer patterns map as in
+- [x] `test_color_id_and_ticks` (in `tests/test_ser_format.py`): all four Bayer patterns map as in
   step 5 and `"XX"` raises `ValueError`; `ticks_from_datetime(datetime(1, 1, 1)) == 0`;
   `ticks_from_datetime(datetime(1970, 1, 1)) == 621355968000000000`; one microsecond more adds
   exactly 10; an aware UTC datetime gives the same count as the naive one with the same fields.
-- [ ] `test_uint16_round_trip_and_layout` (in `tests/test_fits_format.py`): a 3 × 5 `uint16` array
+- [x] `test_uint16_round_trip_and_layout` (in `tests/test_fits_format.py`): a 3 × 5 `uint16` array
   containing 0 and 65535; total length is a multiple of 2880; the header's first five cards
   are `SIMPLE`, `BITPIX`, `NAXIS`, `NAXIS1`, `NAXIS2` in that order with `NAXIS1 == 5`; the
   card `"SIMPLE  =                    T"` padded to 80 characters is the first card exactly; an
   `END` card is present and everything after it in the header block is spaces; the test-side
   reader (`>i2` plus `BZERO`) recovers the array exactly, including 0 and 65535; data padding
   bytes are zero.
-- [ ] `test_uint8_float32_and_cards` (in `tests/test_fits_format.py`): a `uint8` array gives
+- [x] `test_uint8_float32_and_cards` (in `tests/test_fits_format.py`): a `uint8` array gives
   `BITPIX = 8` and no `BZERO`; a `float32` array gives `BITPIX = -32` and round-trips through
   `>f4`; caller cards `("EXPTIME", 0.02, "s")`, `("GAIN", 100, "")`, `("BAYERPAT", "RG", "")`,
   `("SIMPLE2", True, "")` appear after the mandatory cards, with the string value starting in
   column 11 inside quotes and the integer ending in column 30; `ValueError` for a 9-character
   keyword, a non-ASCII string, a `list` value, a 3-D array and an `int32` array.
-- [ ] `test_imports_are_stdlib_and_numpy_only` (one in each test file): the module under test
+- [x] `test_imports_are_stdlib_and_numpy_only` (one in each test file): the module under test
   imports only the standard library and `numpy`, read from its `import` lines with `ast`.
 
 ## Gate
