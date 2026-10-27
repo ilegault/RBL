@@ -1,6 +1,6 @@
 # 63: The capture contract and its pure rules (`capture_config`, `capture_protocol`)
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
