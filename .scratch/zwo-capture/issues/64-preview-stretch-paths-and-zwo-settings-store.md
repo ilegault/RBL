@@ -1,6 +1,6 @@
 # 64: Preview stretch and debayer, ZWO paths, and the persisted ZWO settings
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
