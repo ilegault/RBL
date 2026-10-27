@@ -76,6 +76,18 @@ def _never_touch_the_real_cup_settings_store(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _never_touch_the_real_zwo_settings_store(tmp_path, monkeypatch):
+    """Point the ZWO camera settings store at a temp file, always.
+
+    SessionRecorder loads and saves this store, so a test that constructs one
+    would otherwise write ~/.config/rbl/zwo_camera.json.
+    """
+    from rbl.config import zwo_settings_store as store
+    monkeypatch.setattr(store, "STORE_PATH", Path(tmp_path) / "zwo_camera.json")
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _cup_tab_never_opens_a_real_modal(monkeypatch):
     """Replace the Faraday cup tab's two blocking dialogs with non-blocking stand-ins.
 
