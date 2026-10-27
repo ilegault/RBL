@@ -1,6 +1,6 @@
 # 63: The capture contract and its pure rules (`capture_config`, `capture_protocol`)
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -116,30 +116,30 @@ Qt-free Capture Process use the same validation as the application.
 
 All in `tests/test_capture_protocol.py` (new) unless noted. Pure tests: no Qt, no process.
 
-- [ ] `test_every_message_round_trips`: for every command (built with its dataclass and
+- [x] `test_every_message_round_trips`: for every command (built with its dataclass and
   `to_message(7)`) and one example of every notification, `ok` and `error`,
   `decode(encode(m)) == m`, `encode` output ends with exactly one `b"\n"` and contains no other
   newline, and `command_from_message(decode(encode(cmd.to_message(7))))` equals the dataclass
   with `id == 7`.
-- [ ] `test_decode_rejects` (parametrized, each case asserts `ProtocolError`): bad JSON; a JSON
+- [x] `test_decode_rejects` (parametrized, each case asserts `ProtocolError`): bad JSON; a JSON
   list; missing `type`; `type: "nope"`; a command with no `id`; `id: "1"`; `id: true`; `set`
   with no settings fields; `set` with an extra key; `bit_depth: 12`; `keep_one_in_n: 0` and
   `CAPTURE_KEEP_ONE_IN_N_MAX + 1`; `burst: 0` and `CAPTURE_PHOTO_BURST_MAX + 1`; `frames: 0`
   and `CAPTURE_DARK_FRAMES_MAX + 1`; `roi.width: 0`; `brightness: NaN` (raw text `NaN`);
   `cup_position: "MAYBE"`; `error.code: "oops"`; `session_t0_utc: "yesterday"`. And
   `encode` raises `ProtocolError` for the same invalid `set` it would refuse to decode.
-- [ ] `test_check_hello`: passes for `{"type": "hello", "protocol": CAPTURE_PROTOCOL_VERSION,
+- [x] `test_check_hello`: passes for `{"type": "hello", "protocol": CAPTURE_PROTOCOL_VERSION,
   "pid": 1, "cameras": []}`; raises for `type: "status"` and for `protocol: 2`.
-- [ ] `test_snap_roi` (parametrized): `(1, 1, 101, 51, 1920, 1080) → (0, 0, 96, 50)`;
+- [x] `test_snap_roi` (parametrized): `(1, 1, 101, 51, 1920, 1080) → (0, 0, 96, 50)`;
   `(1900, 1070, 500, 500, 1920, 1080) → (1900, 1070, 16, 10)`; expected values are literal
   tuples in the test, never recomputed with the same formula; a
   tiny ROI `(0, 0, 3, 1, ...)` → width 8, height 2; full sensor unchanged; every result is
   inside the sensor, with even x, y, width % 8 == 0, height % 2 == 0.
-- [ ] `test_bytes_per_hour_and_cup_label`: `estimate_bytes_per_hour(640, 400, 16, 100.0, 1)
+- [x] `test_bytes_per_hour_and_cup_label`: `estimate_bytes_per_hour(640, 400, 16, 100.0, 1)
   == 640 * 400 * 2 * 100 * 3600`, and keep 1 in 4 is a quarter of it; `cup_position_label`
   returns each `CupPosition` member's `.value` when connected and fresh, and `"UNKNOWN"` for
   every member when disconnected and when stale.
-- [ ] `test_numbers_only` (in `tests/test_capture_config.py`): `capture_config.py` contains no
+- [x] `test_numbers_only` (in `tests/test_capture_config.py`): `capture_config.py` contains no
   `def`, `class` or `import` statement (checked with `ast`), and every public name listed in step 1 exists
   with exactly that value.
 
