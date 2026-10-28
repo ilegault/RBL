@@ -1,6 +1,6 @@
 # 64: Preview stretch and debayer, ZWO paths, and the persisted ZWO settings
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 

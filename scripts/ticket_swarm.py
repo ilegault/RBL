@@ -33,7 +33,14 @@ DECISIONS THAT MATTER
 ---------------------
 * The frontier is read from ``origin/master``, never from a working tree.
   A blocker counts as finished only when its ``Status: done`` has been merged,
-  so an agent never starts on top of code that is still sitting in a PR.
+  so an agent never starts on top of code that is still sitting in a PR. The
+  one exception: a PR this swarm watched reach MERGED also counts. A human who
+  merges the moment CI goes green beats the finalize turn, master is left
+  saying ``in-progress``, and without the exception the whole set behind that
+  ticket stalls with nothing running (64 did exactly this to 65-77).
+* A ticket whose agent died before any PR existed (a crash, a timeout) is
+  released on the next start and claimed again; its branch and worktree are
+  reused, so the new agent continues rather than starts over.
 * A ticket is claimable only when it is ``ready-for-agent``, its ``Runner`` is
   not ``developer``, every blocker is done on master, no ``ticket/<set>-<NN>-``
   branch exists on the remote, and this script has not already taken it.
@@ -153,19 +160,22 @@ def resolve_ref(ref: str, home_set: str, tickets: dict[str, Ticket]) -> Ticket |
     return matches[0] if len(matches) == 1 else None
 
 
-def unmet_blockers(t: Ticket, tickets: dict[str, Ticket]) -> list[str]:
+def unmet_blockers(t: Ticket, tickets: dict[str, Ticket],
+                   merged: set[str] = frozenset()) -> list[str]:
+    """``merged``: ticket keys whose PR this swarm saw merged (see DECISIONS)."""
     out = []
     for ref in t.blocked_by:
         b = resolve_ref(ref, t.set, tickets)
         if b is None:
             out.append(f"{ref}?")          # unknown / ambiguous: never assume done
-        elif b.status not in DONE_WORDS:
+        elif b.status not in DONE_WORDS and b.key not in merged:
             out.append(b.key)
     return out
 
 
 def frontier(tickets: dict[str, Ticket], taken: set[str],
-             remote_branches: set[str], sets: set[str] | None = None) -> list[Ticket]:
+             remote_branches: set[str], sets: set[str] | None = None,
+             merged: set[str] = frozenset()) -> list[Ticket]:
     ready = []
     for t in tickets.values():
         if sets and t.set not in sets:
@@ -175,7 +185,7 @@ def frontier(tickets: dict[str, Ticket], taken: set[str],
         prefix = f"ticket/{t.set}-{t.number}-"
         if any(b.startswith(prefix) for b in remote_branches):
             continue
-        if unmet_blockers(t, tickets):
+        if unmet_blockers(t, tickets, merged):
             continue
         ready.append(t)
     return sorted(ready, key=lambda t: (int(t.number), t.set))
@@ -457,6 +467,9 @@ class Swarm:
         for key, d in raw.get("jobs", {}).items():
             job = Job(**{k: v for k, v in d.items() if k in Job.__dataclass_fields__})
             job.pid = None
+            if job.phase == FAILED and not job.pr:
+                log(f"{key}: agent died before opening a PR last run — releasing it to retry")
+                continue
             if job.phase in AGENT_PHASES:
                 # The agent died with the last run of the swarm. If a PR exists we just
                 # watch it; otherwise the implement turn is repeated as a "continue".
@@ -479,6 +492,9 @@ class Swarm:
         slots = {"claude": self.args.claude, "agy": self.args.agy}
         free = [t for t, n in slots.items() if n and self.running(t) < n]
         return min(free, key=lambda t: self.running(t) / slots[t]) if free else None
+
+    def merged(self) -> set[str]:
+        return {k for k, j in self.jobs.items() if j.phase == MERGED}
 
     def open_jobs(self) -> int:
         return sum(1 for j in self.jobs.values() if j.phase not in FINISHED)
@@ -583,6 +599,11 @@ class Swarm:
             job.phase = MERGED
             self.cleanup(job)
             log(f"{job.key} merged")
+            on_master = self.tickets.get(job.key)
+            if on_master and on_master.status not in DONE_WORDS:
+                job.note = (f"merged with Status: {on_master.status} — counted as done "
+                            f"here; set it to done on master")
+                log(f"{job.key}: {job.note}")
             return
         if info["state"] == "CLOSED":
             job.phase, job.note = FAILED, "PR closed without merging"
@@ -689,15 +710,16 @@ class Swarm:
     # ── main loop ────────────────────────────────────────────────────────────
     def tick(self) -> None:
         self.reap()
+        self.tickets = load_master_tickets()
         for job in list(self.jobs.values()):
             if job.phase in (WATCH, READY) and job.pr:
                 self.watch(job)
             elif job.phase == IMPLEMENT and job.key not in self.procs:
                 if self.has_slot(job):
                     self.start_agent(job, IMPLEMENT)   # restart after a crash
-        self.tickets = load_master_tickets()
         taken = set(self.jobs)
-        ready = frontier(self.tickets, taken, remote_ticket_branches(), self.args.sets)
+        ready = frontier(self.tickets, taken, remote_ticket_branches(), self.args.sets,
+                         self.merged())
         while ready and self.open_jobs() < self.args.max_open:
             tool = self.free_tool()
             if tool is None:
@@ -749,9 +771,13 @@ def ensure_ignored() -> None:
 def dry_run(args) -> None:
     tickets = load_master_tickets()
     taken: set[str] = set()
+    merged: set[str] = set()
     if STATE_PATH.exists():
-        taken = set(json.loads(STATE_PATH.read_text(encoding="utf-8"))["jobs"])
-    ready = frontier(tickets, taken, remote_ticket_branches(), args.sets)
+        jobs = json.loads(STATE_PATH.read_text(encoding="utf-8"))["jobs"]
+        # Mirror Swarm.load_state: a job that died without a PR is retried.
+        taken = {k for k, j in jobs.items() if not (j["phase"] == FAILED and not j.get("pr"))}
+        merged = {k for k, j in jobs.items() if j["phase"] == MERGED}
+    ready = frontier(tickets, taken, remote_ticket_branches(), args.sets, merged)
     print("Would start, in this order:")
     for t in ready:
         print(f"  {t.key:<32} {t.title}{'' if t.auto_merge else '   [Auto-merge: no]'}")
@@ -762,7 +788,7 @@ def dry_run(args) -> None:
         if args.sets and t.set not in args.sets:
             continue
         if t.status == CLAIMABLE and t.runner != "developer":
-            unmet = unmet_blockers(t, tickets)
+            unmet = unmet_blockers(t, tickets, merged)
             if unmet:
                 print(f"  {t.key:<32} needs {', '.join(unmet)}")
 
@@ -828,7 +854,8 @@ def main(argv: list[str] | None = None) -> int:
                 swarm.report()
                 last_report = snapshot
             if swarm.idle() and not frontier(swarm.tickets, set(swarm.jobs),
-                                             remote_ticket_branches(), args.sets):
+                                             remote_ticket_branches(), args.sets,
+                                             swarm.merged()):
                 log("nothing left to start and nothing running — done.")
                 return 0
             time.sleep(args.poll if not swarm.procs else min(args.poll, 20))

@@ -91,6 +91,28 @@ def test_frontier_only_offers_unblocked_agent_tickets_in_number_order():
     assert [t.number for t in ready] == ["62", "63", "70"]
 
 
+def test_a_pr_the_swarm_saw_merged_counts_as_done_even_if_master_says_in_progress():
+    # A human merged 64 the moment CI went green, before the finalize turn ran:
+    # master still said in-progress and 65-77 stalled with nothing running.
+    idx = _index(_ticket("s", "64", status="in-progress"), _ticket("s", "65", blocked="64"))
+    assert swarm.frontier(idx, taken={"s/64"}, remote_branches=set()) == []
+    ready = swarm.frontier(idx, taken={"s/64"}, remote_branches=set(), merged={"s/64"})
+    assert [t.key for t in ready] == ["s/65"]
+
+
+def test_a_job_that_died_without_a_pr_is_released_on_restart(tmp_path, monkeypatch):
+    state = tmp_path / "state.json"
+    t = {"set": "s", "number": "48", "branch": "ticket/s-48-x"}
+    state.write_text(json.dumps({"jobs": {
+        "s/48": {"ticket": t, "tool": "claude", "worktree": "w", "phase": "failed", "pr": None},
+        "s/49": {"ticket": {**t, "number": "49"}, "tool": "claude", "worktree": "w",
+                 "phase": "failed", "pr": 120},
+    }}), encoding="utf-8")
+    monkeypatch.setattr(swarm, "STATE_PATH", state)
+    s = swarm.Swarm(type("Args", (), {})())
+    assert set(s.jobs) == {"s/49"}   # a failed job WITH a PR stays for a human
+
+
 def test_frontier_can_be_limited_to_sets():
     idx = _index(_ticket("a", "01"), _ticket("b", "02"))
     assert [t.key for t in swarm.frontier(idx, set(), set(), sets={"b"})] == ["b/02"]
