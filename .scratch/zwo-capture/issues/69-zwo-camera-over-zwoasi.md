@@ -1,6 +1,6 @@
 # 69: `ZwoCamera`: the real camera behind the Capture Process, over `zwoasi`
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -74,22 +74,22 @@ D5 ("Camera implementations"), D1 (`--sdk-dll`), D12 (`requirements.txt`)
 `zwoasi` shape is installed with `monkeypatch.setitem(sys.modules, "zwoasi", stand_in)`; it
 records every call. No real DLL and no real camera.
 
-- [ ] `test_open_passes_the_explicit_dll_path`: `ZwoCamera("C:/x/ASICamera2.dll").open(0)` calls
+- [x] `test_open_passes_the_explicit_dll_path`: `ZwoCamera("C:/x/ASICamera2.dll").open(0)` calls
   `init` exactly once with that string before `Camera(0)`.
-- [ ] `test_info_and_bayer_mapping` (parametrized over the four `BayerPattern` integers):
+- [x] `test_info_and_bayer_mapping` (parametrized over the four `BayerPattern` integers):
   `info().bayer_pattern` is `RG`, `BG`, `GR`, `GB` for 0..3, sensor size from
   `MaxWidth`/`MaxHeight`; `controls()` has the four keys with `min`/`max`/`default` taken from
   the stand-in's `MinValue`/`MaxValue`/`DefaultValue`.
-- [ ] `test_apply_never_switches_on_auto_and_never_asks_for_rgb`: after `apply` at bit depth 16
+- [x] `test_apply_never_switches_on_auto_and_never_asks_for_rgb`: after `apply` at bit depth 16
   and again at 8, the recorded calls set exposure and gain with `auto=False`, set
   `HighSpeedMode` to 0, never set `Offset` or `BandWidth`, and the only image types ever passed
   are `ASI_IMG_RAW16` then `ASI_IMG_RAW8`; `set_roi` received the ROI's four values and
   `bins=1`.
-- [ ] `test_timeout_is_none_and_other_errors_are_camera_lost`: the stand-in raising its timeout
+- [x] `test_timeout_is_none_and_other_errors_are_camera_lost`: the stand-in raising its timeout
   error makes `get_frame` return `None`; raising any other of its errors makes `get_frame`
   raise `CameraLost` carrying the message; a normal return is passed through as the same array
   object.
-- [ ] `test_missing_dll_is_fatal` (Seam A, `tests/capture_child.py` with
+- [x] `test_missing_dll_is_fatal` (Seam A, `tests/capture_child.py` with
   `--camera zwo --sdk-dll <tmp_path>/missing.dll` replacing `--camera fake`): the child's first
   stdout message is `fatal` with message `"ZWO SDK library not found: <that path>"`, and it
   exits with code 1.
@@ -113,3 +113,5 @@ mypy has `ignore_missing_imports = true`, so no stub is needed for `zwoasi`; do 
 - Exposing `Offset`, `BandWidth`, binning, cooling or any other control.
 
 ## Comments
+
+Takeover verification (2026-10-28): PR #125 had merged the implementation with Status left at in-progress. Verified on master: ZwoCamera, the process.py `--camera zwo` branch, `zwoasi==0.2.0` in requirements.txt, and tests/test_zwo_camera.py (13 tests, all pass). Gates: ruff clean, check_tests_first OK, type_gate soft 0 (ratchet 139). No code change needed. Bench verification stays with tickets 78-80.
