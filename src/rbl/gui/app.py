@@ -54,7 +54,10 @@ from rbl.services.cup_log import (
     find_previous_session_cup_log,
     read_dose_totals,
 )
+from rbl.services.regulation_monitor import RegulationMonitor
+from rbl.services.regulation_response import RegulationResponder
 from rbl.services.session_recorder import SessionRecorder
+from rbl.services.session_regulation_watch import SessionRegulationWatch
 from rbl.services.spike_recorder import SpikeRecorder
 from rbl.state.beamline import Beamline
 from rbl.util import best_effort
@@ -351,6 +354,24 @@ class MainWindow(QMainWindow):
         self.spike_recorder.spike_recorded.connect(self.overview_tab.on_spike)
         self.spike_recorder.reference_captured.connect(
             self.overview_tab.on_reference_captured)
+        # While a session runs, the regulation detector watches each driven
+        # plate against its setpoint in OBSERVE mode: a confirmed fault is
+        # logged (trip history, pre-event waveform) and shown as an Overview
+        # warning, never answered by switching the amplifier off (ADR 0006).
+        self.regulation_monitor = RegulationMonitor(parent=self)
+        self.regulation_watch = SessionRegulationWatch(
+            self.beamline.funcgen_setpoints, self.regulation_monitor, parent=self)
+        self.regulation_responder = RegulationResponder(
+            self.regulation_monitor, None,
+            self.regulation_watch.operating_conditions,
+            mode="observe", spike_recorder=self.spike_recorder, parent=self)
+        self.regulation_responder.warning.connect(
+            self.overview_tab.amp_warnings.add_warning)
+        self.beamline.raw_window_ready.connect(self.regulation_watch.on_window)
+        self.session_recorder.session_started.connect(
+            lambda _folder: self.regulation_watch.start())
+        self.session_recorder.session_stopped.connect(
+            lambda _folder: self.regulation_watch.stop())
         # Every spike it logs is plotted live on the Load Characterization tab.
         self.load_char_tab.set_spike_recorder(self.spike_recorder)
         # A calibration run switching the stream profile out from under

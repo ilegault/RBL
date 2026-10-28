@@ -7,7 +7,7 @@ A fake dialog factory stands in for the real Qt dialog so nothing here
 blocks on user input.
 """
 import pytest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QDialog
 
 from rbl.services.regulation_monitor import RegulationMonitor
 from rbl.services.regulation_response import RegulationResponder
@@ -124,3 +124,74 @@ class TestRegulationResponder:
             dialog_factory=FakeDialog)
         monitor.evaluate("X+", 0.01, 3.0, 0.1, 20.0)   # must not raise
         assert logged and logged[0]["label"] == "X+"
+
+
+def build_observer(mode_recorder=None):
+    monitor = RegulationMonitor(debounce_windows=1)
+    amp_drive = FakeAmpDrive()
+    responder = RegulationResponder(
+        monitor, amp_drive, lambda label: {"commanded_kv": 3.0},
+        dialog_factory=FakeDialog, mode="observe", spike_recorder=mode_recorder)
+    return monitor, amp_drive, responder
+
+
+class TestRegulationResponderObserveMode:
+    """ADR 0006: in a session the application witnesses a fault, never answers it."""
+
+    @pytest.fixture(autouse=True)
+    def _trip_path(self, tmp_path, monkeypatch):
+        import rbl.services.regulation_response as rr_module
+        self.path = tmp_path / "trip.jsonl"
+        monkeypatch.setattr(rr_module.trip_history, "TRIP_HISTORY_PATH", self.path)
+
+    def test_current_limited_fault_never_stops_the_channel_or_opens_a_dialog(
+            self, qapp, monkeypatch):
+        def no_dialog(*_a, **_k):
+            raise AssertionError("observe mode must never open a dialog")
+        monkeypatch.setattr(QDialog, "exec", no_dialog)
+        FakeDialog.last_instance = None
+        monitor, amp_drive, responder = build_observer()
+        warnings = []
+        responder.warning.connect(warnings.append)
+
+        monitor.evaluate("X+", 0.5, 3.0, 19.5, 20.0)     # 17 % of commanded, at the limit
+
+        assert amp_drive.off_calls == []
+        assert FakeDialog.last_instance is None
+        records = load_trip_history(self.path)
+        assert len(records) == 1
+        assert records[0]["state"] == "current_limited"
+        assert records[0]["mode"] == "observe"
+        assert records[0]["commanded_kv"] == 3.0
+        assert len(warnings) == 1 and "X+" in warnings[0]
+
+    def test_amp_off_saves_the_pre_event_waveform(self, qapp):
+        class Recorder:
+            def __init__(self):
+                self.calls = []
+
+            def save_pre_event(self, label):
+                self.calls.append(label)
+
+        rec = Recorder()
+        monitor, amp_drive, responder = build_observer(rec)
+        monitor.evaluate("Y-", 0.01, 3.0, 0.1, 20.0)
+        assert rec.calls == ["Y-"]
+        assert amp_drive.off_calls == []
+
+    def test_current_limited_does_not_save_a_pre_event(self, qapp):
+        class Recorder:
+            calls = []
+
+            def save_pre_event(self, label):
+                self.calls.append(label)
+
+        rec = Recorder()
+        monitor, _drive, responder = build_observer(rec)
+        monitor.evaluate("X+", 0.5, 3.0, 19.5, 20.0)
+        assert rec.calls == []
+
+    def test_unknown_mode_is_refused(self, qapp):
+        with pytest.raises(ValueError):
+            RegulationResponder(RegulationMonitor(), FakeAmpDrive(),
+                                lambda label: {}, mode="bogus")
