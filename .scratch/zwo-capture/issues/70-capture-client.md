@@ -1,6 +1,6 @@
 # 70: `CaptureClient`: the application's one owner of the Capture Process
 
-**Status:** in-progress
+**Status:** blocked
 
 **Runner:** any
 
@@ -120,3 +120,23 @@ access in the new test files (`tools/private_access_ratchet.txt` must not rise).
 - Reattaching to a child left by a previous run (ADR 0008 decision 5).
 
 ## Comments
+
+### 2026-10-27 (implementing agent): blocked on ticket 66
+
+Built `CaptureClient`, `capture_command_line`, `capture_child_env`, `tests/qt_wait.py`, and all
+tests. 6 of 7 new tests pass against the real fake-camera child; ruff, check_tests_first,
+check_layers and the type gate are clean.
+
+`test_cup_position_is_sent_only_on_change` FAILS and cannot be fixed on this ticket:
+
+    tests\test_capture_client.py:97: assert wait_until(lambda: len(list(tmp_path.rglob("frames.csv"))) > 0)
+    AssertionError
+
+Cause: `src/rbl/capture/process.py` (ticket 65) answers `start_recording` with
+`error bad_request "not implemented"`, so no `frames.csv` is ever written. Recording and the
+frame log are ticket 66. This ticket's `Blocked by:` names only 65, but its acceptance test
+asserts through the frame log, so it needs 66 as well.
+
+Decision needed from a human: add 66 to this ticket's `Blocked by:` (and rerun after 66 lands,
+the test needs no change), or reword the criterion to something 65 can satisfy. I did not mute,
+weaken or skip the test (ADR 0001).
