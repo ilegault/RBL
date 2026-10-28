@@ -1,6 +1,6 @@
 # 49: The regulation detector watches sessions in observe-only mode
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -29,11 +29,11 @@ Tests may fake: the amplifier drive (a recording object), the stream payload, th
 
 ## Acceptance criteria
 
-- [ ] In observe mode a confirmed `current_limited` fault leaves the fake drive's `output_off` calls empty, with `QDialog.exec` replaced by a function that fails the test.
-- [ ] The trip history gains exactly one record with `state: 'current_limited'` and `mode: 'observe'`.
-- [ ] An `amp_off` fault makes `save_pre_event` write a `spikes/X+_pre_event_*.csv` file in the session folder.
-- [ ] In a test session, windows whose voltage fundamental is 40 % of commanded for the debounce count add an Overview warning naming the plate.
-- [ ] `test_stops_the_channel_on_fault` passes unchanged.
+- [x] In observe mode a confirmed `current_limited` fault leaves the fake drive's `output_off` calls empty, with `QDialog.exec` replaced by a function that fails the test.
+- [x] The trip history gains exactly one record with `state: 'current_limited'` and `mode: 'observe'`.
+- [x] An `amp_off` fault makes `save_pre_event` write a `spikes/X+_pre_event_*.csv` file in the session folder.
+- [x] In a test session, windows whose voltage fundamental is 40 % of commanded for the debounce count add an Overview warning naming the plate.
+- [x] `test_stops_the_channel_on_fault` passes unchanged.
 
 ## Gate
 
@@ -45,3 +45,9 @@ Run in CI's order (`.github/workflows/tests.yml`):
     pytest --tb=short -q -n auto --dist loadfile --durations=25
 
 ## Comments
+
+Landed 2026-10-28. `RegulationResponder(mode="observe")` + new `services/session_regulation_watch.py`
+(feeds `RegulationMonitor` from `raw_window_ready` during a session), wired in `MainWindow`.
+Criteria 1-3: `tests/test_regulation_response.py::TestRegulationResponderObserveMode`; criterion 3 end to
+end and criterion 4: `tests/test_session_regulation_watch.py`; criterion 5: existing test unchanged.
+Bench: none needed. Note: DC setpoints (freq 0) are commanded as |offset_v|, not amp_vpp/2.
