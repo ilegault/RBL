@@ -1,6 +1,6 @@
 # 66: The Capture Process records: SER segments, the frame log and the settings records
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
