@@ -15,6 +15,11 @@ irreducible minimum.  Video may be started and stopped any number of times
 within an active session without overwriting earlier recordings (ADR 0004
 decision 7).
 
+The ZWO camera is driven through CaptureClient (ADR 0008), which controls
+the Capture Process in a separate child process. When the child process exits
+or loses the camera mid-run, the ZWO recording ends cleanly while CSV-only
+logging stays first-class and uninterrupted.
+
 The timebase: at session start we capture both time.perf_counter() and
 datetime.now(UTC) and derive every subsequent wall-clock time from the monotonic
 clock.  This means an NTP correction during an 8-hour run cannot reorder rows
@@ -36,7 +41,10 @@ The VideoRecorder lives on the camera thread so AVI writes never touch the GUI
 thread.  offer_frame() is connected to CameraSource.frame_ready with
 DirectConnection so it executes on the camera thread without a queue round-trip.
 """
+from __future__ import annotations
+
 import csv
+import dataclasses
 import math
 import os
 import shutil
@@ -44,7 +52,7 @@ import sys
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from PySide6.QtCore import (
     QObject,
@@ -52,8 +60,10 @@ from PySide6.QtCore import (
     QTimer,
     Signal,
 )
-from PySide6.QtWidgets import QProgressDialog
+from PySide6.QtGui import QImage
+from PySide6.QtWidgets import QApplication, QProgressDialog
 
+from rbl.config import paths, zwo_settings_store
 from rbl.config.recording_config import (
     CSV_INTERVAL_DEFAULT_S,
     CSV_INTERVAL_MAX_S,
@@ -68,6 +78,7 @@ from rbl.config.recording_config import (
     SEGMENT_SECONDS_DEFAULT,
 )
 from rbl.hardware.camera_source import CameraSource
+from rbl.services.capture_client import CaptureClient
 from rbl.services.csv_log_writer import CsvLogWriter, flatten
 from rbl.services.snapshot_json import dump_json
 from rbl.services.vacuum_logger import (
@@ -94,6 +105,8 @@ class SessionRecorder(QObject):
         Called on the CSV timer; returns the current beamline state.
     camera      : CameraSource
         Shared camera source; may be open or closed.
+    capture     : CaptureClient, optional
+        Shared Capture Process client for the ZWO camera.
     """
 
     state_changed    = Signal()
@@ -101,12 +114,21 @@ class SessionRecorder(QObject):
     status           = Signal(str, str)      # message, theme colour role
     session_started  = Signal(str)           # session folder path
     session_stopped  = Signal(str)
-    photo_taken      = Signal(str)           # absolute path of saved PNG
+    photo_taken      = Signal(str)           # absolute path of saved PNG or FITS
+    zwo_preview      = Signal(QImage, dict)  # forwarded from capture.preview
 
-    def __init__(self, snapshot_fn, camera: CameraSource, parent=None):
+    def __init__(
+        self,
+        snapshot_fn,
+        camera: CameraSource,
+        parent=None,
+        *,
+        capture: CaptureClient | None = None,
+    ):
         super().__init__(parent)
         self._snapshot_fn = snapshot_fn
         self._camera      = camera
+        self._capture     = capture
         # Vetoes installed by the window (cup log state); None means always allowed.
         self._start_guard: Callable[[], bool] | None = None
         self._stop_guard:  Callable[[], bool] | None = None
@@ -149,6 +171,36 @@ class SessionRecorder(QObject):
         self._next_segment_index: int = 0
         self._video_runs: list[dict] = []
         self._ffmpeg_warning_logged: bool = False
+
+        # ZWO Camera & Capture Process state
+        self._zwo_settings, _ = zwo_settings_store.load_settings()
+        self._camera_kind: str = (
+            self._zwo_settings.camera_kind if capture is not None else "usb"
+        )
+        self._zwo_video_active: bool = False
+        self._zwo_starting_video: bool = False
+        self._zwo_stopping_video: bool = False
+        self._zwo_next_segment: int = 0
+        self._zwo_next_frame: int = 0
+        self._zwo_runs: list[dict] = []
+        self._zwo_segments: list[str] = []
+        self._zwo_info: dict = {}
+        self._zwo_status: dict = {}
+        self._zwo_settings_applied: dict = {}
+        self._zwo_open_on_hello: bool = False
+        self._zwo_photo_snaps: dict[int, dict] = {}
+        self._pending_start_recording_id: int = -1
+        self._pending_set_ids: set[int] = set()
+
+        if self._capture is not None:
+            self._capture.preview.connect(self.zwo_preview)
+            self._capture.status.connect(self._on_zwo_status)
+            self._capture.opened.connect(self._on_zwo_opened)
+            self._capture.closed.connect(self._on_zwo_closed)
+            self._capture.event.connect(self._on_zwo_event)
+            self._capture.exited.connect(self._on_zwo_exited)
+            self._capture.hello.connect(self._on_zwo_hello)
+            self._capture.reply.connect(self._on_zwo_reply)
 
         # Photos
         self._photo_index: int = 0
@@ -206,6 +258,81 @@ class SessionRecorder(QObject):
             self._master_codec = label
             self.settings_changed.emit()
 
+    # ---- ZWO camera & settings ---------------------------------------------
+
+    def camera_kind(self) -> str:
+        return self._camera_kind
+
+    def set_camera_kind(self, kind: str) -> None:
+        if kind not in ("usb", "zwo"):
+            return
+        if (self._video_recorder is not None) or self._zwo_video_active:
+            self.status.emit("Stop video before switching cameras", "warn")
+            return
+        if kind == "zwo" and self._capture is None:
+            return
+        if kind == self._camera_kind:
+            return
+        if kind == "zwo":
+            if self._camera.is_open():
+                self._camera.close()
+        elif kind == "usb":
+            self.disconnect_zwo()
+        self._camera_kind = kind
+        self._zwo_settings = dataclasses.replace(self._zwo_settings, camera_kind=kind)
+        zwo_settings_store.save_settings(self._zwo_settings)
+        self.settings_changed.emit()
+        self.state_changed.emit()
+
+    def connect_zwo(self) -> None:
+        if self._capture is None:
+            return
+        if not self._capture.is_running():
+            self._zwo_open_on_hello = True
+            self._capture.start("zwo")
+        else:
+            self._capture.open(0)
+
+    def disconnect_zwo(self) -> None:
+        if self._capture is None:
+            return
+        if self._zwo_video_active:
+            self._stop_zwo_video(detail="disconnect_zwo")
+        self._capture.close()
+        self._capture.shutdown()
+        self._zwo_info = {}
+        self._zwo_settings_applied = {}
+        self.state_changed.emit()
+
+    def set_zwo_settings(self, **fields: Any) -> int:
+        if self._capture is None:
+            return -1
+        cmd_id = self._capture.apply(**fields)
+        if cmd_id >= 0:
+            self._pending_set_ids.add(cmd_id)
+        return cmd_id
+
+    def set_zwo_preview(self, mode: str, brightness: float) -> None:
+        if self._capture is not None and self._capture.is_open():
+            self._capture.set_preview(mode, brightness)
+        self._zwo_settings = dataclasses.replace(
+            self._zwo_settings, preview_mode=mode, brightness=brightness
+        )
+        zwo_settings_store.save_settings(self._zwo_settings)
+        self.settings_changed.emit()
+        self.state_changed.emit()
+
+    def take_darks(self, frames: int) -> int:
+        if self._camera_kind != "zwo":
+            return -1
+        if self._zwo_video_active or self._zwo_starting_video:
+            self.status.emit("Cannot take dark frames while video is running", "warn")
+            return -1
+        if self._capture is None or not self._capture.is_open():
+            self.status.emit("Cannot take dark frames: camera is not open", "warn")
+            return -1
+        return self._capture.take_darks(str(paths.ZWO_DARKS_DIR), frames)
+
     # ---- session control ---------------------------------------------------
 
     def set_start_guard(self, fn: Callable[[], bool] | None) -> None:
@@ -259,6 +386,13 @@ class SessionRecorder(QObject):
         self._next_segment_index = 0
         self._video_runs      = []
         self._ffmpeg_warning_logged = False
+        self._zwo_next_segment = 0
+        self._zwo_next_frame = 0
+        self._zwo_runs = []
+        self._zwo_segments = []
+        self._zwo_video_active = False
+        self._zwo_starting_video = False
+        self._zwo_stopping_video = False
 
         # Open CSV writer and events.csv.
         self._csv_writer = CsvLogWriter(self._folder, "data")
@@ -295,6 +429,14 @@ class SessionRecorder(QObject):
         if not force and self._stop_guard is not None and not self._stop_guard():
             return
         self.stop_video()
+        if self._capture is not None and self._zwo_stopping_video:
+            end = time.monotonic() + 5.0
+            app = QApplication.instance()
+            while self._zwo_stopping_video and time.monotonic() < end:
+                if app is not None:
+                    app.processEvents()
+                time.sleep(0.005)
+
         self._recording = False
         self._csv_timer.stop()
         self._write_csv_row()   # final row
@@ -371,13 +513,18 @@ class SessionRecorder(QObject):
 
     # ---- actions -----------------------------------------------------------
 
-    def take_photo(self) -> "str | None":
-        """Save a PNG + JSON sidecar from the current camera frame.
+    def take_photo(self, burst: int = 1) -> str | None:
+        """Save a photo + JSON sidecar from the current camera frame.
 
         Works with no active session (images land in logs/photos/).
         The sidecar captures the current beamline state at the moment of
         the photo so the image is interpretable without a running session.
         """
+        if self._camera_kind == "zwo":
+            return self._take_zwo_photo(burst)
+        return self._take_usb_photo()
+
+    def _take_usb_photo(self) -> str | None:
         try:
             import cv2
         except ImportError:
@@ -423,6 +570,21 @@ class SessionRecorder(QObject):
         self.photo_taken.emit(path)
         return path
 
+    def _take_zwo_photo(self, burst: int = 1) -> None:
+        if self._capture is None or not self._capture.is_open():
+            return None
+        if self._recording:
+            photo_dir = os.path.join(self._folder, "photos")
+        else:
+            photo_dir = os.path.join(_logs_dir(), "photos")
+            os.makedirs(photo_dir, exist_ok=True)
+
+        snap = self._snapshot_fn()
+        cmd_id = self._capture.photo(photo_dir, burst)
+        if cmd_id >= 0:
+            self._zwo_photo_snaps[cmd_id] = snap
+        return None
+
     def add_note(self, text: str) -> None:
         if not self._recording:
             return
@@ -464,9 +626,15 @@ class SessionRecorder(QObject):
             "transcode_pending": self._transcode_pending,
             "disk_free_bytes":   free,
             "bytes_written":     bytes_written,
-            "video_active":      self._video_recorder is not None,
+            "video_active":      (self._video_recorder is not None) or self._zwo_video_active,
             "ffmpeg_found":      self._ffmpeg_path is not None,
             "master_codec":      self._master_codec,
+            "camera_kind":       self._camera_kind,
+            "zwo_open":          bool(self._capture is not None and self._capture.is_open()),
+            "zwo_recording":     self._zwo_video_active,
+            "zwo_status":        dict(self._zwo_status),
+            "zwo_info":          dict(self._zwo_info),
+            "zwo_settings":      dict(self._zwo_settings_applied),
         }
 
     # ---- video control (ADR 0004 decision 7) -------------------------------
@@ -477,6 +645,35 @@ class SessionRecorder(QObject):
         Refuses (returns False, emits status warning) when not recording,
         video is already running, or camera is not open.
         """
+        if self._camera_kind == "zwo":
+            return self._start_zwo_video()
+        return self._start_usb_video()
+
+    def _start_zwo_video(self) -> bool:
+        if not self._recording:
+            self.status.emit("Cannot start video: session is not recording", "warn")
+            return False
+        if self._zwo_video_active or self._zwo_starting_video:
+            self.status.emit("Cannot start video: video is already running", "warn")
+            return False
+        if self._capture is None or not self._capture.is_open():
+            self.status.emit("Cannot start video: camera is not open", "warn")
+            return False
+
+        t0_wall_utc = self._derive_wall(0.0)
+        cmd_id = self._capture.start_recording(
+            self._folder,
+            session_t0_utc=t0_wall_utc,
+            first_segment_index=self._zwo_next_segment,
+            first_frame_index=self._zwo_next_frame,
+        )
+        if cmd_id < 0:
+            return False
+        self._pending_start_recording_id = cmd_id
+        self._zwo_starting_video = True
+        return True
+
+    def _start_usb_video(self) -> bool:
         if not self._recording:
             self.status.emit("Cannot start video: session is not recording", "warn")
             return False
@@ -547,6 +744,25 @@ class SessionRecorder(QObject):
 
     def stop_video(self, detail: str = "") -> None:
         """Stop video recording if active without ending the session."""
+        if self._camera_kind == "zwo" or self._zwo_video_active:
+            self._stop_zwo_video(detail)
+        else:
+            self._stop_usb_video(detail)
+
+    def _stop_zwo_video(self, detail: str = "") -> None:
+        if not self._zwo_video_active and not self._zwo_starting_video:
+            return
+        self._zwo_starting_video = False
+        self._zwo_stopping_video = True
+        if self._zwo_runs and self._zwo_runs[-1]["stopped_t_rel"] is None:
+            self._zwo_runs[-1]["stopped_t_rel"] = self._t_rel()
+        if self._capture is not None and self._capture.is_open():
+            self._capture.stop_recording()
+        self._write_event("video_stopped", detail)
+        self._write_manifest()
+        self.state_changed.emit()
+
+    def _stop_usb_video(self, detail: str = "") -> None:
         if self._video_recorder is None:
             return
 
@@ -672,6 +888,164 @@ class SessionRecorder(QObject):
         self.status.emit(f"Camera lost ({msg}) — continuing CSV only", "warn")
         self.state_changed.emit()
 
+    # ---- internal: ZWO CaptureClient slots ---------------------------------
+
+    def _on_zwo_hello(self, msg: dict) -> None:
+        if self._zwo_open_on_hello:
+            self._zwo_open_on_hello = False
+            if self._capture is not None:
+                self._capture.open(0)
+
+    def _on_zwo_opened(self, msg: dict) -> None:
+        self._zwo_info = dict(msg)
+        if self._capture is None:
+            return
+        if self._zwo_settings.roi is not None:
+            x, y, w, h = self._zwo_settings.roi
+            roi = {"x": x, "y": y, "width": w, "height": h}
+        else:
+            sw = msg.get("sensor_width", 0)
+            sh = msg.get("sensor_height", 0)
+            roi = {"x": 0, "y": 0, "width": sw, "height": sh}
+
+        cmd_id = self._capture.apply(
+            exposure_us=self._zwo_settings.exposure_us,
+            gain=self._zwo_settings.gain,
+            bit_depth=self._zwo_settings.bit_depth,
+            keep_one_in_n=self._zwo_settings.keep_one_in_n,
+            roi=roi,
+        )
+        if cmd_id >= 0:
+            self._pending_set_ids.add(cmd_id)
+
+        self._capture.set_preview(
+            mode=self._zwo_settings.preview_mode,
+            brightness=self._zwo_settings.brightness,
+        )
+        self.state_changed.emit()
+
+    def _on_zwo_closed(self) -> None:
+        self._zwo_info = {}
+        self.state_changed.emit()
+
+    def _on_zwo_status(self, msg: dict) -> None:
+        self._zwo_status = {k: v for k, v in msg.items() if k != "type"}
+
+    def _on_zwo_event(self, event: str, detail: str) -> None:
+        self._write_event(f"zwo_{event}", detail)
+        if event == "recording_stopped" and detail != "stop":
+            if self._zwo_video_active or self._zwo_starting_video:
+                self._zwo_video_active = False
+                self._zwo_starting_video = False
+                self._zwo_stopping_video = False
+                if self._zwo_runs and self._zwo_runs[-1]["stopped_t_rel"] is None:
+                    self._zwo_runs[-1]["stopped_t_rel"] = self._t_rel()
+                self._write_manifest()
+                self.status.emit(f"ZWO recording stopped ({detail}) — continuing CSV only", "warn")
+                self.state_changed.emit()
+
+    def _on_zwo_exited(self, code: int) -> None:
+        if self._zwo_video_active or self._zwo_starting_video:
+            self._zwo_video_active = False
+            self._zwo_starting_video = False
+            self._zwo_stopping_video = False
+            if self._zwo_runs and self._zwo_runs[-1]["stopped_t_rel"] is None:
+                self._zwo_runs[-1]["stopped_t_rel"] = self._t_rel()
+            self._write_event("zwo_capture_lost", f"exit code {code}")
+            self.status.emit("ZWO camera lost — continuing CSV only", "warn")
+            self._write_manifest()
+            self.state_changed.emit()
+        self._zwo_info = {}
+
+    def _on_zwo_reply(self, reply_to: int, msg: dict) -> None:
+        mtype = msg.get("type")
+        if reply_to == self._pending_start_recording_id:
+            self._pending_start_recording_id = -1
+            self._zwo_starting_video = False
+            if mtype == "ok":
+                self._zwo_video_active = True
+                self._zwo_runs.append({
+                    "started_t_rel": self._t_rel(),
+                    "stopped_t_rel": None,
+                    "first_segment": self._zwo_next_segment,
+                    "last_segment": None,
+                })
+                self._write_event("video_started", "zwo")
+                self._write_manifest()
+                self.state_changed.emit()
+            elif mtype == "error":
+                self._zwo_video_active = False
+                err_msg = msg.get("message", "")
+                self.status.emit(f"Cannot start ZWO video: {err_msg}", "warn")
+                self.state_changed.emit()
+            return
+
+        if mtype == "ok":
+            if reply_to in self._pending_set_ids:
+                self._pending_set_ids.remove(reply_to)
+                if "settings" in msg:
+                    self._zwo_settings_applied = dict(msg["settings"])
+                    s = msg["settings"]
+                    roi_tuple = None
+                    if "roi" in s and s["roi"] is not None:
+                        r = s["roi"]
+                        roi_tuple = (r["x"], r["y"], r["width"], r["height"])
+                    self._zwo_settings = dataclasses.replace(
+                        self._zwo_settings,
+                        exposure_us=s.get("exposure_us", self._zwo_settings.exposure_us),
+                        gain=s.get("gain", self._zwo_settings.gain),
+                        bit_depth=s.get("bit_depth", self._zwo_settings.bit_depth),
+                        keep_one_in_n=s.get("keep_one_in_n", self._zwo_settings.keep_one_in_n),
+                        roi=roi_tuple if "roi" in s else self._zwo_settings.roi,
+                    )
+                    zwo_settings_store.save_settings(self._zwo_settings)
+                    self.settings_changed.emit()
+                    self.state_changed.emit()
+            if "next_segment_index" in msg:
+                self._zwo_video_active = False
+                self._zwo_stopping_video = False
+                self._zwo_next_segment = msg["next_segment_index"]
+                self._zwo_next_frame = msg.get("next_frame_index", self._zwo_next_frame)
+                if self._zwo_runs and self._zwo_runs[-1]["last_segment"] is None:
+                    if self._zwo_next_segment > self._zwo_runs[-1]["first_segment"]:
+                        self._zwo_runs[-1]["last_segment"] = self._zwo_next_segment - 1
+                    else:
+                        self._zwo_runs[-1]["last_segment"] = self._zwo_runs[-1]["first_segment"]
+                for seg in msg.get("segments", []):
+                    if seg not in self._zwo_segments:
+                        self._zwo_segments.append(seg)
+                self._write_manifest()
+                self.state_changed.emit()
+            if "files" in msg:
+                files = msg["files"]
+                if files:
+                    snap = self._zwo_photo_snaps.pop(reply_to, None)
+                    if snap is None:
+                        snap = self._snapshot_fn()
+                    rel_names = []
+                    for fpath in files:
+                        base_name = os.path.basename(fpath)
+                        sidecar_path = os.path.splitext(fpath)[0] + ".json"
+                        sidecar = {
+                            "timestamp": datetime.now().isoformat(),
+                            "media_file": base_name,
+                            "type": "photo",
+                            "beamline": snap,
+                            "camera": "zwo",
+                        }
+                        dump_json(sidecar_path, sidecar)
+                        if self._recording:
+                            rel = f"photos/{base_name}"
+                            self._photo_list.append(rel)
+                            rel_names.append(rel)
+
+                    if self._recording and rel_names:
+                        self._write_event("photo", ", ".join(rel_names))
+                        self._write_manifest()
+                        self.state_changed.emit()
+
+                    self.photo_taken.emit(files[0])
+
     # ---- internal: CSV / events / manifest ---------------------------------
 
     def _t_rel(self) -> float:
@@ -756,6 +1130,17 @@ class SessionRecorder(QObject):
         if self._vacuum_files or self._vacuum_logger is not None:
             manifest["vacuum"] = {
                 "files": list(self._vacuum_files),
+            }
+        if self._zwo_runs:
+            manifest["zwo"] = {
+                "runs": [dict(r) for r in self._zwo_runs],
+                "segments": list(self._zwo_segments),
+                "camera": {
+                    "model": self._zwo_info.get("model", ""),
+                    "serial": self._zwo_info.get("serial", ""),
+                    "sdk_version": self._zwo_info.get("sdk_version", ""),
+                    "bayer_pattern": self._zwo_info.get("bayer_pattern", ""),
+                },
             }
         # Strict + atomic: a manifest is rewritten on every segment close, so a
         # crash mid-write used to be able to leave a truncated session.json as
