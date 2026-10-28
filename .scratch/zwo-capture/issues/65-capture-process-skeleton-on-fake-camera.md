@@ -1,6 +1,6 @@
 # 65: The Capture Process runs on a fake camera: launch, contract, Preview, status, heartbeat
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
