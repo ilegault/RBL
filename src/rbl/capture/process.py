@@ -20,6 +20,29 @@ because a stalled disk must never stall the camera. A writer thread owns the dis
 and the writer opens a new segment on a new generation, so no segment mixes
 settings. A keep-1-in-N-only change does not restart the camera stream.
 
+HOW A RECORDING ENDS (ticket 67)
+--------------------------------
+Every ending closes the open segment (header FrameCount rewritten, trailer appended,
+settings record rewritten with ``closed_reason``) and the frame log, then sends
+``segment_closed`` and ``recording_stopped`` (the reason is the detail). Sends on the
+ending paths ignore a broken pipe, because the application may be the thing that vanished.
+
+* ``stop``: the application asked.
+* ``size_limit``: the next frame would take the SER past ``--segment-max-bytes``; the
+  segment rolls and the recording continues (done in ``RecordingRun.write``).
+* ``low_disk``: ``start_recording`` is refused with ``low_disk`` below the threshold; while
+  recording, once a second, free space below it stops the recording and sends ``low_disk``.
+  The camera stays open, so Preview and status continue.
+* ``camera_lost``: a ``CameraLost`` or ``CAPTURE_CAMERA_LOST_TIMEOUTS`` consecutive timeouts.
+  The acquisition thread cannot close the camera itself (it would join itself), so it hands
+  the reason to the main loop, which closes the segment, sends ``camera_lost`` and closes the
+  camera. The process stays alive; commands needing the camera reply ``not_open``.
+* ``heartbeat_lost`` and ``shutdown`` (including end of stdin): close the segment and the
+  frame log, then close the camera and exit 0 (ADR 0008 decision 5).
+
+A killed process loses at most the frames written since the last header refresh from the
+SER's frame count, never the frames before it.
+
 PHOTOS AND DARK FRAMES (ticket 68)
 ----------------------------------
 ``photo`` and ``take_darks`` register a *still job*. The acquisition thread feeds each
@@ -53,7 +76,6 @@ import numpy as np
 
 from rbl.capture.camera import (
     CameraInfo,
-    CameraLost,
     CameraSettings,
     CaptureCamera,
     FakeCamera,
@@ -82,6 +104,7 @@ from rbl.config.capture_config import (
     CAPTURE_PREVIEW_MAX_FPS,
     CAPTURE_PREVIEW_MAX_WIDTH_PX,
     CAPTURE_PROTOCOL_VERSION,
+    CAPTURE_SEGMENT_MAX_BYTES,
     CAPTURE_STATUS_INTERVAL_S,
     CAPTURE_WRITE_QUEUE_FRAMES,
     PREVIEW_BRIGHTNESS_DEFAULT,
@@ -152,6 +175,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Seconds without a heartbeat before automatic clean shutdown",
     )
     parser.add_argument(
+        "--segment-max-bytes",
+        type=int,
+        default=CAPTURE_SEGMENT_MAX_BYTES,
+        help="Roll to a new SER segment before a file would exceed this many bytes "
+        "(exists so the roll can be tested without writing GiB)",
+    )
+    parser.add_argument(
         "--fake-fail-after",
         type=int,
         default=None,
@@ -172,6 +202,7 @@ class CaptureProcess:
         monotonic: Callable[[], float] = time.monotonic,
         heartbeat_timeout_s: float = CAPTURE_HEARTBEAT_TIMEOUT_S,
         disk_stop_bytes: int = CAPTURE_DISK_STOP_BYTES,
+        segment_max_bytes: int = CAPTURE_SEGMENT_MAX_BYTES,
     ) -> None:
         self._send = send
         self._camera = camera
@@ -180,6 +211,10 @@ class CaptureProcess:
         self._monotonic = monotonic
         self._heartbeat_timeout_s = heartbeat_timeout_s
         self._disk_stop_bytes = disk_stop_bytes
+        self._segment_max_bytes = segment_max_bytes
+        self._last_disk_check = self._monotonic()
+        # Camera-loss reasons handed from the acquisition thread to the main loop.
+        self._lost_queue: queue.Queue[str] = queue.Queue()
 
         self._is_open = False
         self._camera_info: CameraInfo | None = None
@@ -272,10 +307,7 @@ class CaptureProcess:
                     "Heartbeat timed out (%.1f s); shutting down cleanly",
                     self._heartbeat_timeout_s,
                 )
-                if self._is_open:
-                    self._close_camera()
-                self._running = False
-                self._exit_code = 0
+                self._end_for_exit("heartbeat_lost")
                 break
 
             # Process command queue
@@ -288,6 +320,9 @@ class CaptureProcess:
 
             if not self._running:
                 break
+
+            self._check_camera_lost()
+            self._check_disk()
 
             # Periodic status
             now = self._monotonic()
@@ -304,6 +339,64 @@ class CaptureProcess:
                     self._send_preview(frame)
 
         return self._exit_code
+
+    def _safe_send(self, msg: dict[str, Any]) -> None:
+        """Send on an ending path, where the pipe may already be gone."""
+        try:
+            self._send(msg)
+        except OSError:
+            _log.warning("could not send %s: pipe closed", msg.get("type"))
+
+    def _disk_probe(self, folder: str) -> str:
+        """The folder, or its nearest existing parent (it is created on first write)."""
+        path = Path(folder)
+        while not path.exists() and path != path.parent:
+            path = path.parent
+        return str(path)
+
+    def _end_recording(self, reason: str) -> None:
+        """Close the open recording with ``reason`` and announce it."""
+        if self._recording and self._run is not None:
+            self._finish_recording(reason)
+            self._safe_send({"type": "event", "event": "recording_stopped", "detail": reason})
+
+    def _end_for_exit(self, reason: str) -> None:
+        """Close any recording, then the camera, and leave the main loop with code 0."""
+        self._end_recording(reason)
+        self._fail_stills(f"process exit ({reason})")
+        if self._is_open:
+            self._close_camera()
+        self._running = False
+        self._exit_code = 0
+
+    def _check_disk(self) -> None:
+        if not self._recording:
+            return
+        now = self._monotonic()
+        if now - self._last_disk_check < 1.0:
+            return
+        self._last_disk_check = now
+        try:
+            free = self._disk_free(self._disk_probe(self._rec_folder))
+        except Exception:
+            return
+        if free < self._disk_stop_bytes:
+            self._end_recording_low_disk(free)
+
+    def _end_recording_low_disk(self, free: int) -> None:
+        run = self._run
+        if run is None:
+            return
+        self._finish_recording("low_disk")
+        self._safe_send({"type": "event", "event": "low_disk", "detail": str(int(free))})
+        self._safe_send({"type": "event", "event": "recording_stopped", "detail": "low_disk"})
+
+    def _check_camera_lost(self) -> None:
+        try:
+            reason = self._lost_queue.get_nowait()
+        except queue.Empty:
+            return
+        self._handle_camera_lost(reason)
 
     def _dispatch_command(self, cmd: dict[str, Any]) -> None:
         cmd_type = cmd.get("type")
@@ -540,6 +633,18 @@ class CaptureProcess:
 
         info = self._camera_info
         try:
+            free = self._disk_free(self._disk_probe(cmd["folder"]))
+        except Exception:
+            free = None
+        if free is not None and free < self._disk_stop_bytes:
+            self._send({
+                "type": "error",
+                "reply_to": cmd_id,
+                "code": "low_disk",
+                "message": f"only {int(free)} bytes free, below {self._disk_stop_bytes}",
+            })
+            return
+        try:
             run = RecordingRun(
                 Path(cmd["folder"]),
                 session_t0_utc=parse_iso_utc(cmd["session_t0_utc"]),
@@ -553,10 +658,11 @@ class CaptureProcess:
                 },
                 temperature_c=self._camera.temperature_c,
                 counters=lambda: (self._camera.dropped_frames(), self._frames_dropped_queue),
-                event=lambda name, detail: self._send(
+                event=lambda name, detail: self._safe_send(
                     {"type": "event", "event": name, "detail": detail}
                 ),
                 monotonic=self._monotonic,
+                max_segment_bytes=self._segment_max_bytes,
             )
         except Exception as exc:
             _log.error("Failed to start recording: %s", exc)
@@ -572,6 +678,7 @@ class CaptureProcess:
         self._rec_folder = str(Path(cmd["folder"]))
         self._frames_dropped_queue = 0
         self._recording = True
+        self._last_disk_check = self._monotonic()
         self._send({"type": "ok", "reply_to": cmd_id})
         self._send({"type": "event", "event": "recording_started", "detail": ""})
         self._writer_thread = threading.Thread(
@@ -719,7 +826,7 @@ class CaptureProcess:
             jobs, self._still_jobs = self._still_jobs, []
             self._photo_names.clear()
         for job in jobs:
-            self._send({
+            self._safe_send({
                 "type": "error", "reply_to": job.cmd_id, "code": "camera_error",
                 "message": message,
             })
@@ -764,11 +871,8 @@ class CaptureProcess:
                 })
 
     def _handle_shutdown(self, cmd_id: int) -> None:
-        self._send({"type": "ok", "reply_to": cmd_id})
-        if self._is_open:
-            self._close_camera()
-        self._running = False
-        self._exit_code = 0
+        self._safe_send({"type": "ok", "reply_to": cmd_id})
+        self._end_for_exit("shutdown")
 
     def _format_settings(self) -> dict[str, Any]:
         assert self._applied_settings is not None
@@ -826,9 +930,12 @@ class CaptureProcess:
             self._latest_frame = None
 
     def _handle_camera_lost(self, reason: str) -> None:
+        """Main-loop side of a camera loss; the acquisition thread only reports it."""
         _log.error("Camera lost: %s", reason)
+        self._end_recording("camera_lost")
+        self._fail_stills(f"camera lost: {reason}")
+        self._safe_send({"type": "event", "event": "camera_lost", "detail": reason})
         self._close_camera()
-        self._send({"type": "event", "event": "camera_lost", "detail": reason})
 
     def _acquisition_loop(self) -> None:
         consecutive_timeouts = 0
@@ -846,11 +953,8 @@ class CaptureProcess:
 
             try:
                 frame = self._camera.get_frame(timeout_ms)
-            except CameraLost as exc:
-                self._handle_camera_lost(str(exc))
-                break
-            except Exception as exc:
-                self._handle_camera_lost(str(exc))
+            except Exception as exc:  # CameraLost or any SDK failure
+                self._lost_queue.put(str(exc))
                 break
 
             if frame is not None:
@@ -867,7 +971,7 @@ class CaptureProcess:
             else:
                 consecutive_timeouts += 1
                 if consecutive_timeouts >= CAPTURE_CAMERA_LOST_TIMEOUTS:
-                    self._handle_camera_lost("consecutive timeouts")
+                    self._lost_queue.put("consecutive timeouts")
                     break
 
     def _offer_to_writer(self, frame: np.ndarray, arrived: datetime, index: int) -> None:
@@ -1014,6 +1118,7 @@ def main(argv: list[str]) -> int:
         camera_list=camera_list,
         heartbeat_timeout_s=args.heartbeat_timeout_s,
         disk_stop_bytes=args.disk_stop_bytes,
+        segment_max_bytes=args.segment_max_bytes,
     )
 
     def stdin_reader() -> None:

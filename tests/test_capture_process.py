@@ -570,3 +570,122 @@ def test_stills_need_an_open_camera(child, tmp_path) -> None:
     assert _photo(child, tmp_path / "p", 1)["code"] == "not_open"
     rep = child.request({"type": "take_darks", "folder": str(tmp_path / "d"), "frames": 2})
     assert rep["code"] == "not_open"
+
+
+# --- How a recording ends (ticket 67) ---
+
+
+def _record_dir_files(tmp_path: Path) -> tuple[Path, list[Path]]:
+    zwo = tmp_path / "zwo"
+    return zwo, sorted(zwo.glob("segment_*.ser"))
+
+
+def _records(zwo: Path) -> list[dict[str, Any]]:
+    return [
+        json.loads(p.read_text(encoding="utf-8")) for p in sorted(zwo.glob("segment_*.json"))
+    ]
+
+
+def test_size_limit_rolls_segments(tmp_path) -> None:
+    limit = 178 + 10 * W * H * 2
+    c = CaptureChild(cwd=tmp_path, extra_args=["--segment-max-bytes", str(limit)])
+    try:
+        c.wait_for("hello", timeout=10.0)
+        _open(c)
+        assert _start(c, tmp_path)["type"] == "ok"
+        time.sleep(2.0)
+        assert c.request({"type": "stop_recording"})["type"] == "ok"
+        zwo, sers = _record_dir_files(tmp_path)
+        assert len(sers) >= 3
+        total = 0
+        for s in sers:
+            assert s.stat().st_size <= limit
+            head, frames, _ = read_ser(s)
+            assert head["count"] == len(frames) > 0
+            total += len(frames)
+        recs = _records(zwo)
+        assert [r["closed_reason"] for r in recs[:-1]] == ["size_limit"] * (len(recs) - 1)
+        assert recs[-1]["closed_reason"] == "stop"
+        _, rows = read_log(zwo / "frames.csv")
+        assert [int(r[0]) for r in rows] == list(range(total))
+    finally:
+        c.kill()
+
+
+def test_low_disk_refuses_to_start(tmp_path) -> None:
+    c = CaptureChild(cwd=tmp_path, extra_args=["--disk-stop-bytes", str(10**18)])
+    try:
+        c.wait_for("hello", timeout=10.0)
+        _open(c)
+        rep = _start(c, tmp_path)
+        assert rep["type"] == "error" and rep["code"] == "low_disk"
+        assert not list((tmp_path / "zwo").glob("segment_*.ser"))
+    finally:
+        c.kill()
+
+
+def test_camera_lost_leaves_a_readable_recording(tmp_path) -> None:
+    c = CaptureChild(cwd=tmp_path, extra_args=["--fake-fail-after", "40"])
+    try:
+        c.wait_for("hello", timeout=10.0)
+        _open(c)
+        assert _start(c, tmp_path)["type"] == "ok"
+        c.wait_for("event", timeout=15.0, predicate=lambda m: m["event"] == "camera_lost")
+        c.wait_for("event", timeout=5.0, predicate=lambda m: m["event"] == "recording_stopped")
+        zwo = tmp_path / "zwo"
+        assert _records(zwo)[-1]["closed_reason"] == "camera_lost"
+        head, frames, _ = read_ser(zwo / "segment_000.ser")
+        _, rows = read_log(zwo / "frames.csv")
+        assert head["count"] == len(frames) == len(rows) > 0
+        assert c.request({"type": "set", "exposure_us": 12000})["code"] == "not_open"
+        assert c.proc.poll() is None
+    finally:
+        c.kill()
+
+
+@pytest.mark.parametrize("how", ["heartbeat", "shutdown"])
+def test_heartbeat_loss_closes_files_and_exits(tmp_path, how) -> None:
+    c = CaptureChild(cwd=tmp_path, extra_args=["--heartbeat-timeout-s", "2"])
+    try:
+        c.wait_for("hello", timeout=10.0)
+        _open(c)
+        assert _start(c, tmp_path)["type"] == "ok"
+        end = time.monotonic() + 2.0
+        while time.monotonic() < end:
+            c.send({"type": "heartbeat", "id": 0})
+            time.sleep(0.3)
+        if how == "shutdown":
+            assert c.request({"type": "shutdown"})["type"] == "ok"
+        assert c.wait_exit(timeout=10.0) == 0
+        zwo = tmp_path / "zwo"
+        want = "heartbeat_lost" if how == "heartbeat" else "shutdown"
+        assert _records(zwo)[-1]["closed_reason"] == want
+        head, frames, _ = read_ser(zwo / "segment_000.ser")
+        _, rows = read_log(zwo / "frames.csv")
+        assert head["count"] == len(frames) == len(rows) > 0
+    finally:
+        c.kill()
+
+
+def test_killed_process_keeps_counted_frames(tmp_path) -> None:
+    c = CaptureChild(cwd=tmp_path)
+    try:
+        c.wait_for("hello", timeout=10.0)
+        _open(c)
+        assert _start(c, tmp_path)["type"] == "ok"
+        end = time.monotonic() + 5.5
+        while time.monotonic() < end:
+            c.send({"type": "heartbeat", "id": 0})
+            time.sleep(0.5)
+        c.kill()
+        data = (tmp_path / "zwo" / "segment_000.ser").read_bytes()
+        count = struct.unpack_from("<i", data, 38)[0]
+        assert count > 0
+        size = W * H * 2
+        assert len(data) >= 178 + count * size
+        for i in range(count):
+            f = np.frombuffer(data, dtype="<u2", count=W * H, offset=178 + i * size)
+            f = f.reshape(H, W)
+            assert np.array_equal(f, _expected(_k_of(f)))
+    finally:
+        c.kill()
