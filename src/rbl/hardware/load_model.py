@@ -70,6 +70,16 @@ def _shape_k(shape: str) -> float:
         raise ValueError(f"Unknown drive shape {shape!r}; expected one of {sorted(_SHAPE_K)}")
 
 
+def predicted_peak_ma(shape: str, freq_hz: float, c_pf: float, v_pk_v: float) -> float:
+    """Predicted peak current (mA) of a capacitive load: k x f x C x V_pk.
+
+    `v_pk_v` is the peak plate voltage in volts. Raises ValueError for a drive
+    shape with no k factor, so a caller can skip the comparison rather than
+    judge a reference against a number it made up.
+    """
+    return _shape_k(shape) * freq_hz * (c_pf * 1e-12) * v_pk_v * 1e3
+
+
 def admittance_from_fundamentals(i_fund_ma: float, v_fund_kv: float,
                                   phase_deg: float, freq_hz: float) -> dict:
     """Complex load admittance from lock-in fundamentals.

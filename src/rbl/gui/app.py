@@ -340,6 +340,17 @@ class MainWindow(QMainWindow):
         self.spike_recorder = SpikeRecorder(self.beamline.funcgen_setpoints, parent=self)
         self.beamline.raw_window_ready.connect(self.spike_recorder.on_window)
         self.calibration_tab.set_spike_recorder(self.spike_recorder)
+        # A session runs the spike recorder for its whole length (spec Part E),
+        # into the session folder. Setpoint changes already reach the recorder:
+        # it connects FuncGenSetpoints.changed itself in its constructor.
+        self.session_recorder.session_started.connect(self._start_session_spikes)
+        self.session_recorder.session_stopped.connect(self._stop_session_spikes)
+        # Each spike goes to the session's event log and to the Overview tab's
+        # count and warnings (a list, never a dialog - ADR 0006).
+        self.spike_recorder.spike_recorded.connect(self._on_spike_recorded)
+        self.spike_recorder.spike_recorded.connect(self.overview_tab.on_spike)
+        self.spike_recorder.reference_captured.connect(
+            self.overview_tab.on_reference_captured)
         # Every spike it logs is plotted live on the Load Characterization tab.
         self.load_char_tab.set_spike_recorder(self.spike_recorder)
         # A calibration run switching the stream profile out from under
@@ -860,6 +871,22 @@ class MainWindow(QMainWindow):
 
     def _on_session_stopped(self, _folder: str) -> None:
         self.cup_log.close()
+
+    def _start_session_spikes(self, folder: str) -> None:
+        self.spike_recorder.start(folder)
+
+    def _stop_session_spikes(self, folder: str) -> None:
+        # A drift pass may have restarted the recorder into its own folder; its
+        # recording is not the session's to stop.
+        out = self.spike_recorder.output_dir()
+        if out is not None and Path(out) == Path(folder):
+            self.spike_recorder.stop()
+
+    def _on_spike_recorded(self, row: dict) -> None:
+        peak = "at the rail" if row.get("at_rail") else f"{float(row['peak_ma']):.2f} mA"
+        self.session_recorder._write_event(
+            "spike", f"{row['plate_position']} {peak} for "
+                     f"{float(row['duration_s']) * 1e3:.2f} ms")
 
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
