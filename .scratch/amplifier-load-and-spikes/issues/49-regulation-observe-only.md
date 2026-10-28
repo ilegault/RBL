@@ -1,6 +1,6 @@
 # 49: The regulation detector watches sessions in observe-only mode
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
