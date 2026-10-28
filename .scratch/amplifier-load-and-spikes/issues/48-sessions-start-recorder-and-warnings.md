@@ -1,6 +1,6 @@
 # 48: Sessions run the spike recorder, and the Overview tab warns without blocking
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -53,22 +53,22 @@ Tests may fake: the stream payload and setpoints. The session folder is real (te
 
 ## Acceptance criteria
 
-- [ ] **Session start and stop.** `test_starting_a_session_runs_the_spike_recorder` (new,
+- [x] **Session start and stop.** `test_starting_a_session_runs_the_spike_recorder` (new,
   `tests/test_amplifier_warnings.py`): starting a session in a test `MainWindow` makes
   `SpikeRecorder.is_running()` True and creates `spikes.csv` in that session's folder.
   Stopping it makes `is_running()` False.
-- [ ] **Rail warning.** `test_a_spike_at_the_rail_warns_with_its_duration` (new): a
+- [x] **Rail warning.** `test_a_spike_at_the_rail_warns_with_its_duration` (new): a
   synthetic spike on X+ whose raw current monitor sits at 10.0 V for 3 ms adds one warning
   containing `at the rail`, `3.0 ms` and `X+`, and the X+ spike count reads `1`.
-- [ ] **No warning below the rail.** `test_a_spike_below_the_rail_does_not_warn` (new): a
+- [x] **No warning below the rail.** `test_a_spike_below_the_rail_does_not_warn` (new): a
   6 mA spike on a 2 mA reference adds a row and bumps the count, but adds no warning.
-- [ ] **No gap warning.** `test_spikes_close_together_do_not_warn` (new): two non-rail
+- [x] **No gap warning.** `test_spikes_close_together_do_not_warn` (new): two non-rail
   spikes 50 ms apart add no warning.
-- [ ] **Prediction warning.** `test_a_reference_off_the_prediction_warns` (new):
+- [x] **Prediction warning.** `test_a_reference_off_the_prediction_warns` (new):
   - setup: a reference 20 % above the prediction from a measured on-plates result written
     through `write_result`;
   - result: a warning containing `differs`. An unmeasured plate adds none.
-- [ ] **No dialogs, and dismissal.**
+- [x] **No dialogs, and dismissal.**
   `test_warnings_never_open_a_dialog_and_stay_until_dismissed` (new):
   - setup: `QMessageBox.exec`, `QMessageBox.warning` and `QDialog.exec` replaced by
     functions that fail the test;
