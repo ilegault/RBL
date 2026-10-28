@@ -224,6 +224,7 @@ class StampedFrame:
     generation: int
     settings: dict[str, Any]
     cup_position: str
+    photo: str = ""  # file name when this frame was also kept as a photo (spec D7)
 
 
 class RecordingRun:
@@ -288,6 +289,7 @@ class RecordingRun:
             segment=self.current_segment,
             segment_frame=self._segment_frames,
             cup_position=item.cup_position,
+            photo=item.photo,
         )
         self.next_frame_index += 1
         self.frames_written += 1
