@@ -86,7 +86,7 @@ class CaptureClient(QObject):
     closed = Signal()
     status = Signal(dict)
     preview = Signal(QImage, dict)
-    event = Signal(str, str)
+    event = Signal(str, str)  # type: ignore[assignment]  # name fixed by spec D9; shadows QObject.event
     error = Signal(str)
     exited = Signal(int)
     reply = Signal(int, dict)

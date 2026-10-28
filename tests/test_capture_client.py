@@ -100,7 +100,10 @@ def test_cup_position_is_sent_only_on_change(client, tmp_path):
     assert [r is not None for r in results] == [True, False, False, True, True]
     log = next(tmp_path.rglob("frames.csv"))
     with open(log, newline="") as fh:
-        col = [row["cup_position"] for row in csv.DictReader(fh)]
+        # The frame log opens with "#" comment lines (spec: Frame log); DictReader
+        # would otherwise take the first comment as the header row.
+        body = (line for line in fh if not line.startswith("#"))
+        col = [row["cup_position"] for row in csv.DictReader(body)]
     collapsed = [v for i, v in enumerate(col) if i == 0 or v != col[i - 1]]
     assert collapsed[-3:] == ["IN", "OUT", "UNKNOWN"]
     it = iter(["UNKNOWN", "IN", "OUT", "UNKNOWN"])

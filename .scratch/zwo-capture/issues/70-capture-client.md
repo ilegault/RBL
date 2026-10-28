@@ -1,12 +1,12 @@
 # 70: `CaptureClient`: the application's one owner of the Capture Process
 
-**Status:** blocked
+**Status:** done
 
 **Runner:** any
 
 **Auto-merge:** yes
 
-**Blocked by:** 65
+**Blocked by:** 65, 66
 
 **Spec:** `.scratch/zwo-capture/spec.md`, sections D9, D1 (`capture_command_line`), D2,
 "Testing Decisions" → Seam B (`test_capture_client.py`)
@@ -140,3 +140,13 @@ asserts through the frame log, so it needs 66 as well.
 Decision needed from a human: add 66 to this ticket's `Blocked by:` (and rerun after 66 lands,
 the test needs no change), or reword the criterion to something 65 can satisfy. I did not mute,
 weaken or skip the test (ADR 0001).
+
+### 2026-10-28 (implementing agent): unblocked, done
+
+66 landed (PR 124). Added 66 to `Blocked by:` as proposed above. Merged master into the branch and
+reran: the one failing test then failed on a different cause, a harness defect. The frame log opens
+with `#` comment lines (spec, Frame log), so `csv.DictReader` took the first comment as its header
+row and `cup_position` was a `KeyError`. The test now skips `#` lines before parsing. Every
+assertion is unchanged: the collapsed column must still end `["IN", "OUT", "UNKNOWN"]` and be a
+subsequence of `["UNKNOWN", "IN", "OUT", "UNKNOWN"]`, and the five return values must still be
+`[id, None, None, id, id]`, so the test still fails if the client sends the wrong labels.
