@@ -1,6 +1,6 @@
 # 71: `SessionRecorder` drives the ZWO camera: kind, settings, video, photos, darks, events
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
