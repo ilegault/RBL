@@ -796,10 +796,10 @@ class CaptureProcess:
                     with open(job.folder / name, "xb") as fh:
                         fh.write(pack_fits(frame, cards))
                     paths.append(str((job.folder / name).resolve()))
-                self._send({"type": "ok", "reply_to": job.cmd_id, "files": paths})
                 self._send({
                     "type": "event", "event": "photo", "detail": ", ".join(job.names),
                 })
+                self._send({"type": "ok", "reply_to": job.cmd_id, "files": paths})
             else:
                 assert job.acc is not None and job.settings is not None
                 assert job.first_utc is not None
@@ -811,8 +811,8 @@ class CaptureProcess:
                     info.serial, s.exposure_us, s.gain, s.bit_depth, s.roi, job.first_utc
                 )
                 path = write_new_file(job.folder / info.serial / name, pack_fits(mean, cards))
-                self._send({"type": "ok", "reply_to": job.cmd_id, "file": str(path.resolve())})
                 self._send({"type": "event", "event": "darks_saved", "detail": path.name})
+                self._send({"type": "ok", "reply_to": job.cmd_id, "file": str(path.resolve())})
         except Exception as exc:
             _log.error("Failed to write %s: %s", job.kind, exc)
             self._send({
