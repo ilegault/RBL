@@ -1,20 +1,22 @@
 """
 camera.py
-Camera protocol and fake camera implementation for the Capture Process.
+Camera protocol, ZWO camera implementation over zwoasi, and fake camera for testing.
 
 WHY THIS EXISTS
 ---------------
-ADR 0008 requires that the ZWO camera be isolated behind a clear contract so the
-Capture Process can drive both real hardware (zwoasi) and simulated hardware
-(FakeCamera). FakeCamera produces bit-for-bit deterministic frames so all
-recording formats, preview transformations, frame logging, and failure modes can
-be tested without physical instruments attached to the host.
+ADR 0008 requires that the ZWO camera be isolated behind a clear CaptureCamera
+contract so the Capture Process can drive both real hardware (zwoasi over ASICamera2.dll)
+and simulated hardware (FakeCamera). FakeCamera produces bit-for-bit deterministic
+frames so all recording formats, preview transformations, frame logging, and failure
+modes can be tested without physical instruments attached to the host.
+ZwoCamera wraps zwoasi 0.2.0, delaying library import until open() so test suites and
+environments without the native DLL can freely import and inspect the module.
 """
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass, replace
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
 
@@ -182,7 +184,6 @@ class FakeCamera:
         if self._fail_after is not None and self._k >= self._fail_after:
             raise CameraLost("fake camera lost")
 
-        # Sleep max(exposure_us, 1000) microseconds
         time.sleep(max(self._settings.exposure_us, 1000) / 1_000_000.0)
 
         k = self._k
@@ -212,3 +213,216 @@ class FakeCamera:
 
     def close(self) -> None:
         self._streaming = False
+
+
+class ZwoCamera:
+    """CaptureCamera implementation driving real ZWO hardware via zwoasi.
+
+    WHY THIS EXISTS
+    ---------------
+    ADR 0008 requires that the Capture Process isolate all hardware interaction
+    behind CaptureCamera. ZwoCamera wraps the third-party zwoasi 0.2.0 wrapper
+    around ASICamera2.dll.
+
+    CONFIRMED ZWOASI 0.2.0 SHAPE
+    -----------------------------
+    Confirmed from zwoasi 0.2.0 installed package (__init__.py):
+    - Module functions: init(library_file), list_cameras(), get_num_cameras().
+    - Camera class: Camera(id_) where id_ is integer index or model string.
+    - Camera methods:
+        * get_camera_property() -> dict (Name, CameraID, MaxHeight, MaxWidth, BayerPattern, ...)
+        * get_controls() -> dict[str, dict] with MinValue, MaxValue, DefaultValue, ControlType
+        * get_control_value(control_type) -> [value, auto_bool]
+        * set_control_value(control_type, value, auto=False)
+        * set_roi(start_x, start_y, width, height, bins, image_type)
+        * set_image_type(image_type)
+        * start_video_capture()
+        * capture_video_frame(buffer_=None, filename=None, timeout=None) -> np.ndarray
+        * get_dropped_frames() -> int
+        * stop_video_capture()
+        * get_id() -> str (camera identifier)
+        * close()
+    - Constants:
+        * ASI_BAYER_RG=0, ASI_BAYER_BG=1, ASI_BAYER_GR=2, ASI_BAYER_RB=3
+        * ASI_IMG_RAW8=0, ASI_IMG_RGB24=1, ASI_IMG_RAW16=2, ASI_IMG_Y8=3
+        * ASI_GAIN=0, ASI_EXPOSURE=1, ASI_OFFSET=5, ASI_BANDWIDTHOVERLOAD=6,
+          ASI_TEMPERATURE=8, ASI_HIGH_SPEED_MODE=14
+    - Timeout behavior:
+        When capture_video_frame times out, the underlying C call returns ASI_ERROR_TIMEOUT (11).
+        zwoasi maps error code 11 to zwoasi.ZWO_IOError('Timeout', 11) where exc.error_code == 11.
+        ZwoCamera catches this exception, verifies error_code == 11 (or str(exc) == "Timeout"),
+        and returns None. Any other library exception (ZWO_Error / ZWO_IOError with
+        error_code != 11) raises CameraLost(str(exc)).
+    """
+
+    def __init__(self, sdk_dll: str) -> None:
+        self._sdk_dll = sdk_dll
+        self._cam: Any | None = None
+        self._info: CameraInfo | None = None
+        self._settings: CameraSettings | None = None
+
+    def open(self, index: int) -> None:
+        """Open the camera by index with explicit SDK DLL path."""
+        import zwoasi
+
+        zwoasi.init(self._sdk_dll)
+        self._cam = zwoasi.Camera(index)
+
+        prop = self._cam.get_camera_property()
+        model = str(prop.get("Name", "ZWO ASI"))
+
+        # Serial from library: get_id() or CameraID fallback
+        serial = ""
+        try:
+            raw_id = self._cam.get_id()
+            if raw_id is not None:
+                serial = str(raw_id).strip()
+        except Exception:
+            pass
+        if not serial:
+            serial = str(prop.get("CameraID", ""))
+
+        # SDK version: zwoasi exposes __version__; ASICamera2 C SDK version is not exposed by 0.2.0
+        sdk_version = getattr(zwoasi, "sdk_version", getattr(zwoasi, "__version__", "0.2.0"))
+
+        sensor_width = int(prop.get("MaxWidth", 0))
+        sensor_height = int(prop.get("MaxHeight", 0))
+
+        bayer_int = int(prop.get("BayerPattern", 0))
+        bayer_map = {0: "RG", 1: "BG", 2: "GR", 3: "GB"}
+        bayer_pattern = bayer_map.get(bayer_int, "RG")
+
+        self._info = CameraInfo(
+            model=model,
+            serial=serial,
+            sdk_version=str(sdk_version),
+            sensor_width=sensor_width,
+            sensor_height=sensor_height,
+            bayer_pattern=bayer_pattern,
+        )
+
+    def info(self) -> CameraInfo:
+        if self._info is None:
+            raise RuntimeError("Camera is not open")
+        return self._info
+
+    def controls(self) -> dict[str, dict[str, int]]:
+        if self._cam is None:
+            raise RuntimeError("Camera is not open")
+        raw = self._cam.get_controls()
+        res: dict[str, dict[str, int]] = {}
+        mapping = {
+            "Exposure": ["Exposure"],
+            "Gain": ["Gain"],
+            "Offset": ["Offset", "Brightness"],
+            "BandWidth": ["BandWidth", "BandWidthOverload"],
+        }
+        for target, candidates in mapping.items():
+            for c in candidates:
+                if c in raw:
+                    ctrl = raw[c]
+                    res[target] = {
+                        "min": int(ctrl["MinValue"]),
+                        "max": int(ctrl["MaxValue"]),
+                        "default": int(ctrl["DefaultValue"]),
+                    }
+                    break
+        return res
+
+    def apply(self, settings: CameraSettings) -> CameraSettings:
+        if self._cam is None or self._info is None:
+            raise RuntimeError("Camera is not open")
+
+        import zwoasi
+
+        snapped = snap_roi(
+            settings.roi[0],
+            settings.roi[1],
+            settings.roi[2],
+            settings.roi[3],
+            self._info.sensor_width,
+            self._info.sensor_height,
+        )
+
+        if settings.bit_depth == 16:
+            img_type = zwoasi.ASI_IMG_RAW16
+        elif settings.bit_depth == 8:
+            img_type = zwoasi.ASI_IMG_RAW8
+        else:
+            raise ValueError(f"Unsupported bit depth: {settings.bit_depth}")
+
+        # Set Exposure, Gain with auto=False, HighSpeedMode=0
+        self._cam.set_control_value(zwoasi.ASI_EXPOSURE, settings.exposure_us, auto=False)
+        self._cam.set_control_value(zwoasi.ASI_GAIN, settings.gain, auto=False)
+        self._cam.set_control_value(zwoasi.ASI_HIGH_SPEED_MODE, 0, auto=False)
+
+        # Set ROI
+        self._cam.set_roi(
+            start_x=snapped[0],
+            start_y=snapped[1],
+            width=snapped[2],
+            height=snapped[3],
+            bins=1,
+            image_type=img_type,
+        )
+
+        # Read back offset, usb_bandwidth, and high_speed_mode
+        offset_val = int(self._cam.get_control_value(zwoasi.ASI_OFFSET)[0])
+        bandwidth_val = int(self._cam.get_control_value(zwoasi.ASI_BANDWIDTHOVERLOAD)[0])
+        hsm_val = int(self._cam.get_control_value(zwoasi.ASI_HIGH_SPEED_MODE)[0])
+
+        applied = CameraSettings(
+            exposure_us=settings.exposure_us,
+            gain=settings.gain,
+            bit_depth=settings.bit_depth,
+            roi=snapped,
+            offset=offset_val,
+            usb_bandwidth=bandwidth_val,
+            high_speed_mode=hsm_val,
+        )
+        self._settings = applied
+        return applied
+
+    def start_stream(self) -> None:
+        if self._cam is None:
+            raise RuntimeError("Camera is not open")
+        self._cam.start_video_capture()
+
+    def get_frame(self, timeout_ms: int) -> np.ndarray | None:
+        if self._cam is None:
+            raise RuntimeError("Camera is not open")
+        try:
+            return self._cam.capture_video_frame(timeout=timeout_ms)
+        except Exception as exc:
+            error_code = getattr(exc, "error_code", None)
+            if error_code == 11 or str(exc) == "Timeout":
+                return None
+            raise CameraLost(str(exc)) from exc
+
+    def dropped_frames(self) -> int:
+        if self._cam is None:
+            raise RuntimeError("Camera is not open")
+        return int(self._cam.get_dropped_frames())
+
+    def temperature_c(self) -> float:
+        if self._cam is None:
+            raise RuntimeError("Camera is not open")
+        import zwoasi
+
+        temp_raw = self._cam.get_control_value(zwoasi.ASI_TEMPERATURE)[0]
+        return float(temp_raw) / 10.0
+
+    def stop_stream(self) -> None:
+        if self._cam is not None:
+            try:
+                self._cam.stop_video_capture()
+            except Exception:
+                pass
+
+    def close(self) -> None:
+        if self._cam is not None:
+            try:
+                self._cam.close()
+            except Exception:
+                pass
+            self._cam = None
