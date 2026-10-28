@@ -1,6 +1,6 @@
 # 68: Photos and Dark Frames in the Capture Process
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -52,25 +52,25 @@
 `tests/test_capture_process.py` (Seam A) unless noted; ROI 64 × 32, exposure 10000 µs. FITS
 files are parsed with a test-side reader (`>i2` + `BZERO`, `>f4`), not `fits_format`.
 
-- [ ] `test_photo_burst_during_recording`: while recording with keep 1 in 3, `photo` burst 3 →
+- [x] `test_photo_burst_during_recording`: while recording with keep 1 in 3, `photo` burst 3 →
   three files `zwo_photo_000_0..2.fits`; their pixels are FakeCamera frames for three
   **consecutive** *k* (recovered from pixel (0, 0); consecutive proves keep 1 in N was
   ignored); `EXPTIME == 0.01`, `XOFFSET == 0`, `BAYERPAT == 'RG'`; after `stop_recording`
   there is still exactly one segment; any of those frames that also appears in `frames.csv`
   has its file name in the `photo` column, and the others have it empty.
-- [ ] `test_photo_numbering_continues`: a second `photo` into the same folder produces
+- [x] `test_photo_numbering_continues`: a second `photo` into the same folder produces
   `zwo_photo_001_0.fits`; a pre-existing `zwo_photo_007_0.fits` makes the next one
   `zwo_photo_008_0.fits`; no existing file is modified (mtime and bytes unchanged).
-- [ ] `test_take_darks`: while recording → `error` `recording`; not recording, `take_darks`
+- [x] `test_take_darks`: while recording → `error` `recording`; not recording, `take_darks`
   frames 4 → one `float32` FITS at `<folder>/FAKE0001/dark_exp10000us_gain100_raw16_x0y0w64h32_*.fits`
   whose data equals, within 1e-3, the float64 mean of the FakeCamera frames for four
   consecutive *k* starting at some `k0` (the test searches `k0` in 0..4095 and requires a match),
   and `NCOMBINE == 4`; an `event` `darks_saved` arrived.
-- [ ] `test_next_photo_number_and_dark_names` (in `tests/test_capture_stills.py`, pure, new): `next_photo_number` on an empty folder → 0,
+- [x] `test_next_photo_number_and_dark_names` (in `tests/test_capture_stills.py`, pure, new): `next_photo_number` on an empty folder → 0,
   with `zwo_photo_002_0.fits` and `zwo_photo_010_3.fits` → 11, ignoring `photo_005.png`;
   `dark_file_name` gives the exact expected string for a fixed `datetime`; writing the same
   dark name twice produces `..._2.fits` and leaves the first file unchanged.
-- [ ] `test_stills_need_an_open_camera`: `photo` and `take_darks` before `open` reply `not_open`.
+- [x] `test_stills_need_an_open_camera`: `photo` and `take_darks` before `open` reply `not_open`.
 
 ## Gate
 
@@ -90,3 +90,5 @@ Soft type-gate count must not rise above `tools/mypy_ratchet.txt`.
 - Any `photo` from the USB camera path.
 
 ## Comments
+
+2026-10-28: Added `src/rbl/capture/stills.py` (cards, numbering, dark names, never-overwrite writer); `process.py` now handles `photo` and `take_darks` via still jobs fed by the acquisition thread and written on a finisher thread (no disk work on acquisition); `StampedFrame.photo` carries file names to the frame log. Tests: Seam A in `tests/test_capture_process.py` (burst, numbering, darks, not_open) and pure `tests/test_capture_stills.py`. Gate: ruff clean, type gate 139/139, full pytest 2660 passed. No bench verification needed. Note: the branch had a stray claim commit and the remote refuses force-pushes, so master was merged in rather than rebased.

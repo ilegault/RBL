@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import struct
 import time
 from pathlib import Path
@@ -443,3 +444,129 @@ def test_beamline_cup_position_lands_in_the_frame_log(child, tmp_path) -> None:
     assert set(cups[:first_in]) == {"UNKNOWN"}
     assert set(cups[first_in:first_out]) == {"IN"}
     assert set(cups[first_out:]) == {"OUT"}
+
+
+def read_fits(path: Path) -> tuple[dict[str, Any], np.ndarray]:
+    """Minimal FITS primary-HDU reader (uint16 via BZERO, or float32)."""
+    raw = path.read_bytes()
+    assert len(raw) % 2880 == 0
+    cards: dict[str, Any] = {}
+    pos = 0
+    while True:
+        card = raw[pos : pos + 80].decode("ascii")
+        pos += 80
+        key = card[:8].strip()
+        if key == "END":
+            break
+        if card[8:10] == "= ":
+            val = card[10:].split(" / ")[0].strip()
+            if val.startswith("'"):
+                cards[key] = val.strip("'").rstrip()
+            elif val in ("T", "F"):
+                cards[key] = val == "T"
+            else:
+                cards[key] = float(val) if any(c in val for c in ".eE") else int(val)
+    data_at = ((pos + 2879) // 2880) * 2880
+    w, h = cards["NAXIS1"], cards["NAXIS2"]
+    if cards["BITPIX"] == 16:
+        arr = np.frombuffer(raw, dtype=">i2", count=w * h, offset=data_at)
+        arr = (arr.astype(np.int32) + int(cards["BZERO"])).astype(np.uint16)
+    else:
+        assert cards["BITPIX"] == -32
+        arr = np.frombuffer(raw, dtype=">f4", count=w * h, offset=data_at).astype(np.float32)
+    return cards, arr.reshape(h, w)
+
+
+def _photo(c: CaptureChild, folder: Path, burst: int) -> dict[str, Any]:
+    return c.request({"type": "photo", "folder": str(folder), "burst": burst})
+
+
+def test_photo_burst_during_recording(child, tmp_path) -> None:
+    _open(child)
+    assert child.request({"type": "set", "keep_one_in_n": 3})["type"] == "ok"
+    _start(child, tmp_path)
+    time.sleep(0.5)
+    photos = tmp_path / "photos"
+    rep = _photo(child, photos, 3)
+    assert rep["type"] == "ok"
+    names = [f"zwo_photo_000_{k}.fits" for k in range(3)]
+    assert [Path(f).name for f in rep["files"]] == names
+    assert all(Path(f).is_absolute() for f in rep["files"])
+    time.sleep(0.5)
+    child.request({"type": "stop_recording"})
+
+    ks = []
+    for n in names:
+        cards, data = read_fits(photos / n)
+        assert np.array_equal(data, _expected(_k_of(data)))
+        ks.append(_k_of(data))
+        assert cards["EXPTIME"] == 0.01
+        assert cards["XOFFSET"] == 0
+        assert cards["BAYERPAT"] == "RG"
+    assert ks[1] == ks[0] + 1 and ks[2] == ks[0] + 2  # keep 1 in N was ignored
+
+    zwo = tmp_path / "zwo"
+    assert [p.name for p in zwo.glob("segment_*.ser")] == ["segment_000.ser"]
+    _, frames, _ = read_ser(zwo / "segment_000.ser")
+    _, rows = read_log(zwo / "frames.csv")
+    by_k = {_k_of(f): r[7] for f, r in zip(frames, rows)}
+    named = {k: n for k, n in by_k.items() if n}
+    assert named  # a burst of three consecutive k always contains a multiple of 3
+    for k, n in by_k.items():
+        if k in ks:
+            assert n == names[ks.index(k)]
+        else:
+            assert n == ""
+    assert any(e["event"] == "photo" and e["detail"] == ", ".join(names) for e in _events(child))
+
+
+def test_photo_numbering_continues(child, tmp_path) -> None:
+    _open(child)
+    photos = tmp_path / "photos"
+    first = _photo(child, photos, 1)
+    assert Path(first["files"][0]).name == "zwo_photo_000_0.fits"
+    second = _photo(child, photos, 1)
+    assert Path(second["files"][0]).name == "zwo_photo_001_0.fits"
+    keep = photos / "zwo_photo_000_0.fits"
+    before = (keep.read_bytes(), os.stat(keep).st_mtime_ns)
+
+    (photos / "zwo_photo_007_0.fits").write_bytes(b"x")
+    third = _photo(child, photos, 2)
+    assert [Path(f).name for f in third["files"]] == [
+        "zwo_photo_008_0.fits",
+        "zwo_photo_008_1.fits",
+    ]
+    assert (keep.read_bytes(), os.stat(keep).st_mtime_ns) == before
+    assert (photos / "zwo_photo_007_0.fits").read_bytes() == b"x"
+
+
+def test_take_darks(child, tmp_path) -> None:
+    _open(child)
+    _start(child, tmp_path)
+    assert child.request({"type": "take_darks", "folder": str(tmp_path / "d"), "frames": 4})[
+        "code"
+    ] == "recording"
+    child.request({"type": "stop_recording"})
+
+    rep = child.request({"type": "take_darks", "folder": str(tmp_path / "d"), "frames": 4})
+    assert rep["type"] == "ok"
+    path = Path(rep["file"])
+    assert path.is_absolute()
+    assert path.parent == tmp_path / "d" / "FAKE0001"
+    assert path.name.startswith("dark_exp10000us_gain100_raw16_x0y0w64h32_")
+    cards, data = read_fits(path)
+    assert data.dtype == np.float32 and cards["NCOMBINE"] == 4
+    matched = False
+    for k0 in range(4096):
+        mean = np.mean([_expected(k0 + i).astype(np.float64) for i in range(4)], axis=0)
+        if np.allclose(data, mean, atol=1e-3):
+            matched = True
+            break
+    assert matched
+    assert any(e["event"] == "darks_saved" and e["detail"] == path.name for e in _events(child))
+
+
+def test_stills_need_an_open_camera(child, tmp_path) -> None:
+    assert _photo(child, tmp_path / "p", 1)["code"] == "not_open"
+    rep = child.request({"type": "take_darks", "folder": str(tmp_path / "d"), "frames": 2})
+    assert rep["code"] == "not_open"

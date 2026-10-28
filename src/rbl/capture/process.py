@@ -19,6 +19,17 @@ because a stalled disk must never stall the camera. A writer thread owns the dis
 (``rbl.capture.recording``). Any ``set`` bumps the generation, keep 1 in N included,
 and the writer opens a new segment on a new generation, so no segment mixes
 settings. A keep-1-in-N-only change does not restart the camera stream.
+
+PHOTOS AND DARK FRAMES (ticket 68)
+----------------------------------
+``photo`` and ``take_darks`` register a *still job*. The acquisition thread feeds each
+new frame to the open jobs (regardless of keep 1 in N, without pausing the stream or
+touching the recording) and only does cheap work: keep a reference, or add into a
+float64 sum. Packing and writing the FITS files happens on a short-lived finisher
+thread, which sends the reply, so the acquisition thread never waits on the disk.
+A photo frame that is also written to the SER carries its file name to the frame log
+through ``StampedFrame.photo``. A camera loss, close or camera-affecting ``set`` while
+a job is open fails it with ``camera_error``, because its frames would not agree.
 """
 from __future__ import annotations
 
@@ -32,7 +43,7 @@ import shutil
 import sys
 import threading
 import time
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -54,6 +65,12 @@ from rbl.capture.recording import (
     StampedFrame,
     parse_iso_utc,
     utc_from_anchor,
+)
+from rbl.capture.stills import (
+    dark_file_name,
+    next_photo_number,
+    photo_cards,
+    write_new_file,
 )
 from rbl.config.capture_config import (
     CAPTURE_CAMERA_LOST_TIMEOUTS,
@@ -78,6 +95,7 @@ from rbl.hardware.capture_protocol import (
     estimate_bytes_per_hour,
     snap_roi,
 )
+from rbl.hardware.fits_format import pack_fits
 from rbl.hardware.preview_stretch import (
     debayer_for_display,
     downscale_for_display,
@@ -85,6 +103,23 @@ from rbl.hardware.preview_stretch import (
 )
 
 _log = logging.getLogger("rbl.capture")
+
+
+@dataclass
+class _StillJob:
+    """An open ``photo`` or ``take_darks`` request, fed by the acquisition thread."""
+
+    kind: str  # "photo" | "dark"
+    cmd_id: int
+    folder: Path
+    count: int
+    number: int = 0  # photo: NNN of this burst
+    names: list[str] = field(default_factory=list)  # photo: planned file names
+    frames: list[tuple[np.ndarray, datetime, CameraSettings]] = field(default_factory=list)
+    acc: np.ndarray | None = None  # dark: float64 running sum
+    n: int = 0
+    first_utc: datetime | None = None
+    settings: CameraSettings | None = None
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -194,6 +229,13 @@ class CaptureProcess:
         self._rec_folder = ""
         self._frames_dropped_queue = 0
 
+        # Still jobs (photo / dark). _stills_lock guards the job list, the frame-index ->
+        # photo-file-name map and the per-folder reserved photo numbers.
+        self._stills_lock = threading.Lock()
+        self._still_jobs: list[_StillJob] = []
+        self._photo_names: dict[int, str] = {}
+        self._photo_reserved: dict[str, int] = {}
+
     def queue_command(self, cmd: dict[str, Any]) -> None:
         """Enqueue a decoded command dictionary from the input reader."""
         self._cmd_queue.put(cmd)
@@ -284,13 +326,10 @@ class CaptureProcess:
             self._handle_start_recording(cmd_id, cmd)
         elif cmd_type == "stop_recording":
             self._handle_stop_recording(cmd_id)
-        elif cmd_type in ("photo", "take_darks"):
-            self._send({
-                "type": "error",
-                "reply_to": cmd_id,
-                "code": "bad_request",
-                "message": "not implemented",
-            })
+        elif cmd_type == "photo":
+            self._handle_photo(cmd_id, cmd)
+        elif cmd_type == "take_darks":
+            self._handle_take_darks(cmd_id, cmd)
         elif cmd_type == "beamline":
             self._cup_position = cmd.get("cup_position", self._cup_position)
             self._alumina_position = cmd.get("alumina_position", self._alumina_position)
@@ -445,6 +484,7 @@ class CaptureProcess:
         if changes:
             camera_changed = any(name != "keep_one_in_n" for name, _ in changes)
             if camera_changed:
+                self._fail_stills("camera settings changed during the capture")
                 self._stop_stream_for_settings()
                 target_settings = replace(
                     self._applied_settings,
@@ -560,6 +600,130 @@ class CaptureProcess:
         })
         self._send({"type": "event", "event": "recording_stopped", "detail": "stop"})
 
+    def _refuse_not_open(self, cmd_id: int) -> bool:
+        if self._is_open and self._camera_info is not None and self._applied_settings is not None:
+            return False
+        self._send({
+            "type": "error",
+            "reply_to": cmd_id,
+            "code": "not_open",
+            "message": "camera not open",
+        })
+        return True
+
+    def _handle_photo(self, cmd_id: int, cmd: dict[str, Any]) -> None:
+        if self._refuse_not_open(cmd_id):
+            return
+        folder = Path(cmd["folder"])
+        burst = int(cmd["burst"])
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            with self._stills_lock:
+                number = max(next_photo_number(folder), self._photo_reserved.get(str(folder), 0))
+                self._photo_reserved[str(folder)] = number + 1
+                job = _StillJob(
+                    "photo", cmd_id, folder, burst, number=number,
+                    names=[f"zwo_photo_{number:03d}_{k}.fits" for k in range(burst)],
+                )
+                self._still_jobs.append(job)
+        except Exception as exc:
+            _log.error("Failed to start photo: %s", exc)
+            self._send({
+                "type": "error", "reply_to": cmd_id, "code": "camera_error", "message": str(exc),
+            })
+
+    def _handle_take_darks(self, cmd_id: int, cmd: dict[str, Any]) -> None:
+        if self._refuse_not_open(cmd_id):
+            return
+        if self._recording:
+            self._send({
+                "type": "error",
+                "reply_to": cmd_id,
+                "code": "recording",
+                "message": "stop the recording before taking Dark Frames",
+            })
+            return
+        job = _StillJob("dark", cmd_id, Path(cmd["folder"]), int(cmd["frames"]))
+        with self._stills_lock:
+            self._still_jobs.append(job)
+
+    def _feed_stills(self, frame: np.ndarray, arrived: datetime, index: int) -> None:
+        """Acquisition thread: hand one frame to every open job; never touches the disk."""
+        if not self._still_jobs:
+            return
+        done: list[_StillJob] = []
+        settings = self._applied_settings
+        with self._stills_lock:
+            for job in list(self._still_jobs):
+                if settings is None:
+                    break
+                if job.kind == "photo":
+                    self._photo_names[index] = job.names[len(job.frames)]
+                    job.frames.append((frame, arrived, settings))
+                    finished = len(job.frames) == job.count
+                else:
+                    if job.acc is None:
+                        job.acc = np.zeros(frame.shape, dtype=np.float64)
+                        job.first_utc = arrived
+                        job.settings = settings
+                    job.acc += frame
+                    job.n += 1
+                    finished = job.n == job.count
+                if finished:
+                    self._still_jobs.remove(job)
+                    done.append(job)
+        for job in done:
+            threading.Thread(
+                target=self._finish_still, args=(job,), daemon=True, name="CaptureStillWriter"
+            ).start()
+
+    def _finish_still(self, job: _StillJob) -> None:
+        """Finisher thread: pack and write the job's FITS file(s), then reply and notify."""
+        info = self._camera_info
+        assert info is not None
+        try:
+            if job.kind == "photo":
+                paths = []
+                for name, (frame, arrived, settings) in zip(job.names, job.frames):
+                    cards = photo_cards(info, settings, self._camera.temperature_c(), arrived)
+                    with open(job.folder / name, "xb") as fh:
+                        fh.write(pack_fits(frame, cards))
+                    paths.append(str((job.folder / name).resolve()))
+                self._send({"type": "ok", "reply_to": job.cmd_id, "files": paths})
+                self._send({
+                    "type": "event", "event": "photo", "detail": ", ".join(job.names),
+                })
+            else:
+                assert job.acc is not None and job.settings is not None
+                assert job.first_utc is not None
+                s = job.settings
+                mean = (job.acc / job.n).astype(np.float32)
+                cards = photo_cards(info, s, self._camera.temperature_c(), job.first_utc)
+                cards.append(("NCOMBINE", job.n, "frames averaged"))
+                name = dark_file_name(
+                    info.serial, s.exposure_us, s.gain, s.bit_depth, s.roi, job.first_utc
+                )
+                path = write_new_file(job.folder / info.serial / name, pack_fits(mean, cards))
+                self._send({"type": "ok", "reply_to": job.cmd_id, "file": str(path.resolve())})
+                self._send({"type": "event", "event": "darks_saved", "detail": path.name})
+        except Exception as exc:
+            _log.error("Failed to write %s: %s", job.kind, exc)
+            self._send({
+                "type": "error", "reply_to": job.cmd_id, "code": "camera_error",
+                "message": str(exc),
+            })
+
+    def _fail_stills(self, message: str) -> None:
+        """Fail every open job (camera closed, lost or reconfigured under it)."""
+        with self._stills_lock:
+            jobs, self._still_jobs = self._still_jobs, []
+            self._photo_names.clear()
+        for job in jobs:
+            self._send({
+                "type": "error", "reply_to": job.cmd_id, "code": "camera_error",
+                "message": message,
+            })
+
     def _finish_recording(self, reason: str) -> RecordingRun:
         """Stop accepting frames, drain the queue, close the segment with ``reason``."""
         run = self._run
@@ -645,6 +809,7 @@ class CaptureProcess:
 
     def _close_camera(self) -> None:
         self._is_open = False
+        self._fail_stills("camera closed during the capture")
         self._acquisition_stop_event.set()
         if self._acquisition_thread and self._acquisition_thread.is_alive():
             self._acquisition_thread.join(timeout=2.0)
@@ -697,6 +862,7 @@ class CaptureProcess:
                 self._acquired_frames_total += 1
                 with self._latest_frame_lock:
                     self._latest_frame = frame
+                self._feed_stills(frame, arrived, index)
                 self._offer_to_writer(frame, arrived, index)
             else:
                 consecutive_timeouts += 1
@@ -706,13 +872,17 @@ class CaptureProcess:
 
     def _offer_to_writer(self, frame: np.ndarray, arrived: datetime, index: int) -> None:
         """Hand a frame to the writer thread; a full queue drops it, never blocks."""
+        with self._stills_lock:
+            photo = self._photo_names.pop(index, "")
         stamp = self._stamp
         if stamp is None:
             return
         generation, keep, settings = stamp
         if index % keep != 0:
             return
-        item = StampedFrame(frame, arrived, index, generation, settings, self._cup_position)
+        item = StampedFrame(
+            frame, arrived, index, generation, settings, self._cup_position, photo
+        )
         with self._rec_lock:
             if not self._accepting:
                 return
