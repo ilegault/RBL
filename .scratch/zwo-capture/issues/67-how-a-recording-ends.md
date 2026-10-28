@@ -1,6 +1,6 @@
 # 67: How a recording ends: size limit, low disk, camera lost, heartbeat lost, shutdown, crash
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -52,26 +52,26 @@ anyway; ignore a broken pipe).
 `tests/test_capture_process.py` (Seam A, through `CaptureChild`) unless noted. ROI 64 × 32 and
 exposure 10000 µs as in ticket 66. SER files are parsed with the test-side reader.
 
-- [ ] `test_size_limit_rolls_segments`: with `--segment-max-bytes` set to header + 10 frames'
+- [x] `test_size_limit_rolls_segments`: with `--segment-max-bytes` set to header + 10 frames'
   bytes, a ~2 s recording produces several segments, each SER no larger than the limit, every
   closed one's settings record `closed_reason == "size_limit"` except the last (`"stop"`), and
   frame-log rows are continuous across them.
-- [ ] `test_low_disk_refuses_to_start`: with `--disk-stop-bytes` 10**18, `start_recording` →
+- [x] `test_low_disk_refuses_to_start`: with `--disk-stop-bytes` 10**18, `start_recording` →
   `error` `low_disk` and no `zwo/segment_*.ser` exists. And, in-process (no child),
   `test_low_disk_stops_a_running_recording` (in `tests/test_capture_endings.py`): a `CaptureProcess`
   with `FakeCamera`, a list as `send`, and a `disk_free` that returns 10**12 for the first three
   calls and then 0; after recording starts, within 10 s the sent messages include `event`
   `low_disk` and `recording_stopped`, the settings record says `"low_disk"`, and `status`
   messages keep arriving afterwards.
-- [ ] `test_camera_lost_leaves_a_readable_recording`: `--fake-fail-after 40`; record; `event`
+- [x] `test_camera_lost_leaves_a_readable_recording`: `--fake-fail-after 40`; record; `event`
   `camera_lost` arrives; the settings record says `"camera_lost"`; the SER's `FrameCount`
   equals its trailer length and the frame-log row count; a later `set` replies `not_open`; the
   child is still running.
-- [ ] `test_heartbeat_loss_closes_files_and_exits`: `--heartbeat-timeout-s 2`; send heartbeats
+- [x] `test_heartbeat_loss_closes_files_and_exits`: `--heartbeat-timeout-s 2`; send heartbeats
   while recording ~2 s, then stop sending (keep stdin open); the child exits 0 within 10 s; the
   last settings record says `"heartbeat_lost"`; the SER header `FrameCount` equals the
   frame-log row count and the trailer is present. Same for `shutdown` with `"shutdown"`.
-- [ ] `test_killed_process_keeps_counted_frames`: record ≥ 5 s, then `kill()` the child (no
+- [x] `test_killed_process_keeps_counted_frames`: record ≥ 5 s, then `kill()` the child (no
   shutdown). The SER header `FrameCount` is > 0, the file holds at least header +
   `FrameCount` frames' bytes, and every one of those `FrameCount` frames equals the formula.
 
@@ -93,3 +93,5 @@ Soft type-gate count must not rise above `tools/mypy_ratchet.txt`.
 - Resuming a recording after camera loss without the application asking.
 
 ## Comments
+
+2026-10-28: Done. Size-limit roll in `RecordingRun.write` (trailer counted, so file <= limit); low-disk refusal and 1 s check, camera loss handed from the acquisition thread to the main loop (the old path joined its own thread), heartbeat/shutdown close the segment first, ending sends ignore a broken pipe. Tests: `tests/test_capture_process.py` (size limit, refusal, camera lost, heartbeat/shutdown, kill) and `tests/test_capture_endings.py` (in-process low disk). Full suite 2661 passed; ruff and type gate (139 = ratchet) clean.

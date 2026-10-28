@@ -133,6 +133,14 @@ class SerSegmentWriter:
     def frame_count(self) -> int:
         return len(self._timestamps)
 
+    def bytes_if_appended(self, frame: np.ndarray) -> int:
+        """File size if ``frame`` were appended and the segment closed now (trailer included)."""
+        return (
+            self._bytes_written
+            + len(_frame_bytes(frame))
+            + 8 * (len(self._timestamps) + 1)
+        )
+
     def append(self, frame: np.ndarray, utc_ticks: int) -> None:
         data = _frame_bytes(frame)
         self._fh.write(data)
@@ -237,7 +245,9 @@ class RecordingRun:
         counters: Callable[[], tuple[int, int]],
         event: Callable[[str, str], None],
         monotonic: Callable[[], float] = time.monotonic,
+        max_segment_bytes: int | None = None,
     ) -> None:
+        self._max_segment_bytes = max_segment_bytes
         self.dir = folder / "zwo"
         self.dir.mkdir(parents=True, exist_ok=True)
         self._t0 = session_t0_utc
@@ -262,6 +272,11 @@ class RecordingRun:
     def write(self, item: StampedFrame) -> None:
         if self._ser is not None and item.generation != self._generation:
             self.close_segment("settings_change")
+        if self._ser is not None and self._max_segment_bytes is not None and (
+            self._segment_frames > 0
+            and self._ser.bytes_if_appended(item.frame) > self._max_segment_bytes
+        ):
+            self.close_segment("size_limit")
         if self._ser is None:
             self._open_segment(item)
         assert self._ser is not None
