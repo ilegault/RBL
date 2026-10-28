@@ -1,6 +1,6 @@
 # 66: The Capture Process records: SER segments, the frame log and the settings records
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -88,7 +88,7 @@ files stay small. A frame's acquired index *k* is recovered from its pixel (0, 0
 frame is compared pixel for pixel with FakeCamera's formula for its *k*.** Parse SER files with
 a test-side reader (`struct`), not with `ser_format`.
 
-- [ ] `test_recording_writes_ser_frame_log_and_settings_record`: record ~2 s, stop. Exactly one
+- [x] `test_recording_writes_ser_frame_log_and_settings_record`: record ~2 s, stop. Exactly one
   `segment_000.ser`: header `FrameCount` equals the trailer length equals the number of
   frame-log rows; every frame equals the formula; trailer timestamps are non-decreasing;
   `frames.csv` has the three comment lines, the header, and rows with `segment_frame`
@@ -97,19 +97,19 @@ a test-side reader (`struct`), not with `ser_format`.
   `stop_recording` reply has `next_segment_index == 1` and `next_frame_index ==` row count;
   `event`s `recording_started`, `segment_opened`, `segment_closed`, `recording_stopped` arrive
   in that order.
-- [ ] `test_settings_change_mid_recording_starts_a_segment`: record, `set exposure_us` 12000,
+- [x] `test_settings_change_mid_recording_starts_a_segment`: record, `set exposure_us` 12000,
   record, stop. Exactly two segments; each settings record's `exposure_us` matches what was in
   force (10000, then 12000); the first has `closed_reason == "settings_change"`; frame-log
   `segment` column is 0 then 1 with no row of segment 0 after a row of segment 1; an `event`
   `settings_changed` with detail `"exposure_us: 10000 -> 12000"` arrived.
-- [ ] `test_keep_one_in_three`: `set keep_one_in_n` 3, record, stop; every written frame's *k*
+- [x] `test_keep_one_in_three`: `set keep_one_in_n` 3, record, stop; every written frame's *k*
   is divisible by 3 and consecutive written frames differ by exactly 3 (allowing gaps only
   where `frames_dropped_queue` in the settings record is non-zero, which with a 64 × 32 ROI it
   must not be: assert it is 0).
-- [ ] `test_second_run_continues_numbering`: two video runs into the same folder, the second
+- [x] `test_second_run_continues_numbering`: two video runs into the same folder, the second
   started with the first's `next_segment_index` / `next_frame_index`; the second run's first
   segment is `segment_001.ser`, `frames.csv` has one header and continuous `frame_index`.
-- [ ] `test_beamline_cup_position_lands_in_the_frame_log`: rows before any `beamline` say
+- [x] `test_beamline_cup_position_lands_in_the_frame_log`: rows before any `beamline` say
   `UNKNOWN`; after `beamline` `IN`, later rows say `IN`; after `OUT`, `OUT`. And
   `start_recording` while recording → `already_recording`, `stop_recording` while not →
   `not_recording`, `close` while recording → `recording`.
