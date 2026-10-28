@@ -1,6 +1,6 @@
 # 69: `ZwoCamera`: the real camera behind the Capture Process, over `zwoasi`
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
