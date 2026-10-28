@@ -1,6 +1,6 @@
 # 68: Photos and Dark Frames in the Capture Process
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
