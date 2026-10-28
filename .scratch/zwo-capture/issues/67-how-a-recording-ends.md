@@ -1,6 +1,6 @@
 # 67: How a recording ends: size limit, low disk, camera lost, heartbeat lost, shutdown, crash
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
