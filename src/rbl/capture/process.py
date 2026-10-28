@@ -34,6 +34,7 @@ from rbl.capture.camera import (
     CameraSettings,
     CaptureCamera,
     FakeCamera,
+    ZwoCamera,
 )
 from rbl.config.capture_config import (
     CAPTURE_CAMERA_LOST_TIMEOUTS,
@@ -111,6 +112,7 @@ class CaptureProcess:
         self,
         send: Callable[[dict[str, Any]], None],
         camera: CaptureCamera,
+        camera_list: list[str] | None = None,
         disk_free: Callable[[str], int] = lambda p: shutil.disk_usage(p).free,
         monotonic: Callable[[], float] = time.monotonic,
         heartbeat_timeout_s: float = CAPTURE_HEARTBEAT_TIMEOUT_S,
@@ -118,6 +120,7 @@ class CaptureProcess:
     ) -> None:
         self._send = send
         self._camera = camera
+        self._camera_list = camera_list
         self._disk_free = disk_free
         self._monotonic = monotonic
         self._heartbeat_timeout_s = heartbeat_timeout_s
@@ -156,7 +159,9 @@ class CaptureProcess:
         """Main event loop running on the primary process thread."""
         # 1. First message, always: hello
         cams: list[str]
-        if isinstance(self._camera, FakeCamera):
+        if self._camera_list is not None:
+            cams = self._camera_list
+        elif isinstance(self._camera, FakeCamera):
             cams = ["Fake ASI"]
         else:
             try:
@@ -586,7 +591,8 @@ def main(argv: list[str]) -> int:
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
     )
 
-    args = build_arg_parser().parse_args(argv)
+    parser = build_arg_parser()
+    args = parser.parse_args(argv)
 
     send_lock = threading.Lock()
 
@@ -596,15 +602,29 @@ def main(argv: list[str]) -> int:
             protocol_out.write(data)
             protocol_out.flush()
 
+    camera_list: list[str] | None = None
     if args.camera == "zwo":
-        send({"type": "fatal", "message": "ZWO camera support is not built yet"})
-        return 1
+        if not args.sdk_dll:
+            parser.error("--sdk-dll is required when --camera zwo")
+        if not os.path.isfile(args.sdk_dll):
+            send({"type": "fatal", "message": f"ZWO SDK library not found: {args.sdk_dll}"})
+            return 1
+        try:
+            import zwoasi
 
-    camera = FakeCamera(fail_after=args.fake_fail_after)
+            zwoasi.init(args.sdk_dll)
+            camera_list = zwoasi.list_cameras()
+        except Exception as exc:
+            send({"type": "fatal", "message": str(exc)})
+            return 1
+        camera: CaptureCamera = ZwoCamera(args.sdk_dll)
+    else:
+        camera = FakeCamera(fail_after=args.fake_fail_after)
 
     process = CaptureProcess(
         send=send,
         camera=camera,
+        camera_list=camera_list,
         heartbeat_timeout_s=args.heartbeat_timeout_s,
         disk_stop_bytes=args.disk_stop_bytes,
     )
