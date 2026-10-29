@@ -125,3 +125,22 @@ def _main_window_never_opens_a_real_continue_dialog(monkeypatch):
 
     monkeypatch.setattr(MainWindow, "_ask_continue_dose", lambda self, totals: None)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _zwo_controls_never_opens_a_real_modal(monkeypatch):
+    """Patch ZwoControls.confirm_darks to return False by default.
+
+    `confirm_darks` wraps a modal QMessageBox.question. Under offscreen Qt it
+    would wait forever for a click. Returning False prevents hanging while
+    ensuring darks are not taken unless a test explicitly monkeypatches
+    confirm_darks to True.
+    """
+    try:
+        from rbl.gui.widgets.zwo_controls import ZwoControls
+    except ImportError:
+        yield
+        return
+
+    monkeypatch.setattr(ZwoControls, "confirm_darks", lambda self: False)
+    yield
