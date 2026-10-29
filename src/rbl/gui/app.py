@@ -47,6 +47,7 @@ from rbl.gui.widgets.continue_dialog import ContinueDialog
 from rbl.hardware.camera_source import CameraSource
 from rbl.hardware.dose_model import DoseTotals
 from rbl.services.beamline_snapshot import BeamlineSnapshotProvider
+from rbl.services.capture_client import CaptureClient
 from rbl.services.cup_log import (
     ContinueChoice,
     CupLog,
@@ -279,8 +280,11 @@ class MainWindow(QMainWindow):
         # Session recorder — shared between Overview panel and Camera tab.
         self.snapshots        = BeamlineSnapshotProvider(self.beamline, self)
         self.camera_source    = CameraSource(self)
+        # The client is the only owner of the Capture Process (ADR 0008), constructed
+        # but not started; the child launches only when the operator connects the ZWO camera.
+        self.capture_client   = CaptureClient(self)
         self.session_recorder = SessionRecorder(
-            self.snapshots.snapshot, self.camera_source, self)
+            self.snapshots.snapshot, self.camera_source, self, capture=self.capture_client)
 
         # ── Build tabs from single ordered declaration ────────────────────────
         # Each page goes inside a scroll area: when the window is narrowed past
@@ -451,6 +455,9 @@ class MainWindow(QMainWindow):
         self.beamline.cup_changed.connect(cup_panel.on_cup_state)
         self.beamline.cup_actuation_changed.connect(cup_panel.on_cup_actuation_state)
         self.faraday_cup_tab.cup_view_changed.connect(cup_panel.on_cup_view)
+        # The frame log records the end-station cup's confirmed position (ADR 0003),
+        # the client sends it to the Capture Process only when the label changes.
+        self.beamline.cup_actuation_changed.connect(self.capture_client.on_cup_actuation_state)
 
         # Irradiated area from Raster Planner to Faraday Cup tab for fluence and dose (ADR 0003).
         # The Raster Planner holds the sample patch dimensions set by the operator. Emitting
@@ -711,6 +718,9 @@ class MainWindow(QMainWindow):
         # Stop the recorder before closing the camera so the final frames are flushed.
         best_effort("session_recorder.stop",
                     lambda: self.session_recorder.is_recording() and self.session_recorder.stop())
+        # The session's stop sends stop_recording first, so the last segment is closed
+        # by the reason "stop" rather than "shutdown".
+        best_effort("capture_client.shutdown",          self.capture_client.shutdown)
         best_effort("camera_source.close",              self.camera_source.close)
         best_effort("motor_tab.abort_and_close",        self.motor_tab.abort_and_close)
         best_effort("current_tab.shutdown",             self.current_tab.shutdown)
