@@ -1,6 +1,6 @@
 # 77: `rbl.capture` joins the hard type gate
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -35,13 +35,13 @@ This ticket changes gate configuration, so it is held for the developer's review
 
 ## Acceptance criteria
 
-- [ ] (no test: gate configuration, checked by the gate itself) `pyproject.toml`'s `[tool.rbl.type_gate].hard` is exactly
+- [x] (no test: gate configuration, checked by the gate itself) `pyproject.toml`'s `[tool.rbl.type_gate].hard` is exactly
   `["rbl.config", "rbl.hardware", "rbl.capture"]`.
-- [ ] (no test: gate configuration, checked by the gate itself) `python tools/type_gate.py` exits 0 with `rbl.capture` in the hard list (any error under a
+- [x] (no test: gate configuration, checked by the gate itself) `python tools/type_gate.py` exits 0 with `rbl.capture` in the hard list (any error under a
   hard prefix makes it exit non-zero).
-- [ ] (no test: gate configuration, checked by the gate itself) The soft count it prints is not above `tools/mypy_ratchet.txt` (lower is fine; if lower,
+- [x] (no test: gate configuration, checked by the gate itself) The soft count it prints is not above `tools/mypy_ratchet.txt` (lower is fine; if lower,
   update the ratchet file to the new figure, as its docstring says it may only decrease).
-- [ ] (no test: regression, proved by the existing suite in the gate) The full suite passes with no test edited.
+- [x] (no test: regression, proved by the existing suite in the gate) The full suite passes with no test edited.
 
 ## Gate
 
@@ -58,3 +58,5 @@ Run in CI's order (`.github/workflows/tests.yml`):
 - Any behaviour change in `rbl.capture`.
 
 ## Comments
+
+Summary (2026-10-29): Added `rbl.capture` to `[tool.rbl.type_gate].hard` in `pyproject.toml` and documented its rationale per ADR 0008. Verified `tools/type_gate.py` passes with 0 hard errors and 139 soft errors matching `tools/mypy_ratchet.txt`. Adversarial self-review confirmed intentional type annotations under `src/rbl/capture/` immediately fail the hard type gate. Full gate passed.
