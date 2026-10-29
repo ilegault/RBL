@@ -318,6 +318,9 @@ class SessionRecorder(QObject):
         self._zwo_settings = dataclasses.replace(
             self._zwo_settings, preview_mode=mode, brightness=brightness
         )
+        if self._zwo_settings_applied:
+            self._zwo_settings_applied["preview_mode"] = mode
+            self._zwo_settings_applied["brightness"] = brightness
         zwo_settings_store.save_settings(self._zwo_settings)
         self.settings_changed.emit()
         self.state_changed.emit()
@@ -985,6 +988,9 @@ class SessionRecorder(QObject):
                 self._pending_set_ids.remove(reply_to)
                 if "settings" in msg:
                     self._zwo_settings_applied = dict(msg["settings"])
+                    if self._zwo_settings is not None:
+                        self._zwo_settings_applied["preview_mode"] = self._zwo_settings.preview_mode
+                        self._zwo_settings_applied["brightness"] = self._zwo_settings.brightness
                     s = msg["settings"]
                     roi_tuple = None
                     if "roi" in s and s["roi"] is not None:

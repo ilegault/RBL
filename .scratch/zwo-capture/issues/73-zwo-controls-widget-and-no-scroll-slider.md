@@ -1,6 +1,6 @@
 # 73: One ZWO settings widget (`ZwoControls`) and `NoScrollSlider`
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -78,26 +78,26 @@ the Overview panel and the Camera tab show identical ZWO rows, so one widget, te
 `tests/test_zwo_controls.py` (new) unless noted. Real `SessionRecorder` + real `CaptureClient`
 on `start("fake")` (as in ticket 71's tests), `connect_zwo()`, waits spinning `processEvents`.
 
-- [ ] `test_no_scroll_slider_ignores_the_wheel` (in `tests/test_no_scroll_inputs.py`, extend): a `NoScrollSlider` at value 100 receiving a
+- [x] `test_no_scroll_slider_ignores_the_wheel` (in `tests/test_no_scroll_inputs.py`, extend): a `NoScrollSlider` at value 100 receiving a
   `QWheelEvent` keeps value 100, emits no `valueChanged`, and leaves the event not accepted
   (same three checks as the existing `NoScrollSpinBox` class there).
-- [ ] `test_inputs_disabled_until_open_then_ranged_from_controls`: before `opened` every input
+- [x] `test_inputs_disabled_until_open_then_ranged_from_controls`: before `opened` every input
   in step 4 is disabled; after it they are enabled, `spin_gain.maximum()` equals the fake
   camera's `Gain` max from `zwo_info["controls"]`, and `spin_roi_width.maximum() == 1920`.
-- [ ] `test_values_shown_come_from_the_reply`: set `spin_roi_x` to 1 and `spin_roi_width` to
+- [x] `test_values_shown_come_from_the_reply`: set `spin_roi_x` to 1 and `spin_roi_width` to
   101 and emit `editingFinished`; once the reply arrives the boxes show 0 and 96; set
   `spin_exposure_ms` to 5.0 and emit `editingFinished`; `state()["zwo_settings"]["exposure_us"]
   == 5000` and the box shows 5.000. `btn_full_sensor.click()` → boxes show 0, 0, 1920, 1080.
-- [ ] `test_preview_changes_never_touch_the_recording`: during a session and a ZWO video run
+- [x] `test_preview_changes_never_touch_the_recording`: during a session and a ZWO video run
   at ROI 64 × 32, change `combo_preview` to Linear and `slider_brightness` to 300, record 1 s
   more, stop: exactly one `segment_*.ser` exists and its settings record equals the one
   written before the changes, field for field, except `frames`, `closed_utc`,
   `closed_reason`, `sensor_temperature_c_close` and the drop counts.
-- [ ] `test_take_darks_asks_first`: with `confirm_darks` monkeypatched on the instance to
+- [x] `test_take_darks_asks_first`: with `confirm_darks` monkeypatched on the instance to
   return False, clicking `btn_take_darks` writes nothing under `paths.ZWO_DARKS_DIR` (patched
   into `tmp_path`); returning True, a `dark_*.fits` appears under `<darks>/FAKE0001/` within
   30 s. During a ZWO run the button is disabled.
-- [ ] `test_status_line_and_caption`: after a `status` arrives, `lbl_status.text()` contains
+- [x] `test_status_line_and_caption`: after a `status` arrives, `lbl_status.text()` contains
   `"fps"`, `"written"`, `"°C"`, `"GB/h"` and `"GB free"`; `preview_caption("auto") ==
   "Display stretch: not intensity"` and `preview_caption("linear") == "Linear display"`.
 
@@ -121,3 +121,12 @@ Soft type-gate count must not rise above `tools/mypy_ratchet.txt`;
   existing widgets.
 
 ## Comments
+
+Land summary (2026-10-29):
+- Implemented `NoScrollSlider` in `rbl.gui.widgets.inputs` ignoring wheel events.
+- Added `CAPTURE_DARK_FRAMES_DEFAULT = 20` to `rbl.config.capture_config`.
+- Created `rbl.gui.widgets.zwo_controls` with `ZwoControls` and `preview_caption`.
+- Extended `tests/test_no_scroll_inputs.py` with `test_no_scroll_slider_ignores_the_wheel`.
+- Created `tests/test_zwo_controls.py` covering all acceptance criteria with fake camera and SessionRecorder.
+- Added autouse fixture `_zwo_controls_never_opens_a_real_modal` to `tests/conftest.py`.
+- Updated `SessionRecorder` to track `preview_mode` and `brightness` in `zwo_settings` state dict.
