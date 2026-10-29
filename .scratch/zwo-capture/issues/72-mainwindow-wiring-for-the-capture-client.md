@@ -1,6 +1,6 @@
 # 72: `MainWindow` constructs the `CaptureClient`, feeds it the cup position, and shuts it down
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
