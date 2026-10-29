@@ -62,8 +62,10 @@ disable_error_code = ["attr-defined"]
 # decision 4), read by tools/type_gate.py — the wrapper CI runs in place of a
 # bare `mypy` invocation:
 #   hard: any error under one of these module prefixes fails the build.
+#     rbl.capture is hard because it is the Capture Process (ADR 0008),
+#     plain Python with no Qt, and fully typed from the start.
 #   soft (everything else under files=["src/rbl"] above): errors are printed
 #     and counted against the ratchet recorded in tools/mypy_ratchet.txt,
 #     which may only decrease.
 [tool.rbl.type_gate]
-hard = ["rbl.config", "rbl.hardware"]
+hard = ["rbl.config", "rbl.hardware", "rbl.capture"]
