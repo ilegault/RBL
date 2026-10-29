@@ -1,6 +1,6 @@
 # 73: One ZWO settings widget (`ZwoControls`) and `NoScrollSlider`
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
