@@ -1,6 +1,6 @@
 # 77: `rbl.capture` joins the hard type gate
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
