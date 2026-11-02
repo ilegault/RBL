@@ -19,7 +19,7 @@ and the widget therefore exerts no pressure on the layout at all.
 """
 from PySide6.QtCore import QPoint, QRect, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QImage, QPainter, QPen
-from PySide6.QtWidgets import QSizePolicy, QWidget
+from PySide6.QtWidgets import QRubberBand, QSizePolicy, QWidget
 
 
 class VideoView(QWidget):
@@ -31,6 +31,11 @@ class VideoView(QWidget):
     """
 
     double_clicked = Signal()
+    # View coordinates (x, y, width, height) of a finished drag; ticket 75.
+    rect_drawn = Signal(int, int, int, int)
+
+    # Smaller drags are accidental clicks, not a request for an ROI.
+    _MIN_DRAG_PX = 4
 
     # Constant hints — see module docstring for why these must not grow.
     _HINT_SIZE = QSize(320, 240)
@@ -43,6 +48,9 @@ class VideoView(QWidget):
         self._crosshair = False
         self._scale_mode = "fit"   # "fit" | "one_to_one"
         self._painted_rect_last = QRect()
+        self._rect_drawing = False
+        self._drag_origin: "QPoint | None" = None
+        self._band: "QRubberBand | None" = None
 
         self.setStyleSheet("background: #111;")
         self.setSizePolicy(
@@ -78,6 +86,15 @@ class VideoView(QWidget):
         self._scale_mode = mode
         self.updateGeometry()
         self.update()
+
+    def set_rect_drawing(self, on: bool) -> None:
+        """While on, a left-drag draws a screen-only rubber band and emits rect_drawn."""
+        self._rect_drawing = bool(on)
+        if not on:
+            self._cancel_drag()
+
+    def rect_drawing_enabled(self) -> bool:
+        return self._rect_drawing
 
     def painted_rect(self) -> QRect:
         """The rect the last frame was painted into (exposed for tests)."""
@@ -155,6 +172,48 @@ class VideoView(QWidget):
 
     def mouseDoubleClickEvent(self, event) -> None:
         self.double_clicked.emit()
+
+    def _cancel_drag(self) -> None:
+        self._drag_origin = None
+        if self._band is not None:
+            self._band.hide()
+
+    @staticmethod
+    def _span(a: QPoint, b: QPoint) -> QRect:
+        # QRect(p1, p2) treats both corners as inside the rect (+1 px); a drag
+        # of 40 px should report 40.
+        return QRect(min(a.x(), b.x()), min(a.y(), b.y()),
+                     abs(b.x() - a.x()), abs(b.y() - a.y()))
+
+    def mousePressEvent(self, event) -> None:
+        if (self._rect_drawing
+                and event.button() == Qt.MouseButton.LeftButton):
+            self._drag_origin = event.position().toPoint()
+            if self._band is None:
+                self._band = QRubberBand(QRubberBand.Shape.Rectangle, self)
+            self._band.setGeometry(QRect(self._drag_origin, QSize()))
+            self._band.show()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._drag_origin is not None and self._band is not None:
+            self._band.setGeometry(
+                self._span(self._drag_origin, event.position().toPoint()))
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if (self._drag_origin is not None
+                and event.button() == Qt.MouseButton.LeftButton):
+            rect = self._span(self._drag_origin, event.position().toPoint())
+            self._cancel_drag()
+            if (rect.width() >= self._MIN_DRAG_PX
+                    and rect.height() >= self._MIN_DRAG_PX):
+                self.rect_drawn.emit(rect.x(), rect.y(),
+                                     rect.width(), rect.height())
+            return
+        super().mouseReleaseEvent(event)
 
 
 if __name__ == "__main__":

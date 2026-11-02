@@ -186,3 +186,86 @@ def test_camera_tab_video_button_tooltips_and_clicks(tmp_path, qapp, monkeypatch
     assert video_btn.text() == "Start Video"
 
     rec.stop()
+
+
+@pytest.fixture
+def zwo_tab(tmp_path, qapp, monkeypatch):
+    from rbl.config import paths
+    from rbl.gui.camera_tab import CameraTab
+    from rbl.hardware.camera_source import CameraSource
+    from rbl.services.capture_client import CaptureClient
+    from rbl.services.session_recorder import SessionRecorder
+
+    monkeypatch.setattr("rbl.services.session_recorder._logs_dir",
+                        lambda: str(tmp_path / "logs"))
+    monkeypatch.setattr(paths, "ZWO_DARKS_DIR", tmp_path / "darks")
+    client = CaptureClient()
+    client.start("fake")
+    cam = CameraSource()
+    rec = SessionRecorder(lambda: {"beamline_v": 1.0}, cam, capture=client)
+    rec.set_camera_kind("zwo")
+    tab = CameraTab(rec, cam)
+    tab.resize(900, 700)
+    tab.show()
+    yield tab, rec
+    client.shutdown()
+
+
+def test_drawing_a_rect_sets_the_roi(zwo_tab):
+    from rbl.hardware.capture_protocol import snap_roi
+    from rbl.hardware.preview_stretch import view_rect_to_sensor_roi
+    from tests.qt_wait import wait_until
+
+    tab, rec = zwo_tab
+    rec.connect_zwo()
+    assert wait_until(lambda: rec.state()["zwo_open"])
+    assert wait_until(lambda: bool(rec.state()["zwo_settings"]))
+    seen: dict = {}
+    rec.zwo_preview.connect(lambda _img, fields: seen.update(fields))
+    tab.zwo_controls.btn_full_sensor.click()
+    assert wait_until(
+        lambda: rec.state()["zwo_settings"].get("roi", {}).get("width") == 1920)
+    # A Preview must have arrived after Full sensor, and been painted.
+    def _ready():
+        tab.grab()
+        pr = tab.video_view.painted_rect()
+        return not pr.isEmpty() and seen.get("roi", {}).get("width") == 1920
+    assert wait_until(_ready)
+
+    pr = tab.video_view.painted_rect()
+    view = (pr.x(), pr.y(), pr.width() // 2, pr.height() // 2)
+    fields = dict(seen)
+    expected = snap_roi(
+        *view_rect_to_sensor_roi(
+            view, (pr.x(), pr.y(), pr.width(), pr.height()),
+            (fields["width"], fields["height"]), fields["roi"]),
+        1920, 1080)
+    tab.video_view.rect_drawn.emit(*view)
+
+    assert wait_until(
+        lambda: tuple(rec.state()["zwo_settings"]["roi"][k]
+                      for k in ("x", "y", "width", "height")) == expected)
+    assert 900 <= rec.state()["zwo_settings"]["roi"]["width"] <= 960
+
+
+def test_drawing_is_off_while_recording(zwo_tab):
+    from tests.qt_wait import wait_until
+
+    tab, rec = zwo_tab
+    assert not tab.video_view.rect_drawing_enabled()   # not open yet
+    rec.connect_zwo()
+    assert wait_until(lambda: rec.state()["zwo_open"])
+    assert wait_until(lambda: tab.video_view.rect_drawing_enabled())
+
+    rec.start()
+    assert rec.start_video()
+    assert wait_until(lambda: rec.state()["zwo_recording"])
+    assert not tab.video_view.rect_drawing_enabled()
+
+    rec.stop_video()
+    assert wait_until(lambda: not rec.state()["zwo_recording"])
+    assert tab.video_view.rect_drawing_enabled()
+
+    rec.set_camera_kind("usb")
+    assert not tab.video_view.rect_drawing_enabled()
+    rec.stop()
