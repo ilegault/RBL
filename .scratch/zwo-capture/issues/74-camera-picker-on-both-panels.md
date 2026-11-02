@@ -1,6 +1,6 @@
 # 74: The camera picker on the Overview panel and the Camera tab, with the ZWO Preview
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
