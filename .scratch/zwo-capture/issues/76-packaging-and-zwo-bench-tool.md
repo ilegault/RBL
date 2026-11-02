@@ -1,6 +1,6 @@
 # 76: Ship the ZWO DLL inside the one-folder build, and `tools/zwo_bench.py`
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
