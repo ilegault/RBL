@@ -1,6 +1,6 @@
 # 74: The camera picker on the Overview panel and the Camera tab, with the ZWO Preview
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -55,22 +55,22 @@ tests over both classes where the file layout allows, otherwise write each test 
 Real `SessionRecorder` + real `CaptureClient` on `start("fake")` for ZWO tests. No new
 `_`-prefixed access.
 
-- [ ] `test_picker_shows_and_hides_the_right_rows`: with a recorder whose kind is `"usb"`,
+- [x] `test_picker_shows_and_hides_the_right_rows`: with a recorder whose kind is `"usb"`,
   every widget in `usb_only_widgets` is `isVisibleTo(panel)` and `zwo_controls` is not; after
   `combo_camera_kind.setCurrentIndex(1)`, the reverse, and `recorder.camera_kind() == "zwo"`;
   `lbl_preview_caption.text() == "Display stretch: not intensity"`.
-- [ ] `test_zwo_preview_reaches_the_view`: `monkeypatch.setattr(VideoView, "set_frame", spy)`
+- [x] `test_zwo_preview_reaches_the_view`: `monkeypatch.setattr(VideoView, "set_frame", spy)`
   where `spy` records the `QImage` and calls the original; under `"zwo"`, connect and show the
   panel; within 10 s the spy received a non-null `QImage` whose size equals a `zwo_preview`
   message's `width` × `height`. With the recorder's kind left at `"usb"` and the client opened
   directly (`client.open()`, so previews flow and `recorder.zwo_preview` fires), the spy
   receives nothing for 2 s.
-- [ ] `test_video_button_follows_the_zwo_camera`: under `"zwo"`, during a session, the video
+- [x] `test_video_button_follows_the_zwo_camera`: under `"zwo"`, during a session, the video
   button is disabled with the camera closed, enabled after `opened`, reads `"Stop Video"`
   while `zwo_recording`; clicking it stops the run (`zwo_recording` False).
-- [ ] `test_refused_switch_reverts_the_combo`: during a ZWO run, selecting `"USB camera"`
+- [x] `test_refused_switch_reverts_the_combo`: during a ZWO run, selecting `"USB camera"`
   leaves `combo_camera_kind.currentData() == "zwo"` after the render.
-- [ ] (no test: regression, proved by the existing suite in the gate) Every existing test in `tests/test_recording_panel.py`,
+- [x] (no test: regression, proved by the existing suite in the gate) Every existing test in `tests/test_recording_panel.py`,
   `tests/test_camera_tab.py` and `tests/test_e2e_session.py` passes unchanged.
 
 ## Gate
@@ -93,3 +93,8 @@ Soft type-gate count must not rise above `tools/mypy_ratchet.txt`;
 - Both cameras at once.
 
 ## Comments
+
+2026-11-02: Added `camera_kind_mixin.py` (picker row, ZWO row embedding, Preview slot, caption, Open/Close/video/photo
+following the chosen camera) shared by `RecordingPanel` and `CameraTab`. Tests in `tests/test_recording_panel.py`,
+parametrized over both classes (panel, tab): picker rows, preview reaches the view (and not under usb), video button,
+refused switch reverts, Open/Close. CameraTab never had a Segment widget, so its `usb_only_widgets` has none.
