@@ -1,6 +1,6 @@
 # 75: Draw the ZWO region of interest on the Camera tab's video view
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
