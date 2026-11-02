@@ -15,7 +15,7 @@ gates shipping — not driver development.
 
 **Blocked by:** None (can start immediately)
 
-**Status:** in-progress
+**Status:** done
 
 > **This is a developer bench task, not agent-grabbable.** It needs physical access to
 > the control PC and the instrument. An agent should not claim it.
@@ -39,7 +39,7 @@ the backend that produced it rather than blamed on the hardware.
 - [x] `*IDN?` over that connection returns the Keithley identification string
 - [x] The GPIB protocol mode is recorded: SCPI, MEP enabled
 - [x] Findings pasted into this ticket's Comments, including the resource strings seen
-- [ ] A bare PyVISA session, with **no** `os.add_dll_directory()` help, opens the
+- [x] A bare PyVISA session, with **no** `os.add_dll_directory()` help, opens the
       instrument — see the open question in Comments. This is the one that decides
       whether the application needs a dependency-path shim of its own.
 

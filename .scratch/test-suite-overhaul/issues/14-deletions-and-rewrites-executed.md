@@ -22,7 +22,7 @@ assertion quietly dropped from a test being rewritten.
 
 **Blocked by:** 11
 
-**Status:** completed
+**Status:** done
 
 - [x] Every `delete` verdict from the signed-off list is executed, and nothing outside that list is deleted.
 - [x] Every `rewrite` verdict is executed through the sanctioned data path.
