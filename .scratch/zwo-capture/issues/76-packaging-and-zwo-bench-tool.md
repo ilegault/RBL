@@ -1,6 +1,6 @@
 # 76: Ship the ZWO DLL inside the one-folder build, and `tools/zwo_bench.py`
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -51,20 +51,20 @@ imports); `.gitignore`.
 
 `tests/test_zwo_packaging.py` (new).
 
-- [ ] `test_bench_tool_is_standalone`: AST scan of `tools/zwo_bench.py` finds no import of
+- [x] `test_bench_tool_is_standalone`: AST scan of `tools/zwo_bench.py` finds no import of
   `rbl` or any `rbl.*` module and no module-level `import zwoasi`; and
   `subprocess.run([sys.executable, "tools/zwo_bench.py", "--help"], cwd=<repo root>)` exits 0
   with `--sdk-dll` in its output.
-- [ ] `test_levels_report_and_fps_summary` (import the tool by path with `importlib`):
+- [x] `test_levels_report_and_fps_summary` (import the tool by path with `importlib`):
   `levels_report` on a `uint16` array of the values `{0, 16, 32, 4080}` repeated reports
   4 distinct levels and `img % 16` levels `[0]` (so 12-bit data in 16-bit pixels shows up as
   low nibble always 0); on `np.arange(64, dtype=np.uint16)` it reports 64 levels and 16 low-
   nibble values; `fps_summary(500, 10.0, 3)` gives `fps == 50.0`, `dropped == 3`.
-- [ ] `test_spec_bundles_zwoasi_and_the_dll`: reading `rbl.spec` as text, `"zwoasi"` appears in
+- [x] `test_spec_bundles_zwoasi_and_the_dll`: reading `rbl.spec` as text, `"zwoasi"` appears in
   the `all_hiddenimports` list and the path segments `"vendor"`, `"zwo"`, `"ASICamera2.dll"`
   appear in the binaries logic; `.gitignore` contains the line `vendor/zwo/*.dll`; and
   `vendor/zwo/README.md` exists and contains `SHA-256:`.
-- [ ] (by hand) Stated in the PR, since it cannot run in CI: `pyinstaller rbl.spec --clean` on the
+- [ ] (by hand, NOT done; Windows dev PC) Stated in the PR, since it cannot run in CI: `pyinstaller rbl.spec --clean` on the
   Windows dev PC without the DLL prints the warning and builds; with the DLL in
   `vendor/zwo/`, `dist/RBL/` (the one-folder output; check the actual folder name) contains
   `ASICamera2.dll` with the same SHA-256 as the source file.
@@ -85,3 +85,16 @@ Run in CI's order (`.github/workflows/tests.yml`):
 - Changes to `build.bat` (it copies `dist/` as a folder, which now carries the DLL).
 
 ## Comments
+
+2026-11-02: `rbl.spec` now lists `zwoasi` in `all_hiddenimports` and appends
+`vendor/zwo/ASICamera2.dll` (dest `.`) to `all_binaries` when present, else prints the
+warning; ffmpeg logic untouched. `.gitignore` has `vendor/zwo/*.dll`. New
+`vendor/zwo/README.md` (SHA-256 line left for ticket 80) and standalone `tools/zwo_bench.py`
+(`fps_summary`, `levels_report`; `zwoasi` imported inside `main`). All three criteria are
+covered by `tests/test_zwo_packaging.py`; each was seen failing when the spec entry / fps
+formula was broken on purpose. Gate: ruff and tests-first green; full pytest 2693 passed.
+Two items fail identically on pristine `origin/master` in the Linux/Py3.13 sandbox, so are not
+from this ticket: `tests/test_zwo_controls.py::test_status_line_and_caption` and the type-gate
+soft ratchet (140 vs 139). CI on the Windows runner is the arbiter.
+The by-hand criterion (pyinstaller build with and without the DLL) is NOT done: needs the
+Windows dev PC.
