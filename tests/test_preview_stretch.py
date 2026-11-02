@@ -6,6 +6,7 @@ from rbl.hardware.preview_stretch import (
     debayer_for_display,
     downscale_for_display,
     stretch_preview,
+    view_rect_to_sensor_roi,
 )
 
 
@@ -87,3 +88,30 @@ def test_debayer_puts_red_in_the_red_channel(pattern):
 def test_debayer_unknown_pattern_raises():
     with pytest.raises(ValueError):
         debayer_for_display(np.zeros((4, 4), dtype=np.uint16), "XX")
+
+
+_FULL = {"x": 0, "y": 0, "width": 1920, "height": 1080}
+
+
+@pytest.mark.parametrize(
+    "view, painted, preview, roi, expected",
+    [
+        # View rect equal to the painted area -> the whole ROI.
+        ((0, 0, 960, 540), (0, 0, 960, 540), (960, 540), _FULL, (0, 0, 1920, 1080)),
+        # Letterboxed: painted offset by (100, 50); the view rect is the image's
+        # top-left 480 x 270 -> scale 2 to sensor pixels.
+        ((100, 50, 480, 270), (100, 50, 960, 540), (960, 540), _FULL, (0, 0, 960, 540)),
+        # ROI origin shifts the result.
+        ((100, 50, 480, 270), (100, 50, 960, 540), (960, 540),
+         {"x": 200, "y": 100, "width": 1920, "height": 1080}, (200, 100, 960, 540)),
+        # Preview downscaled relative to the ROI (preview 480 wide, ROI 1920).
+        ((0, 0, 480, 270), (0, 0, 960, 540), (480, 270), _FULL, (0, 0, 960, 540)),
+        # Half outside painted on the left/top: clipped to the image.
+        ((-100, -50, 580, 320), (0, 0, 960, 540), (960, 540), _FULL, (0, 0, 960, 540)),
+        # Fully outside painted: zero size at the ROI origin.
+        ((2000, 2000, 50, 50), (0, 0, 960, 540), (960, 540),
+         {"x": 200, "y": 100, "width": 1920, "height": 1080}, (200, 100, 0, 0)),
+    ],
+)
+def test_view_rect_to_sensor_roi(view, painted, preview, roi, expected):
+    assert view_rect_to_sensor_roi(view, painted, preview, roi) == expected

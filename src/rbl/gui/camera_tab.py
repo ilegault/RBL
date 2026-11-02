@@ -26,6 +26,12 @@ camera_kind_mixin.py).  The USB-only controls are collected in
 ``usb_only_widgets`` and hidden under ZWO; the ZWO rows live in ``ZwoControls``
 (``zwo_controls``).  The ZWO Preview is drawn as decoded, with a caption under
 the view.  The USB path is unchanged (ADR 0008 decision 7).
+
+ROI drawing (ticket 75): to choose an ROI, draw over the **Full sensor**
+Preview; the numeric boxes then show the snapped result the Capture Process
+replied with, never the drawn rectangle.  Drawing is on only while the kind is
+ZWO, the camera is open and no ZWO run is recording (an ROI change mid-run
+would start a new segment).  The Overview panel has no drawing.
 """
 import importlib.util
 import os
@@ -59,6 +65,7 @@ from rbl.config.recording_config import (
 from rbl.gui import theme
 from rbl.gui.widgets.camera_kind_mixin import CameraKindMixin
 from rbl.gui.widgets.video_view import VideoView
+from rbl.hardware.preview_stretch import view_rect_to_sensor_roi
 
 _CV2_OK = importlib.util.find_spec("cv2") is not None
 
@@ -109,6 +116,7 @@ class CameraTab(CameraKindMixin, QWidget):
         self._blocking = False
         self._fullscreen_win: "_FullscreenWindow | None" = None
         self._fit_mode = True
+        self._zwo_preview_fields: dict = {}
 
         self._build_ui()
         self._connect_signals()
@@ -246,6 +254,7 @@ class CameraTab(CameraKindMixin, QWidget):
         self._feed.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._feed.double_clicked.connect(self._toggle_fullscreen)
+        self._feed.rect_drawn.connect(self._on_rect_drawn)
         self._scroll.setWidget(self._feed)
         lay.addWidget(self._scroll, stretch=1)
         lay.addWidget(self._make_preview_caption())
@@ -303,6 +312,33 @@ class CameraTab(CameraKindMixin, QWidget):
         self._camera.closed.connect(self._on_camera_closed_ui)
         self._camera.preview_ready.connect(self._on_preview_frame)
         self._connect_zwo_preview()
+
+    @property
+    def video_view(self) -> VideoView:
+        """The live feed widget (read-only)."""
+        return self._feed
+
+    # ---- ROI drawing -------------------------------------------------------
+
+    def _on_zwo_preview_frame(self, image, fields: dict) -> None:
+        # Remember the geometry of the latest Preview even while hidden: the
+        # drawn rectangle is mapped through the frame that is on screen.
+        self._zwo_preview_fields = dict(fields)
+        super()._on_zwo_preview_frame(image, fields)
+
+    def _on_rect_drawn(self, x: int, y: int, w: int, h: int) -> None:
+        f = self._zwo_preview_fields
+        roi = f.get("roi")
+        painted = self._feed.painted_rect()
+        if not roi or not f.get("width") or not f.get("height") or painted.isEmpty():
+            return
+        sx, sy, sw, sh = view_rect_to_sensor_roi(
+            (x, y, w, h),
+            (painted.x(), painted.y(), painted.width(), painted.height()),
+            (int(f["width"]), int(f["height"])), roi)
+        if sw > 0 and sh > 0:
+            self._recorder.set_zwo_settings(
+                roi={"x": sx, "y": sy, "width": sw, "height": sh})
 
     # ---- Camera control ----------------------------------------------------
 
@@ -467,6 +503,9 @@ class CameraTab(CameraKindMixin, QWidget):
             self._combo_quality.setToolTip("")
 
         zwo = self._render_kind(st)
+        self._feed.set_rect_drawing(
+            zwo and bool(st.get("zwo_open", False))
+            and not st.get("zwo_recording", False))
         cam_open = st.get("zwo_open", False) if zwo else self._camera.is_open()
 
         # Video button: enabled only while session recording and camera is open.
