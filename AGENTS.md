@@ -465,123 +465,65 @@ someone else's bug fix smuggled into it cannot be reviewed.
 <!-- ACTIVE-PLAN:START -->
 ## Active implementation plan
 
-_Written by the planning model on 2026-10-24 18:36. Implement this. If something in it is wrong, say so before changing course._
+_Written by the planning model on 2026-11-03 19:54. Implement this. If something in it is wrong, say so before changing course._
 
-# Active work: the ZWO camera (set 6), plus what remains of sets 2, 3 and 4
+# Active work: target-uncertainty cup insertions (set 7), plus what remains of sets 2-4 and 6
 
 This is a pointer, not the work.
 
-## Set 6 (new): the ZWO ASI585MC, recorded at full bit depth by a Capture Process
+## Set 7 (new): end a cup insertion when its mean is precise enough
 
-- Spec: `.scratch/zwo-capture/spec.md`
-- ADR (new, binding): `docs/adr/0008-zwo-camera-owned-by-a-capture-process.md`. Also binding:
-  `docs/adr/0004-monitoring-log-and-sessions.md` (decision 7), `docs/adr/0003-...md`,
-  `docs/adr/0001-tests-first-and-no-muted-failures.md`.
-- Glossary changes in `CONTEXT.md`: new section "Camera" (USB camera, ZWO camera, Capture
-  Process, Master Recording, Segment, Settings record, Frame log, Region of interest (ROI),
-  Preview, Dark Frame) and a new known collision: "Recorder" means two things already; the
-  program that owns the ZWO camera is the *Capture Process*, never "the recorder".
-- Tickets: `.scratch/zwo-capture/issues/62...80`. 78, 79, 80 are `ready-for-developer` (bench).
-  77 is `Auto-merge: no` (gate config) and a leaf.
+- Spec: `.scratch/cup-target-uncertainty/spec.md`
+- Binding: `docs/adr/0003-commanded-and-confirmed-cup-position.md` (new amendment D,
+  2026-11-03, and C1), `docs/adr/0002-cup-acquisition-triggered-by-current.md`
+  (amendments A5-A8, B3), `docs/adr/0001-tests-first-and-no-muted-failures.md`.
+- Glossary (new in `CONTEXT.md`, "Cup actuation and dose"): **Insertion uncertainty**,
+  **Dwell mode** (fixed dwell / target uncertainty / maximum dwell), **Converged
+  insertion**.
+- Tickets: `.scratch/cup-target-uncertainty/issues/81...88`. 88 is
+  `ready-for-developer` (bench): an agent must not claim it.
 - Tracker conventions: `docs/agents/issue-tracker.md`
 
-## Remaining from sets 2-4
+### Next
 
-- Set 2 (`.scratch/logging-and-sessions/`): **33** is `ready-for-agent` and unblocked.
-- Set 3 (`.scratch/amplifier-load-and-spikes/`): **48** (blocked by 33), **49** (blocked by 48),
-  **52** (`ready-for-developer`, blocked by 60).
-- Set 4 (`.scratch/current-monitor-scale/`): **60** (`ready-for-developer`, bench).
+- **81** and **82** are unblocked and touch disjoint code; any order, or in parallel.
+  Start with **81**: it is the pure contract 83, 84 and 87 import.
+- Then 83 (after 81), 84 (after 83), then 85 and 87 (both after 84), then 86 (after 85).
 
-## Next
-
-- **62**, **63** and **33** are unblocked and touch disjoint code; any order, or in parallel.
-  Start with **63**: it is the contract every later set-6 ticket imports, and 64 waits on it.
-- Then 64 (after 63), then 65 (after 63, 64), then 48 once 33 is done.
-- 52, 60, 78, 79, 80 are `ready-for-developer`: an agent must not claim them.
-
-## Dependency order (set 6)
+### Dependency order
 
 ```
-62 ─────────────────────┐
-63 ── 64 ── 65 ─┬─────── 66 ─┬─ 67 ─┐
-                │            └─ 68 ─┼── 71 ─┬─ 72 ─┐
-                ├─ 70 ──────────────┘       └─ 73 ─┴─ 74 ── 75
-                └─ 69 ── 76 ── 78 (dev)
-77 (held, leaf) ← 67, 68, 69
-79 (dev) ← 74, 76;   80 (dev) ← 79
+81 ── 83 ── 84 ─┬─ 85 ── 86
+                └─ 87
+82 ── 88 (developer, bench)
 ```
 
-Edges, exactly: 64←63; 65←63,64; 66←62,65; 67←66; 68←66; 69←65; 70←65; 71←67,68,70;
-72←71; 73←71; 74←72,73; 75←74; 76←69; 77←67,68,69; 78←76; 79←74,76; 80←79.
+### Requirements that are not preferences
 
-- 67, 68 and 69 can run in parallel but all edit `src/rbl/capture/process.py`, in different
-  functions; whichever lands second rebases.
-- 71 and 72 edit `session_recorder.py` and `app.py`, which set 3's 48 also edits. Whichever
-  lands second rebases; neither blocks the other.
+- Insertion uncertainty and the bar numbers are pure functions in the dose model (no Qt,
+  no clock) so the stopping rule is testable with lists of numbers.
+- The sampling cycle scheduler stays clockless and never sees samples; the tab tells it
+  `notify_converged(t)`.
+- The tab keeps the current insertion's samples itself, not via the cup log writer, so
+  the readout works with no cup log open.
+- Fixed dwell and maximum dwell are two separate settings; editing one never changes
+  the other.
+- New cup log columns are appended after the existing ones; no existing column moves.
+- Automatic insertions always have a maximum dwell. "No limit" is manual-only.
+- Not-converged automatic insertions still count toward the dose; manual insertions
+  never count.
 
-## Set 6 requirements that will be quietly treated as preferences
+### Not in this set
 
-1. **The Capture Process imports no Qt**, and nothing outside `rbl/capture/` imports
-   `rbl.capture` except `rbl/main.py`. `main.py` checks `--capture-process` before importing
-   anything from `rbl.gui`. Contract test in 65; `-X importtime` test in 65.
-2. **The Capture Process's standard output carries only protocol lines.** `sys.stdout` is
-   pointed at stderr first thing.
-3. **The acquisition thread never blocks on the disk.** A full write queue drops and counts.
-4. **No segment ever mixes settings.** Any `set` (including keep 1 in N) bumps the generation;
-   the writer opens a new segment on a new generation.
-5. **Values shown in the panels come from the `set` reply** (snapped), never from what was
-   typed.
-6. **`CaptureProcess` takes `send`, `disk_free` and `monotonic` as constructor arguments**, so
-   67 can test low disk in-process.
-7. **`CaptureClient` puts the `rbl` package's parent on the child's `PYTHONPATH` when not
-   frozen**; CI never pip-installs `rbl`.
-8. **`SessionRecorder`'s new `capture` argument is keyword-only and optional**, the default
-   camera kind is `"usb"`, and a USB-only session's `session.json` has no `"zwo"` key. Every
-   existing test passes unedited.
-9. **Refusals on `CaptureClient.error` never end a ZWO run**; only the child's
-   `recording_stopped` event or its exit does.
-10. **Tests compare files byte for byte with FakeCamera's formula**, and parse SER and FITS with
-    readers written in the test files, never with `ser_format` / `fits_format`.
-11. **The ZWO DLL is passed by explicit path** (`zwoasi.init(path)`), ships byte for byte in
-    the one-folder build, and is never committed. No second executable (ADR 0008 decision 2).
+Lowering NPLC or burst reads; correcting the uncertainty for sample correlation; any
+change to dose integration; an Overview history strip or a tab insertion history table;
+"no limit" for automatic insertions.
 
-## What set 6 does not do
+## Remaining from earlier sets
 
-- Motorized focus (only the `focus_preset: null` slot), the alumina stage (only an empty
-  column), any SER/MP4 converter, colour correction of recorded data, Dark Frame subtraction.
-- Reattaching to a Capture Process after a restart; a compiled Capture Process; both cameras
-  at once; code signing.
-- Any change to the USB camera path, and the app-wide scroll-wheel fix for existing widgets.
-
-## Set 4 requirements that still bind 48 and 49
-
-1. **One scale.** `CURRENT_MONITOR_MA_PER_VOLT` is assigned only in `hardware_config.py`. No
-   second factor, no "legacy 10.0", and no "1 V = 10 mA" text anywhere in `src/`. Contract
-   tests in 54 enforce this.
-2. **The scale and the hard trip change in the same PR (54).** With only the scale changed,
-   the 60 mA hard trip could never fire.
-3. **The hard trip is time at the rail** (`HARD_TRIP_RAIL_S`, 5 ms), never a current level,
-   and only in calibration and characterization.
-4. **Sessions and drift passes are never stopped by current** (ADR 0006). The planner's
-   amber and red colours are warnings, never blocks.
-5. **A rail sample is always over the spike threshold**, or a clamped amplifier would never
-   produce a spike row.
-6. **`RailTracker`, `is_at_rail` and `spike_detector` stay pure**: no Qt, no clock, and no
-   `rbl` imports in `spike_detector`.
-7. **The archive script only moves.** It never deletes, never rescales, refuses a second
-   run, and takes its roots as arguments.
-8. **Trip-history tests pass an explicit temp path.** `TRIP_HISTORY_PATH` is not redirected
-   by `tests/conftest.py`.
-9. **Superseded tests are rewritten in place, or deleted only when the ticket's
-   `Deletes tests:` line lists them** (54 and 55).
-
-## What set 4 does not do
-
-- No 100 mA burst configuration: no burst level, recovery period or gap warning. That
-  waits for the manufacturer's reply and a later experiment.
-- No DYNAMIC ADJUSTMENT guidance.
-- No rescaling or importing of old data.
-- No current-based stop in a session or drift pass.
-- No change to the LabJack range or the stream profiles.
-- No PI deck changes.
+Every agent ticket in earlier sets is `done`. Only `ready-for-developer` bench tickets
+remain, and an agent must not claim them: 12, 13, 14 (`.scratch/cup-actuation/`; 13, the
+6482 autorange settle time, bears on the settle window this set uses), 10
+(`.scratch/faraday-cup-reader/`), 52 (`.scratch/amplifier-load-and-spikes/`), 60
+(`.scratch/current-monitor-scale/`), 78, 79, 80 (`.scratch/zwo-capture/`).
 <!-- ACTIVE-PLAN:END -->
