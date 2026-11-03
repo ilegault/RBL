@@ -1,6 +1,6 @@
 # 81: Insertion uncertainty and convergence bars as pure functions
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
