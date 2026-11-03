@@ -1,6 +1,6 @@
 # 82: Poll the picoammeter back-to-back while a run is open
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
