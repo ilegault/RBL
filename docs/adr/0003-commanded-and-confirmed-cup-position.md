@@ -154,3 +154,62 @@ irradiation run entirely by hand accumulates nothing, by design.
 C4 and C5 make the operator's word part of the dose. The application cannot see whether
 the beam was on while it was not sampling, so it asks and records the answer next to the
 numbers it affects. A reader can then recompute the dose under either answer.
+
+## Amendment, 2026-11-03: an insertion may end when its mean is precise enough
+
+Decision 7 and the sampling cycle gave every automatic insertion the same fixed dwell. A
+fixed dwell is sized for the worst beam the operator expects, so on a quiet beam most of
+it is spent measuring a current already known well enough, and every one of those
+seconds shadows the specimen. The point of a sampling insertion is brevity; a dwell that
+cannot end early works against it.
+
+D1. **Two dwell modes.** In **fixed dwell** an insertion ends when its dwell elapses, as
+    before. In **target uncertainty** it ends as soon as its **insertion uncertainty**
+    (the relative standard error of its post-settle mean, see `CONTEXT.md`) is at or
+    below the target, provided it holds at least the minimum number of post-settle
+    samples; or when its **maximum dwell** is reached, whichever comes first. Fixed dwell
+    remains the default. The fixed dwell and the maximum dwell are separate values and
+    editing one never changes the other.
+
+D2. **Automatic insertions always have a maximum dwell.** An automatic insertion on a beam
+    that never converges would otherwise hold the cup in front of the specimen without
+    limit, unattended, and could run past the next period boundary. "No limit" is
+    available only for manual insertions, where the operator is at the bench.
+
+D3. **A not-converged insertion still counts.** An insertion that reaches its maximum dwell
+    before its target is marked not converged, and its mean still enters the dose if it is
+    a counted insertion. It is the best estimate of the current available; dropping it
+    would leave a beam-on interval with no current at all.
+
+D4. **A minimum sample count guards the stopping rule.** Stopping the first time a running
+    uncertainty dips under a target favours stopping on a lucky quiet stretch, and with
+    one sample the spread is zero. No insertion may stop on precision before the minimum
+    count (default 10, settings file only). The bias that remains is small and is recorded,
+    not corrected.
+
+D5. **Manual insertions may use the mode.** The live uncertainty is shown for every
+    insertion. An operator setting, off by default, lets the Insert button and force start
+    retract on convergence. A hand insertion at the controller is display-only. Manual
+    insertions remain uncounted (C1) whatever ends them.
+
+D6. **Every insertion records why it ended and when it first converged.** Mode, target,
+    minimum count, maximum dwell, achieved uncertainty, sample count, end reason, and the
+    time from settle-window end to first reaching the target are written per insertion.
+    When the uncertainty cannot be computed the record says why (too few samples, no valid
+    samples, mean negative, mean below run end current) rather than leaving it blank.
+    Insertion uncertainty is computed and recorded in fixed-dwell mode too.
+
+### Consequences of the amendment
+
+Insertion length now depends on the data, and that is baked into the archive: two
+insertions in one irradiation may differ in length by a factor of several, and the beam-on
+interval each represents changes with them. D6 is what lets a later reader see why.
+
+Insertion uncertainty assumes neighbouring samples are independent. If the beam wanders on
+a timescale longer than the sample spacing, the computed uncertainty is too small and an
+insertion can end on a precision it does not have. Faster polling makes this worse, not
+better. Until a bench measurement of sample-to-sample correlation exists, the target is an
+operator's judgement, not a guarantee.
+
+None of this touches the dominant error in the accumulated charge, which is drift between
+insertions (decision 7). A converged insertion is a precise sample, not a precise dose.

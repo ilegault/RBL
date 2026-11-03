@@ -275,6 +275,26 @@ starting a fresh countdown, and it is dropped once the application closes, once 
 log closes, or once a fresh start sets a boundary of its own. A saved boundary already in the past cannot be resumed and
 never produces a catch-up insertion.
 
+**Insertion uncertainty** - the relative standard error of one insertion's post-settle
+mean current: the spread of its post-settle samples divided by the square root of their
+number, as a fraction of the mean. It says how well one insertion pinned down the
+current while the cup was in the beam. It says nothing about drift between insertions,
+which is the dominant error in the accumulated charge and which no insertion can observe.
+Not to be confused with that dose error, and never called just "the error".
+
+**Dwell mode** - how an insertion decides when to end. In **fixed dwell** it ends when
+the dwell has elapsed. In **target uncertainty** it ends as soon as its insertion
+uncertainty is at or below the **target uncertainty**, provided it has at least the
+minimum number of post-settle samples, or when the **maximum dwell** is reached,
+whichever comes first. The fixed dwell and the maximum dwell are two separate values for
+two separate modes: editing one never changes the other, and neither is ever called
+just "the dwell" where the mode is not obvious.
+
+**Converged insertion** - an insertion in target-uncertainty mode that reached its target
+before its maximum dwell. One that reached the maximum dwell first is **not converged**;
+its mean still stands as the best estimate of the current and still counts if the
+insertion is a counted insertion.
+
 ---
 
 ## Logging and sessions
