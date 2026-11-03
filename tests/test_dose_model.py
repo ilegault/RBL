@@ -19,17 +19,25 @@ from __future__ import annotations
 import ast
 import math
 
+import pytest
+
 import rbl.hardware.dose_model as dm
 from rbl.config.cup_config import CUP_SETTLE_WINDOW_S, ELEMENTARY_CHARGE_C
 from rbl.hardware.dose_model import (
+    ConvergenceBars,
     DoseAccumulator,
     DoseTotals,
     InsertionCurrentStats,
+    InsertionUncertainty,
+    UncertaintyReason,
     compute_charge,
+    compute_convergence_bars,
     compute_dpa,
     compute_fluence,
     compute_insertion_current,
+    compute_insertion_uncertainty,
     patch_area_cm2,
+    uncertainty_reason_text,
 )
 
 
@@ -437,3 +445,134 @@ def test_reset_clears_exclusions_and_seed() -> None:
     acc.record_insertion(0.0, 10.0, 1e-9)
     acc.record_insertion(2000.0, 2010.0, 1e-9)
     assert acc.last_beam_on_s == 1990.0
+
+
+# ---------------------------------------------------------------------------
+# Insertion uncertainty (ticket 81)
+# ---------------------------------------------------------------------------
+
+_NAN = float("nan")
+
+
+def _unc(samples, min_samples=3, target=0.05, run_end=1e-12):
+    return compute_insertion_uncertainty(
+        samples, 0.0, 1.0, target, min_samples, run_end
+    )
+
+
+@pytest.mark.parametrize(
+    "samples, expected",
+    [
+        ([], UncertaintyReason.TOO_FEW_SAMPLES),
+        ([(0.5, 1e-9)], UncertaintyReason.TOO_FEW_SAMPLES),  # settle only
+        ([(1.5, None), (2.0, _NAN)], UncertaintyReason.NO_VALID_SAMPLES),
+        ([(1.5, None), (2.0, 1e-9)], UncertaintyReason.TOO_FEW_SAMPLES),
+        ([(1.5, -2e-9), (2.0, -2e-9), (2.5, -2e-9)], UncertaintyReason.MEAN_NEGATIVE),
+        ([(1.5, 1e-13), (2.0, 1e-13), (2.5, 1e-13)], UncertaintyReason.MEAN_BELOW_RUN_END),
+        ([(1.5, 1e-9), (2.0, 1e-9), (2.5, 1e-9)], None),
+    ],
+)
+def test_uncertainty_reason_table(samples, expected) -> None:
+    r = _unc(samples)
+    assert r.reason is expected
+    assert (r.uncertainty is None) == (expected is not None)
+    if expected is not None:
+        assert r.converged is False
+
+
+def test_negative_mean_below_run_end_is_mean_negative() -> None:
+    r = _unc([(1.5, -1e-9), (2.0, -1e-9), (2.5, -1e-9)], run_end=1e-12)
+    assert r.reason is UncertaintyReason.MEAN_NEGATIVE
+
+
+def test_none_only_post_settle_is_no_valid_not_too_few() -> None:
+    assert _unc([(1.2, None), (1.4, None)]).reason is UncertaintyReason.NO_VALID_SAMPLES
+
+
+def test_min_samples_guard_and_text() -> None:
+    nine = [(1.0 + 0.1 * i, 1e-9) for i in range(9)]
+    r = _unc(nine, min_samples=10)
+    assert r.reason is UncertaintyReason.TOO_FEW_SAMPLES
+    assert not r.converged
+    assert r.n == 9
+    assert uncertainty_reason_text(r.reason, r.n, 10) == "too few samples (9/10)"
+    ten = nine + [(1.9, 1e-9)]
+    r10 = _unc(ten, min_samples=10)
+    assert r10.reason is None
+    assert r10.uncertainty == 0.0
+    assert r10.converged
+
+
+def test_reason_texts() -> None:
+    assert uncertainty_reason_text(UncertaintyReason.NO_VALID_SAMPLES, 0, 10) == "no valid samples"
+    assert uncertainty_reason_text(UncertaintyReason.MEAN_NEGATIVE, 5, 10) == "mean negative"
+    assert (
+        uncertainty_reason_text(UncertaintyReason.MEAN_BELOW_RUN_END, 5, 10)
+        == "mean below run end current"
+    )
+
+
+def test_uncertainty_matches_hand_value_and_exclusions() -> None:
+    samples = [
+        (0.2, 9e-9),  # inside settle window
+        (1.0, 1e-9),
+        (2.0, 2e-9),
+        (2.5, None),
+        (2.7, _NAN),
+        (3.0, 3e-9),
+        (4.0, 4e-9),
+        (5.0, 5e-9),
+    ]
+    r = _unc(samples, min_samples=5, target=0.5)
+    mean = 3e-9
+    std = math.sqrt(sum((x * 1e-9 - mean) ** 2 for x in range(1, 6)) / 4)
+    assert r.n == 5
+    assert r.mean_a == pytest.approx(mean)
+    assert r.std_a == pytest.approx(std)
+    assert r.uncertainty == pytest.approx(std / (math.sqrt(5) * mean))
+    assert r.converged  # 0.2357 <= 0.5
+    assert r.post_settle_elapsed_s == pytest.approx(4.0)  # 5.0 - (0 + 1.0)
+    assert r.mean_spacing_s == pytest.approx(1.0)
+    assert not _unc(samples, min_samples=5, target=0.1).converged
+    # same mean as compute_insertion_current over the same samples
+    assert compute_insertion_current(samples, 0.0, 1.0).mean_a == pytest.approx(r.mean_a)
+
+
+def test_empty_post_settle_elapsed_and_spacing() -> None:
+    r = _unc([(0.5, 1e-9)])
+    assert r.post_settle_elapsed_s == 0.0
+    assert r.mean_spacing_s is None
+
+
+def _result(uncertainty, reason=None, n=5, mean=3e-9, std=1e-9, spacing=1.0):
+    return InsertionUncertainty(uncertainty, reason, n, mean, std, False, 0.0, spacing)
+
+
+def test_convergence_bars_drain_fraction() -> None:
+    assert compute_convergence_bars(_result(0.30), 0.05, 5).drain_fraction == 1.0
+    bars = compute_convergence_bars(_result(0.05), 0.05, 5)
+    assert bars.drain_fraction == pytest.approx(0.25)
+    assert bars.target_mark == 0.25
+
+
+def test_convergence_bars_n_needed_and_time_left() -> None:
+    # (std / (mean * target))^2 = (1e-9 / (3e-9 * 0.05))^2 = 44.44 -> 45
+    bars = compute_convergence_bars(_result(0.1), 0.05, 10)
+    assert isinstance(bars, ConvergenceBars)
+    assert bars.n == 5
+    assert bars.n_needed == 45
+    assert bars.time_left_s == pytest.approx(40.0)  # (45 - 5) * 1.0 s
+    # the minimum count wins when the formula asks for fewer
+    assert compute_convergence_bars(_result(0.1), 0.05, 100).n_needed == 100
+    # no spacing -> no time estimate; already enough samples -> zero
+    assert compute_convergence_bars(_result(0.1, spacing=None), 0.05, 10).time_left_s is None
+    assert compute_convergence_bars(_result(0.1, n=60), 0.05, 10).time_left_s == 0.0
+
+
+def test_convergence_bars_none_when_reason_set() -> None:
+    bars = compute_convergence_bars(
+        _result(None, UncertaintyReason.TOO_FEW_SAMPLES), 0.05, 10
+    )
+    assert bars.drain_fraction is None
+    assert bars.n_needed is None
+    assert bars.time_left_s is None
