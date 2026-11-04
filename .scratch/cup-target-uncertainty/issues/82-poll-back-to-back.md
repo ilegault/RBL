@@ -1,6 +1,6 @@
 # 82: Poll the picoammeter back-to-back while a run is open
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -33,16 +33,16 @@ read returns, so the instrument sets the pace. Idle polling stays at 2 Hz.
 
 ## Acceptance criteria
 
-- [ ] `tests/test_picoammeter_worker.py::test_set_poll_interval_and_acquiring` (rewrite
+- [x] `tests/test_picoammeter_worker.py::test_set_poll_interval_and_acquiring` (rewrite
       in place, same name) asserts `set_acquiring(True)` gives an interval of `0.0` and
       `set_acquiring(False)` gives `CUP_POLL_INTERVAL_IDLE_S`.
-- [ ] A new test runs the worker with the Keithley driver mocked (as
+- [x] A new test runs the worker with the Keithley driver mocked (as
       `test_worker_run_and_stop_lifecycle` does), acquiring, with
       `_sleep_interruptible` patched to record its calls, and asserts that after several
       reads it was never called with a positive duration.
-- [ ] A new test asserts that when not acquiring, `_sleep_interruptible` is called with
+- [x] A new test asserts that when not acquiring, `_sleep_interruptible` is called with
       `CUP_POLL_INTERVAL_IDLE_S` between reads.
-- [ ] `stop()` on an acquiring worker returns within the existing lifecycle test's
+- [x] `stop()` on an acquiring worker returns within the existing lifecycle test's
       timeout.
 
 May fake: the Keithley driver class and `_sleep_interruptible`. Must be real: the worker's
