@@ -38,6 +38,14 @@ DECISIONS THAT MATTER
   merges the moment CI goes green beats the finalize turn, master is left
   saying ``in-progress``, and without the exception the whole set behind that
   ticket stalls with nothing running (64 did exactly this to 65-77).
+* Master is believed over the saved state, every poll (``Swarm.reconcile``). A job
+  whose ticket is ``done`` on master, or whose PR is MERGED, is closed out without
+  starting an agent, whatever phase ``.swarm/state.json`` remembers. Merges made by a
+  human or another session therefore free their dependents on the next poll, and a
+  swarm restarted after hand merges does not relaunch agents on finished tickets
+  (it did: 68 and 76 were relaunched after their PRs had merged). ``--stay`` keeps
+  the swarm polling when idle so it picks those dependents up instead of exiting.
+* A worktree that vanished under a saved job is re-created from the job's branch.
 * A ticket whose agent died before any PR existed (a crash, a timeout) is
   released on the next start and claimed again; its branch and worktree are
   reused, so the new agent continues rather than starts over.
@@ -191,6 +199,33 @@ def frontier(tickets: dict[str, Ticket], taken: set[str],
     return sorted(ready, key=lambda t: (int(t.number), t.set))
 
 
+def landed(master_status: str, pr_state: str | None) -> str | None:
+    """Why a job's work is already on master, or None if it is not.
+
+    Two independent signals, either is enough: the ticket file on origin/master says
+    done (someone merged it by hand, or another session did), or the job's PR is
+    MERGED. Both are facts about master, so they beat whatever phase a stale
+    ``.swarm/state.json`` remembers.
+    """
+    if master_status in DONE_WORDS:
+        return f"Status: {master_status} on master"
+    if pr_state == "MERGED":
+        return "PR merged"
+    return None
+
+
+def recoverable(branch_status: str, pr_state: str | None, buckets: set[str]) -> bool:
+    """A parked (blocked) job whose PR has since gone green and was never really escalated.
+
+    AGENTS.md's escalation sets the ticket's own ``Status: blocked``; an agent that only
+    *reports* blocked (a flaky runner it re-ran rather than fixed — 81 on the 3.14 job)
+    leaves the status alone. So: PR still open, every check reported and none failing or
+    pending, and the branch ticket not marked blocked. Anything else stays for a human.
+    """
+    return (pr_state == "OPEN" and branch_status not in DONE_WORDS | {"blocked"}
+            and bool(buckets) and not buckets & {"fail", "cancel", "pending"})
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Shell helpers
 # ─────────────────────────────────────────────────────────────────────────────
@@ -215,14 +250,32 @@ def gh_json(*args: str, cwd: Path = REPO):
         return None
 
 
+def git_read(*args: str, attempts: int = 4) -> str:
+    """Read-only git with retries.
+
+    The agents run git in worktrees of this same repo while the swarm reads
+    origin/master; on Windows a read that races a fetch/gc/pack rewrite can fail
+    with a nonzero exit and EMPTY stderr, then succeed a moment later. One such
+    blip must not kill a multi-hour swarm.
+    """
+    for i in range(attempts):
+        try:
+            return git(*args)
+        except RuntimeError:
+            if i == attempts - 1:
+                raise
+            time.sleep(1.0 + i)
+    raise AssertionError("unreachable")
+
+
 def load_master_tickets() -> dict[str, Ticket]:
-    git("fetch", "--quiet", "origin", BASE)
-    names = git("ls-tree", "-r", "--name-only", f"origin/{BASE}", ".scratch/").splitlines()
+    git_read("fetch", "--quiet", "origin", BASE)
+    names = git_read("ls-tree", "-r", "--name-only", f"origin/{BASE}", ".scratch/").splitlines()
     tickets = {}
     for name in names:
         if not _FILE.match(name):
             continue
-        t = parse_ticket(name, git("show", f"origin/{BASE}:{name}"))
+        t = parse_ticket(name, git_read("show", f"origin/{BASE}:{name}"))
         if t:
             tickets[t.key] = t
     return tickets
@@ -457,6 +510,7 @@ class Swarm:
         self.jobs: dict[str, Job] = {}
         self.procs: dict[str, subprocess.Popen] = {}
         self.tickets: dict[str, Ticket] = {}
+        self._last_pr_sweep = 0.0
         self.load_state()
 
     # ── state ────────────────────────────────────────────────────────────────
@@ -518,6 +572,16 @@ class Swarm:
         job.turn += 1
         job.started = time.time()
         wt = Path(job.worktree)
+        if not wt.exists():
+            # Saved state outlived the directory (deleted by hand, or removed by a
+            # cleanup that died before the state was saved). Re-attach the branch.
+            wt.parent.mkdir(parents=True, exist_ok=True)
+            git("worktree", "prune", check=False)
+            branch = job.ticket["branch"]
+            if git("branch", "--list", branch).strip():
+                git("worktree", "add", str(wt), branch)
+            else:
+                git("worktree", "add", "-b", branch, str(wt), f"origin/{BASE}")
         (wt / PROMPT_NAME).write_text(build_prompt(phase, job, job.tool, **extra),
                                       encoding="utf-8")
         LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -707,10 +771,59 @@ class Swarm:
         git("worktree", "remove", "--force", job.worktree, check=False)
         git("branch", "-D", job.ticket["branch"], check=False)
 
+    def reconcile(self) -> None:
+        """Believe master over the saved state.
+
+        Work lands without this swarm's help: a human merges, another session merges,
+        a blocked ticket is finished by hand. The saved phase then lies, and without
+        this an old job is restarted on a ticket that is already done (68 and 76 were
+        relaunched after their PRs had merged) while jobs parked as blocked/ready never
+        notice their PR merged. Running every tick also means a merge made while the
+        swarm is running frees its dependents on the very next poll.
+        """
+        check_prs = time.time() - self._last_pr_sweep >= self.args.poll
+        if check_prs:
+            self._last_pr_sweep = time.time()
+        for key, job in list(self.jobs.items()):
+            if job.phase == MERGED or key in self.procs:
+                continue
+            on_master = self.tickets.get(key)
+            if job.pr is None and job.phase in (IMPLEMENT, FAILED, BLOCKED):
+                job.pr = self.find_pr(job) if check_prs else None   # pushed, never recorded
+            state = None
+            if job.pr and check_prs:
+                info = gh_json("pr", "view", str(job.pr), "--json", "state")
+                state = info["state"] if info else None
+            why = landed(on_master.status if on_master else "", state)
+            if why:
+                job.phase, job.note = MERGED, f"landed — {why}"
+                log(f"{key}: {job.note}; no agent needed")
+                self.cleanup(job)
+            elif job.pr and job.phase == IMPLEMENT:
+                job.phase = WATCH      # the agent pushed and opened a PR before it died
+            elif job.pr and job.phase == BLOCKED and check_prs and state == "OPEN":
+                self.try_recover(job)
+
+    def try_recover(self, job: Job) -> None:
+        """Un-park a job that was blocked only on CI that has since come back green."""
+        wt = Path(job.worktree)
+        if not wt.exists():
+            return
+        git("fetch", "--quiet", "origin", job.ticket["branch"], cwd=wt, check=False)
+        checks = gh_json("pr", "checks", str(job.pr), "--json", "name,bucket") or []
+        if not recoverable(self.branch_ticket_status(job), "OPEN",
+                           {c["bucket"] for c in checks}):
+            return
+        run(["gh", "pr", "ready", str(job.pr)], check=False)   # escalation made it a draft
+        job.phase, job.note = WATCH, "CI went green after the agent reported blocked — resumed"
+        job.last_head = ""
+        log(f"{job.key}: {job.note}")
+
     # ── main loop ────────────────────────────────────────────────────────────
     def tick(self) -> None:
         self.reap()
         self.tickets = load_master_tickets()
+        self.reconcile()
         for job in list(self.jobs.values()):
             if job.phase in (WATCH, READY) and job.pr:
                 self.watch(job)
@@ -814,6 +927,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--agy-cmd", default="agy")
     ap.add_argument("--agy-args", default="--dangerously-skip-permissions",
                     help="extra args for every agy run (check `agy --help` for your version)")
+    ap.add_argument("--stay", action="store_true",
+                    help="keep polling when idle instead of exiting, so tickets unblocked "
+                         "by merges made elsewhere are picked up")
     ap.add_argument("--forget", nargs="*", default=[], metavar="SET/NN",
                     help="drop these tickets from the swarm's state, then exit")
     ap.add_argument("--dry-run", action="store_true", help="print the frontier and exit")
@@ -853,7 +969,7 @@ def main(argv: list[str] | None = None) -> int:
             if snapshot != last_report:
                 swarm.report()
                 last_report = snapshot
-            if swarm.idle() and not frontier(swarm.tickets, set(swarm.jobs),
+            if not args.stay and swarm.idle() and not frontier(swarm.tickets, set(swarm.jobs),
                                              remote_ticket_branches(), args.sets,
                                              swarm.merged()):
                 log("nothing left to start and nothing running — done.")
