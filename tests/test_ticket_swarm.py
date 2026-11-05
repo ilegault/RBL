@@ -144,3 +144,78 @@ def test_missing_result_line_is_unknown(tmp_path):
     log = tmp_path / "b.log"
     log.write_text("the agent just stopped", encoding="utf-8")
     assert swarm.swarm_result(log, "agy") == "unknown"
+
+
+@pytest.mark.parametrize("status, pr_state, landed", [
+    ("done", None, True),
+    ("done", "OPEN", True),
+    ("in-progress", "MERGED", True),
+    ("in-progress", "OPEN", False),
+    ("ready-for-agent", None, False),
+    ("blocked", "CLOSED", False),
+])
+def test_landed_trusts_master_status_or_a_merged_pr(status, pr_state, landed):
+    assert (swarm.landed(status, pr_state) is not None) is landed
+
+
+def _swarm_with(jobs, tickets, tmp_path, monkeypatch, pr_state=None):
+    args = type("A", (), {"poll": 0, "claude": 1, "agy": 0})()
+    monkeypatch.setattr(swarm, "STATE_PATH", tmp_path / "state.json")
+    s = swarm.Swarm(args)
+    s.jobs = jobs
+    s.tickets = tickets
+    monkeypatch.setattr(swarm, "gh_json",
+                        lambda *a, **k: {"state": pr_state} if pr_state else None)
+    monkeypatch.setattr(s, "cleanup", lambda job: None)
+    monkeypatch.setattr(s, "find_pr", lambda job: None)
+    return s
+
+
+def _job(t, phase, pr=None):
+    return swarm.Job(ticket={**swarm.asdict(t), "branch": t.branch}, tool="claude",
+                     worktree="x", phase=phase, pr=pr)
+
+
+@pytest.mark.parametrize("phase", ["implement", "watch", "blocked", "ready"])
+def test_reconcile_closes_out_a_job_whose_ticket_is_done_on_master(phase, tmp_path, monkeypatch):
+    t = _ticket("zwo-capture", "68", status="done")
+    s = _swarm_with({t.key: _job(t, phase)}, _index(t), tmp_path, monkeypatch)
+    s.reconcile()
+    assert s.jobs[t.key].phase == swarm.MERGED
+
+
+def test_reconcile_closes_out_a_blocked_job_whose_pr_merged(tmp_path, monkeypatch):
+    t = _ticket("zwo-capture", "70", status="in-progress")
+    s = _swarm_with({t.key: _job(t, "blocked", pr=123)}, _index(t), tmp_path, monkeypatch,
+                    pr_state="MERGED")
+    s.reconcile()
+    assert s.jobs[t.key].phase == swarm.MERGED
+    assert t.key in s.merged()
+
+
+def test_reconcile_leaves_unfinished_work_alone(tmp_path, monkeypatch):
+    t = _ticket("zwo-capture", "68", status="in-progress")
+    s = _swarm_with({t.key: _job(t, "blocked", pr=129)}, _index(t), tmp_path, monkeypatch,
+                    pr_state="OPEN")
+    s.reconcile()
+    assert s.jobs[t.key].phase == "blocked"
+
+
+def test_reconcile_watches_a_pr_the_agent_opened_before_it_died(tmp_path, monkeypatch):
+    t = _ticket("zwo-capture", "68", status="in-progress")
+    s = _swarm_with({t.key: _job(t, "implement", pr=129)}, _index(t), tmp_path, monkeypatch,
+                    pr_state="OPEN")
+    s.reconcile()
+    assert s.jobs[t.key].phase == swarm.WATCH
+
+
+@pytest.mark.parametrize("branch_status, pr_state, buckets, ok", [
+    ("in-progress", "OPEN", {"pass"}, True),
+    ("in-progress", "OPEN", {"pass", "fail"}, False),
+    ("in-progress", "OPEN", {"pass", "pending"}, False),
+    ("in-progress", "OPEN", set(), False),
+    ("blocked", "OPEN", {"pass"}, False),        # a real escalation stays with a human
+    ("in-progress", "CLOSED", {"pass"}, False),
+])
+def test_recoverable_only_when_green_and_never_escalated(branch_status, pr_state, buckets, ok):
+    assert swarm.recoverable(branch_status, pr_state, buckets) is ok
