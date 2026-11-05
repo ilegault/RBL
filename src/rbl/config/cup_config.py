@@ -141,3 +141,8 @@ CUP_CYCLE_PERIOD_S: float = 300.0   # 5-minute sampling period
 CUP_CYCLE_DWELL_S: float = 3.0      # 3-second dwell in beam per insertion
 
 
+
+# Target-uncertainty dwell (ADR 0003 amendment D). The target is a fraction (0.05 = 5 %)
+# of the post-settle mean; the minimum count stops one lucky sample ending an insertion.
+CUP_TARGET_UNCERTAINTY_DEFAULT: float = 0.05
+CUP_MIN_CONVERGE_SAMPLES: int = 10

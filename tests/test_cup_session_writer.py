@@ -16,6 +16,7 @@ import csv
 import json
 import os
 from datetime import datetime
+from pathlib import Path
 
 import pytest
 
@@ -1611,8 +1612,9 @@ class TestSummaryOriginAndTotals:
     """Ticket 26: origin, counted_in_dose and total_beam_on_s columns (ADR 0003 C4/C5)."""
 
     def test_new_columns_are_appended_after_every_existing_one(self):
-        assert CSV_COLUMNS[-3:] == ["origin", "counted_in_dose", "total_beam_on_s"]
-        assert CSV_COLUMNS[-4] == "dpa"
+        # Ticket 83 appended eight more after these; their positions are unchanged.
+        assert CSV_COLUMNS[-11:-8] == ["origin", "counted_in_dose", "total_beam_on_s"]
+        assert CSV_COLUMNS[-12] == "dpa"
 
     def test_explicit_values_read_back_in_their_columns(self, tmp_path):
         sw = CupSessionWriter(session_id="t26_explicit", output_dir=tmp_path)
@@ -1716,3 +1718,78 @@ class TestAutomaticInsertionRestarted:
         sw.close()
         (line,) = [ln for ln in _header_text(sw).splitlines() if ln.startswith("# record types:")]
         assert "automatic_insertion_restarted" in line
+
+
+class TestTargetUncertaintyColumns:
+    """Ticket 83 — eight columns appended after total_beam_on_s; nothing else moves."""
+
+    NEW = [
+        "dwell_mode", "target_uncertainty", "min_converge_samples", "max_dwell_s",
+        "insertion_uncertainty", "uncertainty_reason", "end_reason", "converged_after_s",
+    ]
+    OLD_PREFIX = [
+        "record_type", "iso_timestamp", "host_timestamp", "inst_timestamp", "current_a",
+        "status_word", "over_range", "run_id", "details", "position",
+        "commanded_timestamp", "confirmed_timestamp", "dwell", "sample_count",
+        "mean_current_a", "std_current_a", "beam_on_seconds", "charge", "charge_state",
+        "area", "k", "fluence", "dpa", "origin", "counted_in_dose", "total_beam_on_s",
+    ]
+
+    def test_new_columns_are_last_and_existing_indexes_unchanged(self):
+        assert CSV_COLUMNS[-8:] == self.NEW
+        assert CSV_COLUMNS[:-8] == self.OLD_PREFIX
+
+    def read_rows(self, writer):
+        with open(writer.csv_path, encoding="utf-8") as f:
+            lines = [line for line in f if not line.startswith("#")]
+        return list(csv.DictReader(lines))
+
+    def test_summary_row_carries_values_and_sample_row_is_blank(self, tmp_path):
+        writer = CupSessionWriter(
+            session_id="unc_cols", output_dir=tmp_path, min_converge_samples=10
+        )
+        writer.write_run_opened(t_host=1.0, run_id=1, arm_threshold=5e-7,
+                                release_threshold=2.5e-7)
+        writer.write_sample(t_host=1.1, t_inst=0.1, current=1e-6, status_word=0,
+                            over_range=False, run_id=1)
+        writer.write_insertion_summary(
+            run_id=1, commanded_timestamp=1.0, confirmed_timestamp=1.0, dwell=3.0,
+            sample_count=12, mean_current_a=1e-6, std_current_a=1e-8,
+            beam_on_seconds=0.0, charge=0.0,
+            dwell_mode="fixed", min_converge_samples=10,
+            insertion_uncertainty=0.0123456789, uncertainty_reason="",
+            end_reason="dwell_elapsed",
+        )
+        writer.write_insertion_summary(
+            run_id=2, commanded_timestamp=None, confirmed_timestamp=9.0, dwell=1.0,
+            sample_count=1, mean_current_a=1e-6, std_current_a=0.0,
+            beam_on_seconds=0.0, charge=0.0, dwell_mode="fixed",
+            min_converge_samples=10, insertion_uncertainty=None,
+            uncertainty_reason="too_few_samples", end_reason="operator",
+        )
+        rows = self.read_rows(writer)
+        sample = next(r for r in rows if r["record_type"] == "sample")
+        assert all(sample[c] == "" for c in self.NEW)
+        opened = next(r for r in rows if r["record_type"] == "run_opened")
+        assert all(opened[c] == "" for c in self.NEW)
+
+        first, second = [r for r in rows if r["record_type"] == "insertion_summary"]
+        assert first["dwell_mode"] == "fixed"
+        assert first["min_converge_samples"] == "10"
+        assert float(first["insertion_uncertainty"]) == pytest.approx(0.0123456789, rel=1e-6)
+        assert first["end_reason"] == "dwell_elapsed"
+        for blank in ("target_uncertainty", "max_dwell_s", "converged_after_s",
+                      "uncertainty_reason"):
+            assert first[blank] == ""
+        assert second["insertion_uncertainty"] == ""
+        assert second["uncertainty_reason"] == "too_few_samples"
+        assert second["end_reason"] == "operator"
+        writer.close()
+
+    def test_header_comment_records_min_converge_samples(self, tmp_path):
+        writer = CupSessionWriter(
+            session_id="unc_hdr", output_dir=tmp_path, min_converge_samples=10
+        )
+        writer.close()
+        text = Path(writer.csv_path).read_text(encoding="utf-8")
+        assert "min_converge_samples=10" in text

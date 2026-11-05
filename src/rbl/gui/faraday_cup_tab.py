@@ -203,6 +203,17 @@ the future.
 Stopping writes cycle_disarmed rows carrying the saved boundary, and starting writes
 cycle_armed rows recording whether the countdown was fresh or resumed, ensuring gaps in
 the insertion archive are fully explained.
+
+INSERTION UNCERTAINTY READOUT (ADR 0003 AMENDMENT D, TICKET 83)
+---------------------------------------------------------------
+Every insertion shows its insertion uncertainty live (``lbl_uncertainty``) and writes it,
+with the reason the insertion ended, to the cup log. Behaviour is unchanged: fixed dwell
+still governs, so the operator can watch real beam noise before any stopping rule exists.
+The tab keeps the insertion's samples itself (``_insertion_samples``), cleared when a run
+opens, rather than reading them from the cup log writer: the writer exists only while a
+cup log is open, and a manual bench test is often run without one (ADR 0002 B3).
+The end reason is ``fault`` or ``operator`` when one of those forced the retract, else
+``dwell_elapsed``; later tickets add ``converged`` and ``max_dwell``.
 """
 from __future__ import annotations
 
@@ -249,7 +260,10 @@ from rbl.hardware.dose_model import (
     DoseAccumulator,
     DoseTotals,
     InsertionCurrentStats,
+    InsertionUncertainty,
+    compute_insertion_uncertainty,
     patch_area_cm2,
+    uncertainty_reason_text,
 )
 from rbl.services.cup_acquisition import (
     AuthorityDetector,
@@ -376,6 +390,14 @@ class FaradayCupTab(QWidget):
         self._manual_pending: bool = False
         self._run_forced: bool = False
         self._insertion_origin: str | None = None
+        # Target-uncertainty readout (ticket 83). The tab keeps the current insertion's
+        # samples itself, not via the cup log writer: the readout must work with no cup
+        # log open (ADR 0002 B3). Cleared when a run opens; (t, current or None).
+        self._insertion_samples: list[tuple[float, float | None]] = []
+        self._live_uncertainty: InsertionUncertainty | None = None
+        # Why the insertion in progress is ending, when something other than the dwell
+        # is doing it: "operator" or "fault". None means the dwell elapsed.
+        self._end_reason_hint: str | None = None
         self._confirmed_in_t: float = float("nan")
         self._confirmed_out_t: float = float("nan")
         self._species: str = "NOT_SPECIFIED"
@@ -636,6 +658,27 @@ class FaradayCupTab(QWidget):
             f"font-weight: bold; font-size: {theme.FS_LABEL}px; color: {theme.NEUTRAL};"
         )
         stats_grid.addWidget(self.lbl_samples, 3, 1)
+
+        lbl_unc_title = QLabel("Uncertainty:")
+        lbl_unc_title.setStyleSheet(f"font-size: {theme.FS_LABEL}px; color: {theme.NEUTRAL};")
+        stats_grid.addWidget(lbl_unc_title, 4, 0)
+
+        self.lbl_uncertainty = QLabel("—")
+        self.lbl_uncertainty.setToolTip(
+            "Relative standard error of this insertion's post-settle mean. "
+            "A precise sample, not a precise dose."
+        )
+        self.lbl_uncertainty.setStyleSheet(
+            f"font-family: Consolas, 'Courier New', monospace; "
+            f"font-weight: bold; font-size: {theme.FS_LABEL}px; color: {theme.NEUTRAL};"
+        )
+        stats_grid.addWidget(self.lbl_uncertainty, 4, 1)
+
+        self.lbl_last_insertion = QLabel("")
+        self.lbl_last_insertion.setStyleSheet(
+            f"color: {theme.NEUTRAL}; font-style: italic; font-size: {theme.FS_TINY}px;"
+        )
+        stats_grid.addWidget(self.lbl_last_insertion, 5, 0, 1, 2)
 
         acq_lay.addLayout(stats_grid)
         acq_lay.addStretch()
@@ -1016,6 +1059,7 @@ class FaradayCupTab(QWidget):
             "settle_window_s": self._settle_window_s,
             "cycle_period_s": self.cycle.period_s,
             "cycle_dwell_s": self.cycle.dwell_s,
+            "min_converge_samples": self._settings.min_converge_samples,
         }
 
     def _on_cup_log_opened(self, path: str, kind: str) -> None:
@@ -1116,6 +1160,47 @@ class FaradayCupTab(QWidget):
             return "manual"
         return "uncommanded"
 
+    def _insertion_uncertainty(self) -> InsertionUncertainty:
+        """Insertion uncertainty of the samples held so far, with the live settings.
+
+        Uses the live settle window and release threshold (the run end current) so the
+        readout and the cup log judge the same samples the dose model does.
+        """
+        start = self._current_run_start_t
+        return compute_insertion_uncertainty(
+            self._insertion_samples,
+            None if math.isnan(start) else start,
+            self._settle_window_s,
+            self._settings.target_uncertainty,
+            self._settings.min_converge_samples,
+            self.acquisition.detector.release_threshold,
+        )
+
+    def _uncertainty_percent_or_reason(self, result: InsertionUncertainty) -> str:
+        """``4.2 %``, or the reason text when the uncertainty cannot be computed."""
+        if result.uncertainty is None:
+            assert result.reason is not None
+            return uncertainty_reason_text(
+                result.reason, result.n, self._settings.min_converge_samples
+            )
+        return f"{result.uncertainty * 100:.1f} %"
+
+    def _uncertainty_text(self, result: InsertionUncertainty) -> str:
+        """Live readout text: ``4.2 % (n = 12)``, or the reason text."""
+        if result.uncertainty is None:
+            return self._uncertainty_percent_or_reason(result)
+        return f"{self._uncertainty_percent_or_reason(result)} (n = {result.n})"
+
+    def _begin_insertion_samples(self) -> None:
+        """A run just opened: start a fresh sample list and forget the last end reason."""
+        self._insertion_samples = []
+        self._live_uncertainty = None
+        self._end_reason_hint = None
+
+    def _resolve_end_reason(self) -> str:
+        """Why the insertion that just ended ended (fixed set; ticket 83 knows three)."""
+        return self._end_reason_hint or "dwell_elapsed"
+
     def _close_insertion(self, run_id: int, t_close: float, details: str = "") -> None:
         """Settle the dose for a closed run and write its insertion summary row.
 
@@ -1155,6 +1240,15 @@ class FaradayCupTab(QWidget):
         cs = self.charge_state
         area = self._area_cm2
         k = self.displacement_coeff
+        unc = self._insertion_uncertainty()
+        end_reason = self._resolve_end_reason()
+        self.lbl_last_insertion.setText(
+            f"last: {self._uncertainty_percent_or_reason(unc)} · {end_reason}"
+            f" · n = {unc.n} · {dwell:.1f} s"
+        )
+        self._insertion_samples = []
+        self._live_uncertainty = None
+        self._end_reason_hint = None
         writer = self.cup_log.writer
         if writer is not None:
             writer.write_insertion_summary(
@@ -1177,6 +1271,11 @@ class FaradayCupTab(QWidget):
                 origin=origin,
                 counted_in_dose=counted,
                 total_beam_on_s=self._accumulator.total_beam_on_s,
+                dwell_mode="fixed",
+                min_converge_samples=self._settings.min_converge_samples,
+                insertion_uncertainty=unc.uncertainty,
+                uncertainty_reason=unc.reason.value if unc.reason is not None else "",
+                end_reason=end_reason,
             )
         self._last_commanded_in_t = None
         self._current_run_start_t = float("nan")
@@ -1193,6 +1292,7 @@ class FaradayCupTab(QWidget):
         transition = self.acquisition.force_start(t=t_now)
         if transition is not None:
             self._run_forced = True
+            self._begin_insertion_samples()
             writer = self.cup_log.writer
             if writer is not None:
                 writer.write_run_opened(
@@ -1210,6 +1310,7 @@ class FaradayCupTab(QWidget):
         t_now = time.time()
         transition = self.acquisition.force_stop(t=t_now)
         if transition is not None:
+            self._end_reason_hint = "operator"
             writer = self.cup_log.writer
             if writer is not None:
                 writer.write_run_closed(
@@ -1242,6 +1343,7 @@ class FaradayCupTab(QWidget):
             self.lbl_avg_detail.setStyleSheet(f"color: {theme.MUTED}; font-style: italic;")
             self.lbl_duration.setText("  —    ")
             self.lbl_samples.setText("  —    ")
+            self.lbl_uncertainty.setText("—")
             return
 
         stats = self._active_run_stats()
@@ -1255,6 +1357,11 @@ class FaradayCupTab(QWidget):
             self.btn_force_stop.setEnabled(True)
 
             self.lbl_duration.setText(f"{stats.duration_s:.1f} s")
+            self.lbl_uncertainty.setText(
+                self._uncertainty_text(self._live_uncertainty)
+                if self._live_uncertainty is not None
+                else "—"
+            )
 
             if stats.over_range_samples > 0:
                 self.lbl_samples.setText(
@@ -1292,6 +1399,7 @@ class FaradayCupTab(QWidget):
 
             self.lbl_duration.setText("  —    ")
             self.lbl_samples.setText("  —    ")
+            self.lbl_uncertainty.setText("—")
             self.lbl_average.setText("  —    ")
             self.lbl_average.setStyleSheet(theme.status_label(theme.MUTED))
             self.lbl_avg_detail.setText("No active run")
@@ -1388,6 +1496,7 @@ class FaradayCupTab(QWidget):
         if transition is not None:
             if isinstance(transition, RunOpened):
                 self._current_run_start_t = transition.t
+                self._begin_insertion_samples()
                 if transition.forced:
                     self._run_forced = True
                 writer = self.cup_log.writer
@@ -1433,6 +1542,15 @@ class FaradayCupTab(QWidget):
 
         # Log sample if acquiring, or periodic heartbeat if idle
         if self.acquisition.is_acquiring:
+            usable = (
+                not state.over_range
+                and state.current is not None
+                and math.isfinite(state.current)
+            )
+            self._insertion_samples.append(
+                (t_sample, state.current if usable else None)
+            )
+            self._live_uncertainty = self._insertion_uncertainty()
             run_id = self.acquisition.current_run_id or 1
             writer = self.cup_log.writer
             if writer is not None:
@@ -1652,6 +1770,7 @@ class FaradayCupTab(QWidget):
             return
         if not self._actuation_connected:
             return
+        self._end_reason_hint = "operator"
         # Inform the cycle scheduler that a manual retraction is starting
         t_now = self._last_state_t if not math.isnan(self._last_state_t) else time.time()
         self.cycle.notify_manual_retract(t_now)
@@ -1874,6 +1993,7 @@ class FaradayCupTab(QWidget):
                     saved_boundary_t=saved_b,
                 )
         if retract_action is not None and self._actuation_connected:
+            self._end_reason_hint = "operator"
             self._start_move(CupPosition.OUT)
             if self.beamline is not None:
                 self.beamline.command_cup_out()
@@ -1967,6 +2087,8 @@ class FaradayCupTab(QWidget):
             ),
             arm_debounce_s=self._settings.arm_debounce_s,
             release_interval_s=self._settings.release_interval_s,
+            target_uncertainty=self._settings.target_uncertainty,
+            min_converge_samples=self._settings.min_converge_samples,
         )
         ok = cup_settings_store.save_settings(settings)
         if not ok:
@@ -2140,6 +2262,7 @@ class FaradayCupTab(QWidget):
             elif state.confirmed == CupPosition.INDETERMINATE:
                 # Indeterminate contact reading during move
                 self._move_in_flight = False
+                self._end_reason_hint = "fault"
                 target_name = "IN" if self._move_target == CupPosition.IN else "OUT"
                 self._move_fault = (
                     f"Move Fault: Command {target_name} failed: contacts indeterminate"
@@ -2149,6 +2272,7 @@ class FaradayCupTab(QWidget):
                 elapsed = t_now - self._move_start_t
                 if elapsed >= CUP_MOVE_CONFIRMATION_TIMEOUT_S:
                     self._move_in_flight = False
+                    self._end_reason_hint = "fault"
                     target_name = "IN" if self._move_target == CupPosition.IN else "OUT"
                     self._move_fault = (
                         f"Move Fault: Command {target_name} did not confirm "
@@ -2244,6 +2368,7 @@ class FaradayCupTab(QWidget):
         # and position feedback is exactly what prevents the run-boundary failures this
         # whole effort exists to fix.  Disarm immediately, name the reason.
         if not _was_stale and self._stale and self.cycle.is_armed:
+            self._end_reason_hint = "fault"
             self._cycle_fault = (
                 "Automatic cup insertion stopped: position feedback lost "
                 "(stream profile changed from FULL)"

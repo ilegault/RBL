@@ -25,11 +25,13 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication, QMessageBox
 
+from rbl.config.cup_config import CUP_SETTLE_WINDOW_S
 from rbl.gui import theme
 from rbl.gui.app import MainWindow
 from rbl.gui.faraday_cup_tab import FaradayCupTab
 from rbl.gui.widgets.acquisition_settings import AcquisitionSettingsGroup
 from rbl.hardware.current_monitor import format_current
+from rbl.hardware.dose_model import compute_insertion_uncertainty
 from rbl.services.cup_log import CupLog
 from rbl.state.beamline import Beamline
 from tests.payloads import CupActuationFeed, CupFeed, window_payload
@@ -3115,3 +3117,87 @@ class TestMainWindowSharesOneCupLog:
         assert win.faraday_cup_tab.cup_log is win.cup_log
         assert win.cup_log.writer is None
         assert win.faraday_cup_tab.lbl_not_logging.text() == "Not logging"
+
+
+class TestInsertionUncertaintyReadout:
+    """Ticket 83 — every insertion shows and logs its insertion uncertainty (fixed dwell)."""
+
+    # Post-settle readings: a steady ~1 uA with a little scatter, 0.1 s apart.
+    CURRENTS = [1.00e-6, 1.04e-6, 0.97e-6, 1.02e-6, 0.99e-6, 1.05e-6,
+                0.96e-6, 1.01e-6, 1.03e-6, 0.98e-6, 1.02e-6, 1.00e-6]
+
+    def open_run(self, feed, qapp):
+        feed.send_reading(1.0e-6, timestamp=1.0, t_host=1.0)
+        feed.send_reading(1.0e-6, timestamp=2.1, t_host=2.1)
+        qapp.processEvents()
+
+    def feed_post_settle(self, feed, qapp, count):
+        for i in range(count):
+            t = 4.0 + 0.1 * i
+            feed.send_reading(self.CURRENTS[i], timestamp=t, t_host=t)
+        qapp.processEvents()
+
+    def scenario(self, qapp, cup_log):
+        beamline = Beamline()
+        tab = FaradayCupTab(beamline=beamline, cup_log=cup_log)
+        feed = CupFeed(tab, beamline=beamline)
+        tab.show()
+        qapp.processEvents()
+        assert tab.lbl_uncertainty.text() == "—"
+        self.open_run(feed, qapp)
+        self.feed_post_settle(feed, qapp, 3)
+        assert tab.lbl_uncertainty.text() == "too few samples (3/10)"
+        for i in range(3, 12):
+            t = 4.0 + 0.1 * i
+            feed.send_reading(self.CURRENTS[i], timestamp=t, t_host=t)
+        qapp.processEvents()
+        text = tab.lbl_uncertainty.text()
+        assert text.endswith("% (n = 12)")
+        return tab, feed, text
+
+    def test_readout_and_cup_log_row_with_log_open(self, qapp, tmp_path):
+        cup_log = CupLog(test_root=tmp_path)
+        sw = cup_log.open_test(datetime(2026, 10, 8, 9, 0, 0))
+        tab, feed, _ = self.scenario(qapp, cup_log)
+
+        feed.send_reading(0.0, timestamp=20.0, t_host=20.0)
+        feed.send_reading(0.0, timestamp=23.5, t_host=23.5)
+        qapp.processEvents()
+        assert tab.acquisition.is_acquiring is False
+        assert tab.lbl_uncertainty.text() == "—"
+        assert tab.lbl_last_insertion.text().startswith("last: ")
+        assert "dwell_elapsed" in tab.lbl_last_insertion.text()
+
+        path = sw.csv_path
+        sw.close()
+        with open(path, newline="", encoding="utf-8") as f:
+            rows = list(csv.DictReader(line for line in f if not line.startswith("#")))
+        last = [r for r in rows if r["record_type"] == "insertion_summary"][-1]
+        assert last["dwell_mode"] == "fixed"
+        assert last["end_reason"] == "dwell_elapsed"
+        assert last["target_uncertainty"] == ""
+        assert last["converged_after_s"] == ""
+        samples = [(2.1, 1.0e-6)] + [
+            (4.0 + 0.1 * i, c) for i, c in enumerate(self.CURRENTS)
+        ] + [(20.0, 0.0)]
+        expected = compute_insertion_uncertainty(
+            samples, None, CUP_SETTLE_WINDOW_S, 0.05, 10,
+            tab.acquisition.detector.release_threshold,
+        )
+        if expected.uncertainty is None:
+            assert last["insertion_uncertainty"] == ""
+            assert last["uncertainty_reason"] == expected.reason.value
+        else:
+            assert float(last["insertion_uncertainty"]) == pytest.approx(
+                expected.uncertainty, rel=1e-5
+            )
+            assert last["uncertainty_reason"] == ""
+        tab.close()
+
+    def test_readout_works_with_no_cup_log_open(self, qapp, tmp_path):
+        cup_log = CupLog(test_root=tmp_path)
+        assert cup_log.writer is None
+        tab, _, text = self.scenario(qapp, cup_log)
+        assert text.endswith("% (n = 12)")
+        assert list(tmp_path.rglob("*.csv")) == []
+        tab.close()
