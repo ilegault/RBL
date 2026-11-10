@@ -18,6 +18,7 @@ import csv
 import math
 import os
 from datetime import datetime
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -75,6 +76,26 @@ class TestFaradayCupTabRendersCurrent:
         assert "—" in tab.lbl_current.text()
         assert "Not connected" in tab.lbl_detail.text()
         assert tab.btn_connect.text() == "Connect"
+
+    def test_connect_button_retargets_a_retrying_worker(self, qapp):
+        w1, w2 = MagicMock(), MagicMock()
+        w1.wait.return_value = True
+        w2.wait.return_value = True
+        with patch(
+            "rbl.state.picoammeter_link.PicoammeterWorker", side_effect=[w1, w2]
+        ) as cls:
+            beamline = Beamline()
+            tab = FaradayCupTab(beamline=beamline)
+            tab.show()
+            qapp.processEvents()
+
+            tab.le_resource.setText("GPIB0::14::INSTR")
+            tab.btn_connect.click()
+            tab.le_resource.setText("GPIB0::2::INSTR")
+            tab.btn_connect.click()
+
+            assert cls.call_args == call(resource_name="GPIB0::2::INSTR")
+            w2.start.assert_called_once()
 
     def test_connect_if_needed(self, qapp, monkeypatch):
         beamline = Beamline()
