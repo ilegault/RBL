@@ -1,6 +1,6 @@
 # 91: Last ROI: Full sensor ⇄ Back to ROI, and no ROI change during a ZWO recording
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
