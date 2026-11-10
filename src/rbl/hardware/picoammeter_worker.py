@@ -13,7 +13,8 @@ Communication is strictly via Qt signals.
 MISSING HARDWARE AND RECONNECTION
 ---------------------------------
 If the instrument fails to connect or disconnects mid-run:
-1. Emits error(msg).
+1. Emits error(msg). When msg contains a known VISA status, it ends with a one-sentence
+   operator hint from visa_hints.visa_error_hint (e.g. install Keysight IO Libraries).
 2. Emits connected_changed(False, "").
 3. Closes any open VISA handle.
 4. Waits according to CUP_RECONNECT_BACKOFF_S ladder, checking for stop() requests.
@@ -45,6 +46,7 @@ from rbl.hardware.keithley6482_driver import (
     discover,
     parse_reading,
 )
+from rbl.hardware.visa_hints import visa_error_hint
 
 log = logging.getLogger(__name__)
 
@@ -135,6 +137,9 @@ class PicoammeterWorker(QThread):
             return driver
         except Exception as exc:
             msg = f"Failed to connect to Keithley 6482 on {res}: {exc}"
+            hint = visa_error_hint(msg)
+            if hint is not None:
+                msg = f"{msg} {hint}"
             log.warning("picoammeter_worker: %s", msg)
             self.error.emit(msg)
             self.connected_changed.emit(False, "")
@@ -189,6 +194,9 @@ class PicoammeterWorker(QThread):
                     self.reading_ready.emit(reading)
                 except Exception as exc:
                     err_msg = f"Keithley 6482 read error: {exc}"
+                    hint = visa_error_hint(err_msg)
+                    if hint is not None:
+                        err_msg = f"{err_msg} {hint}"
                     log.warning("picoammeter_worker: %s", err_msg)
                     self.error.emit(err_msg)
                     self._close_driver()

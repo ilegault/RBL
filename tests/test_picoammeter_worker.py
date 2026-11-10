@@ -212,3 +212,24 @@ class TestPicoammeterWorker:
         assert any("GPIB bus communication failure" in e for e in errors)
 
 
+
+    @patch("rbl.hardware.picoammeter_worker.Keithley6482")
+    def test_connect_failure_message_carries_hint(self, mock_driver_cls, qapp):
+        mock_driver_cls.side_effect = Exception(
+            "VI_ERROR_LIBRARY_NFOUND (-1073807202): A code library required by VISA "
+            "could not be located or loaded."
+        )
+        worker = PicoammeterWorker("GPIB0::2::INSTR", poll_interval_s=0.01)
+        errors: list[str] = []
+        worker.error.connect(errors.append)
+
+        with patch("rbl.hardware.picoammeter_worker.CUP_RECONNECT_BACKOFF_S", [0.01]):
+            worker.start()
+            try:
+                assert _wait_until(lambda: len(errors) > 0, timeout_s=10.0)
+            finally:
+                worker.stop()
+                worker.wait(2000)
+
+        assert "VI_ERROR_LIBRARY_NFOUND" in errors[0]
+        assert "Keysight IO Libraries Suite" in errors[0]
