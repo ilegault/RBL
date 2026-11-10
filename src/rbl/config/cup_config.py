@@ -46,8 +46,10 @@ chain"). Neither is visible from software, and both break the mapping above sile
   LabJack GND. The controller does not tie them; the shared return is the breakout's.
 
 Polarity:
-Closed is zero. When a status contact closes, it pulls the FIO line to GND,
-reading as bit value 0 in FIO_STATE. The decoding function inverts.
+A status line reads 1 when its condition is asserted (bench, 2026-11-10, cup IN in
+AUTO: FIO2 = 1, FIO3 = 0, FIO4 = 1); the level is CUP_STATUS_ASSERTED_LEVEL. A
+disconnected status cable floats all three lines high on the T7's pull-ups and so
+reads INDETERMINATE with AUTO asserted.
 Fails-into-the-beam:
 Cup OUT requires both closures (enable and command). Any loss of drive opens both
 relays, and the cup pneumatic cylinder returns IN, intercepting the beam ahead
@@ -113,10 +115,12 @@ CUP_COMMAND_OUT_LINE: str = "FIO1"     # Relay 2 -> ESM P1 1-9 (command cup OUT)
 CUP_ENABLE_OUT_LINE: str = CUP_ENABLE_LINE  # Alias for explicit role naming
 
 # Status bit positions in the raw FIO_STATE integer
-# Active-low dry contacts to GND: 0 = closed (asserted), 1 = open (not asserted)
+# Status lines read 1 when asserted (bench, 2026-11-10, cup IN in AUTO: FIO2=1, FIO3=0, FIO4=1)
 CUP_STATUS_BIT_IN: int = 2             # FIO2: cup IN contact
 CUP_STATUS_BIT_OUT: int = 3            # FIO3: cup OUT contact
 CUP_STATUS_BIT_AUTO: int = 4           # FIO4: controller AUTO mode contact
+# Status line reads 1 when asserted (bench, 2026-11-10, cup IN in AUTO: FIO2=1, FIO3=0, FIO4=1)
+CUP_STATUS_ASSERTED_LEVEL: int = 1
 
 # ---- Actuation timing & debounce (ADR 0003) ------------------------------
 CUP_MOVE_CONFIRMATION_TIMEOUT_S: float = 2.0  # Seconds before unconfirmed move raises a fault
