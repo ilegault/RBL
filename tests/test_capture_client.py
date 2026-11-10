@@ -424,6 +424,7 @@ def test_streaming_is_not_logged_per_message(client, caplog):
             and not r.getMessage().startswith("[capture pid ")
         ]
         count_before = len(non_child_records)
+        assert count_before >= 5
         wait_until(lambda: False, timeout_s=2.0)
         count_after = len([
             r
