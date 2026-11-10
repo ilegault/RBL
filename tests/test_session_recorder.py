@@ -560,3 +560,29 @@ def test_session_start_with_video_enabled_backwards_compat(tmp_path, qapp, monke
     rec.stop()
 
 
+
+
+def test_usb_status_becomes_the_camera_message(tmp_path, qapp):
+    """The USB path's one-shot status text is also the standing camera message (ticket 102)."""
+    import ast
+    import inspect
+
+    import rbl.services.session_recorder as sr_mod
+
+    rec, _ = _make_recorder(tmp_path)
+    assert rec.start_video() is False
+    st = rec.state()
+    assert (st["camera_message"], st["camera_message_level"]) == (
+        "Cannot start video: session is not recording", "warn")
+
+    # Every status emission goes through _announce, or the message and the signal drift apart.
+    tree = ast.parse(inspect.getsource(sr_mod))
+    for func in ast.walk(tree):
+        if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for node in ast.walk(func):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "emit"
+                    and isinstance(node.func.value, ast.Attribute)
+                    and node.func.value.attr == "status"):
+                assert func.name == "_announce", f"status.emit in {func.name}"

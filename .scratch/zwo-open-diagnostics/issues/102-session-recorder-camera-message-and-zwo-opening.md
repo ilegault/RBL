@@ -1,6 +1,6 @@
 # 102: SessionRecorder: one camera message and an opening flag in state()
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -54,12 +54,12 @@ the constructor). Record the message history by connecting `rec.state_changed` t
 `(st["camera_message"], st["camera_message_level"])`. No new private-attribute access in tests
 (the ratchet in `tests/test_layering.py` is at its limit).
 
-- [ ] `test_missing_dll_open_shows_both_stages`: client not started, `RBL_ZWO_SDK_DLL` set to a missing path, kind `"zwo"`, `connect_zwo()`; the history contains `("Starting Capture Process…", "neutral")` followed later by `(<the ticket 99 D4 text>, "fault")`; afterwards `zwo_opening` is False.
-- [ ] `test_open_on_a_running_child`: client started fake and hello received; right after `connect_zwo()` the state is `("Opening camera…", "neutral")` with `zwo_opening` True; once `zwo_open` is True the state is `(f"Opened {FAKE_MODEL} {FAKE_SERIAL}", "ok")` with `zwo_opening` False.
-- [ ] `test_open_timeout_then_late_open`: `CaptureClient(open_reply_timeout_s=0.3)` started with `["--fake-open-delay-s", "1.5"]`; after `connect_zwo()` the state reaches `("No reply to open after 0.3 s — the camera may be stalled on USB", "warn")` with `zwo_opening` False, then `zwo_open` becomes True and the message becomes the `"Opened …"` / `"ok"` pair.
-- [ ] `test_second_connect_while_opening_sends_no_second_open`: client started with `["--fake-open-delay-s", "1.0"]`; `connect_zwo()` twice in a row; after `zwo_open` and a further 1.5 s, the client's `opened` signal has fired exactly once.
-- [ ] `test_capture_errors_and_disconnect`: (a) client started with `["--fake-cameras-empty"]` and kind `"zwo"`: the state reaches `("No ZWO camera detected on USB", "fault")` and no `open` is sent (`opened` never fires); (b) on a normally opened camera, `disconnect_zwo()` leaves `("", "neutral")` and `zwo_opening` False.
-- [ ] `test_usb_status_becomes_the_camera_message` (in `tests/test_session_recorder.py`): a `SessionRecorder` with no capture client; `start_video()` without a session leaves `("Cannot start video: session is not recording", "warn")`. And, parsing `session_recorder.py` with `ast`, every `self.status.emit` call is inside `_announce`.
+- [x] `test_missing_dll_open_shows_both_stages`: client not started, `RBL_ZWO_SDK_DLL` set to a missing path, kind `"zwo"`, `connect_zwo()`; the history contains `("Starting Capture Process…", "neutral")` followed later by `(<the ticket 99 D4 text>, "fault")`; afterwards `zwo_opening` is False.
+- [x] `test_open_on_a_running_child`: client started fake and hello received; right after `connect_zwo()` the state is `("Opening camera…", "neutral")` with `zwo_opening` True; once `zwo_open` is True the state is `(f"Opened {FAKE_MODEL} {FAKE_SERIAL}", "ok")` with `zwo_opening` False.
+- [x] `test_open_timeout_then_late_open`: `CaptureClient(open_reply_timeout_s=0.3)` started with `["--fake-open-delay-s", "1.5"]`; after `connect_zwo()` the state reaches `("No reply to open after 0.3 s — the camera may be stalled on USB", "warn")` with `zwo_opening` False, then `zwo_open` becomes True and the message becomes the `"Opened …"` / `"ok"` pair.
+- [x] `test_second_connect_while_opening_sends_no_second_open`: client started with `["--fake-open-delay-s", "1.0"]`; `connect_zwo()` twice in a row; after `zwo_open` and a further 1.5 s, the client's `opened` signal has fired exactly once.
+- [x] `test_capture_errors_and_disconnect`: (a) client started with `["--fake-cameras-empty"]` and kind `"zwo"`: the state reaches `("No ZWO camera detected on USB", "fault")` and no `open` is sent (`opened` never fires); (b) on a normally opened camera, `disconnect_zwo()` leaves `("", "neutral")` and `zwo_opening` False.
+- [x] `test_usb_status_becomes_the_camera_message` (in `tests/test_session_recorder.py`): a `SessionRecorder` with no capture client; `start_video()` without a session leaves `("Cannot start video: session is not recording", "warn")`. And, parsing `session_recorder.py` with `ast`, every `self.status.emit` call is inside `_announce`.
 
 ## Gate
 
