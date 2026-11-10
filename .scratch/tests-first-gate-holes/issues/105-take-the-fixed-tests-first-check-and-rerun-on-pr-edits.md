@@ -8,9 +8,9 @@
 
 **Blocked by:** None (can start immediately)
 
-**Waiting on:** ticket 87 in `ilegault/ticket-engine` merged to its `master`. Until then
-an agent must not claim this ticket. The developer changes `Status:` to
-`ready-for-agent` once 87 is merged.
+**Was waiting on:** ticket 87 in `ilegault/ticket-engine`. It is merged; the canonical file's
+SHA-256 at the time of writing is
+`ab072943baad008881a06373b4d8b632dc05c7efee2513adc0773b850b18e2c8`.
 
 **Spec:** `.scratch/tests-first-gate-holes/spec.md` in `ilegault/ticket-engine` (D1–D7)
 **Binding:** `docs/adr/0001-tests-first-and-no-muted-failures.md`
