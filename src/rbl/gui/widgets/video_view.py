@@ -22,6 +22,11 @@ enabled, the Preview's height follows its width at the frame's aspect ratio,
 capped at PREVIEW_MAX_HEIGHT_PER_WIDTH (16:9), with vertical size policy
 Preferred. This stops the Overview Preview from absorbing excess panel height.
 The Camera tab leaves it disabled (default).
+
+Ticket 93 addition: a Draft ROI outline (set_draft_fraction). The Camera tab holds
+the Draft in sensor pixels and hands this widget only a fraction of the frame being
+shown; the outline is mapped into painted_rect() at PAINT time, so a window resize
+needs no callback.  It is a screen-only overlay, never burned into frames.
 """
 from PySide6.QtCore import QPoint, QRect, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QImage, QPainter, QPen
@@ -61,6 +66,7 @@ class VideoView(QWidget):
         self._drag_origin: "QPoint | None" = None
         self._band: "QRubberBand | None" = None
         self._height_follows_width = False
+        self._draft_fraction: "tuple[float, float, float, float] | None" = None
 
         self.setStyleSheet("background: #111;")
         self.setSizePolicy(
@@ -137,6 +143,18 @@ class VideoView(QWidget):
     def rect_drawing_enabled(self) -> bool:
         return self._rect_drawing
 
+    def set_draft_fraction(
+        self, f: "tuple[float, float, float, float] | None"
+    ) -> None:
+        """Outline a Draft ROI given as (x, y, w, h) fractions of the painted frame."""
+        if f == self._draft_fraction:
+            return
+        self._draft_fraction = f
+        self.update()
+
+    def draft_fraction(self) -> "tuple[float, float, float, float] | None":
+        return self._draft_fraction
+
     def painted_rect(self) -> QRect:
         """The rect the last frame was painted into (exposed for tests)."""
         return self._painted_rect_last
@@ -205,6 +223,18 @@ class VideoView(QWidget):
         else:
             img_to_draw = self._frame
         p.drawImage(target.topLeft(), img_to_draw)
+
+        if self._draft_fraction is not None:
+            fx, fy, fw, fh = self._draft_fraction
+            pen = QPen(QColor(255, 200, 0), 2)
+            pen.setStyle(Qt.PenStyle.DashLine)
+            p.setPen(pen)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRect(QRect(
+                round(target.x() + fx * target.width()),
+                round(target.y() + fy * target.height()),
+                round(fw * target.width()),
+                round(fh * target.height())))
 
         if self._crosshair:
             self._draw_crosshair(p)
