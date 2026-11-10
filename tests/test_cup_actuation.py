@@ -9,7 +9,7 @@ ADR 0003 & Ticket 04:
 - Contact debounce from cup_config.py (0.05 s) is applied to confirmed transitions
   using per-scan transition times.
 - Last-confirmed-transition timestamp resolves to the exact sample rather than window edge.
-- Relay 1 (enable) closes on connect and opens on shutdown/disconnect; Relay 2 is de-asserted.
+- Relay 1 (interlock) closes on connect and opens on shutdown/disconnect; Relay 2 is de-asserted.
 - Beamline.shutdown() releases drive without issuing a positional command.
 - Non-FULL profiles mark status stale without marking disconnected.
 """
@@ -17,7 +17,7 @@ from unittest.mock import MagicMock
 
 from rbl.config.cup_config import (
     CUP_COMMAND_OUT_LINE,
-    CUP_ENABLE_LINE,
+    CUP_INTERLOCK_LINE,
 )
 from rbl.hardware.cup_status import CupPosition
 from rbl.snapshots import CupActuationState
@@ -271,7 +271,7 @@ class TestCupActuationTeardownAndShutdown:
         # On connect: Relay 1 closes (1), Relay 2 de-asserts (0)
         beamline._on_labjack_connect_cup()
         written = [call.args for call in beamline.lj.write_digital.call_args_list]
-        assert (CUP_ENABLE_LINE, 1) in written
+        assert (CUP_INTERLOCK_LINE, 1) in written
         assert (CUP_COMMAND_OUT_LINE, 0) in written
 
         beamline.lj.write_digital.reset_mock()
@@ -279,7 +279,7 @@ class TestCupActuationTeardownAndShutdown:
         # On disconnect: Relay 1 opens (0), Relay 2 de-asserts (0)
         beamline._on_labjack_disconnect_cup()
         written_dc = [call.args for call in beamline.lj.write_digital.call_args_list]
-        assert (CUP_ENABLE_LINE, 0) in written_dc
+        assert (CUP_INTERLOCK_LINE, 0) in written_dc
         assert (CUP_COMMAND_OUT_LINE, 0) in written_dc
 
     def test_shutdown_leaves_both_outputs_deasserted_no_positional_command(self):
@@ -302,7 +302,7 @@ class TestCupActuationTeardownAndShutdown:
             call.args[0]: call.args[1]
             for call in beamline.lj.write_digital.call_args_list
         }
-        assert written_lines.get(CUP_ENABLE_LINE) == 0
+        assert written_lines.get(CUP_INTERLOCK_LINE) == 0
         assert written_lines.get(CUP_COMMAND_OUT_LINE) == 0
 
         # Positional command must NEVER be issued on shutdown
@@ -337,7 +337,7 @@ class TestStreamWorkerPendingWrites:
         )
 
         # Queue writes
-        worker.queue_digital_write(CUP_ENABLE_LINE, 1)
+        worker.queue_digital_write(CUP_INTERLOCK_LINE, 1)
         worker.queue_digital_write(CUP_COMMAND_OUT_LINE, 0)
 
         with patch("rbl.hardware.labjack_stream_worker._ljm") as mock_ljm, \
@@ -345,13 +345,13 @@ class TestStreamWorkerPendingWrites:
             worker._drain_pending_writes()
 
             # eWriteName called for each queued line
-            mock_ljm.eWriteName.assert_any_call(42, CUP_ENABLE_LINE, 1)
+            mock_ljm.eWriteName.assert_any_call(42, CUP_INTERLOCK_LINE, 1)
             mock_ljm.eWriteName.assert_any_call(42, CUP_COMMAND_OUT_LINE, 0)
 
         # Signals emitted
-        assert (CUP_ENABLE_LINE, 1) in written_signals
+        assert (CUP_INTERLOCK_LINE, 1) in written_signals
         assert (CUP_COMMAND_OUT_LINE, 0) in written_signals
-        assert worker._output_state[CUP_ENABLE_LINE] == 1
+        assert worker._output_state[CUP_INTERLOCK_LINE] == 1
         assert worker._output_state[CUP_COMMAND_OUT_LINE] == 0
         assert len(worker._pending_writes) == 0
 

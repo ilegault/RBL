@@ -1,6 +1,6 @@
 # 114: FIO0 is the interlock line (rename from "enable")
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -26,7 +26,7 @@ Blocked by 113 only because both tickets edit `src/rbl/config/cup_config.py`,
 
 ## Acceptance criteria
 
-- [ ] In `src/rbl/config/cup_config.py`, `CUP_ENABLE_LINE` becomes
+- [x] In `src/rbl/config/cup_config.py`, `CUP_ENABLE_LINE` becomes
       `CUP_INTERLOCK_LINE: str = "FIO0"`, with the trailing comment
       `# Relay 1 -> ESM P1 5-13 (interlock: closed is required for cup OUT, remote or front panel)`.
       The alias `CUP_ENABLE_OUT_LINE` is deleted, not renamed. Neither old name survives
@@ -35,7 +35,7 @@ Blocked by 113 only because both tickets edit `src/rbl/config/cup_config.py`,
       keeps its other four assertions, and asserts
       `not hasattr(rbl.config.cup_config, "CUP_ENABLE_LINE")` and
       `not hasattr(rbl.config.cup_config, "CUP_ENABLE_OUT_LINE")`.
-- [ ] Every importer uses the new name: `src/rbl/hardware/labjack_driver.py` (the import
+- [x] Every importer uses the new name: `src/rbl/hardware/labjack_driver.py` (the import
       and the `eWriteName` call in the connect/shutdown path) and
       `src/rbl/state/cup_actuation_link.py` (the import, `command_cup`,
       `_release_cup_drive`, `_on_labjack_connect_cup`). The relay drive sequence is
@@ -46,7 +46,7 @@ Blocked by 113 only because both tickets edit `src/rbl/config/cup_config.py`,
       disconnect and shutdown. Every other test in `tests/test_cup_actuation.py` that
       references the old name gets the same one-word substitution and nothing else.
       Check by hand: `grep -rn "CUP_ENABLE" src tests scripts` prints nothing.
-- [ ] The prose follows. Replace "enable" with "interlock" where it names relay 1 or
+- [x] The prose follows. Replace "enable" with "interlock" where it names relay 1 or
       FIO0, and nowhere else, in: the `src/rbl/config/cup_config.py` module docstring
       ("Enable line (FIO0)" and "both closures (enable and command)"); the
       `src/rbl/hardware/labjack_driver.py` module docstring and the `# FIO0 (enable)`
@@ -60,7 +60,7 @@ Blocked by 113 only because both tickets edit `src/rbl/config/cup_config.py`,
       on hardware, 2026-11-10). Check by hand:
       `grep -rn -i "enable line\|relay 1 enable\|relay 1 (enable)\|FIO0 (enable)\|enabling cup OUT\|enables cup-out" src tests .scratch/cup-actuation/spec.md`
       prints nothing. (by hand)
-- [ ] The full suite passes with no test edited beyond the substitutions above. That is
+- [x] The full suite passes with no test edited beyond the substitutions above. That is
       the proof that this is a rename and not a behaviour change. (no test: the gate's
       full pytest run is the proof)
 
@@ -83,3 +83,12 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+### 2026-11-10 Done
+- Renamed `CUP_ENABLE_LINE` to `CUP_INTERLOCK_LINE = "FIO0"` and deleted `CUP_ENABLE_OUT_LINE` in `src/rbl/config/cup_config.py`.
+- Updated all importers in `src/rbl/hardware/labjack_driver.py` and `src/rbl/state/cup_actuation_link.py`.
+- Updated prose/docstrings across `cup_config.py`, `labjack_driver.py`, `cup_actuation_link.py`, `test_cup_actuation.py`, and `spec.md`.
+- Rewrote `test_line_names_and_bit_positions` in `tests/test_cup_status.py` asserting `CUP_INTERLOCK_LINE` and absence of legacy enable attributes.
+- Rewrote `test_relays_on_connect_and_disconnect`, `test_shutdown_leaves_both_outputs_deasserted_no_positional_command`, and pending writes tests in `tests/test_cup_actuation.py`.
+- Hand checks passed cleanly (no `CUP_ENABLE` except negative assertions; no legacy enable phrases for relay 1 / FIO0 in prose).
+- All cup tests pass. Gate checks (ruff, check_tests_first, type_gate) pass cleanly.
