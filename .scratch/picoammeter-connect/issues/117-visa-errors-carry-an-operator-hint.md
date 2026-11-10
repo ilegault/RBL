@@ -1,6 +1,6 @@
 # 117: Picoammeter VISA errors carry a plain-language hint
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
