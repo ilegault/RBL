@@ -15,6 +15,20 @@ ONE INSTRUMENT, ONE OWNER
 Beamline is the single owner of the Keithley 6482 picoammeter. No widget constructs,
 holds, or tears down the worker or driver.
 
+RETARGETING
+-----------
+The worker always runs on the most recently requested VISA resource string. On the
+lab PC (2026-11-10) the tab showed GPIB0::02::INSTR while the worker kept retrying
+GPIB0::14::INSTR every 30 s, because a failed worker keeps running on its backoff
+ladder and connect_picoammeter() used to return early whenever a worker existed:
+the first address ever requested was the only one tried until the app restarted.
+A request with a different resource string now stops the old worker, WAITS for it
+to exit, then starts a new one. The wait is required: two workers opening the same
+6482 at once (GPIB0::02::INSTR and GPIB0::2::INSTR are one instrument) collide on
+the GPIB bus. It is bounded at one second beyond the driver's 5000 ms VISA timeout
+so a worker blocked in viOpen can finish; if it still does not stop, no new worker
+starts. The same resource string stays a no-op.
+
 NO UNIT CONVERSION
 ------------------
 The Keithley 6482 returns current already scaled in Amperes. The link layer preserves
@@ -32,6 +46,7 @@ import logging
 import time
 from typing import TYPE_CHECKING
 
+from rbl.config.cup_config import CUP_WORKER_RESTART_WAIT_MS
 from rbl.hardware.keithley6482_driver import (
     Keithley6482Reading,
     parse_reading,
@@ -68,17 +83,39 @@ class PicoammeterLinkMixin:
     # ── Connection Lifecycle ──────────────────────────────────────────────────
 
     def connect_picoammeter(self, resource: str | None = None) -> None:
-        """Start picoammeter polling worker. Non-blocking.
+        """Start picoammeter polling worker. Non-blocking, except when retargeting.
+
+        RETARGETING: the worker always runs on the most recently requested
+        resource. A different (stripped) resource string than the running
+        worker's stops that worker, waits up to CUP_WORKER_RESTART_WAIT_MS for it
+        to exit (two workers must never hold the same 6482; this stranded the lab
+        PC on GPIB0::14::INSTR on 2026-11-10), then starts a new one. If the old
+        worker will not stop, cup_error is emitted and no new worker starts. The
+        same resource string is a no-op: that worker is already retrying it.
 
         Parameters:
             resource: VISA resource string (e.g. "GPIB0::2::INSTR") or None
                       for auto-discovery / default.
         """
         if self._picoammeter_worker is not None:
-            log.info("picoammeter_link: worker already running")
-            return
+            if (resource or "").strip() == self._picoammeter_resource:
+                log.info("picoammeter_link: worker already running")
+                return
+            old = self._picoammeter_worker
+            log.info(
+                "picoammeter_link: retargeting %r -> %r",
+                self._picoammeter_resource,
+                resource,
+            )
+            self.disconnect_picoammeter()
+            if not old.wait(CUP_WORKER_RESTART_WAIT_MS):
+                log.error("picoammeter_link: old worker did not stop; not restarting")
+                self.cup_error.emit(
+                    "Previous picoammeter connection did not stop; press Connect again."
+                )
+                return
 
-        self._picoammeter_resource = resource or ""
+        self._picoammeter_resource = (resource or "").strip()
         self._cup_acquiring = False
         worker = PicoammeterWorker(resource_name=resource)
         worker.reading_ready.connect(self._on_picoammeter_reading)
