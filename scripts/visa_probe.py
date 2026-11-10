@@ -42,6 +42,17 @@ probe printed "USING: default ... The default backend works. Nothing to configur
 "GPIB  3 found" in two runs where no backend got an `*IDN?` reply: once with
 VI_ERROR_RSRC_NFOUND on open, and once with VI_ERROR_TMO on the query. The only reliable
 success criterion is a non-empty `*IDN?` reply; listing alone proves nothing.
+
+WHY ASRL (SERIAL) RESOURCES ARE SKIPPED (THE 2026-11-10 RUN)
+------------------------------------------------------------
+NI-VISA lists every COM port as an ASRL resource, and the probe used to write *IDN?
+to each. On 2026-11-10 that printed "ASRL3::INSTR: LISTED BUT DID NOT ANSWER
+(VI_ERROR_RSRC_BUSY ...)" and a summary "USB NONE ANSWERED (... TDS 2012 scope)" that
+read as a broken scope. RBL talks to every serial instrument (the TDS 2012 scope
+through its USB-serial adapter, both vacuum gauge controllers) with pyserial, and
+probes them only with their own read-only identity queries, so *IDN? proves nothing
+there and is not known to be harmless to them. ASRL resources are never opened, and
+the summary says the scope is not tested by this script.
 """
 import argparse
 import os
@@ -69,7 +80,7 @@ BACKEND_CANDIDATES = [
 
 EXPECTED = {
     "GPIB": "Keithley picoammeter via the 82357B adapter",
-    "USB": "DG1022Z function generators / TDS 2012 scope",
+    "USB": "DG1022Z function generators",
 }
 
 FOUND_MARKER = "RESOURCE:"
@@ -120,6 +131,10 @@ def run_child(spec):
     print(f"  {len(resources)} resource(s):")
     answered = 0
     for res in resources:
+        if res.upper().startswith("ASRL"):
+            print(f"    {res}: serial port, not probed "
+                  "(RBL talks to its serial instruments with pyserial, not VISA)")
+            continue
         try:
             inst = rm.open_resource(res)
         except Exception as exc:
@@ -186,7 +201,7 @@ def main():
         return run_child(args.backend)
 
     print("=" * 70)
-    print("RBL bench VISA verification — ticket 01")
+    print("RBL bench VISA verification")
     print("=" * 70)
 
     try:
@@ -254,7 +269,9 @@ def main():
         hits = [r for r in all_found if r.upper().startswith(prefix)]
         count_str = f"{len(hits)} answered" if hits else "NONE ANSWERED"
         print(f"  {prefix:5s} {count_str:14s} ({what})")
-    print("\nRecord these lines in ticket 01's Comments.")
+    print("  TDS 2012 scope (BPM): RS-232 through a USB-serial adapter, not VISA. "
+          "Not tested here; check it from the Beam Profiler tab.")
+    print("\nRecord these lines in the bench ticket's Comments.")
     return 0
 
 
