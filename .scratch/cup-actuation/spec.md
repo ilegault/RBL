@@ -59,7 +59,7 @@ controller's position status back through the same T7, and make confirmed positi
 not inferred current — the boundary of an acquisition run.
 
 Two digital outputs reach the controller's ESM connector as dry contact closures: one
-enables cup-out control, one commands cup out. Three of the controller's isolated
+is the interlock, one commands cup out. Three of the controller's isolated
 status contacts come back as digital inputs: cup IN, cup OUT, and whether the
 controller is in AUTO mode and therefore listening at all. The status lines join the
 LabJack stream scan list, so position arrives in every window on the stream's own
@@ -161,7 +161,7 @@ not connected to anything," so only GND, IOA and IOB carry signal.
 
 | CB37 pin | Signal | ESM P1 pins | Role |
 |---|---|---|---|
-| 6 | FIO0 | **5–13** | LJTRD IOA → relay 1 COM/NO → dry contact across 5–13, enable cup OUT control |
+| 6 | FIO0 | **5–13** | LJTRD IOA → relay 1 COM/NO → dry contact across 5–13, interlock |
 | 24 | FIO1 | **1–9** | LJTRD IOB → relay 2 COM/NO → dry contact across 1–9, command cup OUT |
 | 5 | FIO2 | **3** (return 11) | cup **IN** status contact |
 | 23 | FIO3 | **2** (return 10) | cup **OUT** status contact |
@@ -224,7 +224,7 @@ No software path is load-bearing for this. It is a property of the wiring, and i
 must stay a property of the wiring. Do not add a shutdown handler that drives the cup
 anywhere; the absence of drive *is* the safe state.
 
-Relay 2 (command OUT) is the one that cycles. Relay 1 (enable) is held closed while
+Relay 2 (command OUT) is the one that cycles. Relay 1 (interlock) is held closed while
 the application is connected and in control, and opened on disconnect and on
 application shutdown, as an explicit release of control.
 

@@ -19,7 +19,7 @@ runs. The two are kept strictly apart in snapshots and never collapsed.
 FAIL-SAFE INTO THE BEAM & DRIVE RELEASE
 ---------------------------------------
 Cup OUT requires two contact closures:
-- Relay 1 (enable OUT control, FIO0)
+- Relay 1 (interlock, FIO0)
 - Relay 2 (command OUT, FIO1)
 Any loss of drive opens both relays, and the mechanical pneumatic cylinder returns
 the cup IN, intercepting the beam ahead of the specimen. This is a property of the
@@ -53,7 +53,7 @@ import math
 from rbl.config.cup_config import (
     CUP_COMMAND_OUT_LINE,
     CUP_CONTACT_DEBOUNCE_S,
-    CUP_ENABLE_LINE,
+    CUP_INTERLOCK_LINE,
 )
 from rbl.hardware.cup_status import CupPosition, decode_cup_status
 from rbl.snapshots import CupActuationState
@@ -105,7 +105,7 @@ class CupActuationLinkMixin:
     def command_cup(self, position: CupPosition | str) -> None:
         """Command the cup to a position (CupPosition.IN or CupPosition.OUT).
 
-        Relay 1 (enable) is held closed (1).
+        Relay 1 (interlock) is held closed (1).
         Relay 2 (command OUT) is set to 1 for OUT, or 0 for IN.
         Immediately publishes a snapshot with the updated commanded position.
         """
@@ -118,10 +118,10 @@ class CupActuationLinkMixin:
 
         self._cup_commanded = position
         if position == CupPosition.OUT:
-            self._write_cup_digital(CUP_ENABLE_LINE, 1)
+            self._write_cup_digital(CUP_INTERLOCK_LINE, 1)
             self._write_cup_digital(CUP_COMMAND_OUT_LINE, 1)
         else:
-            self._write_cup_digital(CUP_ENABLE_LINE, 1)
+            self._write_cup_digital(CUP_INTERLOCK_LINE, 1)
             self._write_cup_digital(CUP_COMMAND_OUT_LINE, 0)
 
         self._publish_cup_actuation_snapshot()
@@ -153,15 +153,15 @@ class CupActuationLinkMixin:
         Does NOT command a position through command_cup(); direct release of drive.
         """
         self._write_cup_digital(CUP_COMMAND_OUT_LINE, 0)
-        self._write_cup_digital(CUP_ENABLE_LINE, 0)
+        self._write_cup_digital(CUP_INTERLOCK_LINE, 0)
 
     def _on_labjack_connect_cup(self) -> None:
         """Called when LabJack T7 connects."""
         self._cup_actuation_connected = True
         self._cup_commanded = CupPosition.IN
         self._cup_stale = False
-        # Energise Relay 1 (enable), de-assert Relay 2 (command OUT)
-        self._write_cup_digital(CUP_ENABLE_LINE, 1)
+        # Energise Relay 1 (interlock), de-assert Relay 2 (command OUT)
+        self._write_cup_digital(CUP_INTERLOCK_LINE, 1)
         self._write_cup_digital(CUP_COMMAND_OUT_LINE, 0)
         self._publish_cup_actuation_snapshot()
 

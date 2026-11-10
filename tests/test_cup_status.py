@@ -8,11 +8,12 @@ FIO2 = 1, FIO3 = 0, FIO4 = 1).
 """
 import sys
 
+import rbl.config.cup_config
 from rbl.config.cup_config import (
     CUP_ARM_DEBOUNCE_S,
     CUP_COMMAND_OUT_LINE,
     CUP_CONTACT_DEBOUNCE_S,
-    CUP_ENABLE_LINE,
+    CUP_INTERLOCK_LINE,
     CUP_MOVE_CONFIRMATION_TIMEOUT_S,
     CUP_RELEASE_INTERVAL_S,
     CUP_STATUS_ASSERTED_LEVEL,
@@ -27,12 +28,14 @@ class TestCupStatusConfig:
     """Verify ticket 02 config additions and preservation of inference constants."""
 
     def test_line_names_and_bit_positions(self):
-        assert CUP_ENABLE_LINE == "FIO0"
+        assert CUP_INTERLOCK_LINE == "FIO0"
         assert CUP_COMMAND_OUT_LINE == "FIO1"
         assert CUP_STATUS_BIT_IN == 2
         assert CUP_STATUS_BIT_OUT == 3
         assert CUP_STATUS_BIT_AUTO == 4
         assert CUP_STATUS_ASSERTED_LEVEL == 1
+        assert not hasattr(rbl.config.cup_config, "CUP_ENABLE_LINE")
+        assert not hasattr(rbl.config.cup_config, "CUP_ENABLE_OUT_LINE")
 
     def test_timing_constants(self):
         assert CUP_MOVE_CONFIRMATION_TIMEOUT_S == 2.0
