@@ -465,9 +465,9 @@ someone else's bug fix smuggled into it cannot be reviewed.
 <!-- ACTIVE-PLAN:START -->
 ## Active implementation plan
 
-_Written by the planning model on 2026-11-10 05:58. Implement this. If something in it is wrong, say so before changing course._
+_Written by the planning model on 2026-11-10 06:33. Implement this. If something in it is wrong, say so before changing course._
 
-# Active work: tests-first gate fix (105, waiting on ticket-engine 87), plus the work below
+# Active work: tests-first gate fix (105, ready for an agent), plus the work below
 
 This is a pointer, not the work.
 
@@ -476,10 +476,10 @@ This is a pointer, not the work.
 - **Spec:** `.scratch/tests-first-gate-holes/spec.md` in `ilegault/ticket-engine`.
 - **Binding:** `docs/adr/0001-tests-first-and-no-muted-failures.md`. Glossary: no change.
 - **Ticket:** `.scratch/tests-first-gate-holes/issues/105-take-the-fixed-tests-first-check-and-rerun-on-pr-edits.md`.
-  `ready-for-developer` until ticket 87 in `ilegault/ticket-engine` is merged; the
-  developer then sets it to `ready-for-agent`. Held (`Auto-merge: no`), a leaf, blocks
+  `ready-for-agent` (ticket-engine 87 is merged). Held (`Auto-merge: no`), a leaf, blocks
   nothing, touches no application code or tests.
-- **Next:** nothing new is claimable yet; carry on with the sets below.
+- **Next:** this ticket is unblocked and can run alongside the sets below. It edits
+  `AGENTS.md` and ADR 0001, so a PR open on those files may need a rebase first.
 
 Requirements an implementer might treat as preferences: `scripts/check_tests_first.py`
 is the canonical file byte for byte and is never edited here, not even for lint; `tests/test_check_tests_first.py` must pass unedited.
