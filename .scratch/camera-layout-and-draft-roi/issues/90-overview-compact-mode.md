@@ -1,6 +1,6 @@
 # 90: Overview Session Recorder: compact mode
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -38,18 +38,18 @@ panel shows only what is needed during a run. Unchecked on construction; never s
 
 Tests use `zwo_rig` with `which="panel"`; visibility is checked with `isVisibleTo(view)`.
 
-- [ ] `test_compact_mode_shows_only_run_controls` (parametrized over `"usb"`, `"zwo"`):
+- [x] `test_compact_mode_shows_only_run_controls` (parametrized over `"usb"`, `"zwo"`):
   after `btn_compact.setChecked(True)`, every widget in `compact_hidden_widgets` is not
   visible and every widget in the D3 shown list (caption only under ZWO) is visible.
-- [ ] `test_compact_mode_survives_state_updates`: compact on under ZWO, then
+- [x] `test_compact_mode_survives_state_updates`: compact on under ZWO, then
   `rec.state_changed.emit()` and `rec.settings_changed.emit()`; `zwo_controls` and
   `combo_camera_kind` are still not visible.
-- [ ] `test_leaving_compact_restores_the_kind_rows` (parametrized `"usb"`, `"zwo"`): compact
+- [x] `test_leaving_compact_restores_the_kind_rows` (parametrized `"usb"`, `"zwo"`): compact
   on then off; visibility of `usb_only_widgets`, `zwo_controls` and `lbl_preview_caption`
   equals what it was before compact was turned on.
-- [ ] `test_compact_starts_off`: a newly constructed `RecordingPanel` has
+- [x] `test_compact_starts_off`: a newly constructed `RecordingPanel` has
   `btn_compact.isChecked()` False and `zwo_controls`/`usb_only_widgets` visible per kind.
-- [ ] `test_compact_buttons_still_act`: in compact mode with the fake ZWO camera open,
+- [x] `test_compact_buttons_still_act`: in compact mode with the fake ZWO camera open,
   clicking `_btn_session` starts a session (`rec.state()["recording"]` True) and clicking
   `_btn_photo` emits `rec.photo_taken` (wait with `tests.qt_wait.wait_until`).
 
@@ -65,3 +65,15 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+2026-11-10: Implemented Overview Session Recorder compact mode.
+- Added `btn_compact` checkable QPushButton on row 1 of `RecordingPanel`.
+- Collected `compact_hidden_widgets` and `compact_shown_widgets`.
+- Applied compact visibility last in `_render()` to survive state/settings updates.
+- Added tests in `tests/test_recording_panel.py`:
+  - `test_compact_mode_shows_only_run_controls` (covers criterion 1)
+  - `test_compact_mode_survives_state_updates` (covers criterion 2)
+  - `test_leaving_compact_restores_the_kind_rows` (covers criterion 3)
+  - `test_compact_starts_off` (covers criterion 4)
+  - `test_compact_buttons_still_act` (covers criterion 5)
+Bench verification: bench ticket 97 covers interactive verification.
