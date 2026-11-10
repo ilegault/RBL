@@ -1,6 +1,6 @@
 # 96: Glossary: Draft ROI, Last ROI, compact mode, and the ROI recording lock
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -35,10 +35,10 @@
 
 ## Acceptance criteria
 
-- [ ] `CONTEXT.md` contains the three new bold terms exactly as **Draft ROI**, **Last ROI**,
+- [x] `CONTEXT.md` contains the three new bold terms exactly as **Draft ROI**, **Last ROI**,
   **Compact mode**, each once as an entry heading, with the text above.
-- [ ] The ROI entry ends with the recording-lock sentence above.
-- [ ] No other line of `CONTEXT.md` changes (`git diff --stat` shows only `CONTEXT.md`).
+- [x] The ROI entry ends with the recording-lock sentence above.
+- [x] No other line of `CONTEXT.md` changes (`git diff --stat` shows only `CONTEXT.md`).
 
 ## Gate
 
@@ -52,3 +52,10 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+2026-11-10:
+- Added glossary terms **Draft ROI** and **Last ROI** under "## Camera", after **Region of interest (ROI)**.
+- Appended recording-lock constraint sentence to the **Region of interest (ROI)** entry.
+- Added glossary term **Compact mode** at the end of "## Logging and sessions".
+- Verified only `CONTEXT.md` changed and all four gate checks pass.
+- Ticket is held for developer review (`Auto-merge: no`).
