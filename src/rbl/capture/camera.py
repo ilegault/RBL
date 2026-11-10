@@ -119,8 +119,9 @@ FAKE_CONTROLS: dict[str, dict[str, int]] = {
 class FakeCamera:
     """Deterministic simulated camera implementing CaptureCamera."""
 
-    def __init__(self, fail_after: int | None = None) -> None:
+    def __init__(self, fail_after: int | None = None, open_delay_s: float = 0.0) -> None:
         self._fail_after = fail_after
+        self._open_delay_s = open_delay_s
         self._streaming = False
         self._k = 0
         self._info = CameraInfo(
@@ -142,6 +143,8 @@ class FakeCamera:
         )
 
     def open(self, index: int) -> None:
+        if self._open_delay_s > 0:
+            time.sleep(self._open_delay_s)
         self._k = 0
         self._streaming = False
         self._settings = CameraSettings(

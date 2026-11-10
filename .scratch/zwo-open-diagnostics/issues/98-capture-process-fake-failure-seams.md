@@ -1,6 +1,6 @@
 # 98: Capture Process: four fake-camera seams for the Open failure cases
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -40,11 +40,11 @@ later tickets can drive `CaptureClient` against a real child for each case.
 Tests go in `tests/test_capture_process.py` and run a real child through the `capture_child`
 fixture (`extra_args=[...]`). Nothing is faked.
 
-- [ ] `test_fake_cameras_empty_sends_an_empty_hello`: the child's `hello` has `cameras == []`, and `check_hello` accepts it.
-- [ ] `test_fake_fatal_is_the_only_line_and_exits_1`: with `["--fake-fatal", "zwoasi.init failed: bad DLL"]`, `wait_exit` returns 1 and `all_messages == [{"type": "fatal", "message": "zwoasi.init failed: bad DLL"}]`.
-- [ ] `test_fake_no_hello_waits_for_stdin_to_close`: after 1.0 s the child has sent no message and `proc.poll()` is `None`; after `close_stdin()`, `wait_exit(10)` returns 0 and still no message was sent.
-- [ ] `test_fake_open_delay_delays_the_open_reply`: with `["--fake-open-delay-s", "1.0"]`, the `ok` reply to `open` arrives no sooner than 1.0 s after the request (measured with `time.monotonic()`).
-- [ ] `test_fake_flags_need_the_fake_camera`, parametrized over the four flags (with a value where the flag takes one): `extra_args=["--camera", "zwo", "--sdk-dll", str(tmp_path / "x.dll"), *flag]` exits 2, `raw_stdout_lines` is empty, and the joined `stderr_lines` contain `need --camera fake`.
+- [x] `test_fake_cameras_empty_sends_an_empty_hello`: the child's `hello` has `cameras == []`, and `check_hello` accepts it.
+- [x] `test_fake_fatal_is_the_only_line_and_exits_1`: with `["--fake-fatal", "zwoasi.init failed: bad DLL"]`, `wait_exit` returns 1 and `all_messages == [{"type": "fatal", "message": "zwoasi.init failed: bad DLL"}]`.
+- [x] `test_fake_no_hello_waits_for_stdin_to_close`: after 1.0 s the child has sent no message and `proc.poll()` is `None`; after `close_stdin()`, `wait_exit(10)` returns 0 and still no message was sent.
+- [x] `test_fake_open_delay_delays_the_open_reply`: with `["--fake-open-delay-s", "1.0"]`, the `ok` reply to `open` arrives no sooner than 1.0 s after the request (measured with `time.monotonic()`).
+- [x] `test_fake_flags_need_the_fake_camera`, parametrized over the four flags (with a value where the flag takes one): `extra_args=["--camera", "zwo", "--sdk-dll", str(tmp_path / "x.dll"), *flag]` exits 2, `raw_stdout_lines` is empty, and the joined `stderr_lines` contain `need --camera fake`.
 
 ## Gate
 
@@ -58,3 +58,15 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+2026-11-10: Implemented four fake-camera failure seams for the Capture Process (ticket 98).
+- Added `--fake-cameras-empty`, `--fake-fatal`, `--fake-no-hello`, and `--fake-open-delay-s` to `build_arg_parser`.
+- Validated in `main` that all four require `--camera fake` (argparse error).
+- Handled each flag in `main` fake branch: `--fake-fatal` sends fatal message and exits 1; `--fake-no-hello` reads stdin to EOF and exits 0; `--fake-cameras-empty` sets `camera_list = []`; `--fake-open-delay-s` sleeps in `FakeCamera.open`.
+- Covered by 5 new acceptance tests in `tests/test_capture_process.py`:
+  - `test_fake_cameras_empty_sends_an_empty_hello`
+  - `test_fake_fatal_is_the_only_line_and_exits_1`
+  - `test_fake_no_hello_waits_for_stdin_to_close`
+  - `test_fake_open_delay_delays_the_open_reply`
+  - `test_fake_flags_need_the_fake_camera` (parametrized across all four flags)
+- Bench verification: Covered by ticket 104.
