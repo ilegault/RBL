@@ -1,6 +1,6 @@
 # 101: CaptureClient: the Open sequence is narrated in rbl.log, and child stderr keeps its level
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
