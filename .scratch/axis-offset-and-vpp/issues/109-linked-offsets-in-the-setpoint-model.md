@@ -1,6 +1,6 @@
 # 109: Linked offsets in the setpoint model
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
