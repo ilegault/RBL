@@ -1,6 +1,6 @@
 # 106: Apply greys out over the 5 V input limit
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -32,26 +32,26 @@ Three buttons:
 
 ## Acceptance criteria
 
-- [ ] New pure function `over_limit_channels(params_by_key: dict) -> list[tuple[str, float]]`
+- [x] New pure function `over_limit_channels(params_by_key: dict) -> list[tuple[str, float]]`
       in `src/rbl/hardware/funcgen_safety.py`. It takes `{key: ChannelParams}` and returns
       `(key, input_peak)` for every channel whose `channel_peak_volts(...)` is above
       `PEAK_MAX_VOLTS + 1e-9`, ordered A1, A2, B1, B2. A unit test in
       `tests/test_funcgen_safety.py` asserts: 10 Vpp at 0 V → not listed (exactly 5.0 V);
       4 Vpp at +3.5 V → listed with 5.5; DC shape at −5.2 V → listed with 5.2; the
       ordering with two offenders. Test: tests/test_funcgen_safety.py::`test_over_limit_channels_lists_offenders_in_order`.
-- [ ] Overview: with generator A connected, set A2's setpoint over the limit through
+- [x] Overview: with generator A connected, set A2's setpoint over the limit through
       `beamline.funcgen_setpoints.update("A2", amp_vpp=4.0, offset_v=-3.4)` (no widget
       typing). The test asserts `tab.btn_apply_all.isEnabled()` is `False` and that the
       tooltip contains `X− (A2) input peak 5.40 V — over the 5 V limit`. Lowering the
       offset back re-enables the button and restores its original tooltip text. A channel
       on a generator that is **not** connected does not disable the button. Test: tests/test_overview_tab.py::`test_apply_all_greys_out_over_the_input_limit`.
-- [ ] FG tab: the same setpoint disables `FuncGenTab.btn_apply_all` and A2's
+- [x] FG tab: the same setpoint disables `FuncGenTab.btn_apply_all` and A2's
       `ChannelPanel.btn_apply`, with the same tooltip line. A1's `btn_apply` stays enabled. Test: tests/test_funcgen_panel_status.py::`test_fg_apply_buttons_grey_out_over_the_input_limit`.
-- [ ] Every enable decision calls `over_limit_channels`. No widget repeats the
+- [x] Every enable decision calls `over_limit_channels`. No widget repeats the
       `> PEAK_MAX_VOLTS` comparison. The state is re-evaluated on
       `FuncGenSetpoints.changed` and on every connection change, so it does not wait for
       a redraw tick. Test: tests/test_overview_tab.py::`test_greying_follows_setpoint_changes_without_a_redraw`.
-- [ ] The 4 V confirmation dialogs (`OverviewTab._on_apply_all`,
+- [x] The 4 V confirmation dialogs (`OverviewTab._on_apply_all`,
       `FuncGenTab._apply_channel`, `FuncGenTab._apply_all`) and `funcgen_control.py` are
       unchanged. `git diff --stat` shows no change to `src/rbl/state/funcgen_control.py`. Test: tests/test_overview_tab.py::`test_high_peak_confirmation_still_asked_above_4_v`.
 
@@ -72,5 +72,12 @@ pytest --tb=short -q -n auto --dist loadfile --durations=25
 
 Progress (2026-11-10 14:23): criteria 1, 2, 4, 5 done, tests green.
 Next: criterion 3 — FG tab btn_apply_all and ChannelPanel.btn_apply greying.
+
+Completed (2026-11-10 14:43): All 5 criteria complete and verified.
+- Implemented `over_limit_channels` in `rbl.hardware.funcgen_safety`.
+- Updated `OverviewTab` to disable `btn_apply_all` and populate tooltip with offending channels when peak exceeds 5 V limit, re-evaluated immediately on setpoint or connection changes.
+- Updated `FuncGenTab` and `ChannelPanel` to disable `btn_apply_all` and per-channel `btn_apply` with matching tooltips when peak exceeds 5 V limit.
+- Verified `funcgen_control.py` and 4 V confirmation dialogs are unchanged.
+- All gates passing (`ruff`, `check_tests_first`, `type_gate` ratchet, `test_layering` ratchet at 462).
 
 
