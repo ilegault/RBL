@@ -316,4 +316,123 @@ def test_timeout_defaults_come_from_config(qapp):
     assert c.open_reply_timeout_s == CAPTURE_OPEN_REPLY_TIMEOUT_S == 15.0
 
 
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        ("2026-11-09 20:52:01,123 INFO [rbl.capture] x", logging.INFO),
+        ("2026-11-09 20:52:01,123 DEBUG [rbl.capture] x", logging.DEBUG),
+        ("2026-11-09 20:52:01,123 WARNING [rbl.capture] x", logging.WARNING),
+        ("2026-11-09 20:52:01,123 ERROR [rbl.capture] x", logging.ERROR),
+        ("Traceback (most recent call last):", logging.WARNING),
+        ('  File "x.py", line 1', logging.WARNING),
+        ("", logging.WARNING),
+    ],
+)
+def test_child_log_level(line, expected):
+    from rbl.services.capture_client import child_log_level
+
+    assert child_log_level(line) == expected
+
+
+def test_drain_lines_keeps_the_partial_tail():
+    from rbl.services.capture_client import drain_lines
+
+    buf = bytearray(b"ab")
+    assert drain_lines(buf) == []
+    buf += b"c\nde"
+    assert drain_lines(buf) == [b"abc\n"]
+    assert buf == bytearray(b"de")
+
+
+def test_child_stderr_keeps_its_level_and_pid(client, caplog):
+    spy = Spy(client)
+    with caplog.at_level(logging.WARNING, logger="rbl.capture"):
+        client.start("fake", heartbeat_timeout_s=0.3)
+        assert wait_until(lambda: spy.hello)
+        assert wait_until(lambda: spy.exits, timeout_s=5.0)
+    pid = spy.hello[0]["pid"]
+    matching = [
+        r
+        for r in caplog.records
+        if r.name == "rbl.capture"
+        and r.levelno == logging.WARNING
+        and r.getMessage().startswith(f"[capture pid {pid}] ")
+        and "Heartbeat timed out" in r.getMessage()
+    ]
+    assert len(matching) == 1
+
+
+def test_open_sequence_is_narrated(client, caplog):
+    spy = Spy(client)
+    with caplog.at_level(logging.INFO, logger="rbl.capture"):
+        client.start("fake")
+        assert wait_until(lambda: spy.hello)
+        client.open()
+        assert wait_until(lambda: spy.opened)
+        client.shutdown()
+        assert wait_until(lambda: spy.exits)
+
+    info_msgs = [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == "rbl.capture" and r.levelno == logging.INFO
+    ]
+    it = iter(info_msgs)
+    assert any(m.startswith("Starting Capture Process:") for m in it)
+    assert any(m.startswith("Capture Process started, pid ") for m in it)
+    assert any(
+        m.startswith("Capture Process hello: protocol 1, cameras ['Fake ASI']")
+        for m in it
+    )
+    assert any(m.startswith("Sent open (id ") for m in it)
+    assert any(
+        m.startswith("Open reply ok (id ") and m.endswith("Fake ASI FAKE0001")
+        for m in it
+    )
+    assert any(
+        m.startswith("Capture Process exited: code 0")
+        and m.endswith("expected True")
+        for m in it
+    )
+
+
+def test_dll_resolution_is_logged(client, monkeypatch, tmp_path, caplog):
+    missing = tmp_path / "nope" / "ASICamera2.dll"
+    monkeypatch.setenv("RBL_ZWO_SDK_DLL", str(missing))
+    expected = f"ZWO SDK DLL: {missing} (from RBL_ZWO_SDK_DLL: True, exists: False)"
+    with caplog.at_level(logging.INFO, logger="rbl.capture"):
+        client.start("zwo")
+    records = [
+        r
+        for r in caplog.records
+        if r.name == "rbl.capture" and r.levelno == logging.INFO
+    ]
+    assert any(r.getMessage() == expected for r in records)
+
+
+def test_streaming_is_not_logged_per_message(client, caplog):
+    spy = Spy(client)
+    with caplog.at_level(logging.DEBUG, logger="rbl.capture"):
+        client.start("fake")
+        assert wait_until(lambda: spy.hello)
+        client.open()
+        assert wait_until(lambda: spy.preview)
+        non_child_records = [
+            r
+            for r in caplog.records
+            if r.name == "rbl.capture"
+            and not r.getMessage().startswith("[capture pid ")
+        ]
+        count_before = len(non_child_records)
+        wait_until(lambda: False, timeout_s=2.0)
+        count_after = len([
+            r
+            for r in caplog.records
+            if r.name == "rbl.capture"
+            and not r.getMessage().startswith("[capture pid ")
+        ])
+        assert count_after == count_before
+
+
+
 

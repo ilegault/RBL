@@ -42,6 +42,15 @@ owner).
 * The ``beamline`` command carries the cup position label so every frame log
   row says whether the beam could have reached the camera (ADR 0003). It is
   sent only when the label changes, and once right after each ``open``.
+* Only the Open sequence is narrated at INFO (DLL resolution, child start and
+  PID, hello, sent open, open reply ok/error, child exit) so reading ``rbl.log``
+  after a failed Open shows exactly how far it got. Heartbeat, status and
+  preview traffic is never logged per message (D1) to avoid flooding the log
+  at ~30 fps.
+* Child stderr is buffered and drained line by line, parsed by
+  ``child_log_level`` to preserve the child's own log level (falling back to
+  WARNING for tracebacks and loader messages), and logged prefixed with
+  ``[capture pid <pid>]`` (D10).
 """
 from __future__ import annotations
 
@@ -49,6 +58,7 @@ import base64
 import binascii
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any, Mapping, Optional
@@ -72,6 +82,36 @@ _log = logging.getLogger("rbl.capture")
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _ALUMINA_UNKNOWN = ""
+
+_CHILD_LOG_RE = re.compile(
+    r"^\S+\s+\S+\s+(DEBUG|INFO|WARNING|ERROR|CRITICAL)\s+\["
+)
+_LEVEL_MAP = {
+    "DEBUG": logging.DEBUG,
+    "INFO": logging.INFO,
+    "WARNING": logging.WARNING,
+    "ERROR": logging.ERROR,
+    "CRITICAL": logging.CRITICAL,
+}
+
+
+def drain_lines(buf: bytearray) -> list[bytes]:
+    """Remove and return every complete \\n-terminated line from buf as bytes."""
+    lines: list[bytes] = []
+    while b"\n" in buf:
+        pos = buf.index(b"\n")
+        line = bytes(buf[: pos + 1])
+        del buf[: pos + 1]
+        lines.append(line)
+    return lines
+
+
+def child_log_level(line: str) -> int:
+    """The logging level of a child stderr line matching its format, or WARNING."""
+    m = _CHILD_LOG_RE.match(line)
+    if m is not None:
+        return _LEVEL_MAP.get(m.group(1), logging.WARNING)
+    return logging.WARNING
 
 
 def capture_command_line(frozen: bool, executable: str, args: list[str]) -> list[str]:
@@ -119,6 +159,8 @@ class CaptureClient(QObject):
         self._pending_open_id: Optional[int] = None
         self._proc: Optional[QProcess] = None
         self._buf = bytearray()
+        self._stderr_buf = bytearray()
+        self._child_pid: int = 0
         self._next_id = 1
         self._open = False
         self._got_hello = False
@@ -163,6 +205,12 @@ class CaptureClient(QObject):
             dll = paths.zwo_sdk_dll_path(
                 frozen, _bundle_dir(), _REPO_ROOT, os.environ
             )
+            _log.info(
+                "ZWO SDK DLL: %s (from RBL_ZWO_SDK_DLL: %s, exists: %s)",
+                dll,
+                bool(os.environ.get("RBL_ZWO_SDK_DLL")),
+                dll.is_file(),
+            )
             if not dll.is_file():
                 self._fail(
                     f"ZWO SDK library not found: {dll}. "
@@ -183,6 +231,8 @@ class CaptureClient(QObject):
             qenv.insert(key, value)
 
         self._buf.clear()
+        self._stderr_buf.clear()
+        self._child_pid = 0
         self._open = False
         self._got_hello = False
         self._shutting_down = False
@@ -198,10 +248,20 @@ class CaptureClient(QObject):
         proc.readyReadStandardError.connect(self._on_stderr)
         proc.finished.connect(self._on_finished)
         proc.errorOccurred.connect(self._on_process_error)
+        proc.started.connect(self._on_started)
         self._proc = proc
+        _log.info("Starting Capture Process: %s", argv)
         proc.start(argv[0], argv[1:])
         self._heartbeat.start()
         self._hello_timer.start()
+
+    def _on_started(self) -> None:
+        if self._proc is not None:
+            pid = self._proc.processId()
+            self._child_pid = pid
+            _log.info("Capture Process started, pid %d", pid)
+            if self._hello_timer.isActive():
+                self._hello_timer.start()
 
     def is_running(self) -> bool:
         return (
@@ -235,6 +295,7 @@ class CaptureClient(QObject):
         if cmd_id >= 0:
             self._pending_open_id = cmd_id
             self._open_reply_timer.start()
+            _log.info("Sent open (id %d, camera index %d)", cmd_id, camera_index)
         return cmd_id
 
     def close(self) -> int:
@@ -309,22 +370,28 @@ class CaptureClient(QObject):
         if self.is_running() and not self._shutting_down:
             self._write(proto.HeartbeatCmd())
 
+    def _log_stderr_line(self, raw_line: bytes) -> None:
+        line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
+        if line:
+            _log.log(
+                child_log_level(line),
+                "[capture pid %d] %s",
+                self._child_pid,
+                line,
+            )
+
     def _on_stderr(self) -> None:
-        assert self._proc is not None
-        text = bytes(self._proc.readAllStandardError().data()).decode(
-            "utf-8", errors="replace"
-        )
-        for line in text.splitlines():
-            if line.strip():
-                _log.info("%s", line)
+        if self._proc is not None:
+            self._stderr_buf.extend(
+                bytes(self._proc.readAllStandardError().data())
+            )
+        for raw in drain_lines(self._stderr_buf):
+            self._log_stderr_line(raw)
 
     def _on_stdout(self) -> None:
-        assert self._proc is not None
-        self._buf.extend(bytes(self._proc.readAllStandardOutput().data()))
-        while b"\n" in self._buf:
-            pos = self._buf.index(b"\n")
-            line = bytes(self._buf[: pos + 1])
-            del self._buf[: pos + 1]
+        if self._proc is not None:
+            self._buf.extend(bytes(self._proc.readAllStandardOutput().data()))
+        for line in drain_lines(self._buf):
             if line.strip():
                 self._handle_line(line)
 
@@ -348,6 +415,13 @@ class CaptureClient(QObject):
         mtype = msg["type"]
         if mtype == "hello":
             self._hello_timer.stop()
+            if "pid" in msg:
+                self._child_pid = int(msg["pid"])
+            _log.info(
+                "Capture Process hello: protocol %d, cameras %r",
+                msg["protocol"],
+                msg["cameras"],
+            )
             if msg.get("cameras") == []:
                 self._got_hello = True
                 self._shutting_down = True
@@ -373,6 +447,21 @@ class CaptureClient(QObject):
         reply_to = msg["reply_to"]
         if reply_to == self._pending_open_id:
             self._open_reply_timer.stop()
+            self._pending_open_id = None
+            if msg["type"] == "ok":
+                _log.info(
+                    "Open reply ok (id %d): %s %s",
+                    reply_to,
+                    msg["model"],
+                    msg["serial"],
+                )
+            elif msg["type"] == "error":
+                _log.info(
+                    "Open reply error (id %d): %s: %s",
+                    reply_to,
+                    msg["code"],
+                    msg["message"],
+                )
         sent = self._pending.pop(reply_to, None)
         if msg["type"] == "error":
             self._fail(f"{msg['code']}: {msg['message']}")
@@ -406,11 +495,27 @@ class CaptureClient(QObject):
             self._heartbeat.stop()
             self._fail("Capture Process failed to start")
 
-    def _on_finished(self, code: int, _status: QProcess.ExitStatus) -> None:
+    def _on_finished(self, code: int, status: QProcess.ExitStatus) -> None:
+        if self._proc is not None:
+            self._stderr_buf.extend(
+                bytes(self._proc.readAllStandardError().data())
+            )
+        for raw in drain_lines(self._stderr_buf):
+            self._log_stderr_line(raw)
+        if self._stderr_buf:
+            self._log_stderr_line(bytes(self._stderr_buf))
+            self._stderr_buf.clear()
+
         self._hello_timer.stop()
         self._open_reply_timer.stop()
         self._heartbeat.stop()
         self._open = False
+        _log.info(
+            "Capture Process exited: code %d, status %s, expected %s",
+            code,
+            status.name,
+            self._shutting_down,
+        )
         self.exited.emit(code)
         if not self._shutting_down:
             self._fail(f"Capture Process exited unexpectedly ({code})")

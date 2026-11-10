@@ -1,6 +1,6 @@
 # 101: CaptureClient: the Open sequence is narrated in rbl.log, and child stderr keeps its level
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -52,12 +52,12 @@ Tests go in `tests/test_capture_client.py`. The two pure helpers are tested with
 the rest against a real fake child with `caplog` on `rbl.capture`. No new private-attribute
 access in tests (the ratchet is at its limit).
 
-- [ ] `test_child_log_level`, parametrized: `"2026-11-09 20:52:01,123 INFO [rbl.capture] x"` → `logging.INFO`; the same with `DEBUG`, `WARNING`, `ERROR` → that level; `"Traceback (most recent call last):"`, `'  File "x.py", line 1'` and `""` → `logging.WARNING`.
-- [ ] `test_drain_lines_keeps_the_partial_tail`: `buf = bytearray(b"ab")` drains to `[]`; after `buf += b"c\nde"` it drains to `[b"abc\n"]` and `buf == bytearray(b"de")`.
-- [ ] `test_child_stderr_keeps_its_level_and_pid`: `start("fake", heartbeat_timeout_s=0.3)` (the child times out on heartbeats and logs a WARNING before exiting); after `spy.exits` fills, exactly one record on `rbl.capture` has `levelno == logging.WARNING`, starts with `f"[capture pid {spy.hello[0]['pid']}] "` and contains `Heartbeat timed out`.
-- [ ] `test_open_sequence_is_narrated`: start fake, wait for hello, `open()`, wait for `opened`, `shutdown()`. The `rbl.capture` INFO messages contain, in this order, records starting with `Starting Capture Process:`, `Capture Process started, pid `, `Capture Process hello: protocol 1, cameras ['Fake ASI']`, `Sent open (id `, `Open reply ok (id ` (ending `Fake ASI FAKE0001`), and `Capture Process exited: code 0` (ending `expected True`).
-- [ ] `test_dll_resolution_is_logged`: with `RBL_ZWO_SDK_DLL` set to a missing path, `start("zwo")` logs the INFO record `f"ZWO SDK DLL: {path} (from RBL_ZWO_SDK_DLL: True, exists: False)"`.
-- [ ] `test_streaming_is_not_logged_per_message`: start fake, open, wait for the first `preview`; record the count of `rbl.capture` records **not** starting with `[capture pid `; wait 2.0 s; the count is unchanged.
+- [x] `test_child_log_level`, parametrized: `"2026-11-09 20:52:01,123 INFO [rbl.capture] x"` → `logging.INFO`; the same with `DEBUG`, `WARNING`, `ERROR` → that level; `"Traceback (most recent call last):"`, `'  File "x.py", line 1'` and `""` → `logging.WARNING`.
+- [x] `test_drain_lines_keeps_the_partial_tail`: `buf = bytearray(b"ab")` drains to `[]`; after `buf += b"c\nde"` it drains to `[b"abc\n"]` and `buf == bytearray(b"de")`.
+- [x] `test_child_stderr_keeps_its_level_and_pid`: `start("fake", heartbeat_timeout_s=0.3)` (the child times out on heartbeats and logs a WARNING before exiting); after `spy.exits` fills, exactly one record on `rbl.capture` has `levelno == logging.WARNING`, starts with `f"[capture pid {spy.hello[0]['pid']}] "` and contains `Heartbeat timed out`.
+- [x] `test_open_sequence_is_narrated`: start fake, wait for hello, `open()`, wait for `opened`, `shutdown()`. The `rbl.capture` INFO messages contain, in this order, records starting with `Starting Capture Process:`, `Capture Process started, pid `, `Capture Process hello: protocol 1, cameras ['Fake ASI']`, `Sent open (id `, `Open reply ok (id ` (ending `Fake ASI FAKE0001`), and `Capture Process exited: code 0` (ending `expected True`).
+- [x] `test_dll_resolution_is_logged`: with `RBL_ZWO_SDK_DLL` set to a missing path, `start("zwo")` logs the INFO record `f"ZWO SDK DLL: {path} (from RBL_ZWO_SDK_DLL: True, exists: False)"`.
+- [x] `test_streaming_is_not_logged_per_message`: start fake, open, wait for the first `preview`; record the count of `rbl.capture` records **not** starting with `[capture pid `; wait 2.0 s; the count is unchanged.
 
 ## Gate
 
@@ -71,3 +71,11 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+### Completed (2026-11-10)
+Implemented Open sequence narration in rbl.log and child stderr log forwarding by line:
+- Added pure module-level functions `drain_lines` and `child_log_level` to `src/rbl/services/capture_client.py`.
+- Updated `CaptureClient._on_stderr` and `_on_finished` to buffer and drain stderr line by line, preserving the child's log level and prefixing with `[capture pid <pid>]`.
+- Added Open-sequence INFO narration lines (DLL resolution, starting process, started with PID, hello with cameras, sent open, open reply ok/error, and child exited with code/status/expected).
+- Updated module docstrings explaining why Open is narrated and why streaming/heartbeat traffic is not logged per message (D1, D10).
+- Added comprehensive unit tests in `tests/test_capture_client.py` covering all acceptance criteria with no new private attribute accesses.
