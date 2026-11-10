@@ -1,6 +1,6 @@
 # 96: Glossary: Draft ROI, Last ROI, compact mode, and the ROI recording lock
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
