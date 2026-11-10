@@ -1,6 +1,6 @@
 # 118: visa_probe skips serial ports and stops implying it tests the scope
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -30,7 +30,7 @@ It also ends with `Record these lines in ticket 01's Comments.`, but ticket 01 i
 
 ## Acceptance criteria
 
-- [ ] In `run_child` in `scripts/visa_probe.py`, a resource whose name starts with
+- [x] In `run_child` in `scripts/visa_probe.py`, a resource whose name starts with
       `"ASRL"` (case-insensitive) is never opened. It prints exactly
       `f"    {res}: serial port, not probed (RBL talks to its serial instruments with pyserial, not VISA)"`
       and moves to the next resource. Test:
@@ -39,22 +39,22 @@ It also ends with `Record these lines in ticket 01's Comments.`, but ticket 01 i
       `("ASRL3::INSTR", "GPIB0::2::INSTR")`; assert `open_resource` was called exactly
       once, with `"GPIB0::2::INSTR"`; the output contains
       `"ASRL3::INSTR: serial port, not probed"`; the return value is `0`.
-- [ ] `EXPECTED["USB"]` becomes `"DG1022Z function generators"`. After the per-category
+- [x] `EXPECTED["USB"]` becomes `"DG1022Z function generators"`. After the per-category
       summary lines, `main()` prints exactly
       `"  TDS 2012 scope (BPM): RS-232 through a USB-serial adapter, not VISA. Not tested here; check it from the Beam Profiler tab."`
       Test: tests/test_visa_probe.py::`test_main_summary_says_scope_is_not_tested_here`
       — copy the setup of `test_main_summary_deduplicates_and_counts_answered`; assert
       that sentence is in the output and that no line starting with `"  USB"` contains
       `"TDS 2012"`.
-- [ ] The closing line becomes `"Record these lines in the bench ticket's Comments."`.
+- [x] The closing line becomes `"Record these lines in the bench ticket's Comments."`.
       Test: tests/test_visa_probe.py::`test_main_summary_says_scope_is_not_tested_here`
       (the same test as above) also asserts the output contains that line and does not
       contain `"ticket 01"`.
-- [ ] Existing tests in `tests/test_visa_probe.py` are not edited and pass, including
+- [x] Existing tests in `tests/test_visa_probe.py` are not edited and pass, including
       `test_main_summary_deduplicates_and_counts_answered` (its `"USB   NONE ANSWERED"`
       assertion still holds); `git diff tests/test_visa_probe.py` shows only additions.
       (by hand)
-- [ ] The module docstring gains a short paragraph saying why `ASRL` resources are
+- [x] The module docstring gains a short paragraph saying why `ASRL` resources are
       skipped, citing the 2026-11-10 run. (by hand)
 
 **What tests may fake:** `pyvisa` (via `sys.modules`, as the existing tests do) and
@@ -74,3 +74,5 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+2026-11-10 summary: `run_child` skips `ASRL*` resources; `EXPECTED["USB"]` is DG1022Z only; `main()` prints the scope-not-tested sentence and the "bench ticket's Comments" line; the banner no longer says "ticket 01" (the new test asserts that string is absent from all output). Docstring paragraph added. Tests: `test_run_child_skips_serial_ports`, `test_main_summary_says_scope_is_not_tested_here`; existing tests untouched (diff is additions only). Gate verified on Linux; the script itself is only exercised through mocks, no Windows bench run.
