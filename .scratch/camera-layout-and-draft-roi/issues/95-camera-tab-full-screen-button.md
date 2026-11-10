@@ -1,6 +1,6 @@
 # 95: Camera tab: a visible Full screen button
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
