@@ -53,11 +53,15 @@ CI enforces this rule (`scripts/check_tests_first.py`): any pull request or comm
 touching application code under `src/` must also touch `tests/`. Non-application
 changes (`docs/`, `scripts/`, `tests/`, `.github/`) pass automatically.
 
-When a change to `src/` genuinely does not require test modifications (e.g. comment
-clarifications or exploratory work), an explicit escape mechanism must be declared:
-a commit/PR annotation `[no-test-needed: <reason>]`, `[tests-exempt: <reason>]`,
-`[skip-test-gate]`, or a `tests-exempt` PR label. The exemption is visible in review,
-never silent.
+A change under `src/` must also touch `tests/`. A `.py` file whose code is unchanged
+once docstrings and comments are removed does not count as a change. Otherwise the
+escape is explicit and visible, and its reach depends on where it is written: a tag
+(`[no-test-needed: <reason>]`, `[tests-exempt: <reason>]` or `[skip-test-gate]`) in
+a commit message covers only the files that commit changed, and a file is exempt
+only when every commit that changed it is tagged; the same tag in the PR title or
+body, or the `tests-exempt` / `skip-test-gate` label, covers the whole PR, and CI
+re-runs when the PR text or labels change. The check fails, never passes, when it
+cannot work out what changed.
 
 **2. No failure may be muted.** `xfail_strict = true` is set, so a muted test
 that starts passing becomes a failure. `xfail` is not a tool for making a build

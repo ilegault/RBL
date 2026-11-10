@@ -8,6 +8,7 @@ on:
   push:
   pull_request:
     branches: [ master ]
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
 
 jobs:
   lint:

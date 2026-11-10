@@ -1,6 +1,6 @@
 # 105: Take ticket-engine's fixed tests-first check, and re-run CI on PR edits and labels
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -50,18 +50,18 @@ The canonical file's own tests live in ticket-engine. Here, prove the copy and t
 wiring with the commands below on the PR branch; paste their output under
 `## Comments`.
 
-- [ ] `scripts/check_tests_first.py` is byte-identical to the canonical file: the
+- [x] `scripts/check_tests_first.py` is byte-identical to the canonical file: the
   SHA-256 of the local file equals the SHA-256 of a fresh download of the URL in step 1
   (`python -c "import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" <file>`
   on each). (no test: the two hashes, pasted under Comments)
-- [ ] `python scripts/check_tests_first.py --files src/rbl/config/cup_config.py` exits 1 and its output
+- [x] `python scripts/check_tests_first.py --files src/rbl/config/cup_config.py` exits 1 and its output
   names `src/rbl/config/cup_config.py`; adding `tests/test_x.py` to `--files` exits 0. (no test: the command output, pasted under Comments)
-- [ ] `tests/test_check_tests_first.py` passes with no edit to it. If a test in it fails against the canonical file, do not edit the test or the file: set `Status: blocked` and say which test under `## Comments`. (no test: the existing suite is the proof)
-- [ ] `.github/workflows/tests.yml` has the step-2 `types:` line under `pull_request:`,
+- [x] `tests/test_check_tests_first.py` passes with no edit to it. If a test in it fails against the canonical file, do not edit the test or the file: set `Status: blocked` and say which test under `## Comments`. (no test: the existing suite is the proof)
+- [x] `.github/workflows/tests.yml` has the step-2 `types:` line under `pull_request:`,
   and its `branches:` line is unchanged. (no test: workflow file)
-- [ ] ADR 0001 and `AGENTS.md` carry the step-3 text in place of the passages named in
+- [x] ADR 0001 and `AGENTS.md` carry the step-3 text in place of the passages named in
   steps 3 and 4. (no test: documentation)
-- [ ] The gate below passes on the PR branch (this PR changes `scripts/`, `.github/`,
+- [x] The gate below passes on the PR branch (this PR changes `scripts/`, `.github/`,
   `docs/` and `AGENTS.md` only, so the tests-first check passes with no tag). (no test: the gate itself)
 
 ## Gate
@@ -76,3 +76,41 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+Summary (2026-11-10):
+- Replaced `scripts/check_tests_first.py` with canonical copy from ticket-engine byte-for-byte.
+- Updated `.github/workflows/tests.yml` to re-run on PR `types: [opened, synchronize, reopened, edited, labeled, unlabeled]`.
+- Updated ADR 0001 and `AGENTS.md` escape documentation with exact wording from step 3.
+
+### Criterion 1 SHA-256 verification:
+- local:  `ab072943baad008881a06373b4d8b632dc05c7efee2513adc0773b850b18e2c8`
+- remote: `ab072943baad008881a06373b4d8b632dc05c7efee2513adc0773b850b18e2c8`
+MATCH
+
+### Criterion 2 command verification:
+1. `python scripts/check_tests_first.py --files src/rbl/config/cup_config.py` (exited 1):
+```
+FAIL: Application source files modified under 'src/' without corresponding test changes under 'tests/':
+  - src/rbl/config/cup_config.py
+
+Tests-first rule violation (see ADR 0001 under docs/adr/):
+1. Write tests under 'tests/' covering the application changes.
+2. If this change is genuinely exempt from test updates, provide an explicit escape reason:
+   - PR Label: 'tests-exempt' or 'skip-test-gate'
+   - Commit message or PR body: [no-test-needed: <reason>], [tests-exempt: <reason>], or [skip-test-gate]
+     (a commit tag covers only the files that commit changed)
+```
+
+2. `python scripts/check_tests_first.py --files src/rbl/config/cup_config.py tests/test_x.py` (exited 0):
+```
+OK: Application source changes (1 file(s)) accompanied by test changes (1 file(s)).
+```
+
+### Criterion 3 test suite:
+`tests/test_check_tests_first.py` passes completely with no modifications (11 passed in 3.56s).
+
+### Gate:
+- `ruff check .`: All checks passed!
+- `python scripts/check_tests_first.py`: OK: No code changes under 'src/'.
+- `python tools/type_gate.py`: 0 hard-layer error(s); 139 soft-layer error(s) (ratchet: 139).
+- `pytest`: passes in CI (verified in GitHub Actions CI run on branch push).
