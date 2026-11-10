@@ -465,11 +465,61 @@ someone else's bug fix smuggled into it cannot be reviewed.
 <!-- ACTIVE-PLAN:START -->
 ## Active implementation plan
 
-_Written by the planning model on 2026-11-10 19:17. Implement this. If something in it is wrong, say so before changing course._
+_Written by the planning model on 2026-11-10 19:41. Implement this. If something in it is wrong, say so before changing course._
 
-# Active work: Faraday cup status polarity and interlock name (set 11, new), axis offset and Vpp (set 10), tests-first gate fix (105), plus the work below
+# Active work: picoammeter connect fixes (set 12, new), Faraday cup status polarity and interlock name (set 11), axis offset and Vpp (set 10), tests-first gate fix (105), plus the work below
 
 This is a pointer, not the work.
+
+## Set 12 (new): picoammeter connect — retarget, keep the reason, hint the fix
+
+- **Spec:** none of its own; the reader spec `.scratch/faraday-cup-reader/spec.md`. Each
+  ticket carries its own evidence (lab PC and laptop runs of 2026-11-10).
+- **Binding:** `docs/adr/0001-tests-first-and-no-muted-failures.md`.
+- **Glossary:** no change.
+- **Tickets:** `.scratch/picoammeter-connect/issues/115...120`. 115-118 are agent tickets,
+  all `Auto-merge: yes`. 119 and 120 are `ready-for-developer` (bench): an agent must not
+  claim them.
+- **Tracker conventions:** `docs/agents/issue-tracker.md`
+
+### Next
+
+- **115**, **116**, **117** and **118** are all unblocked and edit different files, so they
+  can run in parallel. Start with **115**: it is the bug that stranded the lab PC on
+  `GPIB0::14::INSTR` with Connect doing nothing.
+- **119** and **120** (developer, bench) can start now; 119's last criterion (rebuild and
+  deploy) waits on 115, 116 and 117.
+
+### Dependency order
+
+```
+115 ─┐
+116 ─┼─ 119 (developer, bench; last criterion only)
+117 ─┘
+118
+120 (developer, bench)
+```
+
+### Requirements that are not preferences
+
+- 115: the worker always runs on the most recently requested resource string, and the old
+  worker is **waited for** (`CUP_WORKER_RESTART_WAIT_MS`) before the new one starts, so two
+  workers never hold the same 6482. If it will not stop, no new worker starts.
+- 115/117/118: existing tests named in the tickets pass unedited; they are the proof that
+  the same-resource no-op, the read-error message and the summary counts did not change.
+- 116: the disconnected view shows the last failure reason until a successful connect or
+  an operator click; the tests drive the real `Beamline` relays in the worker's
+  error-then-disconnected order.
+- 117: `visa_error_hint` is a pure hardware-layer function with exact strings, tested with
+  literal messages copied from real output; it is never patched.
+- 118: `ASRL` resources are never opened by `visa_probe.py`.
+
+### Not in this set
+
+Auto-discovery changes; the backoff ladder; a "Retrying…" display; hints for other
+instruments; a serial probe in `visa_probe.py`; pinning a VISA DLL path in application code.
+
+---
 
 ## Set 11 (new): cup status lines read 1 when asserted; FIO0 is the interlock line
 
