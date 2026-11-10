@@ -269,3 +269,60 @@ def test_drawing_is_off_while_recording(zwo_tab):
     rec.set_camera_kind("usb")
     assert not tab.video_view.rect_drawing_enabled()
     rec.stop()
+
+
+def test_fullscreen_button_opens_and_esc_closes(setup):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    from rbl.gui.camera_tab import _FullscreenWindow
+
+    tab, panel, rec, cam = setup
+    assert hasattr(tab, "btn_fullscreen")
+    tab.btn_fullscreen.click()
+    try:
+        win = getattr(tab, "_fullscreen_win")
+        assert isinstance(win, _FullscreenWindow)
+        QTest.keyClick(win, Qt.Key.Key_Escape)
+        assert getattr(tab, "_fullscreen_win") is None
+    finally:
+        win = getattr(tab, "_fullscreen_win")
+        if win is not None:
+            win.close()
+
+
+def test_fullscreen_button_and_double_click_agree(setup):
+    from rbl.gui.camera_tab import _FullscreenWindow
+
+    tab, panel, rec, cam = setup
+    assert hasattr(tab, "btn_fullscreen")
+    tab.btn_fullscreen.click()
+    try:
+        win = getattr(tab, "_fullscreen_win")
+        assert isinstance(win, _FullscreenWindow)
+        tab.btn_fullscreen.click()
+        assert getattr(tab, "_fullscreen_win") is None
+        tab.video_view.double_clicked.emit()
+        assert isinstance(getattr(tab, "_fullscreen_win"), _FullscreenWindow)
+    finally:
+        win = getattr(tab, "_fullscreen_win")
+        if win is not None:
+            win.close()
+
+
+def test_fullscreen_button_in_same_layout_as_crosshair(setup):
+    from PySide6.QtWidgets import QHBoxLayout
+
+    tab, panel, rec, cam = setup
+    assert hasattr(tab, "btn_fullscreen")
+    crosshair = getattr(tab, "_chk_crosshair")
+    layouts = [lay for lay in tab.findChildren(QHBoxLayout) if lay.indexOf(crosshair) != -1]
+    assert len(layouts) == 1
+    layout = layouts[0]
+    assert layout.indexOf(tab.btn_fullscreen) != -1
+    assert layout.indexOf(tab.btn_fullscreen) == layout.indexOf(crosshair) + 1
+    assert tab.btn_fullscreen.text() == "Full screen"
+    assert tab.btn_fullscreen.toolTip() == (
+        "Full screen (Esc to exit). Double-click the picture also works."
+    )
+

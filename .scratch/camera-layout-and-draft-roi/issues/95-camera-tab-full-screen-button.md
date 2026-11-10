@@ -1,6 +1,6 @@
 # 95: Camera tab: a visible Full screen button
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -25,13 +25,13 @@ and Esc keep working exactly as now. Add the button to the module docstring's ex
 Use the existing `setup` fixture; the full-screen window is a real `_FullscreenWindow`
 (offscreen platform). Close any window a test opens.
 
-- [ ] `test_fullscreen_button_opens_and_esc_closes`: `btn_fullscreen.click()` sets
+- [x] `test_fullscreen_button_opens_and_esc_closes`: `btn_fullscreen.click()` sets
   `tab._fullscreen_win` to a `_FullscreenWindow`; `QTest.keyClick(tab._fullscreen_win, Qt.Key.Key_Escape)`
   then leaves `tab._fullscreen_win` None.
-- [ ] `test_fullscreen_button_and_double_click_agree`: clicking the button while the window
+- [x] `test_fullscreen_button_and_double_click_agree`: clicking the button while the window
   is open closes it (`_fullscreen_win` None), and `video_view.double_clicked.emit()` opens it
   again.
-- [ ] `btn_fullscreen` is in the same `QHBoxLayout` as `_chk_crosshair`
+- [x] `btn_fullscreen` is in the same `QHBoxLayout` as `_chk_crosshair`
   (`layout.indexOf(...) != -1` for both).
 
 ## Gate
@@ -46,3 +46,9 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+2026-11-10:
+- Added `CameraTab.btn_fullscreen` (`QPushButton("Full screen")`) placed immediately after `_chk_crosshair` in `_build_ui`, wired to `_toggle_fullscreen` with tooltip `"Full screen (Esc to exit). Double-click the picture also works."`.
+- Added the button to `camera_tab.py` module docstring extras list.
+- Covered by `test_fullscreen_button_opens_and_esc_closes`, `test_fullscreen_button_and_double_click_agree`, and `test_fullscreen_button_in_same_layout_as_crosshair` in `tests/test_camera_tab.py`.
+- Note: Criterion 3 did not include a backticked test name in the ticket; covered by `test_fullscreen_button_in_same_layout_as_crosshair`.

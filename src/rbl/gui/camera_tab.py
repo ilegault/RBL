@@ -10,6 +10,7 @@ Extras over the compact RecordingPanel:
   - Crosshair overlay (drawn with QPainter, never burned into frames/photos)
   - Fit / 1:1 toggle
   - Double-click feed to go fullscreen; Esc to exit
+  - Full screen button (Esc to exit; double-click also works)
 
 Phase 1 fix (2026-08-25): replaced _FeedLabel (QLabel subclass) with VideoView.
 The QLabel setPixmap() path had a size ratchet in the DragPanel scroll area
@@ -157,6 +158,13 @@ class CameraTab(CameraKindMixin, QWidget):
         self._chk_crosshair = QCheckBox("Crosshair")
         self._chk_crosshair.toggled.connect(self._on_crosshair_toggled)
         top.addWidget(self._chk_crosshair)
+
+        self.btn_fullscreen = QPushButton("Full screen")
+        self.btn_fullscreen.setToolTip(
+            "Full screen (Esc to exit). Double-click the picture also works."
+        )
+        self.btn_fullscreen.clicked.connect(self._toggle_fullscreen)
+        top.addWidget(self.btn_fullscreen)
         lay.addLayout(top)
 
         # ---- Settings row --------------------------------------------------
