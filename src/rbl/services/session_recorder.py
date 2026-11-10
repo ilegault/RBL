@@ -934,7 +934,12 @@ class SessionRecorder(QObject):
         self.state_changed.emit()
 
     def _on_zwo_status(self, msg: dict) -> None:
+        # state_changed is what makes ZwoControls repaint its status line. A status
+        # message that only stored the dict left the line blank (or stale) until some
+        # unrelated event happened to fire state_changed, so the operator could not
+        # trust fps / dropped-frame / disk-free readings while a run was in progress.
         self._zwo_status = {k: v for k, v in msg.items() if k != "type"}
+        self.state_changed.emit()
 
     def _on_zwo_event(self, event: str, detail: str) -> None:
         self._write_event(f"zwo_{event}", detail)

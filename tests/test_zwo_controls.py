@@ -187,6 +187,26 @@ def test_take_darks_asks_first(recorder_and_widget, qapp):
     rec.stop()
 
 
+def test_a_status_message_repaints_the_status_line_by_itself(
+        recorder_and_widget, capture_client, qapp):
+    """A status message must announce itself with state_changed.
+
+    The status line is only redrawn from state_changed; if the status handler
+    stores the message silently the line stays blank until an unrelated event.
+    The message is delivered through the client's own signal, synchronously,
+    so nothing else can repaint the line in between.
+    """
+    _rec, widget, _ = recorder_and_widget
+    assert widget.lbl_status.text() == ""
+    capture_client.status.emit({
+        "type": "status", "acquired_fps": 12.5, "frames_written": 7,
+        "frames_dropped_camera": 0, "frames_dropped_queue": 0,
+        "sensor_temperature_c": 21.0, "bytes_per_hour": 2e9,
+        "disk_free_bytes": 50 * 1024**3,
+    })
+    assert "12.5 fps" in widget.lbl_status.text()
+
+
 def test_status_line_and_caption(recorder_and_widget, qapp):
     rec, widget, _ = recorder_and_widget
     rec.connect_zwo()
