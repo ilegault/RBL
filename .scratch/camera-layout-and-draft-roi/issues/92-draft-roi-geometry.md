@@ -1,6 +1,6 @@
 # 92: Draft ROI geometry as pure functions
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
