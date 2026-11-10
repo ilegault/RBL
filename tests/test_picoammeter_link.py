@@ -5,10 +5,11 @@ Tests for Beamline's PicoammeterLinkMixin, CupFeed test helper, and CupState sna
 from __future__ import annotations
 
 import math
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
+from rbl.config.cup_config import CUP_WORKER_RESTART_WAIT_MS
 from rbl.snapshots import CupState
 from rbl.state.beamline import Beamline
 from tests.payloads import CupFeed
@@ -155,6 +156,43 @@ class TestPicoammeterLink:
         # Disconnect
         beamline.disconnect_picoammeter()
         mock_worker.stop.assert_called_once()
+
+    @patch("rbl.state.picoammeter_link.PicoammeterWorker")
+    def test_connect_with_new_resource_restarts_worker(self, mock_worker_cls):
+        w1, w2 = MagicMock(), MagicMock()
+        w1.wait.return_value = True
+        mock_worker_cls.side_effect = [w1, w2]
+
+        beamline = Beamline()
+        beamline.connect_picoammeter("GPIB0::14::INSTR")
+        beamline.connect_picoammeter("GPIB0::2::INSTR")
+
+        w1.stop.assert_called_once()
+        w1.wait.assert_called_once_with(CUP_WORKER_RESTART_WAIT_MS)
+        assert mock_worker_cls.call_args_list == [
+            call(resource_name="GPIB0::14::INSTR"),
+            call(resource_name="GPIB0::2::INSTR"),
+        ]
+        w2.start.assert_called_once()
+
+    @patch("rbl.state.picoammeter_link.PicoammeterWorker")
+    def test_restart_refuses_when_old_worker_will_not_stop(self, mock_worker_cls):
+        w1, w2 = MagicMock(), MagicMock()
+        w1.wait.return_value = False
+        mock_worker_cls.side_effect = [w1, w2]
+
+        beamline = Beamline()
+        errors: list[str] = []
+        beamline.cup_error.connect(errors.append)
+        beamline.connect_picoammeter("GPIB0::14::INSTR")
+        beamline.connect_picoammeter("GPIB0::2::INSTR")
+
+        assert mock_worker_cls.call_count == 1
+        w2.start.assert_not_called()
+        assert (
+            "Previous picoammeter connection did not stop; press Connect again."
+            in errors
+        )
 
     @patch("rbl.state.picoammeter_link.PicoammeterWorker")
     def test_set_cup_acquiring_delegates_to_worker(self, mock_worker_cls):

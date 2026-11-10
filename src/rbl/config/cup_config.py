@@ -93,6 +93,7 @@ KEITHLEY_6482_DEFAULT_RESOURCE: str = "GPIB0::2::INSTR"
 # ---- Reconnect backoff schedule -------------------------------------------
 # Seconds to wait between reconnect attempts after a VISA communication failure.
 CUP_RECONNECT_BACKOFF_S: list[float] = [1.0, 2.0, 5.0, 10.0, 30.0]
+CUP_WORKER_RESTART_WAIT_MS: int = 6000  # driver VISA timeout (5000 ms) plus one second
 
 # ---- Acquisition trigger thresholds (ADR 0002) ---------------------------
 CUP_ARM_THRESHOLD_A: float = 0.5e-6        # 0.5 µA to trigger run arming

@@ -1,6 +1,6 @@
 # 115: Connect with a new address restarts the picoammeter worker
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -37,7 +37,7 @@ in `Keithley6482.__init__`, so a worker blocked inside `viOpen` can still finish
 
 ## Acceptance criteria
 
-- [ ] `src/rbl/config/cup_config.py` gains `CUP_WORKER_RESTART_WAIT_MS: int = 6000`
+- [x] `src/rbl/config/cup_config.py` gains `CUP_WORKER_RESTART_WAIT_MS: int = 6000`
       directly under `CUP_RECONNECT_BACKOFF_S`, with a one-line comment: driver VISA
       timeout (5000 ms) plus one second. In `connect_picoammeter()`, when a worker exists
       and the stripped requested resource differs from `self._picoammeter_resource`: keep
@@ -51,18 +51,18 @@ in `Keithley6482.__init__`, so a worker blocked inside `viOpen` can still finish
       `w1.wait` called with `CUP_WORKER_RESTART_WAIT_MS`, the class's `call_args_list`
       equals `[call(resource_name="GPIB0::14::INSTR"), call(resource_name="GPIB0::2::INSTR")]`,
       and `w2.start` called once.
-- [ ] If the old worker does not exit within the wait, no new worker is started and the
+- [x] If the old worker does not exit within the wait, no new worker is started and the
       operator is told. `connect_picoammeter()` emits `self.cup_error` with exactly
       `"Previous picoammeter connection did not stop; press Connect again."` and returns.
       Test: tests/test_picoammeter_link.py::`test_restart_refuses_when_old_worker_will_not_stop`
       — same patch, `w1.wait.return_value = False`; collect `beamline.cup_error`
       emissions; after the second connect the class was constructed once, `w2.start` was
       never called, and the collected list contains that exact string.
-- [ ] The same resource string stays a no-op. The existing test
+- [x] The same resource string stays a no-op. The existing test
       tests/test_picoammeter_link.py::`test_connect_and_disconnect_picoammeter` is not
       edited and still passes (its second call with the same resource asserts
       `start.call_count == 1`).
-- [ ] The operator path works end to end through the tab. Test:
+- [x] The operator path works end to end through the tab. Test:
       tests/test_faraday_cup_tab.py::`test_connect_button_retargets_a_retrying_worker` —
       real `Beamline` and `FaradayCupTab`; patch only
       `rbl.state.picoammeter_link.PicoammeterWorker` (two `MagicMock` workers, first
@@ -71,7 +71,7 @@ in `Keithley6482.__init__`, so a worker blocked inside `viOpen` can still finish
       class's last call is `call(resource_name="GPIB0::2::INSTR")`. No reading is ingested
       between the clicks, so the tab is in its disconnected view the whole time, as on the
       lab PC.
-- [ ] The `connect_picoammeter()` docstring and the module docstring of
+- [x] The `connect_picoammeter()` docstring and the module docstring of
       `src/rbl/state/picoammeter_link.py` gain a short **RETARGETING** paragraph stating
       the rule above, the lab PC incident, and why the old worker is waited for. (by hand)
 
@@ -92,3 +92,5 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+2026-11-10: connect_picoammeter() now retargets: a different stripped resource stops the old worker, waits CUP_WORKER_RESTART_WAIT_MS, then starts a new one; if the old worker will not stop it emits cup_error and starts nothing. Same resource stays a no-op. Tests: test_connect_with_new_resource_restarts_worker, test_restart_refuses_when_old_worker_will_not_stop (tests/test_picoammeter_link.py), test_connect_button_retargets_a_retrying_worker (tests/test_faraday_cup_tab.py); all seen failing before the change. RETARGETING docstrings added. Bench: ticket 119 verifies on the lab PC. Note: after a refused restart the old worker is detached, so a second Connect starts a new worker without waiting (as specified).
