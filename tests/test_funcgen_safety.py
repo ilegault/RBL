@@ -3,11 +3,16 @@ Unit tests for rbl.hardware.funcgen_safety — the interlock maths that decides
 whether a channel's combined peak voltage is safe to apply. No Qt required:
 this is exactly the point of having moved it out of funcgen_tab.py.
 """
+from types import SimpleNamespace
+
+import pytest
+
 from rbl.hardware.funcgen_safety import (
     CHANNEL_ROLE,
     PEAK_MAX_VOLTS,
     PEAK_WARN_VOLTS,
     channel_peak_volts,
+    over_limit_channels,
 )
 
 
@@ -46,10 +51,6 @@ class TestChannelRole:
 
 
 def test_over_limit_channels_lists_offenders_in_order():
-    import pytest
-    from types import SimpleNamespace
-    from rbl.hardware.funcgen_safety import over_limit_channels
-
     # 10 Vpp at 0 V -> exactly 5.0 V -> not listed
     safe_params = SimpleNamespace(shape="Triangle", amp_vpp=10.0, offset_v=0.0)
     assert over_limit_channels({"A1": safe_params}) == []

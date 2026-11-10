@@ -775,7 +775,7 @@ class OverviewTab(QWidget):
         self.chk_ext_ref.blockSignals(False)
 
     def _update_apply_all_enabled(self):
-        """Grey out Apply All if no generator is connected or any connected channel exceeds the rail.
+        """Grey out Apply All if no unit connected or any channel exceeds the rail.
 
         Re-evaluated on every setpoint change and connection change without waiting
         for a redraw tick (D16, D17). Tooltip lists offending channels and peaks.
@@ -792,7 +792,8 @@ class OverviewTab(QWidget):
         elif offenders:
             self.btn_apply_all.setEnabled(False)
             lines = [
-                f"{CHANNEL_ROLE[k].replace('-', '−')} ({k}) input peak {pk:.2f} V — over the 5 V limit. Lower the amplitude or offset."
+                f"{CHANNEL_ROLE[k].replace('-', '−')} ({k}) input peak {pk:.2f} V — "
+                "over the 5 V limit. Lower the amplitude or offset."
                 for k, pk in offenders
             ]
             self.btn_apply_all.setToolTip("\n".join(lines))

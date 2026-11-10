@@ -42,6 +42,7 @@ from rbl.hardware.funcgen_safety import (
     PEAK_MAX_VOLTS,
     PEAK_WARN_VOLTS,
     channel_peak_volts,
+    over_limit_channels,
 )
 from rbl.state.setpoints import AXIS_CHANNELS, START_PHASE_DEFAULTS
 from rbl.state.snapshots import ChannelParams
@@ -510,6 +511,10 @@ class _GenProxy:
     def items(self):
         return [("A", self._beamline.dg_a), ("B", self._beamline.dg_b)]
 
+    def get(self, letter, default=None):
+        val = self[letter]
+        return default if val is None else val
+
 
 class FuncGenTab(QWidget):
     """The 'Function Generators' outer tab."""
@@ -697,6 +702,7 @@ class FuncGenTab(QWidget):
         )
         self.btn_apply_all.clicked.connect(self._apply_all)
         apply_all_row.addWidget(self.btn_apply_all)
+        self._update_apply_enabled()
         left_layout.addLayout(apply_all_row)
 
         # ── SCPI console (right panel — full height) ──────────────────────
@@ -886,6 +892,11 @@ class FuncGenTab(QWidget):
             panel.set_connected(self._gen[gen_letter] is not None)
 
         self._set_scpi_enabled(any_connected)
+        self._update_apply_enabled()
+
+    def refresh_connection_ui(self):
+        """Re-evaluate and present connection state across panels and controls."""
+        self._refresh_connection_ui()
 
     # ---- Cross-unit timebase (10 MHz reference) ------------------------------
 
@@ -1007,6 +1018,56 @@ class FuncGenTab(QWidget):
         controls already hold those values), so this needs no source filter.
         """
         self.panels[key].apply_params(params)
+        self._update_apply_enabled()
+
+    def _update_apply_enabled(self):
+        """Grey out Apply and Apply All when over the 5 V rail.
+
+        Names offending channels and peaks in the button tooltip (D16-D18).
+        """
+        all_params = self._setpoints.all()
+        # Per-channel apply buttons
+        for key, panel in self.panels.items():
+            gen_letter = key[0]
+            gen_conn = self._gen.get(gen_letter) is not None
+            if not gen_conn:
+                panel.btn_apply.setEnabled(False)
+                panel.btn_apply.setToolTip("")
+                continue
+            ch_offenders = over_limit_channels({key: all_params[key]})
+            if ch_offenders:
+                _, peak = ch_offenders[0]
+                role = CHANNEL_ROLE[key].replace("-", "−")
+                panel.btn_apply.setEnabled(False)
+                panel.btn_apply.setToolTip(
+                    f"{role} ({key}) input peak {peak:.2f} V — "
+                    "over the 5 V limit. Lower the amplitude or offset."
+                )
+            else:
+                panel.btn_apply.setEnabled(True)
+                panel.btn_apply.setToolTip("")
+
+        # Apply All 4 Channels button
+        any_connected = any(v is not None for v in self._gen.values())
+        connected_params = {
+            k: p for k, p in all_params.items()
+            if self._gen.get(k[0]) is not None
+        }
+        all_offenders = over_limit_channels(connected_params)
+        if not any_connected:
+            self.btn_apply_all.setEnabled(False)
+            self.btn_apply_all.setToolTip("")
+        elif all_offenders:
+            self.btn_apply_all.setEnabled(False)
+            lines = [
+                f"{CHANNEL_ROLE[k].replace('-', '−')} ({k}) input peak {pk:.2f} V — "
+                "over the 5 V limit. Lower the amplitude or offset."
+                for k, pk in all_offenders
+            ]
+            self.btn_apply_all.setToolTip("\n".join(lines))
+        else:
+            self.btn_apply_all.setEnabled(True)
+            self.btn_apply_all.setToolTip("")
 
     # ---- Apply helpers -------------------------------------------------------
     #

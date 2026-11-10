@@ -6,7 +6,9 @@ that drive the EEL5000 HV amplifiers.
 Moved out of funcgen_tab.py so the peak-voltage interlock can be evaluated
 (and tested) without constructing a widget — the check must eventually run
 on every path to the hardware, not just the one behind the widget's Apply
-button (see Phase 8 of the RBL implementation plan).
+button (see Phase 8 of the RBL implementation plan). Also provides
+over_limit_channels() so GUI screens can pre-emptively grey out Apply buttons
+and name the offending channels in tooltips before the operator clicks.
 """
 from rbl.hardware.funcgen_driver import MAX_GEN_VOLTS
 
@@ -75,13 +77,21 @@ def over_limit_channels(params_by_key: dict) -> list[tuple[str, float]]:
         if key not in params_by_key:
             continue
         p = params_by_key[key]
-        shape = getattr(p, "shape", None)
-        amp = getattr(p, "amp_vpp", None)
-        offset = getattr(p, "offset_v", None)
-        if shape is None and isinstance(p, dict):
-            shape = p.get("shape", "Triangle")
-            amp = p.get("amp_vpp", 0.0)
-            offset = p.get("offset_v", 0.0)
+        raw_shape = getattr(p, "shape", None)
+        if raw_shape is None and isinstance(p, dict):
+            raw_shape = p.get("shape", "Triangle")
+        shape = str(raw_shape or "Triangle")
+
+        raw_amp = getattr(p, "amp_vpp", None)
+        if raw_amp is None and isinstance(p, dict):
+            raw_amp = p.get("amp_vpp", 0.0)
+        amp = float(raw_amp or 0.0)
+
+        raw_offset = getattr(p, "offset_v", None)
+        if raw_offset is None and isinstance(p, dict):
+            raw_offset = p.get("offset_v", 0.0)
+        offset = float(raw_offset or 0.0)
+
         peak = channel_peak_volts(shape, amp, offset)
         if peak > PEAK_MAX_VOLTS + 1e-9:
             offenders.append((key, peak))

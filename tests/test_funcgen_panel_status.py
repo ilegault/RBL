@@ -212,8 +212,8 @@ def test_a_high_frequency_is_not_flagged_by_float_dust(tab):
 
 
 def test_fg_apply_buttons_grey_out_over_the_input_limit(tab):
-    tab._gen["A"] = object()
-    tab._refresh_connection_ui()
+    tab.beamline.dg_a = object()
+    tab.refresh_connection_ui()
     assert tab.btn_apply_all.isEnabled()
     assert tab.panels["A1"].btn_apply.isEnabled()
     assert tab.panels["A2"].btn_apply.isEnabled()
