@@ -1,8 +1,11 @@
 """CaptureClient against the real fake-camera Capture Process (Seam B)."""
 from __future__ import annotations
 
+import ast
 import csv
+import logging
 import os
+import pathlib
 import time
 
 import pytest
@@ -137,10 +140,100 @@ def test_shutdown_and_unexpected_exit(qapp):
         c2.shutdown()
 
 
-def test_missing_dll_launches_nothing(client, monkeypatch, tmp_path):
+def test_missing_dll_launches_nothing(client, monkeypatch, tmp_path, caplog):
     missing = tmp_path / "nope" / "ASICamera2.dll"
     monkeypatch.setenv("RBL_ZWO_SDK_DLL", str(missing))
     spy = Spy(client)
-    client.start("zwo")
-    assert spy.errors == [f"ZWO SDK library not found: {missing}"]
+    expected_text = (
+        f"ZWO SDK library not found: {missing}. "
+        "Copy ASICamera2.dll there or set RBL_ZWO_SDK_DLL."
+    )
+    with caplog.at_level(logging.ERROR, logger="rbl.capture"):
+        client.start("zwo")
+    assert spy.errors == [expected_text]
     assert not client.is_running()
+    records = [
+        r for r in caplog.records
+        if r.name == "rbl.capture" and r.levelno == logging.ERROR
+    ]
+    assert any(r.getMessage() == expected_text for r in records)
+
+
+def test_fatal_before_hello_is_reported_verbatim(client):
+    spy = Spy(client)
+    client.start("fake", extra_args=["--fake-fatal", "zwoasi.init failed: bad DLL"])
+    assert wait_until(lambda: spy.exits)
+    assert spy.errors == ["zwoasi.init failed: bad DLL"]
+    assert spy.hello == []
+
+
+def test_empty_camera_list_ends_the_attempt(client):
+    spy = Spy(client)
+    client.start("fake", extra_args=["--fake-cameras-empty"])
+    assert wait_until(lambda: spy.exits)
+    assert spy.errors == ["No ZWO camera detected on USB"]
+    assert spy.hello == []
+    assert spy.exits == [0]
+
+
+def test_refusals_are_logged(client, tmp_path, caplog):
+    spy = Spy(client)
+    client.start("fake")
+    assert wait_until(lambda: spy.hello)
+    with caplog.at_level(logging.ERROR, logger="rbl.capture"):
+        client.take_darks(str(tmp_path), 1)
+        assert wait_until(lambda: spy.errors)
+    error_text = spy.errors[-1]
+    records = [
+        r for r in caplog.records
+        if r.name == "rbl.capture" and r.levelno == logging.ERROR
+    ]
+    assert any(r.getMessage() == error_text for r in records)
+    assert client.is_running()
+
+
+def test_only_fail_emits_error():
+    client_py = (
+        pathlib.Path(__file__).resolve().parents[1]
+        / "src"
+        / "rbl"
+        / "services"
+        / "capture_client.py"
+    )
+    tree = ast.parse(client_py.read_text(encoding="utf-8"))
+
+    error_emit_calls = []
+
+    class Visitor(ast.NodeVisitor):
+        def __init__(self):
+            self.current_function = None
+
+        def visit_FunctionDef(self, node):
+            old = self.current_function
+            self.current_function = node.name
+            self.generic_visit(node)
+            self.current_function = old
+
+        def visit_AsyncFunctionDef(self, node):
+            old = self.current_function
+            self.current_function = node.name
+            self.generic_visit(node)
+            self.current_function = old
+
+        def visit_Call(self, node):
+            if (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr == "emit"
+                and isinstance(node.func.value, ast.Attribute)
+                and node.func.value.attr == "error"
+                and isinstance(node.func.value.value, ast.Name)
+                and node.func.value.value.id == "self"
+            ):
+                error_emit_calls.append((self.current_function, node))
+            self.generic_visit(node)
+
+    v = Visitor()
+    v.visit(tree)
+    assert len(error_emit_calls) == 1
+    assert error_emit_calls[0][0] == "_fail"
+

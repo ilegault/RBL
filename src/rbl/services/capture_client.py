@@ -22,6 +22,12 @@ owner).
   heartbeat stops and the child shuts itself down.
 * Refusals (``error`` replies) are reported on ``error`` and ``reply`` but never
   end anything by themselves; only the child's events or its exit do.
+* Every error is logged to ``rbl.log`` through ``_fail`` before being emitted on
+  ``error``, so nothing reported by CaptureClient is lost.
+* A pre-hello ``fatal`` line from the child is passed through verbatim via
+  ``_fail``, with no shutdown message and the coming exit marked expected.
+* An empty camera list in ``hello`` ends the attempt immediately with
+  "No ZWO camera detected on USB" and shuts down the child.
 * ``capture_command_line`` and ``capture_child_env`` are pure so the frozen and
   source layouts are testable on one machine. CI never pip-installs ``rbl``
   (it runs from ``src`` via ``pytest.ini``), so when not frozen the child is
@@ -108,7 +114,10 @@ class CaptureClient(QObject):
 
     # ----------------------------------------------------------- lifecycle
     def start(
-        self, camera: str = "zwo", heartbeat_timeout_s: float | None = None
+        self,
+        camera: str = "zwo",
+        heartbeat_timeout_s: float | None = None,
+        extra_args: list[str] | None = None,
     ) -> None:
         if self.is_running():
             return
@@ -119,11 +128,16 @@ class CaptureClient(QObject):
                 frozen, _bundle_dir(), _REPO_ROOT, os.environ
             )
             if not dll.is_file():
-                self.error.emit(f"ZWO SDK library not found: {dll}")
+                self._fail(
+                    f"ZWO SDK library not found: {dll}. "
+                    "Copy ASICamera2.dll there or set RBL_ZWO_SDK_DLL."
+                )
                 return
             args += ["--sdk-dll", str(dll)]
         if heartbeat_timeout_s is not None:
             args += ["--heartbeat-timeout-s", str(heartbeat_timeout_s)]
+        if extra_args:
+            args += list(extra_args)
         frozen = bool(getattr(sys, "frozen", False))
         argv = capture_command_line(frozen, sys.executable, args)
         rbl_parent = str(Path(rbl.__file__).resolve().parent.parent)
@@ -221,9 +235,13 @@ class CaptureClient(QObject):
         return self._command(proto.BeamlineCmd(self._cup_label, _ALUMINA_UNKNOWN))
 
     # ------------------------------------------------------------- plumbing
+    def _fail(self, text: str) -> None:
+        _log.error("%s", text)
+        self.error.emit(text)
+
     def _command(self, cmd: Any) -> int:
         if not self.is_running():
-            self.error.emit("Capture Process is not running")
+            self._fail("Capture Process is not running")
             return -1
         return self._write(cmd)
 
@@ -235,7 +253,7 @@ class CaptureClient(QObject):
         try:
             data = proto.encode(msg)
         except proto.ProtocolError as exc:
-            self.error.emit(str(exc))
+            self._fail(str(exc))
             return -1
         self._pending[cmd_id] = msg["type"]
         self._proc.write(data)
@@ -268,15 +286,25 @@ class CaptureClient(QObject):
         try:
             msg = proto.decode(line)
             if not self._got_hello:
+                if msg.get("type") == "fatal":
+                    self._shutting_down = True
+                    self._fail(msg["message"])
+                    return
                 proto.check_hello(msg)
         except proto.ProtocolError as exc:
             if not self._got_hello and self.is_running():
                 self._shutting_down = True
                 self._write(proto.ShutdownCmd())
-            self.error.emit(str(exc))
+            self._fail(str(exc))
             return
         mtype = msg["type"]
         if mtype == "hello":
+            if msg.get("cameras") == []:
+                self._got_hello = True
+                self._shutting_down = True
+                self._write(proto.ShutdownCmd())
+                self._fail("No ZWO camera detected on USB")
+                return
             self._got_hello = True
             self.hello.emit(msg)
         elif mtype in ("ok", "error"):
@@ -290,13 +318,13 @@ class CaptureClient(QObject):
                 self._open = False
             self.event.emit(msg["event"], msg["detail"])
         elif mtype == "fatal":
-            self.error.emit(msg["message"])
+            self._fail(msg["message"])
 
     def _handle_reply(self, msg: dict[str, Any]) -> None:
         reply_to = msg["reply_to"]
         sent = self._pending.pop(reply_to, None)
         if msg["type"] == "error":
-            self.error.emit(f"{msg['code']}: {msg['message']}")
+            self._fail(f"{msg['code']}: {msg['message']}")
             self.reply.emit(reply_to, msg)
             return
         self.reply.emit(reply_to, msg)
@@ -313,25 +341,25 @@ class CaptureClient(QObject):
         try:
             data = base64.b64decode(msg["jpeg_b64"], validate=True)
         except (binascii.Error, ValueError) as exc:
-            self.error.emit(str(exc))
+            self._fail(str(exc))
             return
         image = QImage.fromData(data)
         if image.isNull():
-            self.error.emit("preview JPEG could not be decoded")
+            self._fail("preview JPEG could not be decoded")
             return
         self.preview.emit(image, fields)
 
     def _on_process_error(self, err: QProcess.ProcessError) -> None:
         if err == QProcess.ProcessError.FailedToStart:
             self._heartbeat.stop()
-            self.error.emit("Capture Process failed to start")
+            self._fail("Capture Process failed to start")
 
     def _on_finished(self, code: int, _status: QProcess.ExitStatus) -> None:
         self._heartbeat.stop()
         self._open = False
         self.exited.emit(code)
         if not self._shutting_down:
-            self.error.emit(f"Capture Process exited unexpectedly ({code})")
+            self._fail(f"Capture Process exited unexpectedly ({code})")
 
 
 def _bundle_dir() -> Path | None:

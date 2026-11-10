@@ -1,6 +1,6 @@
 # 99: CaptureClient: every failure is logged, and the child's own reason survives
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -47,11 +47,11 @@ Tests go in `tests/test_capture_client.py` and drive a **real** fake child with
 private-attribute access (`obj._x`) in tests; the ratchet in
 `tests/test_layering.py::test_private_access_ratchet_does_not_exceed_stored_figure` is at its limit.
 
-- [ ] `test_missing_dll_launches_nothing` (**rewrite in place, same name**): with `RBL_ZWO_SDK_DLL` pointing at a missing file, `spy.errors` equals exactly the D4 text, `client.is_running()` is False, and `caplog` has an `ERROR` record on `rbl.capture` whose `getMessage()` is that same text.
-- [ ] `test_fatal_before_hello_is_reported_verbatim`: with `["--fake-fatal", "zwoasi.init failed: bad DLL"]`, after `spy.exits` fills, `spy.errors == ["zwoasi.init failed: bad DLL"]` (no "expected hello", no "exited unexpectedly") and `spy.hello == []`.
-- [ ] `test_empty_camera_list_ends_the_attempt`: with `["--fake-cameras-empty"]`, after `spy.exits` fills, `spy.errors == ["No ZWO camera detected on USB"]`, `spy.hello == []` and `spy.exits == [0]`.
-- [ ] `test_refusals_are_logged`: start fake, wait for hello, call `client.take_darks(str(tmp_path), 1)` before `open` (the child refuses with `not_open`); the emitted error text appears as an `ERROR` record on `rbl.capture`, and the child is still running.
-- [ ] `test_only_fail_emits_error`: parse `src/rbl/services/capture_client.py` with `ast`; exactly one call whose function is `self.error.emit` exists, and it is inside the function `_fail`.
+- [x] `test_missing_dll_launches_nothing` (**rewrite in place, same name**): with `RBL_ZWO_SDK_DLL` pointing at a missing file, `spy.errors` equals exactly the D4 text, `client.is_running()` is False, and `caplog` has an `ERROR` record on `rbl.capture` whose `getMessage()` is that same text.
+- [x] `test_fatal_before_hello_is_reported_verbatim`: with `["--fake-fatal", "zwoasi.init failed: bad DLL"]`, after `spy.exits` fills, `spy.errors == ["zwoasi.init failed: bad DLL"]` (no "expected hello", no "exited unexpectedly") and `spy.hello == []`.
+- [x] `test_empty_camera_list_ends_the_attempt`: with `["--fake-cameras-empty"]`, after `spy.exits` fills, `spy.errors == ["No ZWO camera detected on USB"]`, `spy.hello == []` and `spy.exits == [0]`.
+- [x] `test_refusals_are_logged`: start fake, wait for hello, call `client.take_darks(str(tmp_path), 1)` before `open` (the child refuses with `not_open`); the emitted error text appears as an `ERROR` record on `rbl.capture`, and the child is still running.
+- [x] `test_only_fail_emits_error`: parse `src/rbl/services/capture_client.py` with `ast`; exactly one call whose function is `self.error.emit` exists, and it is inside the function `_fail`.
 
 ## Gate
 
@@ -65,3 +65,18 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+2026-11-10: Implemented ticket 99 (CaptureClient failure logging and error identification).
+- Added `CaptureClient._fail(text: str)` routing all errors to `_log.error` on `rbl.capture` before emitting `error`. Replaced all direct `self.error.emit` calls in `capture_client.py`.
+- Updated missing DLL message to match D4 format.
+- Added `extra_args: list[str] | None = None` parameter to `CaptureClient.start`.
+- Handled pre-hello `fatal` messages: emitted verbatim via `_fail`, marked coming exit expected (`_shutting_down = True`), no shutdown sent.
+- Handled empty camera list in `hello`: marked hello received and exit expected, sent shutdown command, emitted "No ZWO camera detected on USB" via `_fail`, suppressed hello signal.
+- Updated module docstrings explaining error routing, verbatim fatal handling, and empty camera list handling.
+- Tests in `tests/test_capture_client.py`:
+  - `test_missing_dll_launches_nothing` (rewritten): verifies D4 text and `rbl.capture` ERROR log record.
+  - `test_fatal_before_hello_is_reported_verbatim`: verifies pre-hello fatal message verbatim and no hello emitted.
+  - `test_empty_camera_list_ends_the_attempt`: verifies empty camera list error and clean exit 0.
+  - `test_refusals_are_logged`: verifies refusal error logged at ERROR level on `rbl.capture`.
+  - `test_only_fail_emits_error`: AST check ensuring `_fail` is the only function calling `self.error.emit`.
+- Bench verification: Covered by ticket 104.
