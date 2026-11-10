@@ -1,6 +1,6 @@
 # 117: Picoammeter VISA errors carry a plain-language hint
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -30,7 +30,7 @@ is tested with literal strings and no VISA, no Qt, no thread.
 
 ## Acceptance criteria
 
-- [ ] New module `src/rbl/hardware/visa_hints.py` with a `WHY THIS EXISTS` docstring and
+- [x] New module `src/rbl/hardware/visa_hints.py` with a `WHY THIS EXISTS` docstring and
       `def visa_error_hint(message: str) -> str | None`. It returns the hint for the first
       of these substrings found in `message`, checked in this order, else `None`. The
       hint strings are exactly:
@@ -45,10 +45,10 @@ is tested with literal strings and no VISA, no Qt, no thread.
       and `"VI_ERROR_RSRC_BUSY (-1073807246): The resource is valid, but VISA cannot currently access it."`,
       asserting each returns a string starting `"Hint: "` that contains, respectively,
       `"Keysight IO Libraries Suite"`, `"MENU > COMMUNICATION > GPIB"`, `"not inside a front-panel menu"`, `"Close Keysight Connection Expert"`.
-- [ ] Unknown text gets no hint. Test:
+- [x] Unknown text gets no hint. Test:
       tests/test_visa_hints.py::`test_unknown_error_has_no_hint` — `visa_error_hint("Keithley 6482 read error: could not convert string to float")`
       and `visa_error_hint("")` both return `None`.
-- [ ] `PicoammeterWorker._connect_driver` and the read-error branch of
+- [x] `PicoammeterWorker._connect_driver` and the read-error branch of
       `PicoammeterWorker.run` in `src/rbl/hardware/picoammeter_worker.py` append
       `" " + hint` to the message they already build, when `visa_error_hint(msg)` is not
       `None`, before logging and emitting it. Test:
@@ -59,10 +59,10 @@ is tested with literal strings and no VISA, no Qt, no thread.
       `test_worker_handles_read_exception` does, start the worker on `"GPIB0::2::INSTR"`,
       wait for the first `error` emission; it contains both `"VI_ERROR_LIBRARY_NFOUND"`
       and `"Keysight IO Libraries Suite"`.
-- [ ] The existing test tests/test_picoammeter_worker.py::`test_worker_handles_read_exception`
+- [x] The existing test tests/test_picoammeter_worker.py::`test_worker_handles_read_exception`
       is not edited and still passes (its error has no VISA status, so no hint is
       appended and its substring assertion holds).
-- [ ] The `picoammeter_worker.py` module docstring's "MISSING HARDWARE AND RECONNECTION"
+- [x] The `picoammeter_worker.py` module docstring's "MISSING HARDWARE AND RECONNECTION"
       section says error messages carry a hint from `visa_hints.visa_error_hint`. (by hand)
 
 **What tests may fake:** `Keithley6482` and `CUP_RECONNECT_BACKOFF_S` in the worker test.
@@ -82,3 +82,5 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+Summary (2026-11-10): added `hardware/visa_hints.py` (`visa_error_hint`, pure); `PicoammeterWorker._connect_driver` and the read-error branch append the hint; module docstring updated. Tests: `tests/test_visa_hints.py` (both named tests) and `test_connect_failure_message_carries_hint`; `test_worker_handles_read_exception` unedited and green. Verified on Linux only; the full gate is not Windows-verified. Bench: confirm the hint shows on the lab PC after rebuild (ticket 119).
