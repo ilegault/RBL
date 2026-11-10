@@ -1,6 +1,6 @@
 # 102: SessionRecorder: one camera message and an opening flag in state()
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
