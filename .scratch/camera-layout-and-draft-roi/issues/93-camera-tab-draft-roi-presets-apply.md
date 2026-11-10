@@ -1,6 +1,6 @@
 # 93: Camera tab: Draft ROI with aspect presets, Apply and Discard
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -55,22 +55,22 @@ Use `zwo_tab` (real fake Capture Process, 1920 × 1080). Emit `tab.video_view.re
 directly to simulate a drag, as the current test does. The ROI is read from
 `rec.state()["zwo_settings"]["roi"]` (the confirmed reply).
 
-- [ ] `test_drawing_a_rect_sets_the_roi` (rewritten in place): after `rect_drawn` the
+- [x] `test_drawing_a_rect_sets_the_roi` (rewritten in place): after `rect_drawn` the
   confirmed ROI is still the full sensor 0.5 s later and `video_view.draft_fraction()` is not
   None; after `btn_apply_roi.click()` it equals `snap_roi(*view_rect_to_sensor_roi(...), 1920, 1080)`
   as the current test computes, and `tab.draft()` is None.
-- [ ] `test_aspect_presets_shape_the_draft`: with `"16:9"` chosen, a drawn rect gives
+- [x] `test_aspect_presets_shape_the_draft`: with `"16:9"` chosen, a drawn rect gives
   `draft()` with `w * 9 == h * 16` within ±1; switching to `"1:1"` gives a square with the
   same centre (±1 px); the W/H spin boxes are visible only while `"Custom"` is chosen; Custom
   2:1 gives `w == 2 * h` within ±1.
-- [ ] `test_discard_and_escape_drop_the_draft`: each of `btn_discard_roi.click()` and
+- [x] `test_discard_and_escape_drop_the_draft`: each of `btn_discard_roi.click()` and
   `QTest.keyClick(tab, Qt.Key.Key_Escape)` leaves `draft()` None, `draft_fraction()` None,
   `btn_apply_roi` disabled, and the confirmed ROI unchanged.
-- [ ] `test_last_roi_becomes_the_draft_at_full_sensor`: confirm ROI A with
+- [x] `test_last_roi_becomes_the_draft_at_full_sensor`: confirm ROI A with
   `rec.set_zwo_settings(roi=...)`, then `rec.swap_zwo_roi()` to full sensor: `draft()` equals
   the confirmed A exactly; `btn_apply_roi.click()` makes A the confirmed ROI again. Repeat to
   full sensor, Discard, then emit `rec.state_changed` twice: `draft()` stays None.
-- [ ] `test_drawing_is_off_while_recording` (existing, unchanged) passes, and a new
+- [x] `test_drawing_is_off_while_recording` (existing, unchanged) passes, and a new
   `test_recording_clears_the_draft`: with a Draft present, starting ZWO video leaves
   `draft()` None and `btn_apply_roi` disabled.
 
