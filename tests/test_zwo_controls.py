@@ -74,8 +74,13 @@ def test_inputs_disabled_until_open_then_ranged_from_controls(recorder_and_widge
     assert wait_until(lambda: bool(rec.state()["zwo_info"]))
 
     # After open, they are enabled
+    # The ROI button is the one exception (ticket 91): at the full sensor with no
+    # Last ROI there is nothing to go back to, so it stays disabled.
     for inp in inputs:
+        if inp is widget.btn_full_sensor:
+            continue
         assert inp.isEnabled(), f"{inp} should be enabled after open"
+    assert not widget.btn_full_sensor.isEnabled()
 
     gain_max = rec.state()["zwo_info"]["controls"]["Gain"]["max"]
     assert widget.spin_gain.maximum() == gain_max
@@ -244,3 +249,33 @@ def test_rows_are_packed(recorder_and_widget, qapp):
         widget.slider_brightness,
     )
 
+
+
+def test_roi_button_swaps_and_locks(recorder_and_widget, qapp):
+    rec, widget, _ = recorder_and_widget
+    rec.connect_zwo()
+    assert wait_until(lambda: rec.state()["zwo_open"])
+    assert wait_until(lambda: bool(rec.state()["zwo_settings"]))
+    qapp.processEvents()
+
+    # At the full sensor with no Last ROI: "Back to ROI", nothing to go back to.
+    assert widget.btn_full_sensor.text() == "Back to ROI"
+    assert not widget.btn_full_sensor.isEnabled()
+
+    rec.set_zwo_settings(roi={"x": 64, "y": 32, "width": 640, "height": 480})
+    assert wait_until(lambda: rec.state()["zwo_last_roi"] is not None)
+    qapp.processEvents()
+    assert widget.btn_full_sensor.text() == "Full sensor"
+    assert widget.btn_full_sensor.isEnabled()
+
+    assert rec.start()
+    assert rec.start_video()
+    assert wait_until(lambda: rec.state()["zwo_recording"])
+    qapp.processEvents()
+    assert not widget.btn_full_sensor.isEnabled()
+    for spin in (widget.spin_roi_x, widget.spin_roi_y,
+                 widget.spin_roi_width, widget.spin_roi_height):
+        assert not spin.isEnabled()
+    rec.stop_video()
+    assert wait_until(lambda: not rec.state()["zwo_recording"])
+    rec.stop()

@@ -158,3 +158,20 @@ def test_no_default_literals_in_module():
 def test_conftest_redirects_the_store():
     assert store.STORE_PATH != paths.ZWO_SETTINGS_STORE
     assert (Path.home() / ".config") not in store.STORE_PATH.parents
+
+
+def test_last_roi_round_trips(tmp_path):
+    target = tmp_path / "zwo.json"
+    assert save_settings(ZwoSettings(last_roi=(64, 32, 640, 480)), target)
+    loaded, warnings = load_settings(target)
+    assert loaded.last_roi == (64, 32, 640, 480)
+    assert warnings == []
+    on_disk = json.loads(target.read_text(encoding="utf-8"))
+    assert on_disk["last_roi"] == {"x": 64, "y": 32, "width": 640, "height": 480}
+
+
+def test_bad_last_roi_falls_back():
+    loaded, warnings = validate_settings({"last_roi": "nope"})
+    assert loaded.last_roi is None
+    assert len(warnings) == 1
+    assert warnings[0].key == "last_roi"

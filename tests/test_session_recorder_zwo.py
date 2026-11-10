@@ -289,3 +289,85 @@ def test_usb_only_session_has_no_zwo_block(tmp_path, monkeypatch, qapp):
 
     assert "zwo" not in manifest
     assert rec.state()["camera_kind"] == "usb"
+
+
+def _open_fake_zwo(tmp_path, monkeypatch, capture_client):
+    monkeypatch.setattr("rbl.services.session_recorder._logs_dir", lambda: str(tmp_path / "logs"))
+    monkeypatch.setattr(paths, "ZWO_DARKS_DIR", tmp_path / "zwo_darks")
+    capture_client.start("fake")
+    rec = SessionRecorder(lambda: {"beamline_v": 1.0}, CameraSource(), capture=capture_client)
+    rec.set_camera_kind("zwo")
+    rec.connect_zwo()
+    assert wait_until(lambda: rec.state()["zwo_open"])
+    assert wait_until(lambda: bool(rec.state()["zwo_settings"]))
+    return rec
+
+
+def _confirmed_roi(rec):
+    r = rec.state()["zwo_settings"].get("roi") or {}
+    return (r.get("x"), r.get("y"), r.get("width"), r.get("height"))
+
+
+FULL_SENSOR = (0, 0, 1920, 1080)
+
+
+def test_last_roi_follows_confirmed_rois(tmp_path, monkeypatch, qapp, capture_client):
+    from rbl.config import zwo_settings_store
+
+    rec = _open_fake_zwo(tmp_path, monkeypatch, capture_client)
+    assert wait_until(lambda: _confirmed_roi(rec) == FULL_SENSOR)
+    assert rec.state()["zwo_last_roi"] is None
+
+    rec.set_zwo_settings(roi={"x": 64, "y": 32, "width": 640, "height": 480})
+    assert wait_until(lambda: _confirmed_roi(rec) != FULL_SENSOR)
+    confirmed = _confirmed_roi(rec)
+    assert rec.state()["zwo_last_roi"] == dict(
+        zip(("x", "y", "width", "height"), confirmed))
+
+    rec.set_zwo_settings(roi={"x": 0, "y": 0, "width": 1920, "height": 1080})
+    assert wait_until(lambda: _confirmed_roi(rec) == FULL_SENSOR)
+    assert rec.state()["zwo_last_roi"] == dict(
+        zip(("x", "y", "width", "height"), confirmed))
+    assert zwo_settings_store.load_settings()[0].last_roi == confirmed
+
+
+def test_swap_returns_to_the_exact_roi(tmp_path, monkeypatch, qapp, capture_client):
+    rec = _open_fake_zwo(tmp_path, monkeypatch, capture_client)
+    assert wait_until(lambda: _confirmed_roi(rec) == FULL_SENSOR)
+    assert rec.swap_zwo_roi() == -1  # full sensor, nothing remembered
+
+    rec.set_zwo_settings(roi={"x": 64, "y": 32, "width": 640, "height": 480})
+    assert wait_until(lambda: _confirmed_roi(rec) != FULL_SENSOR)
+    earlier = _confirmed_roi(rec)
+    rec.set_zwo_settings(roi={"x": 0, "y": 0, "width": 1920, "height": 1080})
+    assert wait_until(lambda: _confirmed_roi(rec) == FULL_SENSOR)
+
+    assert rec.swap_zwo_roi() >= 0
+    assert wait_until(lambda: _confirmed_roi(rec) == earlier)
+    assert rec.swap_zwo_roi() >= 0
+    assert wait_until(lambda: _confirmed_roi(rec) == FULL_SENSOR)
+
+
+def test_roi_is_locked_while_recording(tmp_path, monkeypatch, qapp, capture_client):
+    rec = _open_fake_zwo(tmp_path, monkeypatch, capture_client)
+    statuses: list[tuple[str, str]] = []
+    rec.status.connect(lambda msg, role: statuses.append((msg, role)))
+    before = _confirmed_roi(rec)
+
+    assert rec.start()
+    assert rec.start_video()
+    assert wait_until(lambda: rec.state()["zwo_recording"])
+
+    assert rec.set_zwo_settings(roi={"x": 64, "y": 32, "width": 640, "height": 480}) == -1
+    assert rec.swap_zwo_roi() == -1
+    assert ("Cannot change the ROI while video is recording", "warn") in statuses
+    deadline = time.monotonic() + 0.5
+    while time.monotonic() < deadline:
+        qapp.processEvents()
+        time.sleep(0.02)
+    assert _confirmed_roi(rec) == before
+
+    assert rec.set_zwo_settings(gain=120) >= 0
+    rec.stop_video()
+    assert wait_until(lambda: not rec.state()["zwo_recording"])
+    rec.stop()
