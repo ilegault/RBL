@@ -1,6 +1,6 @@
 # 89: Session Recorder: repacked rows and a Preview that stops eating the panel
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
