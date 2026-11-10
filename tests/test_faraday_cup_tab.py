@@ -63,6 +63,28 @@ def win(qapp):
     qapp.processEvents()
 
 
+CONNECT_FAIL_MSG = (
+    "Failed to connect to Keithley 6482 on GPIB0::14::INSTR: "
+    "VI_ERROR_LIBRARY_NFOUND (-1073807202): A code library required by "
+    "VISA could not be located or loaded."
+)
+
+
+def tab_after_connect_failure(qapp):
+    """Real Beamline + tab, wired as app.py wires them, then the worker's
+    error-then-disconnected emission order via the public Beamline signals."""
+    beamline = Beamline()
+    tab = FaradayCupTab(beamline=beamline)
+    beamline.cup_error.connect(tab.on_cup_error)
+    beamline.cup_disconnected_evt.connect(tab.on_cup_disconnected)
+    tab.show()
+    qapp.processEvents()
+    beamline.cup_error.emit(CONNECT_FAIL_MSG)
+    beamline.cup_disconnected_evt.emit()
+    qapp.processEvents()
+    return beamline, tab
+
+
 class TestFaradayCupTabRendersCurrent:
     """Unit tests for FaradayCupTab rendering and lifecycle."""
 
@@ -119,6 +141,24 @@ class TestFaradayCupTabRendersCurrent:
         monkeypatch.setattr(Beamline, "picoammeter_connected", property(lambda self: True))
         status2, detail2 = tab.connect_if_needed()
         assert status2 == "already"
+
+    def test_connect_failure_reason_survives_disconnect_event(self, qapp):
+        _beamline, tab = tab_after_connect_failure(qapp)
+        assert tab.lbl_detail.text() == "Not connected \u2014 " + CONNECT_FAIL_MSG
+        assert "Disconnected" in tab.status_pill.text()
+
+    def test_successful_connect_clears_failure_reason(self, qapp):
+        _beamline, tab = tab_after_connect_failure(qapp)
+        tab.on_cup_connected("KEITHLEY INSTRUMENTS INC.,MODEL 6482")
+        tab.on_cup_disconnected()
+        assert tab.lbl_detail.text() == "Not connected"
+
+    def test_connect_click_replaces_stale_failure_reason(self, qapp, monkeypatch):
+        beamline, tab = tab_after_connect_failure(qapp)
+        monkeypatch.setattr(beamline, "connect_picoammeter", lambda res=None: None)
+        tab.le_resource.setText("GPIB0::2::INSTR")
+        tab.btn_connect.click()
+        assert tab.lbl_detail.text() == "Connecting to GPIB0::2::INSTR\u2026"
 
     def test_renders_cup_current_autoscaling(self, qapp):
         beamline = Beamline()
