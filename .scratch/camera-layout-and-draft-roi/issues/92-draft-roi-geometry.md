@@ -1,6 +1,6 @@
 # 92: Draft ROI geometry as pure functions
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -52,19 +52,19 @@ Draft side, sensor px).
 module under test (assert `"PySide6" not in sys.modules` after a fresh
 `importlib.import_module` in a subprocess, or by reading the module's imports with `ast`).
 
-- [ ] `test_fit_ratio`: `((0,0,400,400), (16,9), (0,0,1920,1080))` → width 400, height 225,
+- [x] `test_fit_ratio`: `((0,0,400,400), (16,9), (0,0,1920,1080))` → width 400, height 225,
   centre `(200, 200)`; a rect overhanging `bounds` comes back fully inside; `ratio=None`
   returns an inside rect unchanged.
-- [ ] `test_rect_from_corners`: Free `((100,100),(300,200))` → `(100,100,200,100)`; dragging
+- [x] `test_rect_from_corners`: Free `((100,100),(300,200))` → `(100,100,200,100)`; dragging
   up-left from the anchor gives a rect whose bottom-right is the anchor; `(1,1)` ratio with
   span 200 × 100 → `100 × 100` at the anchor; a pointer outside `bounds` yields a rect inside
   `bounds`; a 2 px drag yields sides of `ROI_DRAFT_MIN_PX`.
-- [ ] `test_move_rect_clamps_and_keeps_size`: moving `(10,10,100,50)` by `(-500, 9999)` in
+- [x] `test_move_rect_clamps_and_keeps_size`: moving `(10,10,100,50)` by `(-500, 9999)` in
   `(0,0,1920,1080)` gives `(0, 1030, 100, 50)`.
-- [ ] `test_resize_from_corner_keeps_the_opposite_corner`: for each of the four corners the
+- [x] `test_resize_from_corner_keeps_the_opposite_corner`: for each of the four corners the
   opposite corner of the result equals the opposite corner of the input; with `(4,3)` the
   result's `w * 3 == h * 4` within ±1.
-- [ ] `test_fractions_round_trip_and_hit_test`: `point_from_fraction(*to_fraction(r, roi)[:2], roi) == r[:2]`
+- [x] `test_fractions_round_trip_and_hit_test`: `point_from_fraction(*to_fraction(r, roi)[:2], roi) == r[:2]`
   for a nested `roi=(320, 180, 960, 540)`; `hit_test((0,0,100,100), (2,98), 6) == "bl"`,
   `(50,50) -> "inside"`, `(200,200) -> None`.
 
@@ -80,3 +80,10 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+### Landed 2026-11-10
+- Built `src/rbl/hardware/roi_geometry.py`: pure math functions for Draft ROI manipulation (`fit_ratio`, `rect_from_corners`, `move_rect`, `resize_from_corner`, `to_fraction`, `point_from_fraction`, `hit_test`) with no Qt, numpy, or clock dependencies.
+- Added `ROI_DRAFT_MIN_PX = 16` to `src/rbl/config/capture_config.py`.
+- Tests in `tests/test_roi_geometry.py` cover all criteria, including AST & subprocess isolation assertion ensuring no PySide6 or numpy imports, plus `tests/test_capture_config.py` verifying the new constant.
+- Gate green: ruff clean, type_gate 0 hard errors / ratchet clean, tests passing.
+
