@@ -1,6 +1,6 @@
 # 65: The Capture Process runs on a fake camera: launch, contract, Preview, status, heartbeat
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -123,28 +123,28 @@ the outside. Recording, photos and the real ZWO camera come in later tickets.
 `tests/test_capture_process.py` (new) unless noted. Generous timeouts (30 s); never assert on
 speed.
 
-- [ ] `test_hello_first_and_stdout_is_only_protocol`: the first stdout line decodes to `hello`
+- [x] `test_hello_first_and_stdout_is_only_protocol`: the first stdout line decodes to `hello`
   passing `check_hello`; after `open`, `set`, `preview` and 3 s of status/preview traffic,
   every stdout line decoded without `ProtocolError`; the stderr lines contain
   `camera opened: Fake ASI FAKE0001`.
-- [ ] `test_no_qt_is_loaded`: run the child with `-X importtime` added before `-m`, send
+- [x] `test_no_qt_is_loaded`: run the child with `-X importtime` added before `-m`, send
   `shutdown`; its stderr contains no line mentioning `PySide6`, and it exits 0.
-- [ ] `test_open_status_and_preview`: `open` replies `model == "Fake ASI"`, `serial ==
+- [x] `test_open_status_and_preview`: `open` replies `model == "Fake ASI"`, `serial ==
   "FAKE0001"`, `sensor_width == 1920`, `bayer_pattern == "RG"`, `controls` with the four keys,
   and `settings` with the defaults; a `status` arrives with every D2 field; a `preview`
   arrives whose base64 JPEG decodes (`cv2.imdecode`) to exactly its advertised `width` ×
   `height`, at most 960 wide.
-- [ ] `test_set_snaps_and_reports_changes`: `set` before `open` → `error` `not_open`; after
+- [x] `test_set_snaps_and_reports_changes`: `set` before `open` → `error` `not_open`; after
   `open`, `set` with `roi` `{x: 1, y: 1, width: 101, height: 51}` and `exposure_us: 5000`
   replies `settings.roi == {x: 0, y: 0, width: 96, height: 50}` and `exposure_us == 5000`, and
   `event` `settings_changed` arrives with detail `"exposure_us: 20000 -> 5000"` and
   `"roi: 0,0,1920,1080 -> 0,0,96,50"`; the next `preview` has `roi` width 96.
-- [ ] `test_heartbeat_keeps_alive_and_its_loss_ends_the_process`: with
+- [x] `test_heartbeat_keeps_alive_and_its_loss_ends_the_process`: with
   `--heartbeat-timeout-s 2`, sending `heartbeat` every 0.5 s keeps the child running for 5 s;
   then, with stdin kept open and no more messages, it exits with code 0 within 10 s. A second
   child whose stdin is closed exits 0 within 10 s. `shutdown` replies `ok` and the child exits
   0 within 10 s.
-- [ ] `test_capture_import_rules` (in `tests/test_capture_imports.py`) (AST scan of source files, no
+- [x] `test_capture_import_rules` (in `tests/test_capture_imports.py`) (AST scan of source files, no
   imports executed): no file under `src/rbl/capture/` and none of `ser_format.py`,
   `fits_format.py`, `capture_protocol.py`, `preview_stretch.py` imports `PySide6` or any
   `rbl.gui`, `rbl.services` or `rbl.state` module; and no file under `src/rbl` outside

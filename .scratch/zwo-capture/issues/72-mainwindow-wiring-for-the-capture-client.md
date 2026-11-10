@@ -1,6 +1,6 @@
 # 72: `MainWindow` constructs the `CaptureClient`, feeds it the cup position, and shuts it down
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -42,20 +42,20 @@ No new behaviour at start-up: constructing the window must not launch a process.
 
 `tests/test_capture_wiring.py` (new). No `_`-prefixed attribute access.
 
-- [ ] `test_window_has_one_client_and_launches_nothing`: `MainWindow()`;
+- [x] `test_window_has_one_client_and_launches_nothing`: `MainWindow()`;
   `win.capture_client` is a `CaptureClient`; `win.capture_client.is_running()` is False after
   `processEvents`; `win.session_recorder.camera_kind() == "usb"` (fresh store from conftest).
-- [ ] `test_cup_state_reaches_the_client`: `MainWindow()`; on `win.capture_client`:
+- [x] `test_cup_state_reaches_the_client`: `MainWindow()`; on `win.capture_client`:
   `start("fake")`, `open()`, `apply(roi={"x": 0, "y": 0, "width": 64, "height": 32})`,
   `start_recording` into `tmp_path` directly; then
   `win.beamline.cup_actuation_changed.emit(CupActuationState(connected=True,
   confirmed=CupPosition.IN))`; within 10 s `tmp_path/zwo/frames.csv` has a row whose
   `cup_position` is `IN`. (This proves the connection in `__init__`, which is the thing under
   test; nothing is monkeypatched.)
-- [ ] `test_close_shuts_the_child_down`: `MainWindow()`, `win.capture_client.start("fake")`,
+- [x] `test_close_shuts_the_child_down`: `MainWindow()`, `win.capture_client.start("fake")`,
   wait for `hello`; `win.close()`; within `CAPTURE_SHUTDOWN_WAIT_S + 2` s the client emitted
   `exited(0)` and `is_running()` is False.
-- [ ] (no test: regression, proved by the existing suite in the gate) Existing `MainWindow` tests pass unchanged.
+- [x] (no test: regression, proved by the existing suite in the gate) Existing `MainWindow` tests pass unchanged.
 
 ## Gate
 
@@ -74,3 +74,10 @@ Soft type-gate count must not rise above `tools/mypy_ratchet.txt`.
 - Starting the Capture Process automatically at application start.
 
 ## Comments
+
+### Landed 2026-10-29
+- Constructed `CaptureClient(self)` in `MainWindow.__init__` and passed `capture=self.capture_client` to `SessionRecorder`.
+- Wired `self.beamline.cup_actuation_changed.connect(self.capture_client.on_cup_actuation_state)`.
+- Added `best_effort("capture_client.shutdown", self.capture_client.shutdown)` in `MainWindow.closeEvent` right after session stop.
+- Covered by `tests/test_capture_wiring.py` (`test_window_has_one_client_and_launches_nothing`, `test_cup_state_reaches_the_client`, `test_close_shuts_the_child_down`).
+- Existing `MainWindow` tests pass unchanged without regressions.

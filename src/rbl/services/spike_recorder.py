@@ -52,6 +52,12 @@ which adds up the time at the rail. Every row carries `rail_s`, `at_rail` and th
 scale the row was measured with, so a file stays interpretable if the scale ever
 changes again.
 
+WHO STARTS IT
+-------------
+A session starts it into the session folder and stops it with the session
+(MainWindow); a drift pass restarts it into the pass's own folder. The session
+stops the recorder only if it is still recording into the session's folder.
+
 TIME
 ----
 Spike times are stream time (sample count x sample interval since `start`) so
@@ -156,6 +162,14 @@ class SpikeRecorder(QObject):
 
     def is_running(self) -> bool:
         return self._running
+
+    def output_dir(self):
+        """The folder being recorded into, or None when not running.
+
+        Lets an owner stop the recorder only if it is still ITS recording: a
+        drift pass restarts the recorder into its own folder mid-session.
+        """
+        return self._dir if self._running else None
 
     def start(self, output_dir, driven_plates=None) -> None:
         """Begin recording into `output_dir` (created if needed).

@@ -68,6 +68,23 @@ if all_binaries:
           "build.  Do not deploy to the lab machine. ***")
 
 # ---------------------------------------------------------------------------
+# ZWO ASICamera2.dll — BUNDLED, byte for byte, at the root of the one-folder build.
+#
+# The Capture Process opens the ZWO camera with zwoasi.init(<explicit path>); that
+# path is the DLL sitting next to RBL.exe.  No second executable, no installer, no
+# driver (docs/adr/0008-zwo-camera-owned-by-a-capture-process.md, decision 2).  The
+# DLL is gitignored: the developer copies it into vendor\zwo\ (see
+# vendor\zwo\README.md).  Missing DLL is a WARNING, never an error: the build still
+# works for everything except the ZWO camera.
+# ---------------------------------------------------------------------------
+_zwo_dll = os.path.join(ROOT, "vendor", "zwo", "ASICamera2.dll")
+if os.path.isfile(_zwo_dll):
+    all_binaries = all_binaries + [(_zwo_dll, ".")]
+else:
+    print("*** WARNING: vendor\\zwo\\ASICamera2.dll not found — this build cannot "
+          "open the ZWO camera. See vendor/zwo/README.md ***")
+
+# ---------------------------------------------------------------------------
 # Hidden imports — ONLY what's actually used in this codebase:
 #   main.py        → numpy, yaml, json, csv, matplotlib.use("Agg")
 #   current_tab.py → matplotlib.use("QtAgg"), FigureCanvasQTAgg
@@ -115,6 +132,10 @@ all_hiddenimports = [
     # without a camera if cv2 is absent, but include it in the bundle when
     # it is installed.
     "cv2",
+
+    # zwoasi — ZWO camera wrapper.  rbl.capture.camera imports it inside a function
+    # (so the app and the tests run without it), which PyInstaller cannot see.
+    "zwoasi",
 
     # pyserial — RS-232 transport for XGS-600, VGC083, TDS 2012
     "serial",

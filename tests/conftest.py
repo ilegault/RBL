@@ -76,6 +76,18 @@ def _never_touch_the_real_cup_settings_store(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _never_touch_the_real_zwo_settings_store(tmp_path, monkeypatch):
+    """Point the ZWO camera settings store at a temp file, always.
+
+    SessionRecorder loads and saves this store, so a test that constructs one
+    would otherwise write ~/.config/rbl/zwo_camera.json.
+    """
+    from rbl.config import zwo_settings_store as store
+    monkeypatch.setattr(store, "STORE_PATH", Path(tmp_path) / "zwo_camera.json")
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _cup_tab_never_opens_a_real_modal(monkeypatch):
     """Replace the Faraday cup tab's two blocking dialogs with non-blocking stand-ins.
 
@@ -112,4 +124,23 @@ def _main_window_never_opens_a_real_continue_dialog(monkeypatch):
     from rbl.gui.app import MainWindow
 
     monkeypatch.setattr(MainWindow, "_ask_continue_dose", lambda self, totals: None)
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _zwo_controls_never_opens_a_real_modal(monkeypatch):
+    """Patch ZwoControls.confirm_darks to return False by default.
+
+    `confirm_darks` wraps a modal QMessageBox.question. Under offscreen Qt it
+    would wait forever for a click. Returning False prevents hanging while
+    ensuring darks are not taken unless a test explicitly monkeypatches
+    confirm_darks to True.
+    """
+    try:
+        from rbl.gui.widgets.zwo_controls import ZwoControls
+    except ImportError:
+        yield
+        return
+
+    monkeypatch.setattr(ZwoControls, "confirm_darks", lambda self: False)
     yield

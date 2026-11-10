@@ -186,6 +186,11 @@ _AC_PEAK_CURRENT_K = {
 }
 AC_DEFAULT_SHAPE = "triangle"   # matches AmpDrive._command_ac's default
 
+# A captured spike-recorder reference this far (fraction) from k x f x C x V is
+# reported on the Overview tab as differing from its prediction: a warning,
+# never a stop (docs/adr/0006).
+REFERENCE_PREDICTION_TOLERANCE = 0.10
+
 
 def ac_shape_k(shape: str = None) -> float:
     """Constant k in I_pk = k*f*C*V_pk for *shape*. Unknown shapes get sine.

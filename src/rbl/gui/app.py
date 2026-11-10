@@ -47,6 +47,7 @@ from rbl.gui.widgets.continue_dialog import ContinueDialog
 from rbl.hardware.camera_source import CameraSource
 from rbl.hardware.dose_model import DoseTotals
 from rbl.services.beamline_snapshot import BeamlineSnapshotProvider
+from rbl.services.capture_client import CaptureClient
 from rbl.services.cup_log import (
     ContinueChoice,
     CupLog,
@@ -54,7 +55,10 @@ from rbl.services.cup_log import (
     find_previous_session_cup_log,
     read_dose_totals,
 )
+from rbl.services.regulation_monitor import RegulationMonitor
+from rbl.services.regulation_response import RegulationResponder
 from rbl.services.session_recorder import SessionRecorder
+from rbl.services.session_regulation_watch import SessionRegulationWatch
 from rbl.services.spike_recorder import SpikeRecorder
 from rbl.state.beamline import Beamline
 from rbl.util import best_effort
@@ -276,8 +280,11 @@ class MainWindow(QMainWindow):
         # Session recorder — shared between Overview panel and Camera tab.
         self.snapshots        = BeamlineSnapshotProvider(self.beamline, self)
         self.camera_source    = CameraSource(self)
+        # The client is the only owner of the Capture Process (ADR 0008), constructed
+        # but not started; the child launches only when the operator connects the ZWO camera.
+        self.capture_client   = CaptureClient(self)
         self.session_recorder = SessionRecorder(
-            self.snapshots.snapshot, self.camera_source, self)
+            self.snapshots.snapshot, self.camera_source, self, capture=self.capture_client)
 
         # ── Build tabs from single ordered declaration ────────────────────────
         # Each page goes inside a scroll area: when the window is narrowed past
@@ -340,6 +347,35 @@ class MainWindow(QMainWindow):
         self.spike_recorder = SpikeRecorder(self.beamline.funcgen_setpoints, parent=self)
         self.beamline.raw_window_ready.connect(self.spike_recorder.on_window)
         self.calibration_tab.set_spike_recorder(self.spike_recorder)
+        # A session runs the spike recorder for its whole length (spec Part E),
+        # into the session folder. Setpoint changes already reach the recorder:
+        # it connects FuncGenSetpoints.changed itself in its constructor.
+        self.session_recorder.session_started.connect(self._start_session_spikes)
+        self.session_recorder.session_stopped.connect(self._stop_session_spikes)
+        # Each spike goes to the session's event log and to the Overview tab's
+        # count and warnings (a list, never a dialog - ADR 0006).
+        self.spike_recorder.spike_recorded.connect(self._on_spike_recorded)
+        self.spike_recorder.spike_recorded.connect(self.overview_tab.on_spike)
+        self.spike_recorder.reference_captured.connect(
+            self.overview_tab.on_reference_captured)
+        # While a session runs, the regulation detector watches each driven
+        # plate against its setpoint in OBSERVE mode: a confirmed fault is
+        # logged (trip history, pre-event waveform) and shown as an Overview
+        # warning, never answered by switching the amplifier off (ADR 0006).
+        self.regulation_monitor = RegulationMonitor(parent=self)
+        self.regulation_watch = SessionRegulationWatch(
+            self.beamline.funcgen_setpoints, self.regulation_monitor, parent=self)
+        self.regulation_responder = RegulationResponder(
+            self.regulation_monitor, None,
+            self.regulation_watch.operating_conditions,
+            mode="observe", spike_recorder=self.spike_recorder, parent=self)
+        self.regulation_responder.warning.connect(
+            self.overview_tab.amp_warnings.add_warning)
+        self.beamline.raw_window_ready.connect(self.regulation_watch.on_window)
+        self.session_recorder.session_started.connect(
+            lambda _folder: self.regulation_watch.start())
+        self.session_recorder.session_stopped.connect(
+            lambda _folder: self.regulation_watch.stop())
         # Every spike it logs is plotted live on the Load Characterization tab.
         self.load_char_tab.set_spike_recorder(self.spike_recorder)
         # A calibration run switching the stream profile out from under
@@ -419,6 +455,9 @@ class MainWindow(QMainWindow):
         self.beamline.cup_changed.connect(cup_panel.on_cup_state)
         self.beamline.cup_actuation_changed.connect(cup_panel.on_cup_actuation_state)
         self.faraday_cup_tab.cup_view_changed.connect(cup_panel.on_cup_view)
+        # The frame log records the end-station cup's confirmed position (ADR 0003),
+        # the client sends it to the Capture Process only when the label changes.
+        self.beamline.cup_actuation_changed.connect(self.capture_client.on_cup_actuation_state)
 
         # Irradiated area from Raster Planner to Faraday Cup tab for fluence and dose (ADR 0003).
         # The Raster Planner holds the sample patch dimensions set by the operator. Emitting
@@ -679,6 +718,9 @@ class MainWindow(QMainWindow):
         # Stop the recorder before closing the camera so the final frames are flushed.
         best_effort("session_recorder.stop",
                     lambda: self.session_recorder.is_recording() and self.session_recorder.stop())
+        # The session's stop sends stop_recording first, so the last segment is closed
+        # by the reason "stop" rather than "shutdown".
+        best_effort("capture_client.shutdown",          self.capture_client.shutdown)
         best_effort("camera_source.close",              self.camera_source.close)
         best_effort("motor_tab.abort_and_close",        self.motor_tab.abort_and_close)
         best_effort("current_tab.shutdown",             self.current_tab.shutdown)
@@ -860,6 +902,22 @@ class MainWindow(QMainWindow):
 
     def _on_session_stopped(self, _folder: str) -> None:
         self.cup_log.close()
+
+    def _start_session_spikes(self, folder: str) -> None:
+        self.spike_recorder.start(folder)
+
+    def _stop_session_spikes(self, folder: str) -> None:
+        # A drift pass may have restarted the recorder into its own folder; its
+        # recording is not the session's to stop.
+        out = self.spike_recorder.output_dir()
+        if out is not None and Path(out) == Path(folder):
+            self.spike_recorder.stop()
+
+    def _on_spike_recorded(self, row: dict) -> None:
+        peak = "at the rail" if row.get("at_rail") else f"{float(row['peak_ma']):.2f} mA"
+        self.session_recorder._write_event(
+            "spike", f"{row['plate_position']} {peak} for "
+                     f"{float(row['duration_s']) * 1e3:.2f} ms")
 
 
 # ─── Entry point ──────────────────────────────────────────────────────────────

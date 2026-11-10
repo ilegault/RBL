@@ -6,3 +6,4 @@ labjack-ljm>=1.23.0
 opencv-python>=4.9.0
 pyserial>=3.5
 scipy>=1.14
+zwoasi==0.2.0

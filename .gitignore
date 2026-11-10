@@ -244,6 +244,8 @@ cython_debug/
 .idea
 
 .claude
+.swarm/
+.swarm-prompt.md
 
 *.claude-session.bak
 *.orig
@@ -260,3 +262,6 @@ bash.exe.stackdump
 /tools/ffmpeg.exe
 # ffmpeg lives in converter/ now — offline-only tool, never bundled into the app.
 /converter/ffmpeg.exe
+
+# ZWO's ASICamera2.dll is not committed; the developer copies it in (vendor/zwo/README.md).
+vendor/zwo/*.dll

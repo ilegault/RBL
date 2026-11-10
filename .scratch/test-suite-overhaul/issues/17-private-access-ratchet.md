@@ -16,7 +16,7 @@ already existed and was ignored roughly 870 times.
 
 **Blocked by:** 14, 15, 16
 
-**Status:** completed
+**Status:** done
 
 - [x] A committed check counts private-attribute accesses in Qt-dependent test modules.
 - [x] The stored figure is the count measured after tickets 14, 15 and 16 landed.

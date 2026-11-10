@@ -70,23 +70,23 @@ class AcquisitionSettingsGroup(QGroupBox):
         grid.setVerticalSpacing(4)
 
         # 1. Arm threshold (ScientificDoubleSpinBox in Amps)
-        grid.addWidget(QLabel("Arm threshold:"), 0, 0)
+        grid.addWidget(QLabel("Run start current:"), 0, 0)
         self.spn_arm_threshold = ScientificDoubleSpinBox()
         self.spn_arm_threshold.setRange(0.0, 1.0)
         self.spn_arm_threshold.setValue(defaults.arm_threshold_a)
         self.spn_arm_threshold.setToolTip(
-            "Beam current required to trigger an acquisition run (in Amperes)"
+            "Run start current: the beam current that starts an acquisition run (in Amperes)"
         )
         self.spn_arm_threshold.editingFinished.connect(self._on_arm_edited)
         grid.addLayout(unit_row(self.spn_arm_threshold, "A"), 0, 1)
 
         # 2. Release threshold (ScientificDoubleSpinBox in Amps)
-        grid.addWidget(QLabel("Release threshold:"), 0, 2)
+        grid.addWidget(QLabel("Run end current:"), 0, 2)
         self.spn_release_threshold = ScientificDoubleSpinBox()
         self.spn_release_threshold.setRange(0.0, 1.0)
         self.spn_release_threshold.setValue(defaults.release_threshold_a)
         self.spn_release_threshold.setToolTip(
-            "Beam current below which an acquisition run closes (in Amperes)"
+            "Run end current: the beam current below which an acquisition run ends (in Amperes)"
         )
         self.spn_release_threshold.editingFinished.connect(self._on_release_edited)
         grid.addLayout(unit_row(self.spn_release_threshold, "A"), 0, 3)
@@ -106,7 +106,7 @@ class AcquisitionSettingsGroup(QGroupBox):
         # 4. Reset to defaults button
         self.btn_reset_defaults = QPushButton("Reset to Defaults")
         self.btn_reset_defaults.setToolTip(
-            "Reset arm threshold, release threshold, and settle window to defaults"
+            "Reset run start current, run end current, and settle window to defaults"
         )
         self.btn_reset_defaults.clicked.connect(self._on_reset_defaults_clicked)
         btn_lay = QHBoxLayout()
@@ -117,7 +117,8 @@ class AcquisitionSettingsGroup(QGroupBox):
 
         # Status and warning labels
         self.lbl_lock = QLabel(
-            "Locked while a run is open or the cycle is armed. Edits apply to the next run."
+            "Locked while a run is open or automatic cup insertion is running. "
+            "Edits apply to the next run."
         )
         self.lbl_lock.setStyleSheet(f"color: {theme.MUTED}; font-style: italic;")
         self.lbl_lock.setVisible(False)
@@ -210,7 +211,7 @@ class AcquisitionSettingsGroup(QGroupBox):
         arm_warn = next((w for w in warnings if w.key == "arm_threshold_a"), None)
         if arm_warn is not None:
             self.spn_arm_threshold.sync_value(self._last_arm)
-            self.lbl_warning.setText(f"Arm threshold: {arm_warn.reason}")
+            self.lbl_warning.setText(f"Run start current: {arm_warn.reason}")
             self.lbl_warning.setStyleSheet(theme.status_label(theme.FAULT))
             self.lbl_warning.setVisible(True)
         else:
@@ -232,7 +233,7 @@ class AcquisitionSettingsGroup(QGroupBox):
         rel_warn = next((w for w in warnings if w.key == "release_threshold_a"), None)
         if rel_warn is not None:
             self.spn_release_threshold.sync_value(self._last_release)
-            self.lbl_warning.setText(f"Release threshold: {rel_warn.reason}")
+            self.lbl_warning.setText(f"Run end current: {rel_warn.reason}")
             self.lbl_warning.setStyleSheet(theme.status_label(theme.FAULT))
             self.lbl_warning.setVisible(True)
         else:

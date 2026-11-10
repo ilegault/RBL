@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Sequence
 
 from rbl.config.cup_config import CUP_SETTLE_WINDOW_S, ELEMENTARY_CHARGE_C
@@ -112,6 +113,64 @@ def patch_area_cm2(width_x_mm: float, height_y_mm: float) -> float:
     return (width_x_mm * height_y_mm) / 100.0
 
 
+def _extract_sample(s: Any) -> tuple[float, float | None]:
+    if isinstance(s, (tuple, list)) and len(s) >= 2:
+        return float(s[0]), float(s[1]) if s[1] is not None else None
+    t = getattr(s, "t", getattr(s, "timestamp", None))
+    val = getattr(s, "current", None)
+    t_float = float(t) if t is not None else 0.0
+    val_float = float(val) if val is not None else None
+    return t_float, val_float
+
+
+def _post_settle_points(
+    samples: Sequence[tuple[float, float] | Any],
+    start_t: float | None,
+    settle_window_s: float,
+) -> tuple[list[tuple[float, float]], int, int]:
+    """Select valid post-settle (t, value) points; the one place this is decided.
+
+    Returns (valid post-settle points, excluded count, count of post-settle
+    readings including invalid ones). A reading is excluded when it is None or
+    non-finite, or when it falls inside the settle window.
+    """
+    if not samples:
+        return [], 0, 0
+    first_t, _ = _extract_sample(samples[0])
+    t0 = start_t if start_t is not None else first_t
+
+    points: list[tuple[float, float]] = []
+    excluded_count = 0
+    post_settle_readings = 0
+    for sample in samples:
+        t, val = _extract_sample(sample)
+        post = t >= (t0 + settle_window_s)
+        if post:
+            post_settle_readings += 1
+        if val is None or not math.isfinite(val):
+            excluded_count += 1
+            continue
+        if not post:
+            excluded_count += 1  # inside the autorange settle window
+        else:
+            points.append((t, val))
+    return points, excluded_count, post_settle_readings
+
+
+def _post_settle_values(
+    samples: Sequence[tuple[float, float] | Any],
+    start_t: float | None,
+    settle_window_s: float,
+) -> tuple[list[float], int, int]:
+    """(valid post-settle values, excluded count, post-settle reading count).
+
+    Shared by compute_insertion_current and compute_insertion_uncertainty so the
+    mean and its uncertainty can never be computed over different samples.
+    """
+    points, excluded, post = _post_settle_points(samples, start_t, settle_window_s)
+    return [v for _, v in points], excluded, post
+
+
 def compute_insertion_current(
     samples: Sequence[tuple[float, float] | Any],
     start_t: float | None = None,
@@ -133,41 +192,9 @@ def compute_insertion_current(
     Returns:
         InsertionCurrentStats containing mean_a, std_a, sample_count, excluded_count.
     """
-    if not samples:
-        return InsertionCurrentStats(
-            mean_a=0.0,
-            std_a=0.0,
-            sample_count=0,
-            excluded_count=0,
-        )
-
-    # Helper to extract (t, current)
-    def _extract_sample(s: Any) -> tuple[float, float | None]:
-        if isinstance(s, (tuple, list)) and len(s) >= 2:
-            return float(s[0]), float(s[1]) if s[1] is not None else None
-        t = getattr(s, "t", getattr(s, "timestamp", None))
-        val = getattr(s, "current", None)
-        t_float = float(t) if t is not None else 0.0
-        val_float = float(val) if val is not None else None
-        return t_float, val_float
-
-    first_t, _ = _extract_sample(samples[0])
-    t0 = start_t if start_t is not None else first_t
-
-    included_values: list[float] = []
-    excluded_count = 0
-
-    for sample in samples:
-        t, val = _extract_sample(sample)
-        if val is None or not math.isfinite(val):
-            excluded_count += 1
-            continue
-        if t < (t0 + settle_window_s):
-            # Inside the autorange settle window
-            excluded_count += 1
-        else:
-            # Post-settle sample
-            included_values.append(val)
+    included_values, excluded_count, _ = _post_settle_values(
+        samples, start_t, settle_window_s
+    )
 
     sample_count = len(included_values)
     if sample_count == 0:
@@ -192,6 +219,125 @@ def compute_insertion_current(
         sample_count=sample_count,
         excluded_count=excluded_count,
     )
+
+
+class UncertaintyReason(Enum):
+    """Why an insertion's uncertainty cannot be computed (a fixed set, not free text)."""
+    NO_VALID_SAMPLES = "no_valid_samples"
+    TOO_FEW_SAMPLES = "too_few_samples"
+    MEAN_NEGATIVE = "mean_negative"
+    MEAN_BELOW_RUN_END = "mean_below_run_end"
+
+
+def uncertainty_reason_text(reason: UncertaintyReason, n: int, min_samples: int) -> str:
+    """Operator-facing text for a reason."""
+    if reason is UncertaintyReason.NO_VALID_SAMPLES:
+        return "no valid samples"
+    if reason is UncertaintyReason.TOO_FEW_SAMPLES:
+        return f"too few samples ({n}/{min_samples})"
+    if reason is UncertaintyReason.MEAN_NEGATIVE:
+        return "mean negative"
+    return "mean below run end current"
+
+
+@dataclass(frozen=True)
+class InsertionUncertainty:
+    """Relative standard error of an insertion's post-settle mean (ADR 0003 amendment D).
+
+    WHY THIS EXISTS
+    ---------------
+    Target-uncertainty dwell ends an insertion once its mean is precise enough.
+    Pure and clockless so the stopping rule is testable with lists of numbers.
+    uncertainty is a fraction (0.05 = 5 %); reason is None exactly when
+    uncertainty is not None; converged is False whenever reason is set.
+    """
+    uncertainty: float | None
+    reason: UncertaintyReason | None
+    n: int
+    mean_a: float
+    std_a: float
+    converged: bool
+    post_settle_elapsed_s: float
+    mean_spacing_s: float | None
+
+
+def compute_insertion_uncertainty(
+    samples: Sequence[tuple[float, float] | Any],
+    start_t: float | None,
+    settle_window_s: float,
+    target: float,
+    min_samples: int,
+    run_end_current_a: float,
+) -> InsertionUncertainty:
+    """u = std / (sqrt(n) * mean), ddof=1, over the same samples as the mean."""
+    points, _, post_readings = _post_settle_points(samples, start_t, settle_window_s)
+    values = [v for _, v in points]
+    n = len(values)
+    mean_a = sum(values) / n if n else 0.0
+    std_a = (
+        math.sqrt(sum((x - mean_a) ** 2 for x in values) / (n - 1)) if n > 1 else 0.0
+    )
+
+    if samples:
+        first_t, _ = _extract_sample(samples[0])
+        t0 = start_t if start_t is not None else first_t
+    else:
+        t0 = 0.0
+    elapsed = max(0.0, points[-1][0] - (t0 + settle_window_s)) if points else 0.0
+    spacing = (points[-1][0] - points[0][0]) / (n - 1) if n >= 2 else None
+
+    reason: UncertaintyReason | None
+    if post_readings > 0 and n == 0:
+        reason = UncertaintyReason.NO_VALID_SAMPLES
+    elif n < min_samples:
+        reason = UncertaintyReason.TOO_FEW_SAMPLES
+    elif mean_a < 0.0:
+        reason = UncertaintyReason.MEAN_NEGATIVE
+    elif mean_a <= run_end_current_a:
+        reason = UncertaintyReason.MEAN_BELOW_RUN_END
+    else:
+        reason = None
+
+    uncertainty = None if reason is not None else std_a / (math.sqrt(n) * mean_a)
+    return InsertionUncertainty(
+        uncertainty=uncertainty,
+        reason=reason,
+        n=n,
+        mean_a=mean_a,
+        std_a=std_a,
+        converged=uncertainty is not None and uncertainty <= target,
+        post_settle_elapsed_s=elapsed,
+        mean_spacing_s=spacing,
+    )
+
+
+@dataclass(frozen=True)
+class ConvergenceBars:
+    """Numbers for the Overview bars. Display only: never decides a retract."""
+    drain_fraction: float | None
+    target_mark: float
+    n: int
+    n_needed: int | None
+    time_left_s: float | None
+
+
+def compute_convergence_bars(
+    result: InsertionUncertainty, target: float, min_samples: int
+) -> ConvergenceBars:
+    """Bar fill (scaled to 4x target), samples still needed, and estimated time left."""
+    if result.reason is not None or result.uncertainty is None:
+        return ConvergenceBars(None, 0.25, result.n, None, None)
+    full = 4.0 * target
+    drain = min(result.uncertainty, full) / full
+    n_needed = max(
+        min_samples, math.ceil((result.std_a / (result.mean_a * target)) ** 2)
+    )
+    time_left = (
+        None
+        if result.mean_spacing_s is None
+        else max(0, n_needed - result.n) * result.mean_spacing_s
+    )
+    return ConvergenceBars(drain, 0.25, result.n, n_needed, time_left)
 
 
 def compute_charge(current_a: float, interval_s: float) -> float:

@@ -44,6 +44,7 @@ class TestPicoammeterWorker:
         assert worker.get_poll_interval() == CUP_POLL_INTERVAL_IDLE_S
 
         worker.set_acquiring(True)
+        assert worker.get_poll_interval() == 0.0
         assert worker.get_poll_interval() == CUP_POLL_INTERVAL_ACQUIRING_S
 
         worker.set_acquiring(False)
@@ -51,6 +52,94 @@ class TestPicoammeterWorker:
 
         worker.set_poll_interval(0.2)
         assert worker.get_poll_interval() == 0.2
+
+        worker.set_poll_interval(0.0)
+        assert worker.get_poll_interval() == 0.0
+
+    @patch("rbl.hardware.picoammeter_worker.Keithley6482")
+    def test_worker_acquiring_skips_sleep_interruptible(self, mock_driver_cls, qapp):
+        mock_inst = MagicMock()
+        mock_inst.idn.return_value = "Keithley model 6482"
+        mock_inst.protocol_mode = 1
+        mock_inst.read_raw.return_value = "+1.234567E-06,+0.123456,+00000000"
+        mock_driver_cls.return_value = mock_inst
+
+        worker = PicoammeterWorker("GPIB0::14::INSTR")
+        worker.set_acquiring(True)
+
+        readings: list[Keithley6482Reading] = []
+        worker.reading_ready.connect(readings.append)
+
+        sleep_calls: list[float] = []
+
+        with patch.object(
+            PicoammeterWorker, "_sleep_interruptible", side_effect=sleep_calls.append
+        ):
+            worker.start()
+            try:
+                assert _wait_until(lambda: len(readings) >= 5, timeout_s=10.0)
+            finally:
+                worker.stop()
+                assert worker.wait(2000)
+
+            assert len(readings) >= 5
+            assert not any(d > 0 for d in sleep_calls)
+
+    @patch("rbl.hardware.picoammeter_worker.Keithley6482")
+    def test_worker_idle_sleeps_idle_interval_between_reads(self, mock_driver_cls, qapp):
+        mock_inst = MagicMock()
+        mock_inst.idn.return_value = "Keithley model 6482"
+        mock_inst.protocol_mode = 1
+        mock_inst.read_raw.return_value = "+1.234567E-06,+0.123456,+00000000"
+        mock_driver_cls.return_value = mock_inst
+
+        worker = PicoammeterWorker("GPIB0::14::INSTR")
+        worker.set_acquiring(False)
+
+        readings: list[Keithley6482Reading] = []
+        worker.reading_ready.connect(readings.append)
+
+        sleep_calls: list[float] = []
+
+        def fake_sleep(duration_s: float):
+            sleep_calls.append(duration_s)
+            time.sleep(0.001)
+
+        with patch.object(PicoammeterWorker, "_sleep_interruptible", side_effect=fake_sleep):
+            worker.start()
+            try:
+                assert _wait_until(lambda: len(readings) >= 3, timeout_s=10.0)
+            finally:
+                worker.stop()
+                assert worker.wait(2000)
+
+            assert len(readings) >= 3
+            assert len(sleep_calls) >= 3
+            assert all(d == pytest.approx(CUP_POLL_INTERVAL_IDLE_S) for d in sleep_calls)
+
+    @patch("rbl.hardware.picoammeter_worker.Keithley6482")
+    def test_worker_stop_acquiring_within_timeout(self, mock_driver_cls, qapp):
+        mock_inst = MagicMock()
+        mock_inst.idn.return_value = "Keithley model 6482"
+        mock_inst.protocol_mode = 1
+        mock_inst.read_raw.return_value = "+1.234567E-06,+0.123456,+00000000"
+        mock_driver_cls.return_value = mock_inst
+
+        worker = PicoammeterWorker("GPIB0::14::INSTR")
+        worker.set_acquiring(True)
+
+        readings: list[Keithley6482Reading] = []
+        worker.reading_ready.connect(readings.append)
+
+        worker.start()
+        try:
+            assert _wait_until(lambda: len(readings) > 0, timeout_s=10.0)
+        finally:
+            worker.stop()
+            stopped = worker.wait(2000)
+
+        assert stopped is True
+        assert not worker.isRunning()
 
     @patch("rbl.hardware.picoammeter_worker.Keithley6482")
     def test_worker_run_and_stop_lifecycle(self, mock_driver_cls, qapp):

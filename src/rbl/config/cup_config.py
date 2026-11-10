@@ -13,8 +13,9 @@ POLLING RATES
 -------------
 - Idle polling runs at 2 Hz (0.5 s period): provides responsive detection of cup
   insertion while keeping bus traffic low.
-- Acquiring polling runs at 10 Hz (0.1 s period): matches the log-amp stream
-  refresh rate so that the slit currents and cup current views tick together.
+- Acquiring polling runs back-to-back (interval = 0.0 s) while a run is open:
+  reads again as soon as the previous read returns, so the instrument sets the pace.
+  Achieved rate is governed by NPLC 1 integration time plus GPIB round trip.
 
 THRESHOLD-TRIGGERED ACQUISITION (ADR 0002)
 ------------------------------------------
@@ -79,8 +80,9 @@ while a sampling insertion debounced at 1.0 s would never produce a run at all.
 CUP_POLL_RATE_IDLE_HZ: float = 2.0
 CUP_POLL_INTERVAL_IDLE_S: float = 1.0 / CUP_POLL_RATE_IDLE_HZ  # 0.5 s
 
-CUP_POLL_RATE_ACQUIRING_HZ: float = 10.0
-CUP_POLL_INTERVAL_ACQUIRING_S: float = 1.0 / CUP_POLL_RATE_ACQUIRING_HZ  # 0.1 s
+# 0.0 means back-to-back polling while a run is open; the achieved rate is set by the read
+# time (NPLC 1 integration plus GPIB round trip) and is measured by the bench ticket in this set.
+CUP_POLL_INTERVAL_ACQUIRING_S: float = 0.0
 
 # ---- Hardware & VISA defaults --------------------------------------------
 # Address set on the bench 6482's front panel (MENU > COMMUNICATION > GPIB); factory default is 25.

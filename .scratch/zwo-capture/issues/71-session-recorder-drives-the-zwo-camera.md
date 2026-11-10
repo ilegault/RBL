@@ -1,6 +1,6 @@
 # 71: `SessionRecorder` drives the ZWO camera: kind, settings, video, photos, darks, events
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -89,30 +89,30 @@ real `SessionRecorder` with `capture=client`, a `CameraSource` that is never ope
 `rbl.services.session_recorder._logs_dir` / `paths.ZWO_DARKS_DIR` monkeypatched into
 `tmp_path` as `tests/test_session_recorder.py` does. Waits spin `processEvents` (30 s cap).
 
-- [ ] `test_zwo_video_in_a_session`: kind `zwo`, connect, `set_zwo_settings(roi={"x": 0, "y": 0, "width": 64, "height": 32},
+- [x] `test_zwo_video_in_a_session`: kind `zwo`, connect, `set_zwo_settings(roi={"x": 0, "y": 0, "width": 64, "height": 32},
   exposure_us=10000)`, start session, `start_video`, wait 2 s, `stop_video`, stop session:
   `<session>/zwo/segment_000.ser` and `frames.csv` exist; `events.csv` contains
   `video_started`, `zwo_recording_started`, `zwo_segment_opened`, `zwo_recording_stopped` and
   `video_stopped`; `session.json` has a `zwo` block whose `camera.serial == "FAKE0001"` and
   whose `segments` lists `segment_000.ser`; `state()["zwo_settings"]["roi"]["width"] == 64`
   (from the reply). A second run in the same session writes `segment_001.ser`.
-- [ ] `test_zwo_photo_writes_fits_and_sidecar`: during a session, `take_photo()`; a
+- [x] `test_zwo_photo_writes_fits_and_sidecar`: during a session, `take_photo()`; a
   `zwo_photo_000_0.fits` and `zwo_photo_000_0.json` appear in `<session>/photos`, the JSON has
   `"camera": "zwo"` and a `"beamline"` key, `events.csv` has one `photo` row, `photo_taken`
   fired with the FITS path.
-- [ ] `test_capture_death_keeps_csv`: during a ZWO run, kill the child from outside (pid from
+- [x] `test_capture_death_keeps_csv`: during a ZWO run, kill the child from outside (pid from
   `hello`); `events.csv` gets `zwo_capture_lost`; the CSV row count keeps increasing over the
   next 3 s; `state()["zwo_recording"]` is False; status `"ZWO camera lost — continuing CSV
   only"` was emitted.
-- [ ] `test_switching_kind_is_refused_while_video_runs`: during a ZWO run,
+- [x] `test_switching_kind_is_refused_while_video_runs`: during a ZWO run,
   `set_camera_kind("usb")` leaves `camera_kind() == "zwo"` and emits the warn status; with no
   `capture`, `set_camera_kind("zwo")` leaves `"usb"`.
-- [ ] `test_settings_persist_across_recorders`: after `set_zwo_settings(gain=150)` on one
+- [x] `test_settings_persist_across_recorders`: after `set_zwo_settings(gain=150)` on one
   recorder, a new recorder + client, once `opened`, shows `state()["zwo_settings"]["gain"] ==
   150` (the stored value re-applied, read back from the reply).
-- [ ] `test_usb_only_session_has_no_zwo_block`: a session that never selects the ZWO camera
+- [x] `test_usb_only_session_has_no_zwo_block`: a session that never selects the ZWO camera
   writes a `session.json` with no `"zwo"` key, and `state()["camera_kind"] == "usb"`.
-- [ ] (no test: regression, proved by the existing suite in the gate) The whole existing suite passes with no existing test edited; in
+- [x] (no test: regression, proved by the existing suite in the gate) The whole existing suite passes with no existing test edited; in
   particular `tests/test_session_recorder.py`, `tests/test_session_cup_log.py`,
   `tests/test_recording_panel.py`, `tests/test_camera_tab.py`, `tests/test_e2e_session.py`.
   
@@ -137,3 +137,17 @@ access in the new test file except the module-level `_logs_dir` monkeypatch targ
 - A burst control in the UI.
 
 ## Comments
+
+Land summary (2026-10-28):
+- Implemented ZWO camera orchestration in `SessionRecorder` (`src/rbl/services/session_recorder.py`):
+  - Added keyword-only `capture: CaptureClient | None = None` to constructor.
+  - Forwarded `capture.preview` to `zwo_preview` signal (`Signal(QImage, dict)`).
+  - Implemented `camera_kind()` and `set_camera_kind()`, persisting kind to `zwo_settings_store`.
+  - Implemented `connect_zwo()`, `disconnect_zwo()`, `set_zwo_settings()`, `set_zwo_preview()`, and `take_darks()`.
+  - Implemented ZWO dispatch in `start_video()`, `stop_video()`, and `take_photo()`.
+  - Handled child signals: `opened` (applies stored settings and preview), `event` (logged to `events.csv` with `zwo_` prefix), `exited` and unplanned `recording_stopped` (cleanly ends ZWO run while leaving CSV logging intact), and `reply` (tracks settings, segments, and photo sidecars).
+  - Updated `state()` to expose `camera_kind`, `zwo_open`, `zwo_recording`, `zwo_status`, `zwo_info`, `zwo_settings`.
+  - Updated `_write_manifest()` to include the `"zwo"` block only when a ZWO run occurred during the session.
+  - Updated module docstring with reasoning on `CaptureClient` and CSV-first resilience.
+- Created `tests/test_session_recorder_zwo.py` covering all criteria without private attribute access.
+- Verified regression against existing tests and confirmed all gates pass.

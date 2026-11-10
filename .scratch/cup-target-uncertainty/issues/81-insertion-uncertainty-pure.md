@@ -1,6 +1,6 @@
 # 81: Insertion uncertainty and convergence bars as pure functions
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -60,21 +60,21 @@ numbers and no hardware; keep it that way.
 
 ## Acceptance criteria
 
-- [ ] `tests/test_dose_model.py` has a table-driven test asserting, for hand-made
+- [x] `tests/test_dose_model.py` has a table-driven test asserting, for hand-made
       `(t, current)` lists, the exact `reason` for each of the four cases and that the
       precedence holds: a list whose only post-settle readings are `None` gives
       `NO_VALID_SAMPLES`, not `TOO_FEW_SAMPLES`; a negative mean below the run end
       current gives `MEAN_NEGATIVE`.
-- [ ] A test asserts nine identical post-settle samples with `min_samples=10` are not
+- [x] A test asserts nine identical post-settle samples with `min_samples=10` are not
       converged (`TOO_FEW_SAMPLES`, text `"too few samples (9/10)"`) and ten of the
       same value (std 0) are converged with `uncertainty == 0.0`.
-- [ ] A test asserts samples inside the settle window and `None`/non-finite values are
+- [x] A test asserts samples inside the settle window and `None`/non-finite values are
       excluded, and that `uncertainty` equals `std/(sqrt(n)*mean)` computed by hand for
       a known list (use `pytest.approx`).
-- [ ] A test asserts `compute_convergence_bars`: an uncertainty of 0.30 with target 0.05
+- [x] A test asserts `compute_convergence_bars`: an uncertainty of 0.30 with target 0.05
       gives `drain_fraction == 1.0`; 0.05 gives `0.25`; `n_needed` and `time_left_s` for
       a hand-computed case; all None when a reason is set.
-- [ ] The existing `compute_insertion_current` tests pass unchanged, and `dose_model.py`
+- [x] The existing `compute_insertion_current` tests pass unchanged, and `dose_model.py`
       still imports neither PySide6 nor `time`.
 
 Tests use real functions only; nothing may be faked.

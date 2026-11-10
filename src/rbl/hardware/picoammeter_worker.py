@@ -22,7 +22,8 @@ If the instrument fails to connect or disconnects mid-run:
 POLLING RATES
 -------------
 - Idle rate: 2 Hz (CUP_POLL_INTERVAL_IDLE_S = 0.5 s) by default.
-- Acquiring rate: 10 Hz (CUP_POLL_INTERVAL_ACQUIRING_S = 0.1 s) during active runs.
+- Acquiring rate: back-to-back (CUP_POLL_INTERVAL_ACQUIRING_S = 0.0 s) during active runs:
+  reads again as soon as the previous read returns, instrument sets the pace.
 Rates are safely adjusted at runtime via set_poll_interval() / set_acquiring().
 """
 from __future__ import annotations
@@ -90,10 +91,10 @@ class PicoammeterWorker(QThread):
     def set_poll_interval(self, interval_s: float) -> None:
         """Update polling interval in seconds."""
         with QMutexLocker(self._mutex):
-            self._poll_interval_s = max(0.01, float(interval_s))
+            self._poll_interval_s = max(0.0, float(interval_s))
 
     def set_acquiring(self, acquiring: bool) -> None:
-        """Switch between acquiring rate (10 Hz) and idle rate (2 Hz)."""
+        """Switch between acquiring rate (back-to-back, 0.0 s) and idle rate (2 Hz)."""
         interval = CUP_POLL_INTERVAL_ACQUIRING_S if acquiring else CUP_POLL_INTERVAL_IDLE_S
         self.set_poll_interval(interval)
 
@@ -193,9 +194,10 @@ class PicoammeterWorker(QThread):
                     self._close_driver()
                     continue
 
-                # Sleep between polls
+                # Sleep between polls (skip when 0 for back-to-back polling)
                 interval_s = self.get_poll_interval()
-                self._sleep_interruptible(interval_s)
+                if interval_s > 0:
+                    self._sleep_interruptible(interval_s)
 
         finally:
             log.info("picoammeter_worker: thread exiting, closing driver")

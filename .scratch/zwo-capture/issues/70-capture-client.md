@@ -1,12 +1,12 @@
 # 70: `CaptureClient`: the application's one owner of the Capture Process
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
 **Auto-merge:** yes
 
-**Blocked by:** 65
+**Blocked by:** 65, 66
 
 **Spec:** `.scratch/zwo-capture/spec.md`, sections D9, D1 (`capture_command_line`), D2,
 "Testing Decisions" → Seam B (`test_capture_client.py`)
@@ -120,3 +120,33 @@ access in the new test files (`tools/private_access_ratchet.txt` must not rise).
 - Reattaching to a child left by a previous run (ADR 0008 decision 5).
 
 ## Comments
+
+### 2026-10-27 (implementing agent): blocked on ticket 66
+
+Built `CaptureClient`, `capture_command_line`, `capture_child_env`, `tests/qt_wait.py`, and all
+tests. 6 of 7 new tests pass against the real fake-camera child; ruff, check_tests_first,
+check_layers and the type gate are clean.
+
+`test_cup_position_is_sent_only_on_change` FAILS and cannot be fixed on this ticket:
+
+    tests\test_capture_client.py:97: assert wait_until(lambda: len(list(tmp_path.rglob("frames.csv"))) > 0)
+    AssertionError
+
+Cause: `src/rbl/capture/process.py` (ticket 65) answers `start_recording` with
+`error bad_request "not implemented"`, so no `frames.csv` is ever written. Recording and the
+frame log are ticket 66. This ticket's `Blocked by:` names only 65, but its acceptance test
+asserts through the frame log, so it needs 66 as well.
+
+Decision needed from a human: add 66 to this ticket's `Blocked by:` (and rerun after 66 lands,
+the test needs no change), or reword the criterion to something 65 can satisfy. I did not mute,
+weaken or skip the test (ADR 0001).
+
+### 2026-10-28 (implementing agent): unblocked, done
+
+66 landed (PR 124). Added 66 to `Blocked by:` as proposed above. Merged master into the branch and
+reran: the one failing test then failed on a different cause, a harness defect. The frame log opens
+with `#` comment lines (spec, Frame log), so `csv.DictReader` took the first comment as its header
+row and `cup_position` was a `KeyError`. The test now skips `#` lines before parsing. Every
+assertion is unchanged: the collapsed column must still end `["IN", "OUT", "UNKNOWN"]` and be a
+subsequence of `["UNKNOWN", "IN", "OUT", "UNKNOWN"]`, and the five return values must still be
+`[id, None, None, id, id]`, so the test still fails if the client sends the wrong labels.

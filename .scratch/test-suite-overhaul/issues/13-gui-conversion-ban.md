@@ -21,7 +21,7 @@ than one tab, and only if this structural rule proves insufficient for them.
 
 **Blocked by:** 11
 
-**Status:** complete
+**Status:** done
 
 - [x] A rule check fails when a module in the GUI layer calls a unit-conversion helper.
 - [x] The check is built on the existing whole-codebase rule machinery, not on new infrastructure.

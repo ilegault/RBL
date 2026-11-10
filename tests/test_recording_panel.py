@@ -7,7 +7,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PySide6.QtCore import QObject, Signal
-from PySide6.QtWidgets import QApplication, QComboBox, QPushButton, QSpinBox
+from PySide6.QtWidgets import QApplication, QComboBox, QLabel, QPushButton, QSpinBox
 
 
 @pytest.fixture(scope="module")
@@ -243,3 +243,157 @@ def test_recording_panel_video_button_tooltips_and_clicks(tmp_path, qapp, monkey
     assert video_btn.text() == "Start Video"
 
     rec.stop()
+
+
+# ---- Camera picker (ticket 74) ----------------------------------------------
+
+import time  # noqa: E402
+
+from PySide6.QtGui import QImage  # noqa: E402
+
+from rbl.config import paths  # noqa: E402
+from rbl.gui.widgets.video_view import VideoView  # noqa: E402
+from rbl.hardware.camera_source import CameraSource  # noqa: E402
+from rbl.services.capture_client import CaptureClient  # noqa: E402
+from rbl.services.session_recorder import SessionRecorder  # noqa: E402
+from tests.qt_wait import wait_until  # noqa: E402
+
+
+def _make_view(kind, rec, cam):
+    if kind == "panel":
+        from rbl.gui.widgets.recording_panel import RecordingPanel
+        return RecordingPanel(rec)
+    from rbl.gui.camera_tab import CameraTab
+    return CameraTab(rec, cam)
+
+
+@pytest.fixture
+def zwo_rig(tmp_path, monkeypatch, qapp):
+    monkeypatch.setattr("rbl.services.session_recorder._logs_dir",
+                        lambda: str(tmp_path / "logs"))
+    monkeypatch.setattr(paths, "ZWO_DARKS_DIR", tmp_path / "zwo_darks")
+    client = CaptureClient()
+    cam = CameraSource()
+    client.start("fake")
+    rec = SessionRecorder(lambda: {"beamline_v": 1.0}, cam, capture=client)
+    rec.set_camera_kind("usb")
+    yield rec, cam, client
+    client.shutdown()
+
+
+@pytest.mark.parametrize("which", ["panel", "tab"])
+def test_picker_shows_and_hides_the_right_rows(zwo_rig, which):
+    rec, cam, _ = zwo_rig
+    view = _make_view(which, rec, cam)
+    view.show()
+    assert rec.camera_kind() == "usb"
+    assert view.usb_only_widgets
+    assert all(w.isVisibleTo(view) for w in view.usb_only_widgets)
+    assert not view.zwo_controls.isVisibleTo(view)
+    assert not view.lbl_preview_caption.isVisibleTo(view)
+
+    view.combo_camera_kind.setCurrentIndex(1)
+
+    assert rec.camera_kind() == "zwo"
+    assert not any(w.isVisibleTo(view) for w in view.usb_only_widgets)
+    assert view.zwo_controls.isVisibleTo(view)
+    assert view.lbl_preview_caption.isVisibleTo(view)
+    assert view.lbl_preview_caption.text() == "Display stretch: not intensity"
+
+    view.combo_camera_kind.setCurrentIndex(0)
+    assert rec.camera_kind() == "usb"
+    assert all(w.isVisibleTo(view) for w in view.usb_only_widgets)
+    assert not view.zwo_controls.isVisibleTo(view)
+
+
+@pytest.mark.parametrize("which", ["panel", "tab"])
+def test_zwo_preview_reaches_the_view(zwo_rig, monkeypatch, which):
+    rec, cam, client = zwo_rig
+    seen: list[QImage] = []
+    original = VideoView.set_frame
+
+    def spy(self, img):
+        seen.append(img)
+        return original(self, img)
+
+    monkeypatch.setattr(VideoView, "set_frame", spy)
+    msgs: list[dict] = []
+    rec.zwo_preview.connect(lambda img, fields: msgs.append(fields))
+
+    view = _make_view(which, rec, cam)
+    view.show()
+
+    # Kind left at "usb", client opened directly: previews flow, view stays blank.
+    client.open()
+    assert wait_until(lambda: bool(msgs), 10.0)
+    t_end = time.monotonic() + 2.0
+    wait_until(lambda: time.monotonic() > t_end, 2.5)
+    assert seen == []
+    client.close()
+    wait_until(lambda: not client.is_open(), 10.0)
+
+    view.combo_camera_kind.setCurrentIndex(1)
+    msgs.clear()
+    rec.connect_zwo()
+    assert wait_until(lambda: bool(seen) and bool(msgs), 10.0)
+    img = next(i for i in seen if not i.isNull())
+    assert (img.width(), img.height()) == (msgs[0]["width"], msgs[0]["height"])
+
+
+@pytest.mark.parametrize("which", ["panel", "tab"])
+def test_video_button_follows_the_zwo_camera(zwo_rig, which):
+    rec, cam, _ = zwo_rig
+    view = _make_view(which, rec, cam)
+    view.show()
+    view.combo_camera_kind.setCurrentIndex(1)
+    assert rec.start()
+    video_btn = [b for b in view.findChildren(QPushButton) if "Video" in b.text()][0]
+    assert not video_btn.isEnabled()
+
+    rec.connect_zwo()
+    assert wait_until(lambda: rec.state()["zwo_open"], 10.0)
+    assert wait_until(video_btn.isEnabled, 10.0)
+    assert video_btn.text() == "Start Video"
+
+    video_btn.click()
+    assert wait_until(lambda: rec.state()["zwo_recording"], 10.0)
+    assert wait_until(lambda: video_btn.text() == "Stop Video", 10.0)
+
+    video_btn.click()
+    assert wait_until(lambda: not rec.state()["zwo_recording"], 10.0)
+    rec.stop()
+
+
+@pytest.mark.parametrize("which", ["panel", "tab"])
+def test_refused_switch_reverts_the_combo(zwo_rig, which):
+    rec, cam, _ = zwo_rig
+    view = _make_view(which, rec, cam)
+    view.combo_camera_kind.setCurrentIndex(1)
+    rec.connect_zwo()
+    assert wait_until(lambda: rec.state()["zwo_open"], 10.0)
+    assert rec.start()
+    assert rec.start_video()
+    assert wait_until(lambda: rec.state()["zwo_recording"], 10.0)
+
+    view.combo_camera_kind.setCurrentIndex(0)
+
+    assert rec.camera_kind() == "zwo"
+    assert view.combo_camera_kind.currentData() == "zwo"
+    rec.stop_video()
+    rec.stop()
+
+
+@pytest.mark.parametrize("which", ["panel", "tab"])
+def test_open_and_close_buttons_drive_the_zwo_camera(zwo_rig, which):
+    rec, cam, _ = zwo_rig
+    view = _make_view(which, rec, cam)
+    view.combo_camera_kind.setCurrentIndex(1)
+    open_btn = [b for b in view.findChildren(QPushButton)
+                if b.text() in ("Open", "Close")][0]
+    open_btn.click()
+    assert wait_until(lambda: rec.state()["zwo_open"], 10.0)
+    assert wait_until(lambda: open_btn.text() == "Close", 10.0)
+    assert any("FAKE0001" in lb.text() for lb in view.findChildren(QLabel))
+    open_btn.click()
+    assert wait_until(lambda: not rec.state()["zwo_open"], 10.0)
+    assert wait_until(lambda: open_btn.text() == "Open", 10.0)

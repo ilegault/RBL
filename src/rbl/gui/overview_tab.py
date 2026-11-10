@@ -39,11 +39,17 @@ trace on an always-on overview screen is a distraction, not information.  The
 window caption is what keeps the correlation honest: it is worth nothing until
 you know it was computed over a whole cycle.
 
+The HV box also carries the "Amplifier warnings" list and per-plate spike counts
+fed by the spike recorder (a spike at the rail; a captured reference more than
+10 % off k x f x C x V). Warnings are rows with a Dismiss button, never dialogs
+(docs/adr/0006).
+
 Setpoints are shared, not copied: the boxes here and the Function Generators
 tab's panels are two views on one FuncGenSetpoints object, so neither screen
 can show a stale value or silently overwrite what the other has typed.
 """
 import math
+from datetime import datetime
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
@@ -59,9 +65,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from rbl.config import characterization_history
 from rbl.config import hardware_config as SC
+from rbl.config.calibration_config import REFERENCE_PREDICTION_TOLERANCE
 from rbl.config.vacuum_config import GAUGE_DISPLAY_NAMES, UI_GOOD_VACUUM_TORR
 from rbl.gui import theme
+from rbl.gui.widgets.amplifier_warnings_panel import AmplifierWarningsPanel
 from rbl.gui.widgets.axis_drive import AxisDriveControl
 from rbl.gui.widgets.beam_indicator import BeamPositionIndicator
 from rbl.gui.widgets.cup_panel import CupPanel
@@ -72,11 +81,13 @@ from rbl.gui.widgets.slit_control import SlitControl
 from rbl.hardware.amp_monitor import pair_correlation
 from rbl.hardware.current_monitor import format_current
 from rbl.hardware.funcgen_safety import (
+    _AMP_GAIN,
     CHANNEL_ROLE,
     PEAK_MAX_VOLTS,
     PEAK_WARN_VOLTS,
     peak_status,
 )
+from rbl.hardware.load_model import predicted_peak_ma
 from rbl.state.beamline import Beamline
 from rbl.state.setpoints import AXIS_CHANNELS, AXIS_GENERATOR
 from rbl.state.snapshots import AmpState, FuncGenState, LogAmpState, MotorState, ScopeState
@@ -498,6 +509,11 @@ class OverviewTab(QWidget):
             cell.addLayout(foot)
 
             lay.addWidget(panel)
+
+        # Spike counts and warnings from the spike recorder (ADR 0006: a list,
+        # never a dialog, and nothing here commands an amplifier).
+        self.amp_warnings = AmplifierWarningsPanel()
+        lay.addWidget(self.amp_warnings)
         return box
 
     def _build_vacuum_box(self) -> QGroupBox:
@@ -562,6 +578,48 @@ class OverviewTab(QWidget):
     def _on_hv_interlock(self, payload: dict):
         self._hv_interlock = payload
         self._redraw_hv_interlock()
+
+    # ---- spike recorder -----------------------------------------------------
+
+    def on_spike(self, row: dict) -> None:
+        """Wire to SpikeRecorder.spike_recorded: count it; warn if at the rail.
+
+        The monitor cannot read above ~20 mA (ADR 0007), so a rail event reports
+        how long the current sat at the rail, never a peak.
+        """
+        plate = row["plate_position"]
+        self.amp_warnings.count_spike(plate)
+        if _truthy(row.get("at_rail")):
+            rail_ms = float(row["rail_s"]) * 1e3
+            self.amp_warnings.add_warning(
+                f"current at the rail for {rail_ms:.1f} ms on {plate}")
+
+    def on_reference_captured(self, plate: str, info: dict) -> None:
+        """Wire to SpikeRecorder.reference_captured: compare it with k x f x C x V.
+
+        An unmeasured plate (no on-plates capacitance at the current scale), a
+        channel that is not driven and a drive shape with no k factor are
+        skipped: there is nothing honest to compare against.
+        """
+        key = next((k for k, p in CHANNEL_ROLE.items() if p == plate), None)
+        c_pf = characterization_history.newest_on_plates_c_pf(plate, datetime.now())
+        if key is None or c_pf is None:
+            return
+        params = self._setpoints.get(key)
+        try:
+            predicted = predicted_peak_ma(
+                params.shape, params.freq_hz, c_pf,
+                params.amp_vpp / 2.0 * _AMP_GAIN)
+        except ValueError:
+            return
+        if predicted <= 0:
+            return
+        reference = float(info["current_ma"])
+        if abs(reference - predicted) / predicted > REFERENCE_PREDICTION_TOLERANCE:
+            self.amp_warnings.add_warning(
+                f"{plate}: reference current {reference:.2f} mA differs from the "
+                f"{predicted:.2f} mA predicted for {c_pf:.0f} pF "
+                f"by more than {REFERENCE_PREDICTION_TOLERANCE:.0%}")
 
     @property
     def panel_area(self) -> PanelArea:
@@ -1124,3 +1182,8 @@ class OverviewTab(QWidget):
         lbl.setText(text)
         lbl.setStyleSheet(theme.status_label(role, bold=False)
                           + f"font-size: {theme.FS_CAPTION}px;")
+
+
+def _truthy(value) -> bool:
+    """A CSV-style flag: True, 1, or the text "True"."""
+    return value is True or str(value).strip().lower() in ("true", "1")

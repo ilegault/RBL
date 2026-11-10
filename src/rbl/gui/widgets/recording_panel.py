@@ -21,6 +21,14 @@ preview widget layout.
 
 Phase 2 (2026-08-25): UI restructured to expose the codec controls that
 actually affect what lands on disk.  See recording_config.MASTER_CODECS.
+
+One camera at a time, chosen here (ticket 74): the "Camera:" row at the top
+picks USB or ZWO.  The USB settings rows (camera index, Res, Acquire, Record,
+Format, Master, Segment, MP4 copy) are collected in ``usb_only_widgets`` and
+hidden under ZWO; the ZWO rows live in ``ZwoControls`` (``zwo_controls``) and
+show only under ZWO.  Open/Close, Start/Stop Video and Take Photo follow the
+chosen camera.  The picker logic is shared with CameraTab in
+camera_kind_mixin.py.  The USB path is unchanged (ADR 0008 decision 7).
 """
 import importlib.util
 import os
@@ -53,6 +61,7 @@ from rbl.config.recording_config import (
     SEGMENT_SECONDS_CHOICES,
 )
 from rbl.gui import theme
+from rbl.gui.widgets.camera_kind_mixin import CameraKindMixin
 from rbl.gui.widgets.video_view import VideoView
 
 _CV2_OK = importlib.util.find_spec("cv2") is not None
@@ -63,7 +72,7 @@ _CAMERA_FORMATS = [
 ]
 
 
-class RecordingPanel(QGroupBox):
+class RecordingPanel(CameraKindMixin, QGroupBox):
     """Compact session recorder panel for the Overview PanelArea column."""
 
     def __init__(self, recorder, parent=None):
@@ -81,6 +90,8 @@ class RecordingPanel(QGroupBox):
     def _build_ui(self):
         lay = QVBoxLayout(self)
         lay.setSpacing(4)
+
+        lay.addLayout(self._make_kind_row())
 
         # ---- Camera open row -----------------------------------------------
         cam_row = QHBoxLayout()
@@ -105,14 +116,16 @@ class RecordingPanel(QGroupBox):
         # ---- Resolution + acquire fps + record fps -------------------------
         s1 = QHBoxLayout()
         s1.setSpacing(4)
-        s1.addWidget(QLabel("Res:"))
+        lbl_res_t = QLabel("Res:")
+        s1.addWidget(lbl_res_t)
         self._combo_res = QComboBox()
         for w, h, label in RES_PRESETS:
             self._combo_res.addItem(label, (w, h))
         self._combo_res.setCurrentIndex(len(RES_PRESETS) - 1)
         s1.addWidget(self._combo_res)
 
-        s1.addWidget(QLabel("Acquire:"))
+        lbl_acq = QLabel("Acquire:")
+        s1.addWidget(lbl_acq)
         self._spin_preview = QSpinBox()
         self._spin_preview.setRange(1, 120)
         self._spin_preview.setValue(PREVIEW_FPS_DEFAULT)
@@ -124,7 +137,8 @@ class RecordingPanel(QGroupBox):
             "available at full resolution.")
         s1.addWidget(self._spin_preview)
 
-        s1.addWidget(QLabel("Record:"))
+        lbl_rec = QLabel("Record:")
+        s1.addWidget(lbl_rec)
         self._spin_rec_fps = QSpinBox()
         self._spin_rec_fps.setRange(RECORD_FPS_MIN, RECORD_FPS_MAX)
         self._spin_rec_fps.setValue(self._recorder._record_fps)
@@ -139,7 +153,8 @@ class RecordingPanel(QGroupBox):
         # ---- Format combo (pixel format sent to camera) --------------------
         s_fmt = QHBoxLayout()
         s_fmt.setSpacing(4)
-        s_fmt.addWidget(QLabel("Format:"))
+        lbl_fmt = QLabel("Format:")
+        s_fmt.addWidget(lbl_fmt)
         self._combo_fmt = QComboBox()
         for label, data in _CAMERA_FORMATS:
             self._combo_fmt.addItem(label, data)
@@ -152,11 +167,15 @@ class RecordingPanel(QGroupBox):
         s_fmt.addWidget(self._combo_fmt)
         lay.addLayout(s_fmt)
 
+        # ---- ZWO rows (shown only under the ZWO camera) --------------------
+        lay.addWidget(self._make_zwo_controls())
+
         # ---- Live feed (VideoView — constant minimum size, no ratchet) -----
         self._feed = VideoView()
         self._feed.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         lay.addWidget(self._feed, stretch=1)
+        lay.addWidget(self._make_preview_caption())
 
         # ---- CSV / segment row ---------------------------------------------
         s2 = QHBoxLayout()
@@ -169,7 +188,8 @@ class RecordingPanel(QGroupBox):
         self._spin_csv.valueChanged.connect(self._on_csv_interval_changed)
         s2.addWidget(self._spin_csv)
 
-        s2.addWidget(QLabel("Segment:"))
+        lbl_seg = QLabel("Segment:")
+        s2.addWidget(lbl_seg)
         self._combo_seg = QComboBox()
         for secs in SEGMENT_SECONDS_CHOICES:
             if secs < 60:
@@ -190,7 +210,8 @@ class RecordingPanel(QGroupBox):
         # ---- Master codec row ----------------------------------------------
         s3 = QHBoxLayout()
         s3.setSpacing(4)
-        s3.addWidget(QLabel("Master:"))
+        lbl_master = QLabel("Master:")
+        s3.addWidget(lbl_master)
         self._combo_master = QComboBox()
         for label in MASTER_CODECS:
             self._combo_master.addItem(label)
@@ -209,7 +230,8 @@ class RecordingPanel(QGroupBox):
         # ---- MP4 copy (CRF) row — disabled when ffmpeg absent --------------
         s4 = QHBoxLayout()
         s4.setSpacing(4)
-        s4.addWidget(QLabel("MP4 copy (CRF):"))
+        lbl_mp4 = QLabel("MP4 copy (CRF):")
+        s4.addWidget(lbl_mp4)
         self._combo_quality = QComboBox()
         for label in QUALITY_PRESETS:
             self._combo_quality.addItem(label)
@@ -261,6 +283,17 @@ class RecordingPanel(QGroupBox):
         btns.addWidget(self._btn_folder)
         lay.addLayout(btns)
 
+        self.usb_only_widgets = [
+            self._combo_cam,
+            lbl_res_t, self._combo_res,
+            lbl_acq, self._spin_preview,
+            lbl_rec, self._spin_rec_fps,
+            lbl_fmt, self._combo_fmt,
+            lbl_seg, self._combo_seg,
+            lbl_master, self._combo_master,
+            lbl_mp4, self._combo_quality,
+        ]
+
     # ---- Signal wiring -----------------------------------------------------
 
     def _connect_signals(self):
@@ -271,11 +304,14 @@ class RecordingPanel(QGroupBox):
         self._camera.format_ready.connect(self._on_format_ready)
         self._camera.closed.connect(self._on_camera_closed_ui)
         self._camera.preview_ready.connect(self._on_preview_frame)
+        self._connect_zwo_preview()
 
     # ---- Camera control ----------------------------------------------------
 
     def _toggle_camera(self):
-        if self._camera.is_open():
+        if self._is_zwo():
+            self._toggle_zwo_camera()
+        elif self._camera.is_open():
             self._camera.close()
         else:
             idx    = self._combo_cam.currentData()
@@ -308,7 +344,7 @@ class RecordingPanel(QGroupBox):
         self._render()
 
     def _on_preview_frame(self, frame):
-        if not self.isVisible():
+        if not self.isVisible() or self._is_zwo():
             return
         try:
             import cv2 as _cv2
@@ -439,19 +475,23 @@ class RecordingPanel(QGroupBox):
 
         self._update_png_guard()
 
+        zwo = self._render_kind(st)
+        cam_open = st.get("zwo_open", False) if zwo else self._camera.is_open()
+
         # Video button: enabled only while session recording and camera is open.
         if not rec:
             self._btn_video.setEnabled(False)
             self._btn_video.setToolTip("Start a session first")
             self._btn_video.setText("Start Video")
-        elif not self._camera.is_open():
+        elif not cam_open:
             self._btn_video.setEnabled(False)
             self._btn_video.setToolTip("Open the camera first")
             self._btn_video.setText("Start Video")
         else:
             self._btn_video.setEnabled(True)
             self._btn_video.setToolTip("")
-            self._btn_video.setText("Stop Video" if video_active else "Start Video")
+            running = st.get("zwo_recording", False) if zwo else video_active
+            self._btn_video.setText("Stop Video" if running else "Start Video")
 
         if rec:
             self._btn_session.setText("■ STOP SESSION")
@@ -499,5 +539,5 @@ class RecordingPanel(QGroupBox):
             self._lbl_stats.setText(
                 "" if ffmpeg_found else "ffmpeg not found — keeping master only")
 
-        self._btn_photo.setEnabled(self._camera.is_open())
+        self._btn_photo.setEnabled(cam_open)
         self._btn_note.setEnabled(rec)

@@ -1,6 +1,6 @@
 # 75: Draw the ZWO region of interest on the Camera tab's video view
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -42,24 +42,24 @@
 
 ## Acceptance criteria
 
-- [ ] `test_view_rect_to_sensor_roi` (in `tests/test_preview_stretch.py`) (pure, parametrized,
+- [x] `test_view_rect_to_sensor_roi` (in `tests/test_preview_stretch.py`) (pure, parametrized,
   literal expected tuples): full painted area at preview 960 × 540 of a full-sensor ROI
   1920 × 1080 maps a view rect equal to `painted` to `(0, 0, 1920, 1080)`; a painted rect
   offset by `(100, 50)` (letterboxing) with view rect `(100, 50, 480, 270)` maps to
   `(0, 0, 960, 540)` sensor at scale 2 when painted is 960 × 540; with ROI origin `(200, 100)`
   the result is shifted by it; a rect half outside `painted` is clipped; one fully outside →
   width and height 0.
-- [ ] `test_drawing_a_rect_sets_the_roi` (in `tests/test_camera_tab.py`) (real recorder + fake
+- [x] `test_drawing_a_rect_sets_the_roi` (in `tests/test_camera_tab.py`) (real recorder + fake
   client, connected, not recording, Full sensor applied, tab shown): emit
   `tab.video_view.rect_drawn` — `video_view` is a new **public** read-only property returning
   the feed — with the top-left quarter of `tab.video_view.painted_rect()`; once the reply
   arrives, `state()["zwo_settings"]["roi"]` equals `snap_roi(*view_rect_to_sensor_roi(<the
   same inputs>), 1920, 1080)` (the mapping itself is proved by the pure test above) and its
   width is between 900 and 960.
-- [ ] `test_drawing_is_off_while_recording` (in `tests/test_camera_tab.py`): during a ZWO run,
+- [x] `test_drawing_is_off_while_recording` (in `tests/test_camera_tab.py`): during a ZWO run,
   `video_view.rect_drawing_enabled()` (add this public getter) is False; after `stop_video` it
   is True; under `"usb"` it is False.
-- [ ] `test_rect_drawn_on_drag` (in `tests/test_video_view.py`, new or extended): with drawing on, a simulated press-move-
+- [x] `test_rect_drawn_on_drag` (in `tests/test_video_view.py`, new or extended): with drawing on, a simulated press-move-
   release (`QTest.mousePress/mouseMove/mouseRelease`) of 40 × 30 pixels emits `rect_drawn`
   once with those values; with drawing off it emits nothing; a 2 × 2 drag emits nothing.
 
@@ -81,3 +81,9 @@ Run in CI's order (`.github/workflows/tests.yml`):
 - Drawing anything into recorded data or photos (the rubber band is screen-only).
 
 ## Comments
+
+Landed 2026-11-02. `view_rect_to_sensor_roi` in `preview_stretch.py` (edges rounded, clipped to painted);
+`VideoView.set_rect_drawing` / `rect_drawing_enabled` / `rect_drawn` (QRubberBand, 4 px minimum);
+`CameraTab.video_view`, preview-geometry memory, drawing on only while ZWO + open + not recording.
+Tests: test_view_rect_to_sensor_roi, test_rect_drawn_on_drag (+ double-click guard),
+test_drawing_a_rect_sets_the_roi, test_drawing_is_off_while_recording.

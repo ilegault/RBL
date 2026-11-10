@@ -333,10 +333,10 @@ class CupSessionWriter:
         """Write self-describing comments at the top of the CSV file."""
         self._file.write(f"# cup_session_writer RBL {_now_iso()}\n")
         self._file.write(
-            f"# thresholds: arm={self._arm_threshold_a:.3e} A  "
-            f"release={self._release_threshold_a:.3e} A  "
-            f"arm_debounce={self._arm_debounce_s:.1f} s  "
-            f"release_interval={self._release_interval_s:.1f} s  "
+            f"# thresholds: run start current={self._arm_threshold_a:.3e} A  "
+            f"run end current={self._release_threshold_a:.3e} A  "
+            f"run start debounce={self._arm_debounce_s:.1f} s  "
+            f"run end interval={self._release_interval_s:.1f} s  "
             f"settle_window={self._settle_window_s:.1f} s\n"
         )
         species_str = _format_header_val(self._species)
@@ -440,7 +440,8 @@ class CupSessionWriter:
     ) -> None:
         """Write a marker recording that an acquisition run began and its active thresholds."""
         threshold_info = (
-            f"arm={arm_threshold:.3e} A, release={release_threshold:.3e} A, forced={forced}"
+            f"run start current={arm_threshold:.3e} A, "
+            f"run end current={release_threshold:.3e} A, forced={forced}"
         )
         det = f"{threshold_info}; {details}" if details else threshold_info
         row = {

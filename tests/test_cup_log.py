@@ -212,8 +212,8 @@ class TestWriterSettingsProvider:
             ln for ln in Path(writer.csv_path).read_text(encoding="utf-8").splitlines()
             if ln.startswith("# thresholds:")
         ]
-        assert "arm=7.500e-07 A" in header[0]
-        assert "release=2.500e-07 A" in header[0]
+        assert "run start current=7.500e-07 A" in header[0]
+        assert "run end current=2.500e-07 A" in header[0]
         assert "settle_window=3.0 s" in header[0]
 
     def test_session_log_header_carries_provided_thresholds(self, tmp_path):

@@ -19,6 +19,19 @@ is always free to shrink it.  No frame data was ever affected.
 Phase 2 (2026-08-25): UI restructured to expose master codec and camera pixel
 format controls.  The "Preview" spin box is relabelled "Acquire" to make clear
 it controls acquisition rate, not display rate.
+
+One camera at a time, chosen here (ticket 74): the "Camera:" row at the top
+picks USB or ZWO, identically to RecordingPanel (shared in
+camera_kind_mixin.py).  The USB-only controls are collected in
+``usb_only_widgets`` and hidden under ZWO; the ZWO rows live in ``ZwoControls``
+(``zwo_controls``).  The ZWO Preview is drawn as decoded, with a caption under
+the view.  The USB path is unchanged (ADR 0008 decision 7).
+
+ROI drawing (ticket 75): to choose an ROI, draw over the **Full sensor**
+Preview; the numeric boxes then show the snapped result the Capture Process
+replied with, never the drawn rectangle.  Drawing is on only while the kind is
+ZWO, the camera is open and no ZWO run is recording (an ROI change mid-run
+would start a new segment).  The Overview panel has no drawing.
 """
 import importlib.util
 import os
@@ -50,7 +63,9 @@ from rbl.config.recording_config import (
     RES_PRESETS,
 )
 from rbl.gui import theme
+from rbl.gui.widgets.camera_kind_mixin import CameraKindMixin
 from rbl.gui.widgets.video_view import VideoView
+from rbl.hardware.preview_stretch import view_rect_to_sensor_roi
 
 _CV2_OK = importlib.util.find_spec("cv2") is not None
 
@@ -91,7 +106,7 @@ class _FullscreenWindow(QWidget):
 
 # ---- Camera tab ------------------------------------------------------------
 
-class CameraTab(QWidget):
+class CameraTab(CameraKindMixin, QWidget):
     """Full-view camera tab sharing one CameraSource with the Overview panel."""
 
     def __init__(self, recorder, camera, parent=None):
@@ -101,6 +116,7 @@ class CameraTab(QWidget):
         self._blocking = False
         self._fullscreen_win: "_FullscreenWindow | None" = None
         self._fit_mode = True
+        self._zwo_preview_fields: dict = {}
 
         self._build_ui()
         self._connect_signals()
@@ -112,6 +128,8 @@ class CameraTab(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(8, 8, 8, 8)
         lay.setSpacing(4)
+
+        lay.addLayout(self._make_kind_row())
 
         # ---- Top controls row ----------------------------------------------
         top = QHBoxLayout()
@@ -142,14 +160,16 @@ class CameraTab(QWidget):
         # ---- Settings row --------------------------------------------------
         s1 = QHBoxLayout()
         s1.setSpacing(6)
-        s1.addWidget(QLabel("Res:"))
+        lbl_res_t = QLabel("Res:")
+        s1.addWidget(lbl_res_t)
         self._combo_res = QComboBox()
         for w, h, label in RES_PRESETS:
             self._combo_res.addItem(label, (w, h))
         self._combo_res.setCurrentIndex(len(RES_PRESETS) - 1)
         s1.addWidget(self._combo_res)
 
-        s1.addWidget(QLabel("Format:"))
+        lbl_fmt = QLabel("Format:")
+        s1.addWidget(lbl_fmt)
         self._combo_fmt = QComboBox()
         for label, data in _CAMERA_FORMATS:
             self._combo_fmt.addItem(label, data)
@@ -159,7 +179,8 @@ class CameraTab(QWidget):
             "YUY2: uncompressed 4:2:2, typically 5 fps at 1080p.")
         s1.addWidget(self._combo_fmt)
 
-        s1.addWidget(QLabel("Acquire:"))
+        lbl_acq = QLabel("Acquire:")
+        s1.addWidget(lbl_acq)
         self._spin_preview = QSpinBox()
         self._spin_preview.setRange(1, 120)
         self._spin_preview.setValue(PREVIEW_FPS_DEFAULT)
@@ -169,7 +190,8 @@ class CameraTab(QWidget):
             "Lower it to make an uncompressed pixel format available.")
         s1.addWidget(self._spin_preview)
 
-        s1.addWidget(QLabel("Record:"))
+        lbl_rec = QLabel("Record:")
+        s1.addWidget(lbl_rec)
         self._spin_rec_fps = QSpinBox()
         self._spin_rec_fps.setRange(RECORD_FPS_MIN, RECORD_FPS_MAX)
         self._spin_rec_fps.setValue(self._recorder._record_fps)
@@ -180,7 +202,8 @@ class CameraTab(QWidget):
         self._spin_rec_fps.valueChanged.connect(self._on_rec_fps_changed)
         s1.addWidget(self._spin_rec_fps)
 
-        s1.addWidget(QLabel("Master:"))
+        lbl_master = QLabel("Master:")
+        s1.addWidget(lbl_master)
         self._combo_master = QComboBox()
         for label in MASTER_CODECS:
             self._combo_master.addItem(label)
@@ -190,7 +213,8 @@ class CameraTab(QWidget):
         self._combo_master.currentTextChanged.connect(self._on_master_changed)
         s1.addWidget(self._combo_master)
 
-        s1.addWidget(QLabel("MP4 copy (CRF):"))
+        lbl_mp4 = QLabel("MP4 copy (CRF):")
+        s1.addWidget(lbl_mp4)
         self._combo_quality = QComboBox()
         for label in QUALITY_PRESETS:
             self._combo_quality.addItem(label)
@@ -218,6 +242,9 @@ class CameraTab(QWidget):
         s1.addStretch(1)
         lay.addLayout(s1)
 
+        # ---- ZWO rows (shown only under the ZWO camera) --------------------
+        lay.addWidget(self._make_zwo_controls())
+
         # ---- Live feed (VideoView in a scroll area for 1:1 mode) -----------
         self._scroll = QScrollArea()
         self._scroll.setFrameShape(QScrollArea.Shape.NoFrame)
@@ -227,8 +254,10 @@ class CameraTab(QWidget):
         self._feed.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._feed.double_clicked.connect(self._toggle_fullscreen)
+        self._feed.rect_drawn.connect(self._on_rect_drawn)
         self._scroll.setWidget(self._feed)
         lay.addWidget(self._scroll, stretch=1)
+        lay.addWidget(self._make_preview_caption())
 
         # ---- Status bar ----------------------------------------------------
         self._lbl_status = QLabel("")
@@ -261,6 +290,17 @@ class CameraTab(QWidget):
         btns.addWidget(self._btn_folder)
         lay.addLayout(btns)
 
+        # This tab never exposed the segment length, so it has no Segment widget.
+        self.usb_only_widgets = [
+            self._combo_cam,
+            lbl_res_t, self._combo_res,
+            lbl_fmt, self._combo_fmt,
+            lbl_acq, self._spin_preview,
+            lbl_rec, self._spin_rec_fps,
+            lbl_master, self._combo_master,
+            lbl_mp4, self._combo_quality,
+        ]
+
     # ---- Signal wiring -----------------------------------------------------
 
     def _connect_signals(self):
@@ -271,11 +311,41 @@ class CameraTab(QWidget):
         self._camera.format_ready.connect(self._on_format_ready)
         self._camera.closed.connect(self._on_camera_closed_ui)
         self._camera.preview_ready.connect(self._on_preview_frame)
+        self._connect_zwo_preview()
+
+    @property
+    def video_view(self) -> VideoView:
+        """The live feed widget (read-only)."""
+        return self._feed
+
+    # ---- ROI drawing -------------------------------------------------------
+
+    def _on_zwo_preview_frame(self, image, fields: dict) -> None:
+        # Remember the geometry of the latest Preview even while hidden: the
+        # drawn rectangle is mapped through the frame that is on screen.
+        self._zwo_preview_fields = dict(fields)
+        super()._on_zwo_preview_frame(image, fields)
+
+    def _on_rect_drawn(self, x: int, y: int, w: int, h: int) -> None:
+        f = self._zwo_preview_fields
+        roi = f.get("roi")
+        painted = self._feed.painted_rect()
+        if not roi or not f.get("width") or not f.get("height") or painted.isEmpty():
+            return
+        sx, sy, sw, sh = view_rect_to_sensor_roi(
+            (x, y, w, h),
+            (painted.x(), painted.y(), painted.width(), painted.height()),
+            (int(f["width"]), int(f["height"])), roi)
+        if sw > 0 and sh > 0:
+            self._recorder.set_zwo_settings(
+                roi={"x": sx, "y": sy, "width": sw, "height": sh})
 
     # ---- Camera control ----------------------------------------------------
 
     def _toggle_camera(self):
-        if self._camera.is_open():
+        if self._is_zwo():
+            self._toggle_zwo_camera()
+        elif self._camera.is_open():
             self._camera.close()
         else:
             idx    = self._combo_cam.currentData()
@@ -304,8 +374,13 @@ class CameraTab(QWidget):
         self._combo_cam.setEnabled(True)
         self._render()
 
+    def _draw_zwo_preview(self, image):
+        self._feed.set_frame(image)
+        if self._fullscreen_win is not None:
+            self._fullscreen_win.set_frame(image)
+
     def _on_preview_frame(self, frame):
-        if not self.isVisible():
+        if not self.isVisible() or self._is_zwo():
             return
         try:
             import cv2 as _cv2
@@ -427,19 +502,26 @@ class CameraTab(QWidget):
         else:
             self._combo_quality.setToolTip("")
 
+        zwo = self._render_kind(st)
+        self._feed.set_rect_drawing(
+            zwo and bool(st.get("zwo_open", False))
+            and not st.get("zwo_recording", False))
+        cam_open = st.get("zwo_open", False) if zwo else self._camera.is_open()
+
         # Video button: enabled only while session recording and camera is open.
         if not rec:
             self._btn_video.setEnabled(False)
             self._btn_video.setToolTip("Start a session first")
             self._btn_video.setText("Start Video")
-        elif not self._camera.is_open():
+        elif not cam_open:
             self._btn_video.setEnabled(False)
             self._btn_video.setToolTip("Open the camera first")
             self._btn_video.setText("Start Video")
         else:
             self._btn_video.setEnabled(True)
             self._btn_video.setToolTip("")
-            self._btn_video.setText("Stop Video" if video_active else "Start Video")
+            running = st.get("zwo_recording", False) if zwo else video_active
+            self._btn_video.setText("Stop Video" if running else "Start Video")
 
         if rec:
             elapsed = st["elapsed_s"]
@@ -462,5 +544,5 @@ class CameraTab(QWidget):
             self._lbl_status.setStyleSheet(
                 f"color: {theme.NEUTRAL}; font-size: {theme.FS_CAPTION}px;")
 
-        self._btn_photo.setEnabled(self._camera.is_open())
+        self._btn_photo.setEnabled(cam_open)
         self._btn_note.setEnabled(rec)

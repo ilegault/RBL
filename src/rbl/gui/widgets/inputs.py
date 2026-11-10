@@ -61,6 +61,7 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QHBoxLayout,
     QLabel,
+    QSlider,
     QSpinBox,
     QWidget,
 )
@@ -101,6 +102,23 @@ class NoScrollSpinBox(QSpinBox):
     Keyboard tracking stays ON here, unlike QuietDoubleSpinBox: these are
     small integers with no sub-unit prefix, so no partially-typed value is
     a valid-but-wrong number the way "0" is for "0.514".
+    """
+
+    def wheelEvent(self, event):
+        # ignore(), not accept() — see NoScrollComboBox.
+        event.ignore()
+
+
+class NoScrollSlider(QSlider):
+    """A QSlider that cannot be changed with the mouse wheel.
+
+    Qt's default steps a slider on mouse wheel events, focused or not.
+    The brightness slider sits in a scrolling tab, so scrolling past it
+    would silently alter the preview brightness if wheel events were
+    accepted.
+
+    Moving the slider remains a deliberate drag or click gesture, and the
+    wheel is left to do the one thing it should do over a long tab: scroll it.
     """
 
     def wheelEvent(self, event):

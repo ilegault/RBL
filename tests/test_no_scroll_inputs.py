@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 
 from rbl.gui.widgets.inputs import (
     NoScrollComboBox,
+    NoScrollSlider,
     NoScrollSpinBox,
     QuietDoubleSpinBox,
 )
@@ -163,6 +164,21 @@ class TestNoScrollSpinBox:
         spn.setValue(4)
         spn.stepUp()
         assert spn.value() == 5
+
+
+class TestNoScrollSlider:
+    def test_no_scroll_slider_ignores_the_wheel(self, qapp):
+        """A NoScrollSlider at value 100 receiving a QWheelEvent keeps value 100,
+        emits no valueChanged, and leaves the event not accepted."""
+        slider = NoScrollSlider()
+        slider.setRange(0, 200)
+        slider.setValue(100)
+        seen = []
+        slider.valueChanged.connect(seen.append)
+        event = _wheel(slider, delta=+120)
+        assert slider.value() == 100
+        assert seen == []
+        assert not event.isAccepted()
 
 
 class TestEveryDropdownInTheApp:
