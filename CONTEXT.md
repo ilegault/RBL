@@ -341,6 +341,11 @@ excluded.
 log into a new session's. Offered at every session start, with no time limit, because an
 irradiation can span more than one session.
 
+**Compact mode** — the Overview's Session Recorder showing only what a run needs:
+open/close the camera, the Preview, start/stop the session, take a photo, add a note,
+and the status line. It changes what is shown, never what is recorded, and is off each
+time the application opens.
+
 ---
 
 ## Camera
@@ -375,7 +380,16 @@ confirmed position only; the upstream cups are manual and unrecorded, so whether
 reached the target cannot be read from the frame log alone.
 
 **Region of interest (ROI)** — the rectangle of the sensor the ZWO camera reads out and
-records. Everything outside it is never captured.
+records. Everything outside it is never captured. It cannot be changed while the ZWO
+camera is recording video; every ROI control is disabled then.
+
+**Draft ROI** — the rectangle drawn over the Preview on the Camera tab that is not yet
+the ROI. It can be held to an aspect ratio, moved and resized; nothing the camera
+records changes until the operator applies it. Discarding it changes nothing.
+
+**Last ROI** — the most recent ROI, other than the full sensor, that the camera
+confirmed. It is remembered across launches; **Back to ROI** restores it exactly, and at
+the full sensor it is shown as the Draft ROI.
 
 **Preview** — the small, slow, brightness-stretched picture of the ZWO camera shown on
 screen. It is for watching only: it is never saved, and its brightness says nothing
