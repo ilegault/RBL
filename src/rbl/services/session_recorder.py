@@ -290,6 +290,8 @@ class SessionRecorder(QObject):
         if not self._capture.is_running():
             self._zwo_open_on_hello = True
             self._capture.start("zwo")
+        elif not self._capture.is_ready():
+            self._zwo_open_on_hello = True
         else:
             self._capture.open(0)
 

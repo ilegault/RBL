@@ -155,6 +155,10 @@ class CaptureClient(QObject):
             and self._proc.state() != QProcess.ProcessState.NotRunning
         )
 
+    def is_ready(self) -> bool:
+        """True when the child process is running and its initial hello message has arrived."""
+        return self.is_running() and self._got_hello
+
     def is_open(self) -> bool:
         return self._open and self.is_running()
 

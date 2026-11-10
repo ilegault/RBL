@@ -40,6 +40,7 @@ def recorder_and_widget(tmp_path, monkeypatch, qapp, capture_client):
 
     cam = CameraSource()
     capture_client.start("fake")
+    assert wait_until(lambda: capture_client.is_ready())
     rec = SessionRecorder(lambda: {"beamline_v": 1.0}, cam, capture=capture_client)
     rec.set_camera_kind("zwo")
 
