@@ -25,9 +25,11 @@ bench and only one of them gates anything.
 
 - [ ] Both DG1022Z function generators are connected and powered
 - [ ] The TDS 2012 oscilloscope is connected and powered
-- [ ] `scripts/verify_visa_bench.py` lists both function generators under the default
-      VISA backend
-- [ ] It lists the oscilloscope under the default VISA backend
+- [ ] `scripts/visa_probe.py` (run as `.venv\Scripts\python scripts\visa_probe.py`)
+      prints a `RESOURCE:` line for both function generators under the default VISA
+      backend. A `RESOURCE:` line is printed only when the instrument answered `*IDN?`;
+      `LISTED BUT DID NOT ANSWER` is a fail, because listing alone proves nothing
+- [ ] It prints a `RESOURCE:` line for the oscilloscope under the default VISA backend
 - [ ] Each answers `*IDN?` with its expected identification string
 - [ ] The two function generator serial numbers are recorded in Comments — the
       application distinguishes the pair by serial and never by hardcoded resource
