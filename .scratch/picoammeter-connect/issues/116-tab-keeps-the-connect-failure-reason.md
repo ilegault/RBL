@@ -1,6 +1,6 @@
 # 116: The Faraday Cup tab keeps showing why the picoammeter is not connected
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
