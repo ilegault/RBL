@@ -1,0 +1,37 @@
+# ticket-engine configuration for this repo.
+#
+# WHY THIS EXISTS
+# ---------------
+# Written by hand on 2026-11-10, NOT by `add-repo`. RBL is not wired to the
+# engine: it is not in engine-repos.toml, the box never touches it, and its own
+# tests.yml (Windows) still decides merges. This file exists so agents working
+# RBL tickets locally follow the engine's rules: the implement-ticket-parallel
+# skill treats any repo with this file as an engine repo (claim check, named
+# tests, the full gate list, the local integrity gate before pushing), and the
+# engine's integrity runner reads its settings from here.
+#
+# Full wiring is ticket-engine ticket 15 (.scratch/phase-1/issues/15-*.md).
+# Note there: because this file exists, `add-repo` plans an upgrade PR instead
+# of the adopt PR.
+
+default_branch = "master"
+python_version = "3.14"
+install = "pip install -r requirements-dev.txt"
+jules_enabled = false
+
+# Folders holding the code under test, and the tests (scripts/check_tests_first.py
+# reads source_paths too).
+source_paths = ["src"]
+test_paths = ["tests"]
+
+# The same four checks .github/workflows/tests.yml runs, in its order.
+gate_commands = [
+    "ruff check .",
+    "python scripts/check_tests_first.py",
+    "python tools/type_gate.py",
+    "pytest --tb=short -q -n auto --dist loadfile",
+]
+
+# Environment the test suite needs, mirroring tests.yml.
+[test_env]
+QT_QPA_PLATFORM = "offscreen"
