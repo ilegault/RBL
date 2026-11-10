@@ -1,10 +1,10 @@
 """
 Tests for Faraday cup status decoding from raw FIO_STATE integers.
 
-ADR 0003 & Ticket 02:
+ADR 0003 & Ticket 02 & Ticket 113:
 Status decoding is a pure function in rbl/hardware/ with no Qt or LabJack imports.
-A closed status contact pulls the FIO line to ground (bit value 0).
-Closed is zero. The decoding function inverts.
+A status line reads 1 when its condition is asserted (bench, 2026-11-10, cup IN in AUTO:
+FIO2 = 1, FIO3 = 0, FIO4 = 1).
 """
 import sys
 
@@ -15,6 +15,7 @@ from rbl.config.cup_config import (
     CUP_ENABLE_LINE,
     CUP_MOVE_CONFIRMATION_TIMEOUT_S,
     CUP_RELEASE_INTERVAL_S,
+    CUP_STATUS_ASSERTED_LEVEL,
     CUP_STATUS_BIT_AUTO,
     CUP_STATUS_BIT_IN,
     CUP_STATUS_BIT_OUT,
@@ -31,6 +32,7 @@ class TestCupStatusConfig:
         assert CUP_STATUS_BIT_IN == 2
         assert CUP_STATUS_BIT_OUT == 3
         assert CUP_STATUS_BIT_AUTO == 4
+        assert CUP_STATUS_ASSERTED_LEVEL == 1
 
     def test_timing_constants(self):
         assert CUP_MOVE_CONFIRMATION_TIMEOUT_S == 2.0
@@ -47,34 +49,26 @@ class TestCupStatusPureDecodes:
 
     def _make_word(
         self,
-        in_contact_closed: bool,
-        out_contact_closed: bool,
-        auto_closed: bool,
+        in_asserted: bool,
+        out_asserted: bool,
+        auto_asserted: bool,
     ) -> int:
-        """Helper building an FIO_STATE word where closed == 0 and open == 1."""
-        word = 0xFFFF
-        if in_contact_closed:
-            word &= ~(1 << CUP_STATUS_BIT_IN)
-        else:
+        """Helper building an FIO_STATE word where asserted == 1 and non-asserted == 0."""
+        word = 0x0000
+        if in_asserted:
             word |= (1 << CUP_STATUS_BIT_IN)
-
-        if out_contact_closed:
-            word &= ~(1 << CUP_STATUS_BIT_OUT)
-        else:
+        if out_asserted:
             word |= (1 << CUP_STATUS_BIT_OUT)
-
-        if auto_closed:
-            word &= ~(1 << CUP_STATUS_BIT_AUTO)
-        else:
+        if auto_asserted:
             word |= (1 << CUP_STATUS_BIT_AUTO)
         return word
 
     def test_decode_cup_in(self):
-        # IN contact closed (0), OUT open (1), AUTO closed (0)
+        # IN asserted (1), OUT not asserted (0), AUTO asserted (1)
         word = self._make_word(
-            in_contact_closed=True,
-            out_contact_closed=False,
-            auto_closed=True,
+            in_asserted=True,
+            out_asserted=False,
+            auto_asserted=True,
         )
         status = decode_cup_status(word)
         assert isinstance(status, CupStatus)
@@ -82,84 +76,92 @@ class TestCupStatusPureDecodes:
         assert status.auto_mode is True
 
     def test_decode_cup_out(self):
-        # IN open (1), OUT closed (0), AUTO closed (0)
+        # IN not asserted (0), OUT asserted (1), AUTO asserted (1)
         word = self._make_word(
-            in_contact_closed=False,
-            out_contact_closed=True,
-            auto_closed=True,
+            in_asserted=False,
+            out_asserted=True,
+            auto_asserted=True,
         )
         status = decode_cup_status(word)
         assert status.position == CupPosition.OUT
         assert status.auto_mode is True
 
     def test_decode_in_transit_neither_asserted(self):
-        # IN open (1), OUT open (1), AUTO closed (0)
+        # IN not asserted (0), OUT not asserted (0), AUTO asserted (1)
         word = self._make_word(
-            in_contact_closed=False,
-            out_contact_closed=False,
-            auto_closed=True,
+            in_asserted=False,
+            out_asserted=False,
+            auto_asserted=True,
         )
         status = decode_cup_status(word)
         assert status.position == CupPosition.IN_TRANSIT
         assert status.auto_mode is True
 
     def test_decode_indeterminate_both_asserted(self):
-        # IN closed (0), OUT closed (0), AUTO closed (0)
+        # IN asserted (1), OUT asserted (1), AUTO asserted (1)
         word = self._make_word(
-            in_contact_closed=True,
-            out_contact_closed=True,
-            auto_closed=True,
+            in_asserted=True,
+            out_asserted=True,
+            auto_asserted=True,
         )
         status = decode_cup_status(word)
         assert status.position == CupPosition.INDETERMINATE
         assert status.auto_mode is True
 
     def test_decode_auto_asserted_and_not_asserted(self):
-        # AUTO asserted (contact closed -> bit 4 is 0)
+        # AUTO asserted (bit 4 is 1)
         word_auto = self._make_word(
-            in_contact_closed=True,
-            out_contact_closed=False,
-            auto_closed=True,
+            in_asserted=True,
+            out_asserted=False,
+            auto_asserted=True,
         )
         assert decode_cup_status(word_auto).auto_mode is True
 
-        # AUTO not asserted (contact open -> bit 4 is 1)
+        # AUTO not asserted (bit 4 is 0)
         word_manual = self._make_word(
-            in_contact_closed=True,
-            out_contact_closed=False,
-            auto_closed=False,
+            in_asserted=True,
+            out_asserted=False,
+            auto_asserted=False,
         )
         assert decode_cup_status(word_manual).auto_mode is False
 
-    def test_explicit_closed_contact_is_zero_inversion(self):
-        """Explicitly test the polarity rule: closed contact pulls to GND (bit value 0)."""
-        # FIO2=0, FIO3=1, FIO4=0 -> IN=True, OUT=False, AUTO=True
-        raw_int = (1 << CUP_STATUS_BIT_OUT)  # Only OUT bit is 1; IN and AUTO bits are 0
-        status = decode_cup_status(raw_int)
-        assert status.position == CupPosition.IN
-        assert status.auto_mode is True
-
-        # FIO2=1, FIO3=0, FIO4=1 -> IN=False, OUT=True, AUTO=False
-        raw_int2 = (1 << CUP_STATUS_BIT_IN) | (1 << CUP_STATUS_BIT_AUTO)  # IN and AUTO bits are 1
-        status2 = decode_cup_status(raw_int2)
-        assert status2.position == CupPosition.OUT
-        assert status2.auto_mode is False
-
-    def test_all_ones_word_returns_in_transit_and_auto_false(self):
-        """An all-ones word (all contacts open) must decode as IN_TRANSIT and auto_mode False."""
-        all_ones = 0xFFFF
-        status = decode_cup_status(all_ones)
-        assert status.position == CupPosition.IN_TRANSIT
+    def test_asserted_level_constant_controls_the_decode(self, monkeypatch):
+        """Monkeypatching CUP_STATUS_ASSERTED_LEVEL to 0 inverts the decode."""
+        monkeypatch.setattr("rbl.hardware.cup_status.CUP_STATUS_ASSERTED_LEVEL", 0)
+        status = decode_cup_status(20)
+        assert status.position == CupPosition.OUT
         assert status.auto_mode is False
-        assert status.position != CupPosition.IN
-        assert status.position != CupPosition.OUT
+
+    def test_bench_word_cup_in_auto_decodes_in_and_auto(self):
+        """Bench word 20 (0b10100: FIO2=1, FIO3=0, FIO4=1) decodes to IN and auto_mode True."""
+        status = decode_cup_status(20)
+        assert status == CupStatus(CupPosition.IN, True)
+
+    def test_hardware_words_decode_per_line(self):
+        """Hardware words decode correctly across individual lines and combinations."""
+        cases = [
+            (24, CupPosition.OUT, True),
+            (16, CupPosition.IN_TRANSIT, True),
+            (28, CupPosition.INDETERMINATE, True),
+            (4, CupPosition.IN, False),
+            (0, CupPosition.IN_TRANSIT, False),
+            (0xFFE3, CupPosition.IN_TRANSIT, False),
+        ]
+        for word, expected_pos, expected_auto in cases:
+            status = decode_cup_status(word)
+            assert status.position == expected_pos, (
+                f"Failed position for word {word} (0b{word:b})"
+            )
+            assert status.auto_mode is expected_auto, (
+                f"Failed auto_mode for word {word} (0b{word:b})"
+            )
 
     def test_unpacking_as_tuple(self):
         """CupStatus namedtuple can be unpacked into (position, auto_mode)."""
         word = self._make_word(
-            in_contact_closed=True,
-            out_contact_closed=False,
-            auto_closed=True,
+            in_asserted=True,
+            out_asserted=False,
+            auto_asserted=True,
         )
         pos, auto = decode_cup_status(word)
         assert pos == CupPosition.IN

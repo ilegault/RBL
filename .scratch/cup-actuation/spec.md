@@ -207,9 +207,10 @@ outputs cannot drive directly.
 
 Polarity, stated once because it is where this kind of work goes wrong: LJTRD
 output-high closes its switch, which pulls the relay board's active-low input down,
-which energises the relay. A status contact that is **closed** pulls its FIO line to
-ground and therefore reads as bit value **0**. Closed is zero. The decoding function
-inverts.
+which energises the relay. A status line reads 1 when its condition is asserted
+(bench, 2026-11-10, cup IN in AUTO: FIO2 = 1, FIO3 = 0, FIO4 = 1); the level is
+`CUP_STATUS_ASSERTED_LEVEL`. A disconnected status cable floats all three lines high
+on the T7's pull-ups and so reads INDETERMINATE with AUTO asserted.
 
 ### Fail-safe: the cup fails IN
 

@@ -575,11 +575,11 @@ class TestFaradayCupTabLivePlot:
         assert not tab.plot.redraw_timer.isActive()
 
 
-RAW_STATUS_IN = 1 << 3   # Bit 3 (OUT) open, Bit 2 (IN) closed (0), Bit 4 (AUTO) closed (0)
-RAW_STATUS_OUT = 1 << 2  # Bit 2 (IN) open, Bit 3 (OUT) closed (0), Bit 4 (AUTO) closed (0)
-RAW_STATUS_TRANSIT = (1 << 2) | (1 << 3)  # Both open (1), neither asserted
-RAW_STATUS_INDETERMINATE = 0  # Both closed (0), both asserted (fault)
-RAW_STATUS_NOT_AUTO = (1 << 3) | (1 << 4)  # IN closed (0), AUTO open (1)
+RAW_STATUS_IN = 20  # 0b10100: FIO2 (IN) = 1, FIO3 (OUT) = 0, FIO4 (AUTO) = 1
+RAW_STATUS_OUT = 24  # 0b11000: FIO2 (IN) = 0, FIO3 (OUT) = 1, FIO4 (AUTO) = 1
+RAW_STATUS_TRANSIT = 16  # 0b10000: FIO2 (IN) = 0, FIO3 (OUT) = 0, FIO4 (AUTO) = 1
+RAW_STATUS_INDETERMINATE = 28  # 0b11100: FIO2 (IN) = 1, FIO3 (OUT) = 1, FIO4 (AUTO) = 1
+RAW_STATUS_NOT_AUTO = 4  # 0b00100: FIO2 (IN) = 1, FIO3 (OUT) = 0, FIO4 (AUTO) = 0
 
 
 class TestFaradayCupActuationUI:
