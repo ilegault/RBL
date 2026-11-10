@@ -469,11 +469,110 @@ someone else's bug fix smuggled into it cannot be reviewed.
 <!-- ACTIVE-PLAN:START -->
 ## Active implementation plan
 
-_Written by the planning model on 2026-11-10 06:33. Implement this. If something in it is wrong, say so before changing course._
+_Written by the planning model on 2026-11-10 19:17. Implement this. If something in it is wrong, say so before changing course._
 
-# Active work: tests-first gate fix (105, ready for an agent), plus the work below
+# Active work: Faraday cup status polarity and interlock name (set 11, new), axis offset and Vpp (set 10), tests-first gate fix (105), plus the work below
 
 This is a pointer, not the work.
+
+## Set 11 (new): cup status lines read 1 when asserted; FIO0 is the interlock line
+
+- **Spec:** `.scratch/cup-actuation/spec.md` (the tickets correct its polarity paragraph
+  and its "enable" wording).
+- **Binding:** `docs/adr/0003-commanded-and-confirmed-cup-position.md`,
+  `docs/adr/0001-tests-first-and-no-muted-failures.md`.
+- **Glossary (new in `CONTEXT.md`, edited by the planner, committed by the developer, no
+  ticket):** **Interlock** and **Asserted**; the **AUTO mode** entry gains that LOCAL still
+  needs the interlock closed. The name "enable" for FIO0 is retired.
+- **Tickets:** `.scratch/cup-actuation/issues/113-status-lines-read-1-when-asserted.md`,
+  `.scratch/cup-actuation/issues/114-fio0-is-the-interlock-line.md`. Both agent tickets,
+  both `Auto-merge: yes`. No bench ticket in this set.
+- **Evidence:** the 2026-11-10 comment on bench ticket 12 (Kipling, cup IN in AUTO:
+  FIO2 = 1, FIO3 = 0, FIO4 = 1). Ticket 12 is `ready-for-developer` and is not edited.
+- **Tracker conventions:** `docs/agents/issue-tracker.md`
+
+### Next
+
+- **113** is unblocked: start with it. It is the visible bug (the tab reports confirmed
+  OUT with the cup IN). Then **114**, which is blocked by 113 only because both edit
+  `cup_config.py`, `tests/test_cup_status.py` and `tests/test_cup_actuation.py`.
+- Set 11 touches only cup files and may run in parallel with set 10 and set 7.
+
+### Dependency order
+
+```
+113 ── 114
+```
+
+### Requirements that are not preferences
+
+- The polarity lives in `CUP_STATUS_ASSERTED_LEVEL` in `cup_config.py`, and
+  `decode_cup_status()` reads it at call time (no default argument, no import-time mask),
+  so the monkeypatch test can prove the constant is used.
+- The new decode tests use integer literals from the real hardware (20 = cup IN in AUTO),
+  never words built from the bit constants: a word derived from the rule under test cannot
+  catch the rule being wrong.
+- Only the two tests on 113's `Deletes tests:` line are removed; everything else is
+  rewritten in place under its existing name. If a tab or Beamline test fails after the
+  fixture words change, fix `src/`, not the assertion.
+- 114 is a rename with no behaviour change: the old names do not survive as aliases.
+
+### Not in this set
+
+A UI to change the status mapping or polarity (the developer chose a config constant);
+moving any line to another FIO; any change to when FIO0 or FIO1 is driven; ADR 0003's
+wording; ticket 12's checklist.
+
+---
+
+## Set 10 (new): axis offset on the Overview, amplitude in Vpp everywhere, Send to drive
+
+- **Spec:** `.scratch/axis-offset-and-vpp/spec.md`
+- **Binding:** `docs/adr/0001-tests-first-and-no-muted-failures.md`. The ±5 V interlock is
+  load-bearing (AGENTS.md §7).
+- **Glossary (new in `CONTEXT.md`, committed with the spec, no ticket):** a **Raster drive**
+  section with **Amplitude**, **Offset**, **Linked pair** / **unlinked pair** and **Input peak**,
+  plus a Known collisions entry: "Peak" means three things.
+- **Tickets:** `.scratch/axis-offset-and-vpp/issues/106...112`. 112 is `ready-for-developer`
+  (bench): an agent must not claim it.
+- **Tracker conventions:** `docs/agents/issue-tracker.md`
+
+### Next
+
+- **106**, **107** and **109** are unblocked and touch different files, so they can run in
+  parallel. Start with **109** (the setpoint model): 110 and 111 both wait on it.
+- **108** after 106 (both edit `funcgen_tab.py`). **110** after 107 and 109. **111** after 109.
+- Then **112** (developer, bench).
+
+### Dependency order
+
+```
+106 ── 108 ──────────────┐
+107 ─┐                   │
+109 ─┴─ 110 ─────────────┼─ 112 (developer, bench)
+109 ─── 111 ─────────────┘
+```
+
+### Requirements that are not preferences
+
+- `Beamline.set_channel` and `Beamline.apply_all_channels` (`src/rbl/state/funcgen_control.py`)
+  are not edited. Greying Apply is a front-end courtesy; Beamline stays the backstop.
+- The link flag lives in `FuncGenSetpoints` (non-GUI) so it is testable without widgets,
+  and is never saved. `update_axis` drops `offset_v`.
+- Every greying decision calls `over_limit_channels` in `funcgen_safety.py`. No widget
+  repeats the 5 V comparison.
+- Send to drive never sends a hardware command and never changes `output_on`.
+- Planner text and the Send-to-drive enable rule are pure functions, tested with plain dicts.
+- The peak-volt test in `tests/test_overview_tab.py` is rewritten in place under its own
+  name; no test is deleted.
+
+### Not in this set
+
+Saving setpoints or link state; per-plate amplitude or frequency on the Overview; the warn
+threshold; the HV pressure interlock; the Overview amplifier bars; the planner's kV physics
+lines; applying to hardware from the planner.
+
+---
 
 ## Tests-first gate fix (new)
 

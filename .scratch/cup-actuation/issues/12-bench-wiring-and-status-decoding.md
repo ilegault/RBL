@@ -122,3 +122,24 @@ joins the controller's ground to the LabJack's.
   rows in the session file.
 - Record the wire colours, and the readings of 10/11/12 to pin 8 and to chassis with the
   controller off.
+
+### 2026-11-10 status polarity is inverted (developer, recorded by planner)
+
+**This supersedes the 11-08 line "A closed contact reads 0, matching the decode
+function's inversion".**
+
+- Symptom: cup commanded IN and seen IN at the beamline, but the app reports confirmed OUT.
+  Commanded insertion and retraction themselves are correct.
+- Kipling, controller in AUTO, cup physically IN: **FIO2 = 1, FIO3 = 0, FIO4 = 1.**
+- So all three status lines read **1 when asserted**: IN high = in, OUT high = out,
+  AUTO high = AUTO. The pin mapping (FIO2 IN, FIO3 OUT, FIO4 AUTO) is right. The
+  inversion in `decode_cup_status()` is wrong. IN and OUT are not swapped; a swap
+  would have left FIO4 reading 0 in AUTO.
+- Decided: fix it in software (drop the inversion), not at the wiring.
+- Interlock (P1 5–13, FIO0): seen on hardware that with the interlock open the
+  front-panel buttons cannot move the cup OUT, even in LOCAL. FIO0 is renamed from
+  "enable" to "interlock" (CONTEXT.md updated).
+- Consequence for the remaining hand-move check: after the fix, mid-travel should
+  read FIO2 = 0 and FIO3 = 0 (in transit). A disconnected status cable floats all
+  three lines to 1 on the T7's pull-ups, which will now read as indeterminate (a
+  fault) with AUTO asserted.
