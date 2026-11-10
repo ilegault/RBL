@@ -1,6 +1,6 @@
 # 118: visa_probe skips serial ports and stops implying it tests the scope
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
