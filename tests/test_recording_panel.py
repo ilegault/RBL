@@ -477,3 +477,93 @@ def test_rows_are_packed(zwo_rig, qapp):
     _same_row(combo_fmt, combo_master)
     _same_row(combo_quality, combo_seg)
 
+
+# ---- Compact mode (ticket 90) -----------------------------------------------
+
+
+@pytest.mark.parametrize("kind", ["usb", "zwo"])
+def test_compact_mode_shows_only_run_controls(zwo_rig, kind):
+    rec, cam, _ = zwo_rig
+    view = _make_view("panel", rec, cam)
+    view.show()
+    if kind == "zwo":
+        view.combo_camera_kind.setCurrentIndex(1)
+    view.btn_compact.setChecked(True)
+    assert not any(w.isVisibleTo(view) for w in view.compact_hidden_widgets)
+    for w in view.compact_shown_widgets:
+        if w is view.lbl_preview_caption:
+            assert w.isVisibleTo(view) == (kind == "zwo")
+        else:
+            assert w.isVisibleTo(view)
+
+
+def test_compact_mode_survives_state_updates(zwo_rig):
+    rec, cam, _ = zwo_rig
+    view = _make_view("panel", rec, cam)
+    view.show()
+    view.combo_camera_kind.setCurrentIndex(1)
+    view.btn_compact.setChecked(True)
+    rec.state_changed.emit()
+    rec.settings_changed.emit()
+    assert not view.zwo_controls.isVisibleTo(view)
+    assert not view.combo_camera_kind.isVisibleTo(view)
+
+
+@pytest.mark.parametrize("kind", ["usb", "zwo"])
+def test_leaving_compact_restores_the_kind_rows(zwo_rig, kind):
+    rec, cam, _ = zwo_rig
+    view = _make_view("panel", rec, cam)
+    view.show()
+    if kind == "zwo":
+        view.combo_camera_kind.setCurrentIndex(1)
+    usb_vis_before = [w.isVisibleTo(view) for w in view.usb_only_widgets]
+    zwo_vis_before = view.zwo_controls.isVisibleTo(view)
+    caption_vis_before = view.lbl_preview_caption.isVisibleTo(view)
+
+    view.btn_compact.setChecked(True)
+    view.btn_compact.setChecked(False)
+
+    assert [w.isVisibleTo(view) for w in view.usb_only_widgets] == usb_vis_before
+    assert view.zwo_controls.isVisibleTo(view) == zwo_vis_before
+    assert view.lbl_preview_caption.isVisibleTo(view) == caption_vis_before
+
+
+def test_compact_starts_off(zwo_rig):
+    rec, cam, _ = zwo_rig
+    view = _make_view("panel", rec, cam)
+    view.show()
+    assert view.btn_compact.isChecked() is False
+    assert all(w.isVisibleTo(view) for w in view.usb_only_widgets)
+    assert not view.zwo_controls.isVisibleTo(view)
+
+    view.combo_camera_kind.setCurrentIndex(1)
+    assert view.btn_compact.isChecked() is False
+    assert not any(w.isVisibleTo(view) for w in view.usb_only_widgets)
+    assert view.zwo_controls.isVisibleTo(view)
+
+
+def test_compact_buttons_still_act(zwo_rig):
+    rec, cam, _ = zwo_rig
+    view = _make_view("panel", rec, cam)
+    view.show()
+    view.combo_camera_kind.setCurrentIndex(1)
+    rec.connect_zwo()
+    assert wait_until(lambda: rec.state()["zwo_open"], 10.0)
+
+    view.btn_compact.setChecked(True)
+
+    btn_session = [b for b in view.findChildren(QPushButton) if "SESSION" in b.text()][0]
+    btn_photo = [b for b in view.findChildren(QPushButton) if "Photo" in b.text()][0]
+
+    btn_session.click()
+    assert wait_until(lambda: rec.state()["recording"] is True, 10.0)
+
+    photo_emitted = []
+    rec.photo_taken.connect(lambda path: photo_emitted.append(path))
+    btn_photo.click()
+    assert wait_until(lambda: len(photo_emitted) > 0, 10.0)
+
+    rec.stop()
+    rec.disconnect_zwo()
+
+

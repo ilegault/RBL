@@ -35,6 +35,13 @@ picker, Open button and resolution label. USB rows pack into three rows:
 (Res/Acquire/Record), (Format/Master), (MP4 copy/Segment). VideoView height follows
 width capped at 16:9 with stretch=0. CSV every shares a row with START SESSION.
 Start Video joins the action buttons row. Spare height goes below the panel.
+
+Compact mode (ticket 90): A checkable "Compact" button on row 1 collapses the
+panel to just run controls during an acquisition, hiding settings and non-run
+actions while keeping Open/Close, resolution, preview, START/STOP SESSION,
+status, Take Photo, and Add Note. Compact visibility is applied last in
+_render() so it survives state and settings updates. Starts unchecked and is
+never saved.
 """
 import importlib.util
 import os
@@ -114,6 +121,13 @@ class RecordingPanel(CameraKindMixin, QGroupBox):
             f"color: {theme.NEUTRAL}; font-size: {theme.FS_CAPTION}px;")
         kind_row.addWidget(self._lbl_res)
         kind_row.addStretch(1)
+
+        self.btn_compact = QPushButton("Compact")
+        self.btn_compact.setCheckable(True)
+        self.btn_compact.setChecked(False)
+        self.btn_compact.toggled.connect(self._on_compact_toggled)
+        kind_row.addWidget(self.btn_compact)
+
         lay.addLayout(kind_row)
 
         # ---- USB row 1: Res / Acquire / Record -----------------------------
@@ -231,7 +245,8 @@ class RecordingPanel(CameraKindMixin, QGroupBox):
         # ---- CSV / Session row ---------------------------------------------
         s_sess = QHBoxLayout()
         s_sess.setSpacing(4)
-        s_sess.addWidget(QLabel("CSV every:"))
+        lbl_csv = QLabel("CSV every:")
+        s_sess.addWidget(lbl_csv)
         self._spin_csv = QSpinBox()
         self._spin_csv.setRange(CSV_INTERVAL_MIN_S, CSV_INTERVAL_MAX_S)
         self._spin_csv.setValue(self._recorder._csv_interval_s)
@@ -293,6 +308,30 @@ class RecordingPanel(CameraKindMixin, QGroupBox):
             lbl_master, self._combo_master,
             lbl_mp4, self._combo_quality,
             lbl_seg, self._combo_seg,
+        ]
+
+        self.compact_hidden_widgets = [
+            self.lbl_camera_kind,
+            self.combo_camera_kind,
+            *self.usb_only_widgets,
+            self.zwo_controls,
+            lbl_csv,
+            self._spin_csv,
+            self._lbl_stats,
+            self._btn_video,
+            self._btn_folder,
+        ]
+
+        self.compact_shown_widgets = [
+            self._btn_open,
+            self._lbl_res,
+            self.btn_compact,
+            self._feed,
+            self.lbl_preview_caption,
+            self._btn_session,
+            self._lbl_status,
+            self._btn_photo,
+            self._btn_note,
         ]
 
     # ---- Signal wiring -----------------------------------------------------
@@ -440,6 +479,9 @@ class RecordingPanel(CameraKindMixin, QGroupBox):
     def _take_photo(self):
         self._recorder.take_photo()
 
+    def _on_compact_toggled(self, _checked: bool = False):
+        self._render()
+
     def _add_note(self):
         text, ok = QInputDialog.getText(self, "Add Note", "Note:")
         if ok and text:
@@ -447,7 +489,7 @@ class RecordingPanel(CameraKindMixin, QGroupBox):
 
     # ---- Rendering ---------------------------------------------------------
 
-    def _render(self):
+    def _render(self, *_args):
         st = self._recorder.state()
         rec = st["recording"]
         video_active = st.get("video_active", False)
@@ -542,3 +584,12 @@ class RecordingPanel(CameraKindMixin, QGroupBox):
 
         self._btn_photo.setEnabled(cam_open)
         self._btn_note.setEnabled(rec)
+
+        # Compact mode (ticket 90): applied last so it survives state changes.
+        if self.btn_compact.isChecked():
+            for w in self.compact_hidden_widgets:
+                w.setVisible(False)
+        else:
+            for w in self.compact_hidden_widgets:
+                if w not in self.usb_only_widgets and w is not self.zwo_controls:
+                    w.setVisible(True)
