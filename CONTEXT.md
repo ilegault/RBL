@@ -215,7 +215,19 @@ favour of one.
 
 **AUTO mode** — the controller state in which it honours remote commands. In LOCAL it
 accepts a contact closure and does nothing, so the application reads the AUTO status
-contact and does not assume it.
+contact and does not assume it. LOCAL is not free of the application: the front-panel
+buttons still move the cup only while the **interlock** is closed.
+
+**Interlock** — the loop across the controller's remote connector (P1 5–13) that must
+be closed before the cup can go OUT by any route: a remote command in AUTO, or the
+front-panel buttons in LOCAL. The controller manual's name for it. Cup OUT needs the
+interlock closed *and* the OUT command closed; anything else leaves the cup IN. Not
+an "enable" — that name is retired. Distinct from the vacuum HV interlock, which
+gates high voltage and has nothing to do with the cup.
+
+**Asserted** — a status contact reporting its condition true (cup IN, cup OUT, or
+AUTO). Say *asserted*, not *closed*: which way the contact moves when its condition
+is true is a wiring fact the bench establishes, and it was once assumed wrong.
 
 **Sampling insertion** — a short, commanded insertion whose purpose is to measure the
 transmitted current once, not to irradiate anything. Seconds, not minutes. The thing
