@@ -1,6 +1,6 @@
 # 93: Camera tab: Draft ROI with aspect presets, Apply and Discard
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 

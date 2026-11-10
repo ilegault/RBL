@@ -242,10 +242,125 @@ def test_drawing_a_rect_sets_the_roi(zwo_tab):
         1920, 1080)
     tab.video_view.rect_drawn.emit(*view)
 
+    # Drawing makes a Draft; the confirmed ROI is untouched until Apply ROI.
+    wait_until(lambda: False, 0.5)
+    assert rec.state()["zwo_settings"]["roi"]["width"] == 1920
+    assert tab.video_view.draft_fraction() is not None
+    assert tab.draft() is not None
+
+    tab.btn_apply_roi.click()
     assert wait_until(
         lambda: tuple(rec.state()["zwo_settings"]["roi"][k]
                       for k in ("x", "y", "width", "height")) == expected)
     assert 900 <= rec.state()["zwo_settings"]["roi"]["width"] <= 960
+    assert tab.draft() is None
+
+
+def _open_full_sensor(tab, rec):
+    """Open the fake camera at the full sensor with a painted Preview; returns the fields."""
+    from tests.qt_wait import wait_until
+
+    rec.connect_zwo()
+    assert wait_until(lambda: rec.state()["zwo_open"])
+    assert wait_until(lambda: bool(rec.state()["zwo_settings"]))
+    seen: dict = {}
+    rec.zwo_preview.connect(lambda _img, fields: seen.update(fields))
+    tab.zwo_controls.btn_full_sensor.click()
+    assert wait_until(
+        lambda: rec.state()["zwo_settings"].get("roi", {}).get("width") == 1920)
+
+    def _ready():
+        tab.grab()
+        return (not tab.video_view.painted_rect().isEmpty()
+                and seen.get("roi", {}).get("width") == 1920)
+    assert wait_until(_ready)
+    return seen
+
+
+def _draw_half(tab):
+    pr = tab.video_view.painted_rect()
+    tab.video_view.rect_drawn.emit(pr.x() + 20, pr.y() + 20,
+                                   pr.width() // 2, pr.height() // 2)
+
+
+def _confirmed_roi(rec):
+    r = rec.state()["zwo_settings"]["roi"]
+    return (r["x"], r["y"], r["width"], r["height"])
+
+
+def test_aspect_presets_shape_the_draft(zwo_tab):
+    tab, rec = zwo_tab
+    _open_full_sensor(tab, rec)
+
+    tab.combo_aspect.setCurrentIndex(tab.combo_aspect.findText("16:9"))
+    assert not tab.spin_aspect_w.isVisibleTo(tab)
+    _draw_half(tab)
+    x, y, w, h = tab.draft()
+    assert abs(w - h * 16 / 9) <= 1
+
+    cx, cy = x + w / 2, y + h / 2
+    tab.combo_aspect.setCurrentIndex(tab.combo_aspect.findText("1:1"))
+    x, y, w, h = tab.draft()
+    assert abs(w - h) <= 1
+    assert abs(x + w / 2 - cx) <= 1 and abs(y + h / 2 - cy) <= 1
+
+    tab.combo_aspect.setCurrentIndex(tab.combo_aspect.findText("Custom"))
+    assert tab.spin_aspect_w.isVisibleTo(tab) and tab.spin_aspect_h.isVisibleTo(tab)
+    tab.spin_aspect_w.setValue(2)
+    tab.spin_aspect_h.setValue(1)
+    x, y, w, h = tab.draft()
+    assert abs(w - 2 * h) <= 1
+
+    tab.combo_aspect.setCurrentIndex(tab.combo_aspect.findText("Free"))
+    assert not tab.spin_aspect_w.isVisibleTo(tab)
+
+
+def test_discard_and_escape_drop_the_draft(zwo_tab):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    tab, rec = zwo_tab
+    _open_full_sensor(tab, rec)
+    before = _confirmed_roi(rec)
+
+    for dismiss in (tab.btn_discard_roi.click,
+                    lambda: QTest.keyClick(tab, Qt.Key.Key_Escape)):
+        _draw_half(tab)
+        assert tab.draft() is not None
+        assert tab.btn_apply_roi.isEnabled()
+        dismiss()
+        assert tab.draft() is None
+        assert tab.video_view.draft_fraction() is None
+        assert not tab.btn_apply_roi.isEnabled()
+        assert _confirmed_roi(rec) == before
+
+
+def test_last_roi_becomes_the_draft_at_full_sensor(zwo_tab):
+    from tests.qt_wait import wait_until
+
+    tab, rec = zwo_tab
+    _open_full_sensor(tab, rec)
+    full = _confirmed_roi(rec)
+
+    rec.set_zwo_settings(roi={"x": 320, "y": 180, "width": 640, "height": 360})
+    assert wait_until(lambda: _confirmed_roi(rec) == (320, 180, 640, 360))
+    a = _confirmed_roi(rec)
+    rec.swap_zwo_roi()
+    assert wait_until(lambda: _confirmed_roi(rec) == full)
+    assert wait_until(lambda: tab.draft() == a)
+
+    tab.btn_apply_roi.click()
+    assert wait_until(lambda: _confirmed_roi(rec) == a)
+    assert tab.draft() is None
+
+    # Back to full sensor, then Discard: the Draft must not reappear.
+    rec.swap_zwo_roi()
+    assert wait_until(lambda: _confirmed_roi(rec) == full)
+    assert wait_until(lambda: tab.draft() == a)
+    tab.btn_discard_roi.click()
+    rec.state_changed.emit()
+    rec.state_changed.emit()
+    assert tab.draft() is None
 
 
 def test_drawing_is_off_while_recording(zwo_tab):
@@ -268,6 +383,25 @@ def test_drawing_is_off_while_recording(zwo_tab):
 
     rec.set_camera_kind("usb")
     assert not tab.video_view.rect_drawing_enabled()
+    rec.stop()
+
+
+def test_recording_clears_the_draft(zwo_tab):
+    from tests.qt_wait import wait_until
+
+    tab, rec = zwo_tab
+    _open_full_sensor(tab, rec)
+    _draw_half(tab)
+    assert tab.draft() is not None
+
+    rec.start()
+    assert rec.start_video()
+    assert wait_until(lambda: rec.state()["zwo_recording"])
+    assert tab.draft() is None
+    assert not tab.btn_apply_roi.isEnabled()
+
+    rec.stop_video()
+    assert wait_until(lambda: not rec.state()["zwo_recording"])
     rec.stop()
 
 
