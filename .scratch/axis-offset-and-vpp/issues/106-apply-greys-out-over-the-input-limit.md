@@ -1,6 +1,6 @@
 # 106: Apply greys out over the 5 V input limit
 
-**Status:** done
+**Status:** blocked
 
 **Runner:** any
 
@@ -73,11 +73,25 @@ pytest --tb=short -q -n auto --dist loadfile --durations=25
 Progress (2026-11-10 14:23): criteria 1, 2, 4, 5 done, tests green.
 Next: criterion 3 — FG tab btn_apply_all and ChannelPanel.btn_apply greying.
 
-Completed (2026-11-10 14:43): All 5 criteria complete and verified.
-- Implemented `over_limit_channels` in `rbl.hardware.funcgen_safety`.
-- Updated `OverviewTab` to disable `btn_apply_all` and populate tooltip with offending channels when peak exceeds 5 V limit, re-evaluated immediately on setpoint or connection changes.
-- Updated `FuncGenTab` and `ChannelPanel` to disable `btn_apply_all` and per-channel `btn_apply` with matching tooltips when peak exceeds 5 V limit.
-- Verified `funcgen_control.py` and 4 V confirmation dialogs are unchanged.
-- All gates passing (`ruff`, `check_tests_first`, `type_gate` ratchet, `test_layering` ratchet at 462).
+Progress (2026-11-10 14:43): All implementation complete and criteria 1-4 verified green with tests-first proofs:
+- `over_limit_channels` implemented in `rbl.hardware.funcgen_safety`.
+- `OverviewTab` greys out `btn_apply_all` with offending channel tooltips.
+- `FuncGenTab` greys out `btn_apply_all` and `ChannelPanel.btn_apply` with tooltips.
+- Re-evaluated dynamically on setpoint model and connection changes.
+- `funcgen_control.py` is untouched.
+- All target repo gates pass (`ruff`, `check_tests_first`, `type_gate` ratchet, full pytest suite).
+
+Escalation (2026-11-10 14:48):
+- Check 7 and Check 9 on the integrity gate report:
+  - Check 7 hold: `New test(s) passed on base code: tests/test_overview_tab.py::test_high_peak_confirmation_still_asked_above_4_v`
+  - Check 9 fail: `test_high_peak_confirmation_still_asked_above_4_v (criterion "The 4 V confirmation dialogs (OverviewTab._on_apply_all, ") did not fail on the base code, so it does not prove the criterion`
+- Root cause:
+  Criterion 5 is an invariance requirement ("The 4 V confirmation dialogs ... and funcgen_control.py are unchanged"). The 4 V confirmation was already implemented in `OverviewTab._on_apply_all` on base (`origin/master`), covered by existing test `test_apply_all_asks_before_a_high_peak`.
+  Because criterion 5 in `origin/master` specified a new test name `test_high_peak_confirmation_still_asked_above_4_v` without rewrite wording (ADR 0013 / ADR 0014), the newly added test passes on base code, causing Check 7 to hold and Check 9 to fail.
+- What needs human decision:
+  On `master`, update criterion 5 of ticket 106 to either:
+  1. Reword as rewriting `test_apply_all_asks_before_a_high_peak` (e.g. `Rewrites tests/test_overview_tab.py::test_apply_all_asks_before_a_high_peak`), OR
+  2. Tag the criterion `(no test: invariant code unchanged)` or similar.
+  Then unblock and re-run.
 
 
