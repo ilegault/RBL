@@ -31,9 +31,18 @@ The Faraday Cup Controller ESM remote connector is operated via the LabJack T7
 and an LJTick-RelayDriver (LJTRD) with relay isolation:
 - Enable line (FIO0): closes relay 1 across ESM P1 5-13, enabling cup OUT control.
 - Command line (FIO1): closes relay 2 across ESM P1 1-9, commanding cup OUT.
-- Cup IN status (FIO2): isolated dry contact to GND (bit 2).
-- Cup OUT status (FIO3): isolated dry contact to GND (bit 3).
-- Controller AUTO mode (FIO4): isolated dry contact to GND (bit 4).
+- Cup IN status (FIO2): ESM P1 3-11, isolated dry contact to GND (bit 2).
+- Cup OUT status (FIO3): ESM P1 2-10, isolated dry contact to GND (bit 3).
+- Controller AUTO mode (FIO4): ESM P1 4-12, isolated dry contact to GND (bit 4).
+
+Wiring facts from the 2026-11-08 bench (cup-actuation ticket 12; spec "The hardware
+chain"). Neither is visible from software, and both break the mapping above silently:
+- P1 controls cup #3 only. The end-station cup must be on controller channel 3, or
+  these lines command and report a different cup.
+- Two cables, about 75 ft. Cable A carries the command pairs (5/13 to relay 1, 1/9 to
+  relay 2, both on the NO contacts; NC would invert the fail-safe). Cable B carries the
+  status lines, with P1 10, 11 and 12 tied at the breakout and returned on one wire to
+  LabJack GND. The controller does not tie them; the shared return is the breakout's.
 
 Polarity:
 Closed is zero. When a status contact closes, it pulls the FIO line to GND,

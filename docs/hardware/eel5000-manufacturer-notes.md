@@ -2,9 +2,10 @@
 
 **Source:** email from Brian Carmer, Electrical Energy Limited (the EEL5000
 manufacturer), 2026-10-07, replying to Isaac Legault's questions of 2026-10-06.
-**Status:** manufacturer-stated. **Not bench-verified.** The amplifiers are wired
-to the steerer plates and cannot be disconnected for a resistor test, so these
-statements are adopted on the manufacturer's word (`docs/adr/0007-current-monitor-scale-is-2-ma-per-volt.md`).
+**Status:** manufacturer-stated. **Not bench-verified.** These statements are
+adopted on the manufacturer's word. *Corrected 2026-11-08:* the HV cables unplug at
+the amplifier outputs, so a resistor test is possible and is scheduled in the
+amplifier bench campaign (ticket 52, step 4) (`docs/adr/0007-current-monitor-scale-is-2-ma-per-volt.md`).
 **Where this beats the manual:** wherever the two disagree, this file wins. The
 manual's ratings table is copied in `docs/AMP_ENVELOPE_AND_HV_SAFETY_PLAN.md`
 section 1.2; that table is superseded where marked below.
@@ -188,8 +189,9 @@ measurement campaign, not as a confirmation.
 
 ## 4. A consistency check that needs no disconnection
 
-A resistor test needs the output disconnected, which isn't possible. The clamp
-test (ticket 45) can still cross-check the scale with the plates attached:
+A resistor test needs the output disconnected, which is possible only at the
+amplifier end (ticket 52, step 4). The clamp test (ticket 45) can cross-check the
+scale sooner, with the plates attached:
 
 1. Set one amplifier's pot to dial **50** (10 mA, per the manufacturer).
 2. Drive a triangle and raise the frequency until the output stops following its

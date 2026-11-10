@@ -465,30 +465,129 @@ someone else's bug fix smuggled into it cannot be reviewed.
 <!-- ACTIVE-PLAN:START -->
 ## Active implementation plan
 
-_Written by the planning model on 2026-11-03 19:54. Implement this. If something in it is wrong, say so before changing course._
+_Written by the planning model on 2026-11-10 04:40. Implement this. If something in it is wrong, say so before changing course._
 
-# Active work: target-uncertainty cup insertions (set 7), plus what remains of sets 2-4 and 6
+# Active work: ZWO Open fails loudly (set 9), compact Session Recorder and Draft ROI (set 8), target-uncertainty cup insertions (set 7, in progress), plus bench tickets from earlier sets
 
 This is a pointer, not the work.
 
-## Set 7 (new): end a cup insertion when its mean is precise enough
+## Set 9 (new): ZWO Open fails loudly
 
-- Spec: `.scratch/cup-target-uncertainty/spec.md`
-- Binding: `docs/adr/0003-commanded-and-confirmed-cup-position.md` (new amendment D,
-  2026-11-03, and C1), `docs/adr/0002-cup-acquisition-triggered-by-current.md`
-  (amendments A5-A8, B3), `docs/adr/0001-tests-first-and-no-muted-failures.md`.
-- Glossary (new in `CONTEXT.md`, "Cup actuation and dose"): **Insertion uncertainty**,
-  **Dwell mode** (fixed dwell / target uncertainty / maximum dwell), **Converged
-  insertion**.
-- Tickets: `.scratch/cup-target-uncertainty/issues/81...88`. 88 is
-  `ready-for-developer` (bench): an agent must not claim it.
+- Spec: `.scratch/zwo-open-diagnostics/spec.md`
+- Binding: `docs/adr/0008-zwo-camera-owned-by-a-capture-process.md` (decisions 1, 3, 4, 5, 7),
+  `docs/adr/0001-tests-first-and-no-muted-failures.md`.
+- Glossary: no change (D18; **camera message** is a UI string, not a domain term).
+- Tickets: `.scratch/zwo-open-diagnostics/issues/98...104`. 104 is `ready-for-developer`
+  (bench): an agent must not claim it.
 - Tracker conventions: `docs/agents/issue-tracker.md`
 
 ### Next
 
-- **81** and **82** are unblocked and touch disjoint code; any order, or in parallel.
-  Start with **81**: it is the pure contract 83, 84 and 87 import.
-- Then 83 (after 81), 84 (after 83), then 85 and 87 (both after 84), then 86 (after 85).
+- **98** is unblocked: start with it. It adds the fake-child flags that every later test
+  drives. Then 99, then 100 (all three edit `capture_client.py` or feed it, so in order).
+- After 100: **101** and **102** in parallel (different files).
+- **103** waits on 102 **and** on set 8's 90, 94 and 95 (it adds its label into the rows
+  they rework). Then 104 (bench).
+- Set 9's 98-102 touch no GUI file and may run in parallel with set 8 and set 7.
+
+### Dependency order
+
+```
+98 ── 99 ── 100 ─┬─ 101 ─────────────┐
+                 └─ 102 ─┐           ├─ 104 (developer, bench)
+set 8: 90, 94, 95 ───────┴─ 103 ─────┘
+```
+
+### Requirements that are not preferences
+
+- The fake-child flags (`--fake-cameras-empty`, `--fake-fatal`, `--fake-no-hello`,
+  `--fake-open-delay-s`) are refused unless `--camera fake`; they are CLI flags, not
+  protocol messages.
+- Every `CaptureClient` error goes through `_fail` (logged at ERROR, then emitted); no other
+  `error.emit` exists. Every `SessionRecorder` `status.emit` goes through `_announce`.
+- Both timeouts are `CaptureClient` constructor arguments so tests expire them in well under
+  a second. The hello timeout kills the child; the open-reply timeout only warns and never
+  kills (ADR 0008 decision 5). Timeout messages format the client's actual timeout.
+- `child_log_level` and `drain_lines` are pure module-level functions, tested without a child.
+- `connect_zwo` refuses a second open while `zwo_opening` is true; the disabled Open button
+  is not the lock.
+- The views read the new state keys with `st.get` defaults so stand-in recorders still work.
+- Tests in Qt test modules add no private-attribute access: the ratchet in
+  `tests/test_layering.py` is at its limit (462). Find widgets by text or public name.
+
+### Not in this set
+
+A debug toggle or per-message protocol trace; a diagnostics button; any change to the line
+protocol or `CAPTURE_PROTOCOL_VERSION`; reattaching to a Capture Process; deploying the DLL
+(bench ticket 80); edits to set 8's tickets.
+
+## Set 8: compact Session Recorder, compact mode, Last ROI, Draft ROI
+
+- Spec: `.scratch/camera-layout-and-draft-roi/spec.md`
+- Binding: `docs/adr/0008-zwo-camera-owned-by-a-capture-process.md` (decisions 6, 7),
+  `docs/adr/0001-tests-first-and-no-muted-failures.md`.
+- Glossary (new in `CONTEXT.md`, via ticket 96, held): **Draft ROI**, **Last ROI**,
+  **Compact mode**; the **Region of interest (ROI)** entry gains the recording lock.
+- Tickets: `.scratch/camera-layout-and-draft-roi/issues/89...97`. 96 changes `CONTEXT.md`
+  (Auto-merge: no, a leaf). 97 is `ready-for-developer` (bench): an agent must not claim it.
+- Tracker conventions: `docs/agents/issue-tracker.md`
+
+### Next
+
+- **89**, **92**, **95** and **96** are unblocked. Start with **89**: 90 and 91 wait on it,
+  and it is the visible fix. **92** (pure geometry) touches no GUI file and can run in
+  parallel with 89. 95 edits `camera_tab.py`, as 93 and 94 later do, so land 95 before 93
+  starts.
+- Then 90 and 91 (both after 89), 93 (after 91 and 92), 94 (after 93), then 97 (bench).
+
+### Dependency order
+
+```
+89 ─┬─ 90 ──────────────┐
+    └─ 91 ─┐            │
+92 ────────┴─ 93 ── 94 ─┼─ 97 (developer, bench)
+95 ─────────────────────┘
+96 (held: CONTEXT.md, leaf)
+```
+
+### Requirements that are not preferences
+
+- Layout tickets move widgets; they change no handler, signal or enable rule, and keep
+  every existing attribute name (tests reference them).
+- The Preview's height-for-width is opt-in on `VideoView`; the Camera tab's feed is
+  unchanged. `VideoView` size hints stay constant (see its docstring).
+- Compact visibility is applied last in `RecordingPanel._render`, after `_render_kind`,
+  so a state change cannot undo it. Compact mode is never saved.
+- The recorder refuses every ROI change while ZWO video is recording or starting; the GUI
+  disabling the controls is not the lock.
+- Last ROI is learned only from a confirmed Capture Process reply, never from what was
+  typed or drawn.
+- Draft geometry is pure functions in `src/rbl/hardware/roi_geometry.py` (no Qt), held
+  in sensor pixels; the Camera tab only routes events into them.
+- A Draft changes nothing until Apply ROI. Drafting is off in full screen and while
+  recording.
+
+### Not in this set
+
+ROI drawing on the Overview; saved compact-mode or aspect-preset preferences; any change
+to the Capture Process, its contract or `snap_roi`; any change to USB recording.
+
+## Set 7 (in progress): end a cup insertion when its mean is precise enough
+
+- Spec: `.scratch/cup-target-uncertainty/spec.md`
+- Binding: `docs/adr/0003-commanded-and-confirmed-cup-position.md` (amendment D,
+  2026-11-03, and C1), `docs/adr/0002-cup-acquisition-triggered-by-current.md`
+  (amendments A5-A8, B3), `docs/adr/0001-tests-first-and-no-muted-failures.md`.
+- Glossary (`CONTEXT.md`, "Cup actuation and dose"): **Insertion uncertainty**,
+  **Dwell mode** (fixed dwell / target uncertainty / maximum dwell), **Converged
+  insertion**.
+- Tickets: `.scratch/cup-target-uncertainty/issues/81...88`. 81 and 82 are done. 88 is
+  `ready-for-developer` (bench): an agent must not claim it.
+
+### Next
+
+- **83** is unblocked. Then 84 (after 83), then 85 and 87 (both after 84), then 86
+  (after 85). Set 7 and set 8 touch disjoint code and may run in parallel.
 
 ### Dependency order
 
@@ -522,8 +621,7 @@ change to dose integration; an Overview history strip or a tab insertion history
 ## Remaining from earlier sets
 
 Every agent ticket in earlier sets is `done`. Only `ready-for-developer` bench tickets
-remain, and an agent must not claim them: 12, 13, 14 (`.scratch/cup-actuation/`; 13, the
-6482 autorange settle time, bears on the settle window this set uses), 10
+remain, and an agent must not claim them: 12, 13, 14 (`.scratch/cup-actuation/`), 10
 (`.scratch/faraday-cup-reader/`), 52 (`.scratch/amplifier-load-and-spikes/`), 60
 (`.scratch/current-monitor-scale/`), 78, 79, 80 (`.scratch/zwo-capture/`).
 <!-- ACTIVE-PLAN:END -->
