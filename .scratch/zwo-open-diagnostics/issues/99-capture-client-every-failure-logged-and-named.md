@@ -1,6 +1,6 @@
 # 99: CaptureClient: every failure is logged, and the child's own reason survives
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
