@@ -20,6 +20,12 @@ owner).
   camera.
 * A heartbeat ``QTimer`` runs while the child does. If the application dies the
   heartbeat stops and the child shuts itself down.
+* If the child sends no ``hello`` within ``hello_timeout_s`` (10 s by default),
+  the hello timer expires, logs an error, and kills the child.
+* If the child does not reply to ``open`` within ``open_reply_timeout_s`` (15 s
+  by default), the open-reply timer warns and emits ``open_timed_out``, but does
+  not kill the child or fail: per ADR 0008, after ``hello`` only the child's own
+  events or exit end things, and a late open reply is still accepted.
 * Refusals (``error`` replies) are reported on ``error`` and ``reply`` but never
   end anything by themselves; only the child's events or its exit do.
 * Every error is logged to ``rbl.log`` through ``_fail`` before being emitted on
@@ -54,6 +60,8 @@ import rbl
 from rbl.config import paths
 from rbl.config.capture_config import (
     CAPTURE_HEARTBEAT_INTERVAL_S,
+    CAPTURE_HELLO_TIMEOUT_S,
+    CAPTURE_OPEN_REPLY_TIMEOUT_S,
     CAPTURE_SHUTDOWN_WAIT_S,
 )
 from rbl.hardware import capture_protocol as proto
@@ -96,9 +104,19 @@ class CaptureClient(QObject):
     error = Signal(str)
     exited = Signal(int)
     reply = Signal(int, dict)
+    open_timed_out = Signal()
 
-    def __init__(self, parent: Optional[QObject] = None) -> None:
+    def __init__(
+        self,
+        parent: Optional[QObject] = None,
+        *,
+        hello_timeout_s: float = CAPTURE_HELLO_TIMEOUT_S,
+        open_reply_timeout_s: float = CAPTURE_OPEN_REPLY_TIMEOUT_S,
+    ) -> None:
         super().__init__(parent)
+        self._hello_timeout_s = float(hello_timeout_s)
+        self._open_reply_timeout_s = float(open_reply_timeout_s)
+        self._pending_open_id: Optional[int] = None
         self._proc: Optional[QProcess] = None
         self._buf = bytearray()
         self._next_id = 1
@@ -111,6 +129,24 @@ class CaptureClient(QObject):
         self._heartbeat = QTimer(self)
         self._heartbeat.setInterval(int(CAPTURE_HEARTBEAT_INTERVAL_S * 1000))
         self._heartbeat.timeout.connect(self._send_heartbeat)
+
+        self._hello_timer = QTimer(self)
+        self._hello_timer.setSingleShot(True)
+        self._hello_timer.setInterval(int(self._hello_timeout_s * 1000))
+        self._hello_timer.timeout.connect(self._on_hello_timeout)
+
+        self._open_reply_timer = QTimer(self)
+        self._open_reply_timer.setSingleShot(True)
+        self._open_reply_timer.setInterval(int(self._open_reply_timeout_s * 1000))
+        self._open_reply_timer.timeout.connect(self._on_open_reply_timeout)
+
+    @property
+    def hello_timeout_s(self) -> float:
+        return self._hello_timeout_s
+
+    @property
+    def open_reply_timeout_s(self) -> float:
+        return self._open_reply_timeout_s
 
     # ----------------------------------------------------------- lifecycle
     def start(
@@ -151,8 +187,11 @@ class CaptureClient(QObject):
         self._got_hello = False
         self._shutting_down = False
         self._pending.clear()
+        self._pending_open_id = None
         self._last_label = None
         self._cup_label = "UNKNOWN"
+        self._hello_timer.stop()
+        self._open_reply_timer.stop()
         proc = QProcess(self)
         proc.setProcessEnvironment(qenv)
         proc.readyReadStandardOutput.connect(self._on_stdout)
@@ -162,6 +201,7 @@ class CaptureClient(QObject):
         self._proc = proc
         proc.start(argv[0], argv[1:])
         self._heartbeat.start()
+        self._hello_timer.start()
 
     def is_running(self) -> bool:
         return (
@@ -177,6 +217,8 @@ class CaptureClient(QObject):
         return self._open and self.is_running()
 
     def shutdown(self) -> None:
+        self._hello_timer.stop()
+        self._open_reply_timer.stop()
         self._heartbeat.stop()
         proc = self._proc
         if proc is None or proc.state() == QProcess.ProcessState.NotRunning:
@@ -189,7 +231,11 @@ class CaptureClient(QObject):
 
     # ------------------------------------------------------------ commands
     def open(self, camera_index: int = 0) -> int:
-        return self._command(proto.OpenCmd(camera_index))
+        cmd_id = self._command(proto.OpenCmd(camera_index))
+        if cmd_id >= 0:
+            self._pending_open_id = cmd_id
+            self._open_reply_timer.start()
+        return cmd_id
 
     def close(self) -> int:
         return self._command(proto.CloseCmd())
@@ -287,11 +333,13 @@ class CaptureClient(QObject):
             msg = proto.decode(line)
             if not self._got_hello:
                 if msg.get("type") == "fatal":
+                    self._hello_timer.stop()
                     self._shutting_down = True
                     self._fail(msg["message"])
                     return
                 proto.check_hello(msg)
         except proto.ProtocolError as exc:
+            self._hello_timer.stop()
             if not self._got_hello and self.is_running():
                 self._shutting_down = True
                 self._write(proto.ShutdownCmd())
@@ -299,6 +347,7 @@ class CaptureClient(QObject):
             return
         mtype = msg["type"]
         if mtype == "hello":
+            self._hello_timer.stop()
             if msg.get("cameras") == []:
                 self._got_hello = True
                 self._shutting_down = True
@@ -322,6 +371,8 @@ class CaptureClient(QObject):
 
     def _handle_reply(self, msg: dict[str, Any]) -> None:
         reply_to = msg["reply_to"]
+        if reply_to == self._pending_open_id:
+            self._open_reply_timer.stop()
         sent = self._pending.pop(reply_to, None)
         if msg["type"] == "error":
             self._fail(f"{msg['code']}: {msg['message']}")
@@ -350,16 +401,37 @@ class CaptureClient(QObject):
         self.preview.emit(image, fields)
 
     def _on_process_error(self, err: QProcess.ProcessError) -> None:
+        self._hello_timer.stop()
         if err == QProcess.ProcessError.FailedToStart:
             self._heartbeat.stop()
             self._fail("Capture Process failed to start")
 
     def _on_finished(self, code: int, _status: QProcess.ExitStatus) -> None:
+        self._hello_timer.stop()
+        self._open_reply_timer.stop()
         self._heartbeat.stop()
         self._open = False
         self.exited.emit(code)
         if not self._shutting_down:
             self._fail(f"Capture Process exited unexpectedly ({code})")
+
+    def _on_hello_timeout(self) -> None:
+        self._shutting_down = True
+        self._fail(
+            f"Capture Process sent no hello within {self._hello_timeout_s:g} s"
+        )
+        if self._proc is not None:
+            self._proc.kill()
+
+    def _on_open_reply_timeout(self) -> None:
+        open_id = self._pending_open_id
+        if open_id is not None:
+            _log.warning(
+                "No reply to open (id %d) within %g s",
+                open_id,
+                self._open_reply_timeout_s,
+            )
+        self.open_timed_out.emit()
 
 
 def _bundle_dir() -> Path | None:
