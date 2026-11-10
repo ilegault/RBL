@@ -1,6 +1,6 @@
 # 100: CaptureClient: a missing hello and a stalled open no longer hang
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -44,11 +44,11 @@ Tests go in `tests/test_capture_client.py`, against a real fake child using tick
 through `start("fake", extra_args=[...])`. Only the timeout lengths are shortened, through the
 constructor. No new private-attribute access in tests (the ratchet is at its limit).
 
-- [ ] `test_no_hello_times_out_and_kills_the_child`: `CaptureClient(hello_timeout_s=0.3)`, `start("fake", extra_args=["--fake-no-hello"])`; within 5 s `spy.exits` fills, `spy.errors == ["Capture Process sent no hello within 0.3 s"]` (exactly one error: no "exited unexpectedly"), and `is_running()` is False.
-- [ ] `test_hello_in_time_cancels_the_hello_timeout`: `CaptureClient(hello_timeout_s=0.5)`, normal fake child; after hello, wait 1.0 s more; `is_running()` is True and `spy.errors == []`.
-- [ ] `test_open_reply_timeout_warns_and_keeps_the_child`: `CaptureClient(open_reply_timeout_s=0.3)`, `start("fake", extra_args=["--fake-open-delay-s", "1.5"])`, `open()` after hello. `open_timed_out` fires exactly once while `spy.opened` is still empty; at that moment `is_running()` is True, `spy.errors == []`, and `caplog` holds a `WARNING` on `rbl.capture` containing `No reply to open`. Then `spy.opened` fills (the late reply is handled) and `open_timed_out` has still fired once.
-- [ ] `test_open_reply_in_time_does_not_time_out`: `CaptureClient(open_reply_timeout_s=1.0)`, normal fake; after `opened`, wait 1.5 s; `open_timed_out` never fired.
-- [ ] `test_timeout_defaults_come_from_config`: `CaptureClient()` reports `hello_timeout_s == CAPTURE_HELLO_TIMEOUT_S == 10.0` and `open_reply_timeout_s == CAPTURE_OPEN_REPLY_TIMEOUT_S == 15.0`.
+- [x] `test_no_hello_times_out_and_kills_the_child`: `CaptureClient(hello_timeout_s=0.3)`, `start("fake", extra_args=["--fake-no-hello"])`; within 5 s `spy.exits` fills, `spy.errors == ["Capture Process sent no hello within 0.3 s"]` (exactly one error: no "exited unexpectedly"), and `is_running()` is False.
+- [x] `test_hello_in_time_cancels_the_hello_timeout`: `CaptureClient(hello_timeout_s=0.5)`, normal fake child; after hello, wait 1.0 s more; `is_running()` is True and `spy.errors == []`.
+- [x] `test_open_reply_timeout_warns_and_keeps_the_child`: `CaptureClient(open_reply_timeout_s=0.3)`, `start("fake", extra_args=["--fake-open-delay-s", "1.5"])`, `open()` after hello. `open_timed_out` fires exactly once while `spy.opened` is still empty; at that moment `is_running()` is True, `spy.errors == []`, and `caplog` holds a `WARNING` on `rbl.capture` containing `No reply to open`. Then `spy.opened` fills (the late reply is handled) and `open_timed_out` has still fired once.
+- [x] `test_open_reply_in_time_does_not_time_out`: `CaptureClient(open_reply_timeout_s=1.0)`, normal fake; after `opened`, wait 1.5 s; `open_timed_out` never fired.
+- [x] `test_timeout_defaults_come_from_config`: `CaptureClient()` reports `hello_timeout_s == CAPTURE_HELLO_TIMEOUT_S == 10.0` and `open_reply_timeout_s == CAPTURE_OPEN_REPLY_TIMEOUT_S == 15.0`.
 
 ## Gate
 
@@ -62,3 +62,9 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+2026-11-10: Implemented hello timeout and open-reply timeout on CaptureClient.
+- `src/rbl/config/capture_config.py`: Added `CAPTURE_HELLO_TIMEOUT_S = 10.0` and `CAPTURE_OPEN_REPLY_TIMEOUT_S = 15.0`.
+- `src/rbl/services/capture_client.py`: Added keyword-only `hello_timeout_s` and `open_reply_timeout_s` to `CaptureClient.__init__`, exposed as read-only properties. Added `open_timed_out = Signal()`. Armed single-shot hello timer in `start()`, cancelled on any hello or early error/shutdown; on expiry logs `_fail` and kills child. Armed single-shot open-reply timer on `open()`, cancelled on matching reply/finish/shutdown; on expiry logs WARNING and emits `open_timed_out` without killing child. Updated module docstring with reasoning.
+- `tests/test_capture_config.py`: `test_numbers_only` updated to check expected values.
+- `tests/test_capture_client.py`: Added named tests `test_no_hello_times_out_and_kills_the_child`, `test_hello_in_time_cancels_the_hello_timeout`, `test_open_reply_timeout_warns_and_keeps_the_child`, `test_open_reply_in_time_does_not_time_out`, and `test_timeout_defaults_come_from_config`.

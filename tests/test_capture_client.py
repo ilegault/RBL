@@ -237,3 +237,83 @@ def test_only_fail_emits_error():
     assert len(error_emit_calls) == 1
     assert error_emit_calls[0][0] == "_fail"
 
+
+def test_no_hello_times_out_and_kills_the_child(qapp):
+    c = CaptureClient(hello_timeout_s=0.3)
+    spy = Spy(c)
+    try:
+        c.start("fake", extra_args=["--fake-no-hello"])
+        assert wait_until(lambda: spy.exits, timeout_s=5.0)
+        assert spy.errors == ["Capture Process sent no hello within 0.3 s"]
+        assert not c.is_running()
+    finally:
+        c.shutdown()
+
+
+def test_hello_in_time_cancels_the_hello_timeout(qapp):
+    c = CaptureClient(hello_timeout_s=0.5)
+    spy = Spy(c)
+    try:
+        c.start("fake")
+        assert wait_until(lambda: spy.hello)
+        wait_until(lambda: False, timeout_s=1.0)
+        assert c.is_running()
+        assert spy.errors == []
+    finally:
+        c.shutdown()
+
+
+def test_open_reply_timeout_warns_and_keeps_the_child(qapp, caplog):
+    c = CaptureClient(open_reply_timeout_s=0.3)
+    spy = Spy(c)
+    timed_outs: list[bool] = []
+    c.open_timed_out.connect(lambda: timed_outs.append(True))
+    try:
+        with caplog.at_level(logging.WARNING, logger="rbl.capture"):
+            c.start("fake", extra_args=["--fake-open-delay-s", "1.5"])
+            assert wait_until(lambda: spy.hello)
+            c.open()
+            assert wait_until(lambda: len(timed_outs) == 1, timeout_s=3.0)
+            assert not spy.opened
+            assert c.is_running()
+            assert spy.errors == []
+            records = [
+                r
+                for r in caplog.records
+                if r.name == "rbl.capture" and r.levelno == logging.WARNING
+            ]
+            assert any("No reply to open" in r.getMessage() for r in records)
+            assert wait_until(lambda: spy.opened, timeout_s=3.0)
+            assert len(timed_outs) == 1
+    finally:
+        c.shutdown()
+
+
+def test_open_reply_in_time_does_not_time_out(qapp):
+    c = CaptureClient(open_reply_timeout_s=1.0)
+    spy = Spy(c)
+    timed_outs: list[bool] = []
+    c.open_timed_out.connect(lambda: timed_outs.append(True))
+    try:
+        c.start("fake")
+        assert wait_until(lambda: spy.hello)
+        c.open()
+        assert wait_until(lambda: spy.opened)
+        wait_until(lambda: False, timeout_s=1.5)
+        assert not timed_outs
+    finally:
+        c.shutdown()
+
+
+def test_timeout_defaults_come_from_config(qapp):
+    from rbl.config.capture_config import (
+        CAPTURE_HELLO_TIMEOUT_S,
+        CAPTURE_OPEN_REPLY_TIMEOUT_S,
+    )
+
+    c = CaptureClient()
+    assert c.hello_timeout_s == CAPTURE_HELLO_TIMEOUT_S == 10.0
+    assert c.open_reply_timeout_s == CAPTURE_OPEN_REPLY_TIMEOUT_S == 15.0
+
+
+
