@@ -1,6 +1,6 @@
 # 100: CaptureClient: a missing hello and a stalled open no longer hang
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
