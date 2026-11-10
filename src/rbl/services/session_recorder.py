@@ -307,12 +307,52 @@ class SessionRecorder(QObject):
         self.state_changed.emit()
 
     def set_zwo_settings(self, **fields: Any) -> int:
+        """Ask the Capture Process to apply ``fields``; the confirmed reply is the truth.
+
+        Any change to the ROI is refused while ZWO video is recording or
+        starting (the GUI disabling the controls is not the lock). Other fields
+        are unaffected.
+        """
         if self._capture is None:
+            return -1
+        if "roi" in fields and (self._zwo_video_active or self._zwo_starting_video):
+            self.status.emit("Cannot change the ROI while video is recording", "warn")
             return -1
         cmd_id = self._capture.apply(**fields)
         if cmd_id >= 0:
             self._pending_set_ids.add(cmd_id)
         return cmd_id
+
+    def _is_full_sensor(self, roi: tuple[int, int, int, int] | None) -> bool:
+        if roi is None:
+            return True
+        sw = self._zwo_info.get("sensor_width")
+        sh = self._zwo_info.get("sensor_height")
+        return tuple(roi) == (0, 0, sw, sh)
+
+    def swap_zwo_roi(self) -> int:
+        """At the full sensor apply the Last ROI; anywhere else apply the full sensor.
+
+        Returns -1 and sends nothing when at the full sensor with no Last ROI
+        (or when the sensor size is not yet known). Goes through
+        ``set_zwo_settings`` so the recording lock applies.
+        """
+        sw = self._zwo_info.get("sensor_width", 0)
+        sh = self._zwo_info.get("sensor_height", 0)
+        applied = self._zwo_settings_applied.get("roi")
+        current = (
+            (applied["x"], applied["y"], applied["width"], applied["height"])
+            if isinstance(applied, dict) else self._zwo_settings.roi
+        )
+        if self._is_full_sensor(current):
+            last = self._zwo_settings.last_roi
+            if last is None:
+                return -1
+            x, y, w, h = last
+            return self.set_zwo_settings(roi={"x": x, "y": y, "width": w, "height": h})
+        if not (sw > 0 and sh > 0):
+            return -1
+        return self.set_zwo_settings(roi={"x": 0, "y": 0, "width": sw, "height": sh})
 
     def set_zwo_preview(self, mode: str, brightness: float) -> None:
         if self._capture is not None and self._capture.is_open():
@@ -640,6 +680,9 @@ class SessionRecorder(QObject):
             "zwo_status":        dict(self._zwo_status),
             "zwo_info":          dict(self._zwo_info),
             "zwo_settings":      dict(self._zwo_settings_applied),
+            "zwo_last_roi":      (dict(zip(("x", "y", "width", "height"),
+                                           self._zwo_settings.last_roi))
+                                  if self._zwo_settings.last_roi is not None else None),
         }
 
     # ---- video control (ADR 0004 decision 7) -------------------------------
@@ -1003,8 +1046,12 @@ class SessionRecorder(QObject):
                     if "roi" in s and s["roi"] is not None:
                         r = s["roi"]
                         roi_tuple = (r["x"], r["y"], r["width"], r["height"])
+                    last_roi = self._zwo_settings.last_roi
+                    if roi_tuple is not None and not self._is_full_sensor(roi_tuple):
+                        last_roi = roi_tuple
                     self._zwo_settings = dataclasses.replace(
                         self._zwo_settings,
+                        last_roi=last_roi,
                         exposure_us=s.get("exposure_us", self._zwo_settings.exposure_us),
                         gain=s.get("gain", self._zwo_settings.gain),
                         bit_depth=s.get("bit_depth", self._zwo_settings.bit_depth),

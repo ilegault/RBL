@@ -208,11 +208,7 @@ class ZwoControls(QWidget):
         self._recorder.set_zwo_settings(roi=roi)
 
     def _on_full_sensor_clicked(self) -> None:
-        info = self._recorder.state().get("zwo_info", {})
-        sw = info.get("sensor_width", 0)
-        sh = info.get("sensor_height", 0)
-        if sw > 0 and sh > 0:
-            self._recorder.set_zwo_settings(roi={"x": 0, "y": 0, "width": sw, "height": sh})
+        self._recorder.swap_zwo_roi()
 
     def _on_preview_changed(self, *args: Any) -> None:
         mode = self.combo_preview.currentData() or "auto"
@@ -266,6 +262,21 @@ class ZwoControls(QWidget):
             inp.setEnabled(zwo_open)
 
         self.btn_take_darks.setEnabled(zwo_open and not zwo_recording)
+
+        # ROI is locked while ZWO video records (the recorder refuses too).
+        sw = info.get("sensor_width", 0)
+        sh = info.get("sensor_height", 0)
+        roi = settings.get("roi")
+        at_full = (not roi) or (
+            isinstance(roi, dict)
+            and (roi.get("x"), roi.get("y"), roi.get("width"), roi.get("height"))
+            == (0, 0, sw, sh))
+        last_roi = state.get("zwo_last_roi")
+        self.btn_full_sensor.setText("Back to ROI" if at_full else "Full sensor")
+        self.btn_full_sensor.setEnabled(
+            zwo_open and not zwo_recording and not (at_full and last_roi is None))
+        for spn in (self.spin_roi_x, self.spin_roi_y, self.spin_roi_width, self.spin_roi_height):
+            spn.setEnabled(zwo_open and not zwo_recording)
 
         # Control ranges
         controls = info.get("controls", {})

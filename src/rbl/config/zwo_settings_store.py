@@ -20,6 +20,11 @@ validate_settings is the only place the rules live, so the file and the panel
 cannot disagree about what is allowed. The ROI is stored as
 {"x", "y", "width", "height"}; null means the full sensor. Snapping to the
 sensor happens in the Capture Process, not here.
+
+``last_roi`` is the most recent ROI the Capture Process confirmed that was not
+the full sensor, stored in the same shape. It lets "Back to ROI" return to the
+exact region after a trip to the full sensor, and survives a restart. The
+recorder writes it only from a confirmed reply, never from what was typed.
 """
 import dataclasses
 import json
@@ -69,6 +74,7 @@ class ZwoSettings:
     keep_one_in_n: int = CAPTURE_KEEP_ONE_IN_N_DEFAULT
     preview_mode: str = PREVIEW_MODE_DEFAULT
     brightness: float = PREVIEW_BRIGHTNESS_DEFAULT
+    last_roi: tuple[int, int, int, int] | None = None  # appended: positional callers stay valid
 
     @classmethod
     def defaults(cls) -> "ZwoSettings":
@@ -143,6 +149,7 @@ _RULES: tuple[tuple[str, Callable[[Any], str | None]], ...] = (
     ("gain", _check_gain),
     ("bit_depth", _check_bit_depth),
     ("roi", _check_roi),
+    ("last_roi", _check_roi),
     ("keep_one_in_n", _check_keep),
     ("preview_mode", _check_mode),
     ("brightness", _check_brightness),
@@ -164,7 +171,7 @@ def validate_settings(raw: dict) -> tuple[ZwoSettings, list[SettingsLoadWarning]
         value = raw[key]
         reason = rule(value)
         if reason is None:
-            if key == "roi" and value is not None:
+            if key in ("roi", "last_roi") and value is not None:
                 value = tuple(value[k] for k in _ROI_KEYS)
             elif key == "brightness":
                 value = float(value)
@@ -206,6 +213,8 @@ def save_settings(settings: ZwoSettings, path: Path | None = None) -> bool:
     data = dataclasses.asdict(settings)
     if settings.roi is not None:
         data["roi"] = dict(zip(_ROI_KEYS, settings.roi))
+    if settings.last_roi is not None:
+        data["last_roi"] = dict(zip(_ROI_KEYS, settings.last_roi))
     data["_README"] = README_TEXT
     tmp_path: Path | None = None
     try:

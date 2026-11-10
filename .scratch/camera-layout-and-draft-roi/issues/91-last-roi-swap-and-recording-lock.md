@@ -1,6 +1,6 @@
 # 91: Last ROI: Full sensor ⇄ Back to ROI, and no ROI change during a ZWO recording
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -47,23 +47,23 @@ Real things: the store's load/save on a temp file, the fake Capture Process
 (`CaptureClient().start("fake")`, sensor 1920 × 1080) and its snapped replies. Nothing else
 is faked.
 
-- [ ] `tests/test_zwo_settings_store.py::test_last_roi_round_trips`: save
+- [x] `tests/test_zwo_settings_store.py::test_last_roi_round_trips`: save
   `ZwoSettings(last_roi=(64, 32, 640, 480))`, load: same tuple, no warnings; the JSON on disk
   holds `"last_roi": {"x": 64, "y": 32, "width": 640, "height": 480}`. And
   `test_bad_last_roi_falls_back`: `{"last_roi": "nope"}` loads `last_roi=None` with exactly
   one `SettingsLoadWarning` whose key is `"last_roi"`.
-- [ ] `tests/test_session_recorder_zwo.py::test_last_roi_follows_confirmed_rois`: open the
+- [x] `tests/test_session_recorder_zwo.py::test_last_roi_follows_confirmed_rois`: open the
   fake camera, apply ROI `(64, 32, 640, 480)`, wait for the reply: `state()["zwo_last_roi"]`
   equals the *confirmed* (snapped) ROI; then apply the full sensor: `zwo_last_roi` is
   unchanged; and a fresh `load_settings()` returns that same `last_roi`.
-- [ ] `test_swap_returns_to_the_exact_roi`: after the steps above, `swap_zwo_roi()` twice
+- [x] `test_swap_returns_to_the_exact_roi`: after the steps above, `swap_zwo_roi()` twice
   more: the confirmed `zwo_settings["roi"]` is first the earlier ROI exactly, then full
   sensor. With `last_roi` None at the full sensor, `swap_zwo_roi()` returns -1.
-- [ ] `test_roi_is_locked_while_recording`: `rec.start()`, `rec.start_video()`, wait for
+- [x] `test_roi_is_locked_while_recording`: `rec.start()`, `rec.start_video()`, wait for
   `zwo_recording`; `set_zwo_settings(roi=...)` and `swap_zwo_roi()` both return -1, a
   `status` emission with that exact warning text is seen, and after 0.5 s the confirmed ROI
   is unchanged; `set_zwo_settings(gain=...)` still returns a command id ≥ 0.
-- [ ] `tests/test_zwo_controls.py::test_roi_button_swaps_and_locks`: button text is
+- [x] `tests/test_zwo_controls.py::test_roi_button_swaps_and_locks`: button text is
   `"Back to ROI"` and disabled at full sensor with no Last ROI; after an ROI is confirmed it
   reads `"Full sensor"` and is enabled; while ZWO video records, it and the four ROI spin
   boxes are disabled.
@@ -80,3 +80,6 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+Landed 2026-11-10: `last_roi` in the store (appended field), recorder learns it from confirmed replies only, `swap_zwo_roi()`, ROI lock in `set_zwo_settings`, `ZwoControls` button/spin enablement. Tests cover each criterion by the named tests.
+Existing `test_inputs_disabled_until_open_then_ranged_from_controls` rewritten in place: the ROI button is now disabled after open at full sensor with no Last ROI (this ticket's rule).
+Unrelated, fails on clean master too: `tests/test_capture_client.py::test_hello_in_time_cancels_the_hello_timeout` (local run). `test_screenshot_overview` failed once under `-n auto` load, passes alone.
