@@ -1,6 +1,6 @@
 # 90: Overview Session Recorder: compact mode
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
