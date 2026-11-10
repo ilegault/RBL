@@ -85,6 +85,7 @@ from rbl.hardware.funcgen_safety import (
     CHANNEL_ROLE,
     PEAK_MAX_VOLTS,
     PEAK_WARN_VOLTS,
+    over_limit_channels,
     peak_status,
 )
 from rbl.hardware.load_model import predicted_peak_ma
@@ -221,6 +222,7 @@ class OverviewTab(QWidget):
         self._setpoints.changed.connect(self._on_setpoint_changed)
         for axis in self.drives:
             self._sync_axis_from_setpoints(axis)
+        self._update_apply_all_enabled()
 
         self._redraw_timer = QTimer(self)
         self._redraw_timer.setInterval(self._REDRAW_INTERVAL_MS)
@@ -411,12 +413,13 @@ class OverviewTab(QWidget):
             "QPushButton:hover { background:#0063b1; }"
             "QPushButton:disabled { background:#c0c0c0; color:#888; }"
         )
-        self.btn_apply_all.setToolTip(
+        self._btn_apply_all_default_tooltip = (
             "Configure all four channels with outputs untouched, then enable "
             "the outputs back-to-back, then phase-synchronise each unit - the "
             "same sequence as the Function Generators tab's Apply All, and the "
             "only ordering that brings the raster up aligned."
         )
+        self.btn_apply_all.setToolTip(self._btn_apply_all_default_tooltip)
         self.btn_apply_all.setEnabled(False)
         self.btn_apply_all.clicked.connect(self._on_apply_all)
         lay.addWidget(self.btn_apply_all)
@@ -568,6 +571,7 @@ class OverviewTab(QWidget):
 
     def _on_funcgens(self, state: FuncGenState):
         self._funcgens = state
+        self._update_apply_all_enabled()
 
     def _on_scope(self, state: ScopeState):
         self._scope = state
@@ -719,6 +723,7 @@ class OverviewTab(QWidget):
         for axis, keys in AXIS_CHANNELS.items():
             if key in keys:
                 self._sync_axis_from_setpoints(axis)
+        self._update_apply_all_enabled()
 
     def _sync_axis_from_setpoints(self, axis: str):
         params = self._setpoints.axis_params(axis)
@@ -768,6 +773,32 @@ class OverviewTab(QWidget):
         self.chk_ext_ref.blockSignals(True)
         self.chk_ext_ref.setChecked(locked)
         self.chk_ext_ref.blockSignals(False)
+
+    def _update_apply_all_enabled(self):
+        """Grey out Apply All if no generator is connected or any connected channel exceeds the rail.
+
+        Re-evaluated on every setpoint change and connection change without waiting
+        for a redraw tick (D16, D17). Tooltip lists offending channels and peaks.
+        """
+        any_connected = any(self._funcgens.connected.get(g, False) for g in ("A", "B"))
+        connected_params = {
+            k: p for k, p in self._setpoints.all().items()
+            if self._funcgens.connected.get(k[0], False)
+        }
+        offenders = over_limit_channels(connected_params)
+        if not any_connected:
+            self.btn_apply_all.setEnabled(False)
+            self.btn_apply_all.setToolTip(self._btn_apply_all_default_tooltip)
+        elif offenders:
+            self.btn_apply_all.setEnabled(False)
+            lines = [
+                f"{CHANNEL_ROLE[k].replace('-', '−')} ({k}) input peak {pk:.2f} V — over the 5 V limit. Lower the amplitude or offset."
+                for k, pk in offenders
+            ]
+            self.btn_apply_all.setToolTip("\n".join(lines))
+        else:
+            self.btn_apply_all.setEnabled(True)
+            self.btn_apply_all.setToolTip(self._btn_apply_all_default_tooltip)
 
     def _on_apply_all(self):
         """Push every channel's setpoint through Beamline's Apply-All sequence.
@@ -943,7 +974,7 @@ class OverviewTab(QWidget):
             ctrl.set_readback(funcgens.channels, connected)
             ctrl.set_connected(connected)
 
-        self.btn_apply_all.setEnabled(any_connected)
+        self._update_apply_all_enabled()
         # Sharing a timebase only means anything with BOTH units connected —
         # there is nothing to lock one generator to.
         both = all(funcgens.connected.get(g, False) for g in ("A", "B"))
