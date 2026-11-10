@@ -178,3 +178,60 @@ def test_main_summary_deduplicates_and_counts_answered(monkeypatch, capsys):
     assert "USING: Backend 1" in captured
     assert "GPIB  1 answered" in captured
     assert "USB   NONE ANSWERED" in captured
+
+
+def test_run_child_skips_serial_ports(capsys):
+    mock_rm = MagicMock()
+    mock_rm.visalib = "MockVisaLib"
+    mock_rm.list_resources.return_value = ("ASRL3::INSTR", "GPIB0::2::INSTR")
+
+    mock_inst = MagicMock()
+    mock_inst.query.side_effect = lambda cmd: (
+        "KEITHLEY INSTRUMENTS INC.,MODEL 6482,4008420,A01" if cmd == "*IDN?" else "1"
+    )
+    mock_rm.open_resource.return_value = mock_inst
+
+    mock_pyvisa = MagicMock()
+    mock_pyvisa.ResourceManager.return_value = mock_rm
+
+    with patch.dict("sys.modules", {"pyvisa": mock_pyvisa}):
+        ret = vp.run_child("")
+
+    assert ret == 0
+    mock_rm.open_resource.assert_called_once_with("GPIB0::2::INSTR")
+    captured = capsys.readouterr().out
+    assert "ASRL3::INSTR: serial port, not probed" in captured
+    assert (
+        "    ASRL3::INSTR: serial port, not probed (RBL talks to its serial "
+        "instruments with pyserial, not VISA)"
+    ) in captured
+
+
+def test_main_summary_says_scope_is_not_tested_here(monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["visa_probe.py"])
+    monkeypatch.setattr(vp, "BACKEND_CANDIDATES", [("Backend 1", ""), ("Backend 2", "")])
+
+    dummy_proc = subprocess.CompletedProcess(
+        args=["python", "visa_probe.py", "--backend", ""],
+        returncode=0,
+        stdout=(
+            "  1 resource(s):\n"
+            "    RESOURCE: GPIB0::2::INSTR KEITHLEY INSTRUMENTS INC.,MODEL 6482,4008420,A01\n"
+        ),
+        stderr="",
+    )
+
+    with patch("subprocess.run", return_value=dummy_proc):
+        ret = vp.main()
+
+    assert ret == 0
+    captured = capsys.readouterr().out
+    assert (
+        "  TDS 2012 scope (BPM): RS-232 through a USB-serial adapter, not VISA. "
+        "Not tested here; check it from the Beam Profiler tab."
+    ) in captured
+    usb_lines = [ln for ln in captured.splitlines() if ln.startswith("  USB")]
+    assert usb_lines
+    assert all("TDS 2012" not in ln for ln in usb_lines)
+    assert "Record these lines in the bench ticket's Comments." in captured
+    assert "ticket 01" not in captured

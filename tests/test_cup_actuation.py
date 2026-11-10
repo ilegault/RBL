@@ -18,21 +18,18 @@ from unittest.mock import MagicMock
 from rbl.config.cup_config import (
     CUP_COMMAND_OUT_LINE,
     CUP_ENABLE_LINE,
-    CUP_STATUS_BIT_IN,
-    CUP_STATUS_BIT_OUT,
 )
 from rbl.hardware.cup_status import CupPosition
 from rbl.snapshots import CupActuationState
 from rbl.state.beamline import Beamline
 from tests.payloads import CupActuationFeed
 
-# Raw FIO_STATE words helper (closed contact = 0, open contact = 1)
+# Raw FIO_STATE words helper (asserted contact = 1, non-asserted contact = 0)
 # Bit 2 = IN, Bit 3 = OUT, Bit 4 = AUTO
-RAW_STATUS_IN = (1 << CUP_STATUS_BIT_OUT)  # IN closed (0), OUT open (1), AUTO closed (0)
-RAW_STATUS_OUT = (1 << CUP_STATUS_BIT_IN)  # IN open (1), OUT closed (0), AUTO closed (0)
-# Both contacts open (neither asserted), AUTO closed (0)
-RAW_STATUS_TRANSIT = (1 << CUP_STATUS_BIT_IN) | (1 << CUP_STATUS_BIT_OUT)
-RAW_STATUS_INDETERMINATE = 0  # Both closed (0), AUTO closed (0)
+RAW_STATUS_IN = 20  # 0b10100: FIO2 (IN) = 1, FIO3 (OUT) = 0, FIO4 (AUTO) = 1
+RAW_STATUS_OUT = 24  # 0b11000: FIO2 (IN) = 0, FIO3 (OUT) = 1, FIO4 (AUTO) = 1
+RAW_STATUS_TRANSIT = 16  # 0b10000: FIO2 (IN) = 0, FIO3 (OUT) = 0, FIO4 (AUTO) = 1
+RAW_STATUS_INDETERMINATE = 28  # 0b11100: FIO2 (IN) = 1, FIO3 (OUT) = 1, FIO4 (AUTO) = 1
 
 
 class MockCupTab:

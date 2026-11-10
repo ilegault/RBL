@@ -1,6 +1,6 @@
 # 113: Status lines read 1 when asserted (fix the inverted decode)
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -40,7 +40,7 @@ comment "2026-11-10 status polarity is inverted". Do not edit ticket 12.
 
 ## Acceptance criteria
 
-- [ ] `src/rbl/config/cup_config.py` gains `CUP_STATUS_ASSERTED_LEVEL: int = 1`, placed
+- [x] `src/rbl/config/cup_config.py` gains `CUP_STATUS_ASSERTED_LEVEL: int = 1`, placed
       directly under `CUP_STATUS_BIT_AUTO`, with a one-line comment citing the 2026-11-10
       Kipling reading. `decode_cup_status()` treats a status bit as asserted when it
       equals `CUP_STATUS_ASSERTED_LEVEL`. **The function must read that name at call time
@@ -50,7 +50,7 @@ comment "2026-11-10 status polarity is inverted". Do not edit ticket 12.
       Test: tests/test_cup_status.py::`test_asserted_level_constant_controls_the_decode`
       — monkeypatch `rbl.hardware.cup_status.CUP_STATUS_ASSERTED_LEVEL` to `0`; then
       `decode_cup_status(20)` returns `CupPosition.OUT` with `auto_mode is False`.
-- [ ] The bench word decodes correctly. Tests use **integer literals**, never a word
+- [x] The bench word decodes correctly. Tests use **integer literals**, never a word
       built from the bit constants or from a helper that encodes the same rule as the
       code, because a word derived from the rule under test cannot catch the rule being
       wrong. Test: tests/test_cup_status.py::`test_bench_word_cup_in_auto_decodes_in_and_auto`
@@ -61,14 +61,14 @@ comment "2026-11-10 status polarity is inverted". Do not edit ticket 12.
       `28` (`0b11100`) → INDETERMINATE, auto True; `4` (`0b00100`) → IN, auto False;
       `0` → IN_TRANSIT, auto False; `0xFFE3` (every bit set except 2, 3, 4) → IN_TRANSIT,
       auto False, which proves bits outside 2–4 are ignored.
-- [ ] Existing tests are rewritten in place, same names, to the new polarity, and pass:
+- [x] Existing tests are rewritten in place, same names, to the new polarity, and pass:
       in `tests/test_cup_status.py`, `TestCupStatusPureDecodes._make_word` takes
       `in_asserted`, `out_asserted`, `auto_asserted` and sets an asserted bit to 1 and
       a non-asserted bit to 0, starting from `0x0000`. Callers in
       `test_decode_cup_in`, `test_decode_cup_out`, `test_decode_in_transit_neither_asserted`,
       `test_decode_indeterminate_both_asserted`, `test_decode_auto_asserted_and_not_asserted`
       and `test_unpacking_as_tuple` pass the same meaning under the new keyword names.
-- [ ] The raw-word fixtures elsewhere are rewritten in place with the new polarity, as
+- [x] The raw-word fixtures elsewhere are rewritten in place with the new polarity, as
       literals with a comment giving the binary: in `tests/test_cup_actuation.py` and
       `tests/test_faraday_cup_tab.py`, `RAW_STATUS_IN = 20`, `RAW_STATUS_OUT = 24`,
       `RAW_STATUS_TRANSIT = 16`, `RAW_STATUS_INDETERMINATE = 28`, and in
@@ -81,7 +81,7 @@ comment "2026-11-10 status polarity is inverted". Do not edit ticket 12.
       and tests/test_cup_actuation.py::`test_commanded_out_followed_by_confirming_status_word`.
       If any of them fails, the fault is in `src/`, not the test: fix the code and leave
       the assertion as it is.
-- [ ] The old rule is gone from prose. Rewrite the polarity text in: the module and
+- [x] The old rule is gone from prose. Rewrite the polarity text in: the module and
       function docstrings of `src/rbl/hardware/cup_status.py`; the "Polarity:" block of
       the `src/rbl/config/cup_config.py` module docstring and the comment above
       `CUP_STATUS_BIT_IN`; the "Closed is zero:" block of the
@@ -115,3 +115,13 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+### 2026-11-10 Done
+- Config constant `CUP_STATUS_ASSERTED_LEVEL = 1` added to `cup_config.py`.
+- `decode_cup_status()` updated to read `CUP_STATUS_ASSERTED_LEVEL` at call time.
+- Docstrings updated across `cup_status.py`, `cup_config.py`, `labjack_driver.py`, and `spec.md`.
+- Deleted obsolete inverted polarity tests (`test_explicit_closed_contact_is_zero_inversion`, `test_all_ones_word_returns_in_transit_and_auto_false`).
+- Added `test_asserted_level_constant_controls_the_decode`, `test_bench_word_cup_in_auto_decodes_in_and_auto`, `test_hardware_words_decode_per_line`.
+- Rewrote `RAW_STATUS_*` constants in `test_cup_actuation.py` and `test_faraday_cup_tab.py` to literal binary words with new polarity.
+- Verified all cup status, actuation, and UI tests pass (119/119 green).
+- Full gate checks pass (ruff clean, check_tests_first clean, type_gate clean).
