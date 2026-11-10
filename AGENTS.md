@@ -465,13 +465,33 @@ someone else's bug fix smuggled into it cannot be reviewed.
 <!-- ACTIVE-PLAN:START -->
 ## Active implementation plan
 
-_Written by the planning model on 2026-11-10 04:40. Implement this. If something in it is wrong, say so before changing course._
+_Written by the planning model on 2026-11-10 05:58. Implement this. If something in it is wrong, say so before changing course._
 
-# Active work: ZWO Open fails loudly (set 9), compact Session Recorder and Draft ROI (set 8), target-uncertainty cup insertions (set 7, in progress), plus bench tickets from earlier sets
+# Active work: tests-first gate fix (105, waiting on ticket-engine 87), plus the work below
 
 This is a pointer, not the work.
 
-## Set 9 (new): ZWO Open fails loudly
+## Tests-first gate fix (new)
+
+- **Spec:** `.scratch/tests-first-gate-holes/spec.md` in `ilegault/ticket-engine`.
+- **Binding:** `docs/adr/0001-tests-first-and-no-muted-failures.md`. Glossary: no change.
+- **Ticket:** `.scratch/tests-first-gate-holes/issues/105-take-the-fixed-tests-first-check-and-rerun-on-pr-edits.md`.
+  `ready-for-developer` until ticket 87 in `ilegault/ticket-engine` is merged; the
+  developer then sets it to `ready-for-agent`. Held (`Auto-merge: no`), a leaf, blocks
+  nothing, touches no application code or tests.
+- **Next:** nothing new is claimable yet; carry on with the sets below.
+
+Requirements an implementer might treat as preferences: `scripts/check_tests_first.py`
+is the canonical file byte for byte and is never edited here, not even for lint; `tests/test_check_tests_first.py` must pass unedited.
+If it cannot land as is, the ticket is escalated (`Status: blocked`).
+
+---
+
+## Active work: ZWO Open fails loudly (set 9), compact Session Recorder and Draft ROI (set 8), target-uncertainty cup insertions (set 7, in progress), plus bench tickets from earlier sets
+
+This is a pointer, not the work.
+
+### Set 9 (new): ZWO Open fails loudly
 
 - Spec: `.scratch/zwo-open-diagnostics/spec.md`
 - Binding: `docs/adr/0008-zwo-camera-owned-by-a-capture-process.md` (decisions 1, 3, 4, 5, 7),
@@ -481,7 +501,7 @@ This is a pointer, not the work.
   (bench): an agent must not claim it.
 - Tracker conventions: `docs/agents/issue-tracker.md`
 
-### Next
+#### Next
 
 - **98** is unblocked: start with it. It adds the fake-child flags that every later test
   drives. Then 99, then 100 (all three edit `capture_client.py` or feed it, so in order).
@@ -490,7 +510,7 @@ This is a pointer, not the work.
   they rework). Then 104 (bench).
 - Set 9's 98-102 touch no GUI file and may run in parallel with set 8 and set 7.
 
-### Dependency order
+#### Dependency order
 
 ```
 98 ── 99 ── 100 ─┬─ 101 ─────────────┐
@@ -498,7 +518,7 @@ This is a pointer, not the work.
 set 8: 90, 94, 95 ───────┴─ 103 ─────┘
 ```
 
-### Requirements that are not preferences
+#### Requirements that are not preferences
 
 - The fake-child flags (`--fake-cameras-empty`, `--fake-fatal`, `--fake-no-hello`,
   `--fake-open-delay-s`) are refused unless `--camera fake`; they are CLI flags, not
@@ -515,13 +535,13 @@ set 8: 90, 94, 95 ───────┴─ 103 ─────┘
 - Tests in Qt test modules add no private-attribute access: the ratchet in
   `tests/test_layering.py` is at its limit (462). Find widgets by text or public name.
 
-### Not in this set
+#### Not in this set
 
 A debug toggle or per-message protocol trace; a diagnostics button; any change to the line
 protocol or `CAPTURE_PROTOCOL_VERSION`; reattaching to a Capture Process; deploying the DLL
 (bench ticket 80); edits to set 8's tickets.
 
-## Set 8: compact Session Recorder, compact mode, Last ROI, Draft ROI
+### Set 8: compact Session Recorder, compact mode, Last ROI, Draft ROI
 
 - Spec: `.scratch/camera-layout-and-draft-roi/spec.md`
 - Binding: `docs/adr/0008-zwo-camera-owned-by-a-capture-process.md` (decisions 6, 7),
@@ -532,7 +552,7 @@ protocol or `CAPTURE_PROTOCOL_VERSION`; reattaching to a Capture Process; deploy
   (Auto-merge: no, a leaf). 97 is `ready-for-developer` (bench): an agent must not claim it.
 - Tracker conventions: `docs/agents/issue-tracker.md`
 
-### Next
+#### Next
 
 - **89**, **92**, **95** and **96** are unblocked. Start with **89**: 90 and 91 wait on it,
   and it is the visible fix. **92** (pure geometry) touches no GUI file and can run in
@@ -540,7 +560,7 @@ protocol or `CAPTURE_PROTOCOL_VERSION`; reattaching to a Capture Process; deploy
   starts.
 - Then 90 and 91 (both after 89), 93 (after 91 and 92), 94 (after 93), then 97 (bench).
 
-### Dependency order
+#### Dependency order
 
 ```
 89 ─┬─ 90 ──────────────┐
@@ -550,7 +570,7 @@ protocol or `CAPTURE_PROTOCOL_VERSION`; reattaching to a Capture Process; deploy
 96 (held: CONTEXT.md, leaf)
 ```
 
-### Requirements that are not preferences
+#### Requirements that are not preferences
 
 - Layout tickets move widgets; they change no handler, signal or enable rule, and keep
   every existing attribute name (tests reference them).
@@ -567,12 +587,12 @@ protocol or `CAPTURE_PROTOCOL_VERSION`; reattaching to a Capture Process; deploy
 - A Draft changes nothing until Apply ROI. Drafting is off in full screen and while
   recording.
 
-### Not in this set
+#### Not in this set
 
 ROI drawing on the Overview; saved compact-mode or aspect-preset preferences; any change
 to the Capture Process, its contract or `snap_roi`; any change to USB recording.
 
-## Set 7 (in progress): end a cup insertion when its mean is precise enough
+### Set 7 (in progress): end a cup insertion when its mean is precise enough
 
 - Spec: `.scratch/cup-target-uncertainty/spec.md`
 - Binding: `docs/adr/0003-commanded-and-confirmed-cup-position.md` (amendment D,
@@ -584,12 +604,12 @@ to the Capture Process, its contract or `snap_roi`; any change to USB recording.
 - Tickets: `.scratch/cup-target-uncertainty/issues/81...88`. 81 and 82 are done. 88 is
   `ready-for-developer` (bench): an agent must not claim it.
 
-### Next
+#### Next
 
 - **83** is unblocked. Then 84 (after 83), then 85 and 87 (both after 84), then 86
   (after 85). Set 7 and set 8 touch disjoint code and may run in parallel.
 
-### Dependency order
+#### Dependency order
 
 ```
 81 ── 83 ── 84 ─┬─ 85 ── 86
@@ -597,7 +617,7 @@ to the Capture Process, its contract or `snap_roi`; any change to USB recording.
 82 ── 88 (developer, bench)
 ```
 
-### Requirements that are not preferences
+#### Requirements that are not preferences
 
 - Insertion uncertainty and the bar numbers are pure functions in the dose model (no Qt,
   no clock) so the stopping rule is testable with lists of numbers.
@@ -612,13 +632,13 @@ to the Capture Process, its contract or `snap_roi`; any change to USB recording.
 - Not-converged automatic insertions still count toward the dose; manual insertions
   never count.
 
-### Not in this set
+#### Not in this set
 
 Lowering NPLC or burst reads; correcting the uncertainty for sample correlation; any
 change to dose integration; an Overview history strip or a tab insertion history table;
 "no limit" for automatic insertions.
 
-## Remaining from earlier sets
+### Remaining from earlier sets
 
 Every agent ticket in earlier sets is `done`. Only `ready-for-developer` bench tickets
 remain, and an agent must not claim them: 12, 13, 14 (`.scratch/cup-actuation/`), 10
