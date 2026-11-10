@@ -1,6 +1,6 @@
 # 98: Capture Process: four fake-camera seams for the Open failure cases
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
