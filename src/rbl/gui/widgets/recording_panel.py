@@ -29,6 +29,12 @@ hidden under ZWO; the ZWO rows live in ``ZwoControls`` (``zwo_controls``) and
 show only under ZWO.  Open/Close, Start/Stop Video and Take Photo follow the
 chosen camera.  The picker logic is shared with CameraTab in
 camera_kind_mixin.py.  The USB path is unchanged (ADR 0008 decision 7).
+
+Repacked rows and preview sizing (ticket 89): Row 1 combines camera kind, USB camera
+picker, Open button and resolution label. USB rows pack into three rows:
+(Res/Acquire/Record), (Format/Master), (MP4 copy/Segment). VideoView height follows
+width capped at 16:9 with stretch=0. CSV every shares a row with START SESSION.
+Start Video joins the action buttons row. Spare height goes below the panel.
 """
 import importlib.util
 import os
@@ -42,7 +48,6 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QLabel,
     QPushButton,
-    QSizePolicy,
     QSpinBox,
     QVBoxLayout,
 )
@@ -91,41 +96,39 @@ class RecordingPanel(CameraKindMixin, QGroupBox):
         lay = QVBoxLayout(self)
         lay.setSpacing(4)
 
-        lay.addLayout(self._make_kind_row())
-
-        # ---- Camera open row -----------------------------------------------
-        cam_row = QHBoxLayout()
-        cam_row.setSpacing(4)
+        # ---- Row 1: Camera kind, USB cam picker, Open, resolution ----------
+        kind_row = self._make_kind_row()
 
         self._combo_cam = QComboBox()
         for i in range(5):
             self._combo_cam.addItem(f"Camera {i}", i)
-        cam_row.addWidget(self._combo_cam)
+        kind_row.addWidget(self._combo_cam)
 
         self._btn_open = QPushButton("Open")
         self._btn_open.setFixedWidth(60)
         self._btn_open.clicked.connect(self._toggle_camera)
-        cam_row.addWidget(self._btn_open)
+        kind_row.addWidget(self._btn_open)
 
         self._lbl_res = QLabel("")
         self._lbl_res.setStyleSheet(
             f"color: {theme.NEUTRAL}; font-size: {theme.FS_CAPTION}px;")
-        cam_row.addWidget(self._lbl_res, stretch=1)
-        lay.addLayout(cam_row)
+        kind_row.addWidget(self._lbl_res)
+        kind_row.addStretch(1)
+        lay.addLayout(kind_row)
 
-        # ---- Resolution + acquire fps + record fps -------------------------
-        s1 = QHBoxLayout()
-        s1.setSpacing(4)
+        # ---- USB row 1: Res / Acquire / Record -----------------------------
+        s_res = QHBoxLayout()
+        s_res.setSpacing(4)
         lbl_res_t = QLabel("Res:")
-        s1.addWidget(lbl_res_t)
+        s_res.addWidget(lbl_res_t)
         self._combo_res = QComboBox()
         for w, h, label in RES_PRESETS:
             self._combo_res.addItem(label, (w, h))
         self._combo_res.setCurrentIndex(len(RES_PRESETS) - 1)
-        s1.addWidget(self._combo_res)
+        s_res.addWidget(self._combo_res)
 
         lbl_acq = QLabel("Acquire:")
-        s1.addWidget(lbl_acq)
+        s_res.addWidget(lbl_acq)
         self._spin_preview = QSpinBox()
         self._spin_preview.setRange(1, 120)
         self._spin_preview.setValue(PREVIEW_FPS_DEFAULT)
@@ -135,10 +138,10 @@ class RecordingPanel(CameraKindMixin, QGroupBox):
             "rate — the Record box below only selects which of these frames "
             "are written. Lower it to make an uncompressed pixel format "
             "available at full resolution.")
-        s1.addWidget(self._spin_preview)
+        s_res.addWidget(self._spin_preview)
 
         lbl_rec = QLabel("Record:")
-        s1.addWidget(lbl_rec)
+        s_res.addWidget(lbl_rec)
         self._spin_rec_fps = QSpinBox()
         self._spin_rec_fps.setRange(RECORD_FPS_MIN, RECORD_FPS_MAX)
         self._spin_rec_fps.setValue(self._recorder._record_fps)
@@ -147,10 +150,11 @@ class RecordingPanel(CameraKindMixin, QGroupBox):
             "How many of the acquired frames are written. "
             "Cannot exceed the acquire rate.")
         self._spin_rec_fps.valueChanged.connect(self._on_rec_fps_changed)
-        s1.addWidget(self._spin_rec_fps)
-        lay.addLayout(s1)
+        s_res.addWidget(self._spin_rec_fps)
+        s_res.addStretch(1)
+        lay.addLayout(s_res)
 
-        # ---- Format combo (pixel format sent to camera) --------------------
+        # ---- USB row 2: Format / Master ------------------------------------
         s_fmt = QHBoxLayout()
         s_fmt.setSpacing(4)
         lbl_fmt = QLabel("Format:")
@@ -163,33 +167,40 @@ class RecordingPanel(CameraKindMixin, QGroupBox):
             "MJPG: compressed JPEG stream, available at all resolutions and frame rates.\n"
             "YUY2: uncompressed 4:2:2 — eliminates in-camera lossy encoding but "
             "requires lower frame rates at full resolution (typically 5 fps at 1080p).")
-        s_fmt.addStretch()
         s_fmt.addWidget(self._combo_fmt)
+
+        lbl_master = QLabel("Master:")
+        s_fmt.addWidget(lbl_master)
+        self._combo_master = QComboBox()
+        for label in MASTER_CODECS:
+            self._combo_master.addItem(label)
+        self._combo_master.setCurrentText(MASTER_CODEC_DEFAULT)
+        self._combo_master.setToolTip(
+            "On-disk codec — the compression that actually runs in the lab.\n\n"
+            "MJPEG q98/q100: re-encodes each frame as JPEG; fast, small.\n"
+            "FFV1 lossless: bit-exact, ~3× larger. Writes .mkv.\n"
+            "PNG sequence: one PNG per frame in a folder; completely lossless,\n"
+            "  independently openable. Only available at ≤ 10 fps.\n\n"
+            "The MP4 copy (CRF) setting below is separate and requires ffmpeg.")
+        self._combo_master.currentTextChanged.connect(self._on_master_changed)
+        s_fmt.addWidget(self._combo_master)
+        s_fmt.addStretch(1)
         lay.addLayout(s_fmt)
 
-        # ---- ZWO rows (shown only under the ZWO camera) --------------------
-        lay.addWidget(self._make_zwo_controls())
-
-        # ---- Live feed (VideoView — constant minimum size, no ratchet) -----
-        self._feed = VideoView()
-        self._feed.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        lay.addWidget(self._feed, stretch=1)
-        lay.addWidget(self._make_preview_caption())
-
-        # ---- CSV / segment row ---------------------------------------------
-        s2 = QHBoxLayout()
-        s2.setSpacing(4)
-        s2.addWidget(QLabel("CSV every:"))
-        self._spin_csv = QSpinBox()
-        self._spin_csv.setRange(CSV_INTERVAL_MIN_S, CSV_INTERVAL_MAX_S)
-        self._spin_csv.setValue(self._recorder._csv_interval_s)
-        self._spin_csv.setSuffix(" s")
-        self._spin_csv.valueChanged.connect(self._on_csv_interval_changed)
-        s2.addWidget(self._spin_csv)
+        # ---- USB row 3: MP4 copy (CRF) / Segment ---------------------------
+        s_mp4 = QHBoxLayout()
+        s_mp4.setSpacing(4)
+        lbl_mp4 = QLabel("MP4 copy (CRF):")
+        s_mp4.addWidget(lbl_mp4)
+        self._combo_quality = QComboBox()
+        for label in QUALITY_PRESETS:
+            self._combo_quality.addItem(label)
+        self._combo_quality.setCurrentText(QUALITY_DEFAULT)
+        self._combo_quality.currentTextChanged.connect(self._on_quality_changed)
+        s_mp4.addWidget(self._combo_quality)
 
         lbl_seg = QLabel("Segment:")
-        s2.addWidget(lbl_seg)
+        s_mp4.addWidget(lbl_seg)
         self._combo_seg = QComboBox()
         for secs in SEGMENT_SECONDS_CHOICES:
             if secs < 60:
@@ -204,51 +215,35 @@ class RecordingPanel(CameraKindMixin, QGroupBox):
                 self._combo_seg.setCurrentIndex(i)
                 break
         self._combo_seg.currentIndexChanged.connect(self._on_segment_changed)
-        s2.addWidget(self._combo_seg)
-        lay.addLayout(s2)
+        s_mp4.addWidget(self._combo_seg)
+        s_mp4.addStretch(1)
+        lay.addLayout(s_mp4)
 
-        # ---- Master codec row ----------------------------------------------
-        s3 = QHBoxLayout()
-        s3.setSpacing(4)
-        lbl_master = QLabel("Master:")
-        s3.addWidget(lbl_master)
-        self._combo_master = QComboBox()
-        for label in MASTER_CODECS:
-            self._combo_master.addItem(label)
-        self._combo_master.setCurrentText(MASTER_CODEC_DEFAULT)
-        self._combo_master.setToolTip(
-            "On-disk codec — the compression that actually runs in the lab.\n\n"
-            "MJPEG q98/q100: re-encodes each frame as JPEG; fast, small.\n"
-            "FFV1 lossless: bit-exact, ~3× larger. Writes .mkv.\n"
-            "PNG sequence: one PNG per frame in a folder; completely lossless,\n"
-            "  independently openable. Only available at ≤ 10 fps.\n\n"
-            "The MP4 copy (CRF) setting below is separate and requires ffmpeg.")
-        self._combo_master.currentTextChanged.connect(self._on_master_changed)
-        s3.addWidget(self._combo_master)
-        lay.addLayout(s3)
+        # ---- ZWO rows (shown only under the ZWO camera) --------------------
+        lay.addWidget(self._make_zwo_controls())
 
-        # ---- MP4 copy (CRF) row — disabled when ffmpeg absent --------------
-        s4 = QHBoxLayout()
-        s4.setSpacing(4)
-        lbl_mp4 = QLabel("MP4 copy (CRF):")
-        s4.addWidget(lbl_mp4)
-        self._combo_quality = QComboBox()
-        for label in QUALITY_PRESETS:
-            self._combo_quality.addItem(label)
-        self._combo_quality.setCurrentText(QUALITY_DEFAULT)
-        self._combo_quality.currentTextChanged.connect(self._on_quality_changed)
-        s4.addWidget(self._combo_quality)
+        # ---- Live feed (VideoView — constant minimum size, no ratchet) -----
+        self._feed = VideoView()
+        self._feed.set_height_follows_width(True)
+        lay.addWidget(self._feed, stretch=0)
+        lay.addWidget(self._make_preview_caption())
 
-        self._btn_video = QPushButton("Start Video")
-        self._btn_video.clicked.connect(self._toggle_video)
-        s4.addWidget(self._btn_video)
-        lay.addLayout(s4)
+        # ---- CSV / Session row ---------------------------------------------
+        s_sess = QHBoxLayout()
+        s_sess.setSpacing(4)
+        s_sess.addWidget(QLabel("CSV every:"))
+        self._spin_csv = QSpinBox()
+        self._spin_csv.setRange(CSV_INTERVAL_MIN_S, CSV_INTERVAL_MAX_S)
+        self._spin_csv.setValue(self._recorder._csv_interval_s)
+        self._spin_csv.setSuffix(" s")
+        self._spin_csv.valueChanged.connect(self._on_csv_interval_changed)
+        s_sess.addWidget(self._spin_csv)
 
-        # ---- Start/Stop button ---------------------------------------------
         self._btn_session = QPushButton("● START SESSION")
         self._btn_session.setMinimumHeight(36)
         self._btn_session.clicked.connect(self._toggle_session)
-        lay.addWidget(self._btn_session)
+        s_sess.addWidget(self._btn_session, stretch=1)
+        lay.addLayout(s_sess)
 
         # ---- Status lines --------------------------------------------------
         self._lbl_status = QLabel("No session")
@@ -266,6 +261,10 @@ class RecordingPanel(CameraKindMixin, QGroupBox):
         # ---- Action buttons ------------------------------------------------
         btns = QHBoxLayout()
         btns.setSpacing(4)
+        self._btn_video = QPushButton("Start Video")
+        self._btn_video.clicked.connect(self._toggle_video)
+        btns.addWidget(self._btn_video)
+
         self._btn_photo = QPushButton("Take Photo")
         self._btn_photo.setToolTip(
             "Saves a lossless PNG plus a beamline-state sidecar, independent "
@@ -283,15 +282,17 @@ class RecordingPanel(CameraKindMixin, QGroupBox):
         btns.addWidget(self._btn_folder)
         lay.addLayout(btns)
 
+        lay.addStretch(1)
+
         self.usb_only_widgets = [
             self._combo_cam,
             lbl_res_t, self._combo_res,
             lbl_acq, self._spin_preview,
             lbl_rec, self._spin_rec_fps,
             lbl_fmt, self._combo_fmt,
-            lbl_seg, self._combo_seg,
             lbl_master, self._combo_master,
             lbl_mp4, self._combo_quality,
+            lbl_seg, self._combo_seg,
         ]
 
     # ---- Signal wiring -----------------------------------------------------

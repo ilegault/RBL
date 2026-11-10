@@ -40,6 +40,7 @@ def recorder_and_widget(tmp_path, monkeypatch, qapp, capture_client):
 
     cam = CameraSource()
     capture_client.start("fake")
+    assert wait_until(lambda: capture_client.is_ready())
     rec = SessionRecorder(lambda: {"beamline_v": 1.0}, cam, capture=capture_client)
     rec.set_camera_kind("zwo")
 
@@ -186,6 +187,26 @@ def test_take_darks_asks_first(recorder_and_widget, qapp):
     rec.stop()
 
 
+def test_a_status_message_repaints_the_status_line_by_itself(
+        recorder_and_widget, capture_client, qapp):
+    """A status message must announce itself with state_changed.
+
+    The status line is only redrawn from state_changed; if the status handler
+    stores the message silently the line stays blank until an unrelated event.
+    The message is delivered through the client's own signal, synchronously,
+    so nothing else can repaint the line in between.
+    """
+    _rec, widget, _ = recorder_and_widget
+    assert widget.lbl_status.text() == ""
+    capture_client.status.emit({
+        "type": "status", "acquired_fps": 12.5, "frames_written": 7,
+        "frames_dropped_camera": 0, "frames_dropped_queue": 0,
+        "sensor_temperature_c": 21.0, "bytes_per_hour": 2e9,
+        "disk_free_bytes": 50 * 1024**3,
+    })
+    assert "12.5 fps" in widget.lbl_status.text()
+
+
 def test_status_line_and_caption(recorder_and_widget, qapp):
     rec, widget, _ = recorder_and_widget
     rec.connect_zwo()
@@ -201,3 +222,25 @@ def test_status_line_and_caption(recorder_and_widget, qapp):
 
     assert preview_caption("auto") == "Display stretch: not intensity"
     assert preview_caption("linear") == "Linear display"
+
+
+def test_rows_are_packed(recorder_and_widget, qapp):
+    from tests.test_recording_panel import _same_row
+
+    rec, widget, _ = recorder_and_widget
+    _same_row(
+        widget.spin_exposure_ms,
+        widget.spin_gain,
+        widget.combo_bit_depth,
+        widget.spin_keep_one_in_n,
+    )
+    _same_row(
+        widget.spin_roi_x,
+        widget.btn_full_sensor,
+        widget.btn_take_darks,
+    )
+    _same_row(
+        widget.combo_preview,
+        widget.slider_brightness,
+    )
+

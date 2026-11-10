@@ -129,7 +129,9 @@ class CameraTab(CameraKindMixin, QWidget):
         lay.setContentsMargins(8, 8, 8, 8)
         lay.setSpacing(4)
 
-        lay.addLayout(self._make_kind_row())
+        kind_row = self._make_kind_row()
+        kind_row.addStretch(1)
+        lay.addLayout(kind_row)
 
         # ---- Top controls row ----------------------------------------------
         top = QHBoxLayout()

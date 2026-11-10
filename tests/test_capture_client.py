@@ -47,8 +47,10 @@ class Spy:
 
 def test_hello_open_status_preview(client):
     spy = Spy(client)
+    assert not client.is_ready()
     client.start("fake")
     assert wait_until(lambda: spy.hello)
+    assert client.is_ready()
     client.open()
     assert wait_until(lambda: spy.opened)
     assert spy.opened[0]["serial"] == "FAKE0001"

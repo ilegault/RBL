@@ -52,3 +52,17 @@ def test_double_click_still_works_when_drawing_off(qapp):
     view.double_clicked.connect(lambda: hits.append(1))
     QTest.mouseDClick(view, Qt.MouseButton.LeftButton)
     assert hits == [1]
+
+
+def test_height_follows_width_is_opt_in(qapp):
+    from PySide6.QtCore import QSize
+    from PySide6.QtGui import QImage
+
+    view = VideoView()
+    assert not view.hasHeightForWidth()
+    view.set_height_follows_width(True)
+    assert view.hasHeightForWidth()
+    view.set_frame(QImage(2000, 500, QImage.Format.Format_RGB888))
+    assert view.heightForWidth(800) == 200
+    assert view.minimumSizeHint() == QSize(64, 48)
+

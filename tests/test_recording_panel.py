@@ -397,3 +397,83 @@ def test_open_and_close_buttons_drive_the_zwo_camera(zwo_rig, which):
     open_btn.click()
     assert wait_until(lambda: not rec.state()["zwo_open"], 10.0)
     assert wait_until(lambda: open_btn.text() == "Open", 10.0)
+
+
+def _same_row(*widgets):
+    assert len(widgets) >= 2
+    parent = widgets[0].parentWidget()
+    assert parent is not None
+    root_layout = parent.layout()
+    assert root_layout is not None
+
+    def _find_layout(layout, widget):
+        for i in range(layout.count()):
+            item = layout.itemAt(i)
+            if item.widget() == widget:
+                return layout
+            child = item.layout()
+            if child is not None:
+                found = _find_layout(child, widget)
+                if found is not None:
+                    return found
+        return None
+
+    target = _find_layout(root_layout, widgets[0])
+    assert target is not None, f"Could not find layout for {widgets[0]}"
+    for w in widgets[1:]:
+        found_lay = _find_layout(root_layout, w)
+        assert found_lay is target, f"{w} is in layout {found_lay}, expected {target}"
+
+
+def test_preview_takes_no_spare_height(zwo_rig, qapp):
+    from rbl.config.recording_config import PREVIEW_MAX_HEIGHT_PER_WIDTH
+    from rbl.gui.widgets.video_view import VideoView
+    from rbl.hardware.preview_stretch import preview_height_for_width
+
+    rec, cam, _ = zwo_rig
+    view = _make_view("panel", rec, cam)
+    view.resize(800, 1600)
+    view.show()
+    qapp.processEvents()
+
+    feed = [w for w in view.findChildren(VideoView)][0]
+    expected = preview_height_for_width(feed.width(), None, PREVIEW_MAX_HEIGHT_PER_WIDTH)
+    assert abs(feed.height() - expected) <= 2
+
+
+def test_rows_are_packed(zwo_rig, qapp):
+    rec, cam, _ = zwo_rig
+    view = _make_view("panel", rec, cam)
+    view.show()
+
+    combo_camera_kind = view.combo_camera_kind
+    btn_open = [b for b in view.findChildren(QPushButton) if b.text() in ("Open", "Close")][0]
+    spin_csv = [s for s in view.findChildren(QSpinBox) if s.suffix().strip() == "s"][0]
+    btn_session = [b for b in view.findChildren(QPushButton) if "SESSION" in b.text()][0]
+    btn_video = [b for b in view.findChildren(QPushButton) if "Video" in b.text()][0]
+    btn_photo = [b for b in view.findChildren(QPushButton) if "Photo" in b.text()][0]
+    btn_note = [b for b in view.findChildren(QPushButton) if "Note" in b.text()][0]
+    btn_folder = [b for b in view.findChildren(QPushButton) if "Folder" in b.text()][0]
+    combo_fmt = [
+        c for c in view.findChildren(QComboBox)
+        if any(c.itemData(i) in ("MJPG", "YUY2") for i in range(c.count()))
+    ][0]
+    combo_master = [
+        c for c in view.findChildren(QComboBox)
+        if any("MJPEG q98" in c.itemText(i) for i in range(c.count()))
+    ][0]
+    combo_quality = [
+        c for c in view.findChildren(QComboBox)
+        if any("Standard (CRF" in c.itemText(i) for i in range(c.count()))
+    ][0]
+    combo_seg = [
+        c for c in view.findChildren(QComboBox)
+        if any("min" in c.itemText(i) for i in range(c.count()))
+    ][0]
+
+    _same_row(combo_camera_kind, btn_open)
+    _same_row(spin_csv, btn_session)
+    _same_row(btn_video, btn_photo, btn_note, btn_folder)
+    _same_row(combo_fmt, combo_master)
+    _same_row(combo_quality, combo_seg)
+
