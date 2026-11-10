@@ -308,6 +308,9 @@ class FaradayCupTab(QWidget):
         super().__init__(parent)
         self.beamline = beamline
         self._connected = False
+        # Last connect/communication failure, shown by the disconnected view
+        # until a successful connect or an operator click clears it.
+        self._last_error: str | None = None
         self._visible = False
         self.acquisition = CupAcquisitionStateMachine(detector=AuthorityDetector())
 
@@ -990,10 +993,13 @@ class FaradayCupTab(QWidget):
     def _on_connect_clicked(self) -> None:
         if self.beamline is None:
             return
+        self._last_error = None
         if self._connected:
             self.beamline.disconnect_picoammeter()
         else:
             resource = self.get_resource()
+            self.lbl_detail.setText(f"Connecting to {resource}\u2026")
+            self.lbl_detail.setStyleSheet(f"color: {theme.MUTED}; font-style: italic;")
             try:
                 self.beamline.connect_picoammeter(resource)
             except Exception as exc:
@@ -1298,7 +1304,14 @@ class FaradayCupTab(QWidget):
             self.lbl_avg_detail.setStyleSheet(f"color: {theme.NEUTRAL}; font-style: italic;")
 
     def _set_disconnected_view(self, t: float | None = None) -> None:
-        """Reset tab to clean, honest disconnected state."""
+        """Reset tab to clean, honest disconnected state.
+
+        The last failure reason is shown until a successful connect or an operator
+        click clears it. WHY: on a failed connect the worker emits ``error(msg)``
+        and then ``connected_changed(False, "")``, so ``on_cup_disconnected`` runs
+        right after ``on_cup_error`` and used to overwrite the reason with a bare
+        "Not connected" before the operator could read it.
+        """
         t_now = time.time() if t is None else t
         was_connected = self._connected
         self._connected = False
@@ -1308,8 +1321,12 @@ class FaradayCupTab(QWidget):
         self.btn_connect.setText("Connect")
         self.lbl_current.setText("  —    ")
         self.lbl_current.setStyleSheet(theme.status_label(theme.MUTED))
-        self.lbl_detail.setText("Not connected")
-        self.lbl_detail.setStyleSheet(f"color: {theme.MUTED}; font-style: italic;")
+        if self._last_error:
+            self.lbl_detail.setText(f"Not connected \u2014 {self._last_error}")
+            self.lbl_detail.setStyleSheet(f"color: {theme.FAULT}; font-style: italic;")
+        else:
+            self.lbl_detail.setText("Not connected")
+            self.lbl_detail.setStyleSheet(f"color: {theme.MUTED}; font-style: italic;")
         self.lbl_ident.setText("")
         self.lbl_meta.setText("")
 
@@ -1496,6 +1513,7 @@ class FaradayCupTab(QWidget):
 
     def on_cup_connected(self, ident: str) -> None:
         """Called when Keithley 6482 connects successfully."""
+        self._last_error = None
         was_connected = self._connected
         self._connected = True
         self._update_redraw_state()
@@ -1520,6 +1538,7 @@ class FaradayCupTab(QWidget):
     def on_cup_error(self, msg: str) -> None:
         """Called when a worker/communication error occurs."""
         log.warning("FaradayCupTab error: %s", msg)
+        self._last_error = msg
         self.lbl_detail.setText(f"Error: {msg}")
         self.lbl_detail.setStyleSheet(f"color: {theme.FAULT}; font-style: italic;")
 

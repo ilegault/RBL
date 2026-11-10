@@ -99,6 +99,44 @@ class TestFaradayCupTabRendersCurrent:
         status2, detail2 = tab.connect_if_needed()
         assert status2 == "already"
 
+    _CONNECT_FAIL_MSG = (
+        "Failed to connect to Keithley 6482 on GPIB0::14::INSTR: "
+        "VI_ERROR_LIBRARY_NFOUND (-1073807202): A code library required by "
+        "VISA could not be located or loaded."
+    )
+
+    def _tab_after_connect_failure(self, qapp):
+        """Real Beamline + tab, wired as app.py wires them, then the worker's
+        error-then-disconnected emission order."""
+        beamline = Beamline()
+        tab = FaradayCupTab(beamline=beamline)
+        beamline.cup_error.connect(tab.on_cup_error)
+        beamline.cup_disconnected_evt.connect(tab.on_cup_disconnected)
+        tab.show()
+        qapp.processEvents()
+        beamline._on_picoammeter_error(self._CONNECT_FAIL_MSG)
+        beamline._on_picoammeter_connected_changed(False, "")
+        qapp.processEvents()
+        return beamline, tab
+
+    def test_connect_failure_reason_survives_disconnect_event(self, qapp):
+        _beamline, tab = self._tab_after_connect_failure(qapp)
+        assert tab.lbl_detail.text() == "Not connected \u2014 " + self._CONNECT_FAIL_MSG
+        assert "Disconnected" in tab.status_pill.text()
+
+    def test_successful_connect_clears_failure_reason(self, qapp):
+        _beamline, tab = self._tab_after_connect_failure(qapp)
+        tab.on_cup_connected("KEITHLEY INSTRUMENTS INC.,MODEL 6482")
+        tab.on_cup_disconnected()
+        assert tab.lbl_detail.text() == "Not connected"
+
+    def test_connect_click_replaces_stale_failure_reason(self, qapp, monkeypatch):
+        beamline, tab = self._tab_after_connect_failure(qapp)
+        monkeypatch.setattr(beamline, "connect_picoammeter", lambda res=None: None)
+        tab.le_resource.setText("GPIB0::2::INSTR")
+        tab.btn_connect.click()
+        assert tab.lbl_detail.text() == "Connecting to GPIB0::2::INSTR\u2026"
+
     def test_renders_cup_current_autoscaling(self, qapp):
         beamline = Beamline()
         tab = FaradayCupTab(beamline=beamline)
