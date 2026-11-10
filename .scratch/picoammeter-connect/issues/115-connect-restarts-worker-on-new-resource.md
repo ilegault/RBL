@@ -1,6 +1,6 @@
 # 115: Connect with a new address restarts the picoammeter worker
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
