@@ -14,6 +14,11 @@ model the two would drift apart and an Apply from either screen would silently
 overwrite whatever the other had typed. Both are views on this object; neither
 owns the value.
 
+The shared model also tracks whether an axis's offsets are linked (minus plate
+held equal and opposite to plus plate). Linking lives here rather than in a
+widget so that the Overview, Function Generators tab, and Raster Planner all
+read one source of truth without constructing widgets.
+
 Holds no driver and sends nothing — applying a setpoint is Beamline's job, and
 Beamline is where the +/-5 V interlock lives.
 """
@@ -29,6 +34,7 @@ from rbl.state.snapshots import ChannelParams
 # gives deterministic alignment, so a cross-unit pair could never hold phase.
 AXIS_CHANNELS = {"X": ("A1", "A2"), "Y": ("B1", "B2")}
 AXIS_GENERATOR = {"X": "A", "Y": "B"}
+CHANNEL_AXIS = {ch: axis for axis, channels in AXIS_CHANNELS.items() for ch in channels}
 
 # Push-pull differential drive: with the '+' plate at 0 deg and the '-' plate at
 # 180 deg, the pair reaches its full differential swing with no DC offset on
@@ -59,10 +65,13 @@ class FuncGenSetpoints(QObject):
     """The four channels' commanded parameters, editable per channel or per axis."""
 
     changed = Signal(str, object)   # channel key, ChannelParams
+    link_changed = Signal(str, bool)  # axis ("X" or "Y"), linked
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._params = {key: default_params(key) for key in CHANNEL_ROLE}
+        self._linked = {axis: True for axis in AXIS_CHANNELS}
+        self._linking_in_progress = False
 
     # ---- Read ----------------------------------------------------------------
 
@@ -93,6 +102,10 @@ class FuncGenSetpoints(QObject):
                 and plus.freq_hz == minus.freq_hz
                 and plus.output_on == minus.output_on)
 
+    def axis_linked(self, axis: str) -> bool:
+        """Whether this axis's +/- plates are held equal and opposite in offset."""
+        return self._linked[axis]
+
     # ---- Write ---------------------------------------------------------------
 
     def update(self, key: str, **fields) -> bool:
@@ -107,7 +120,71 @@ class FuncGenSetpoints(QObject):
             return False
         self._params[key] = updated
         self.changed.emit(key, updated)
+
+        if "offset_v" in fields and not self._linking_in_progress:
+            axis = CHANNEL_AXIS.get(key)
+            if axis and self.axis_linked(axis):
+                plus_key, minus_key = AXIS_CHANNELS[axis]
+                plus = self._params[plus_key].offset_v
+                minus = self._params[minus_key].offset_v
+                if abs(plus + minus) > 1e-9:
+                    self.set_linked(axis, False)
+
         return True
+
+    def set_linked(self, axis: str, linked: bool) -> None:
+        """Set the linked state for an axis.
+
+        Linking keeps the '+' channel's offset and sets the '-' channel to its
+        negative. Unlinking changes no offset. Emits link_changed only on a real
+        change.
+        """
+        if self._linked[axis] == linked:
+            return
+        self._linked[axis] = linked
+        if linked:
+            plus_key, minus_key = AXIS_CHANNELS[axis]
+            plus_offset = self._params[plus_key].offset_v
+            self.update(minus_key, offset_v=-plus_offset)
+        self.link_changed.emit(axis, linked)
+
+    def set_axis_offset(self, axis: str, offset_v: float) -> None:
+        """Set the differential offset for an axis (+ to offset_v, - to -offset_v)."""
+        plus_key, minus_key = AXIS_CHANNELS[axis]
+        self._linking_in_progress = True
+        try:
+            self.update(plus_key, offset_v=offset_v)
+            self.update(minus_key, offset_v=-offset_v)
+        finally:
+            self._linking_in_progress = False
+
+    def send_plan(self, axis: str, amp_vpp: float, offset_v: float, freq_hz: float) -> None:
+        """Apply a raster plan to an axis.
+
+        Sets both channels' amp_vpp, freq_hz and shape='Triangle', sets offsets
+        equal and opposite (+ to +offset_v, - to -offset_v), and links the axis.
+        Leaves output_on, phase_deg, start_phase_deg and load untouched.
+        """
+        plus_key, minus_key = AXIS_CHANNELS[axis]
+        self._linking_in_progress = True
+        try:
+            self.update(
+                plus_key,
+                amp_vpp=amp_vpp,
+                freq_hz=freq_hz,
+                shape=DEFAULT_SHAPE,
+                offset_v=offset_v,
+            )
+            self.update(
+                minus_key,
+                amp_vpp=amp_vpp,
+                freq_hz=freq_hz,
+                shape=DEFAULT_SHAPE,
+                offset_v=-offset_v,
+            )
+        finally:
+            self._linking_in_progress = False
+        self.set_linked(axis, True)
 
     def update_axis(self, axis: str, **fields) -> bool:
         """Change both channels of an axis together.
@@ -115,9 +192,15 @@ class FuncGenSetpoints(QObject):
         Phase is dropped rather than applied: the 0 deg / 180 deg push-pull
         relationship is the whole reason the pair exists, so an axis-level edit
         must never be able to flatten both channels onto the same phase.
+
+        offset_v is dropped as well: a common-mode offset moves nothing (equal
+        offset on both plates creates no net deflection field), so an
+        axis-level edit must never touch offset_v. Use set_axis_offset() for
+        differential offset.
         """
         fields.pop("phase_deg", None)
         fields.pop("start_phase_deg", None)
+        fields.pop("offset_v", None)
         changed = False
         for key in AXIS_CHANNELS[axis]:
             changed = self.update(key, **fields) or changed

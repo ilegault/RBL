@@ -14,7 +14,7 @@ import pytest
 from PySide6.QtWidgets import QApplication
 
 from rbl.state.beamline import Beamline
-from rbl.state.setpoints import AXIS_CHANNELS, FuncGenSetpoints
+from rbl.state.setpoints import AXIS_CHANNELS, START_PHASE_DEFAULTS, FuncGenSetpoints
 
 
 @pytest.fixture(scope="module")
@@ -72,6 +72,101 @@ def test_defaults_are_a_safe_triangle_at_no_volts():
         assert params.amp_vpp == 0.0
         assert params.offset_v == 0.0
         assert params.output_on is False
+
+
+def test_axes_start_linked():
+    sp = FuncGenSetpoints()
+    assert sp.axis_linked("X") is True
+    assert sp.axis_linked("Y") is True
+
+
+def test_linked_offset_is_equal_and_opposite():
+    sp = FuncGenSetpoints()
+    link_events = []
+    sp.link_changed.connect(lambda ax, lk: link_events.append((ax, lk)))
+
+    sp.set_axis_offset("X", 0.4)
+    assert sp.get("A1").offset_v == pytest.approx(0.4)
+    assert sp.get("A2").offset_v == pytest.approx(-0.4)
+
+    sp.set_linked("X", False)
+    assert sp.get("A1").offset_v == pytest.approx(0.4)
+    assert sp.get("A2").offset_v == pytest.approx(-0.4)
+    assert link_events == [("X", False)]
+
+    # A second call emits nothing
+    sp.set_linked("X", False)
+    assert link_events == [("X", False)]
+
+    # While unlinked, set different offsets
+    sp.update("A1", offset_v=0.3)
+    sp.update("A2", offset_v=0.1)
+
+    # Re-linking sets minus plate to negative of plus plate and emits
+    sp.set_linked("X", True)
+    assert sp.get("A1").offset_v == pytest.approx(0.3)
+    assert sp.get("A2").offset_v == pytest.approx(-0.3)
+    assert link_events == [("X", False), ("X", True)]
+    assert sp.axis_linked("X") is True
+
+
+def test_channel_offset_edit_unlinks_the_pair():
+    sp = FuncGenSetpoints()
+    sp.set_axis_offset("X", 0.4)
+    assert sp.axis_linked("X") is True
+
+    link_events = []
+    sp.link_changed.connect(lambda ax, lk: link_events.append((ax, lk)))
+
+    # Updating when still equal and opposite (|plus + minus| <= 1e-9) does not unlink
+    sp.update("A2", offset_v=-0.4)
+    assert sp.axis_linked("X") is True
+    assert link_events == []
+
+    # Edits to amplitude, frequency, or output never change the link
+    sp.update("A1", amp_vpp=2.0)
+    sp.update("A2", freq_hz=20.0)
+    sp.update("A1", output_on=True)
+    assert sp.axis_linked("X") is True
+    assert link_events == []
+
+    # Updating A1 so that pair is no longer equal and opposite unlinks
+    sp.update("A1", offset_v=0.5)
+    assert sp.axis_linked("X") is False
+    assert link_events == [("X", False)]
+
+
+def test_update_axis_refuses_to_touch_offset():
+    sp = FuncGenSetpoints()
+    sp.set_axis_offset("X", 0.4)
+    sp.update_axis("X", offset_v=1.0, amp_vpp=2.0)
+
+    assert sp.get("A1").amp_vpp == pytest.approx(2.0)
+    assert sp.get("A2").amp_vpp == pytest.approx(2.0)
+    assert sp.get("A1").offset_v == pytest.approx(0.4)
+    assert sp.get("A2").offset_v == pytest.approx(-0.4)
+
+
+def test_send_plan_sets_a_linked_triangle_and_leaves_output_alone():
+    sp = FuncGenSetpoints()
+    sp.set_linked("Y", False)
+    sp.update("B1", shape="Sine", output_on=True, offset_v=0.8, amp_vpp=1.0, freq_hz=10.0)
+    sp.update("B2", shape="Square", output_on=True, offset_v=-0.1, amp_vpp=1.5, freq_hz=10.0)
+
+    sp.send_plan("Y", 4.0, 0.25, 517.0)
+
+    assert sp.axis_linked("Y") is True
+    for key, expected_offset in [("B1", 0.25), ("B2", -0.25)]:
+        p = sp.get(key)
+        assert p.amp_vpp == pytest.approx(4.0)
+        assert p.freq_hz == pytest.approx(517.0)
+        assert p.shape == "Triangle"
+        assert p.offset_v == pytest.approx(expected_offset)
+        assert p.output_on is True
+        assert p.phase_deg == pytest.approx(START_PHASE_DEFAULTS[key])
+        assert p.start_phase_deg == pytest.approx(START_PHASE_DEFAULTS[key])
+        assert p.load == "INFinity"
+    assert sp.axis_matched("Y") is True
 
 
 # ---- Both screens on one model ----------------------------------------------
