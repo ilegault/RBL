@@ -1,6 +1,6 @@
 # 89: Session Recorder: repacked rows and a Preview that stops eating the panel
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -61,24 +61,24 @@ assertions use a small test helper `_same_row(*widgets)` that finds the `QHBoxLa
 holding the first widget (walk `parentWidget().layout()` and its child layouts, use
 `indexOf`) and checks every other widget is in that same layout object.
 
-- [ ] `tests/test_preview_stretch.py::test_preview_height_for_width` (parametrized):
+- [x] `tests/test_preview_stretch.py::test_preview_height_for_width` (parametrized):
   `(800, (1920, 1080), 9/16) -> 450`; `(800, (1000, 1000), 9/16) -> 450` (tall frame is
   capped); `(800, (2000, 500), 9/16) -> 200`; `(800, None, 9/16) -> 450`; `(800, (0, 0), 9/16) -> 450`.
-- [ ] `tests/test_video_view.py::test_height_follows_width_is_opt_in`: a fresh `VideoView`
+- [x] `tests/test_video_view.py::test_height_follows_width_is_opt_in`: a fresh `VideoView`
   has `hasHeightForWidth()` False; after `set_height_follows_width(True)` and
   `set_frame(QImage(2000, 500, Format_RGB888))`, `heightForWidth(800) == 200` and
   `minimumSizeHint()` still equals the constant `QSize(64, 48)`.
-- [ ] `tests/test_recording_panel.py::test_preview_takes_no_spare_height` (`zwo_rig`,
+- [x] `tests/test_recording_panel.py::test_preview_takes_no_spare_height` (`zwo_rig`,
   `"panel"`): panel resized to 800 × 1600 and shown, after `qapp.processEvents()` the feed's
   height equals `preview_height_for_width(feed.width(), None, 9/16)` within 2 px, i.e. the
   Preview did not grow to fill 1600 px.
-- [ ] `tests/test_recording_panel.py::test_rows_are_packed` (`zwo_rig`, `"panel"`):
+- [x] `tests/test_recording_panel.py::test_rows_are_packed` (`zwo_rig`, `"panel"`):
   `_same_row(combo_camera_kind, _btn_open)`; `_same_row(_spin_csv, _btn_session)`;
   `_same_row(_btn_video, _btn_photo, _btn_note, _btn_folder)`;
   `_same_row(_combo_fmt, _combo_master)`; `_same_row(_combo_quality, _combo_seg)`.
-- [ ] `tests/test_zwo_controls.py::test_rows_are_packed`: `_same_row(spin_exposure_ms, spin_gain, combo_bit_depth, spin_keep_one_in_n)`;
+- [x] `tests/test_zwo_controls.py::test_rows_are_packed`: `_same_row(spin_exposure_ms, spin_gain, combo_bit_depth, spin_keep_one_in_n)`;
   `_same_row(spin_roi_x, btn_full_sensor, btn_take_darks)`; `_same_row(combo_preview, slider_brightness)`.
-- [ ] Every existing test in `tests/test_recording_panel.py`, `tests/test_zwo_controls.py`
+- [x] Every existing test in `tests/test_recording_panel.py`, `tests/test_zwo_controls.py`
   and `tests/test_camera_tab.py` passes unmodified.
 
 ## Gate
@@ -93,3 +93,11 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+Completed 2026-11-10:
+- Added pure `preview_height_for_width` in `src/rbl/hardware/preview_stretch.py` and `PREVIEW_MAX_HEIGHT_PER_WIDTH` in `src/rbl/config/recording_config.py`, verified with parametrized tests in `tests/test_preview_stretch.py`.
+- Added `set_height_follows_width` opt-in to `VideoView` in `src/rbl/gui/widgets/video_view.py`, verified in `tests/test_video_view.py`.
+- Repacked `ZwoControls` into three compact rows plus status line in `src/rbl/gui/widgets/zwo_controls.py`, verified in `tests/test_zwo_controls.py::test_rows_are_packed`.
+- Repacked `RecordingPanel` rows in `src/rbl/gui/widgets/recording_panel.py` and `camera_kind_mixin.py` / `camera_tab.py`, with Preview opt-in and trailing panel stretch, verified in `tests/test_recording_panel.py::test_rows_are_packed` and `test_preview_takes_no_spare_height`.
+- All existing tests in `test_recording_panel.py`, `test_zwo_controls.py`, and `test_camera_tab.py` pass unmodified.
+

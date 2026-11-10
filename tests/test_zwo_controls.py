@@ -201,3 +201,25 @@ def test_status_line_and_caption(recorder_and_widget, qapp):
 
     assert preview_caption("auto") == "Display stretch: not intensity"
     assert preview_caption("linear") == "Linear display"
+
+
+def test_rows_are_packed(recorder_and_widget, qapp):
+    from tests.test_recording_panel import _same_row
+
+    rec, widget, _ = recorder_and_widget
+    _same_row(
+        widget.spin_exposure_ms,
+        widget.spin_gain,
+        widget.combo_bit_depth,
+        widget.spin_keep_one_in_n,
+    )
+    _same_row(
+        widget.spin_roi_x,
+        widget.btn_full_sensor,
+        widget.btn_take_darks,
+    )
+    _same_row(
+        widget.combo_preview,
+        widget.slider_brightness,
+    )
+
