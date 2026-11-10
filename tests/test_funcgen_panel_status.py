@@ -209,3 +209,25 @@ def test_a_high_frequency_is_not_flagged_by_float_dust(tab):
     panel.spn_freq.setValue(5_000_000.0)
     panel.update_readback(_readback(freq=5_000_000.0001))
     assert "frequency" not in panel.lbl_pending.text()
+
+
+def test_fg_apply_buttons_grey_out_over_the_input_limit(tab):
+    tab._gen["A"] = object()
+    tab._refresh_connection_ui()
+    assert tab.btn_apply_all.isEnabled()
+    assert tab.panels["A1"].btn_apply.isEnabled()
+    assert tab.panels["A2"].btn_apply.isEnabled()
+
+    tab.beamline.funcgen_setpoints.update("A2", amp_vpp=4.0, offset_v=-3.4)
+
+    assert not tab.btn_apply_all.isEnabled()
+    assert "X− (A2) input peak 5.40 V — over the 5 V limit" in tab.btn_apply_all.toolTip()
+    assert not tab.panels["A2"].btn_apply.isEnabled()
+    assert "X− (A2) input peak 5.40 V — over the 5 V limit" in tab.panels["A2"].btn_apply.toolTip()
+    assert tab.panels["A1"].btn_apply.isEnabled()
+
+    # Lowering the offset back re-enables the buttons
+    tab.beamline.funcgen_setpoints.update("A2", offset_v=0.0)
+    assert tab.btn_apply_all.isEnabled()
+    assert tab.panels["A2"].btn_apply.isEnabled()
+

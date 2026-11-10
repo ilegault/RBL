@@ -552,6 +552,59 @@ def test_apply_all_is_disabled_until_a_generator_is_connected(tab):
     assert tab.btn_apply_all.isEnabled()
 
 
+def test_apply_all_greys_out_over_the_input_limit(tab):
+    _connect_gens(tab, a=True, b=False)
+    original_tooltip = tab.btn_apply_all.toolTip()
+    assert tab.btn_apply_all.isEnabled()
+
+    # Generator B is not connected: an over-limit setpoint on B1 must NOT disable the button
+    tab.beamline.funcgen_setpoints.update("B1", amp_vpp=4.0, offset_v=-3.4)
+    assert tab.btn_apply_all.isEnabled()
+
+    # Generator A is connected: A2 over the limit disables the button and updates tooltip
+    tab.beamline.funcgen_setpoints.update("A2", amp_vpp=4.0, offset_v=-3.4)
+    assert not tab.btn_apply_all.isEnabled()
+    assert "X− (A2) input peak 5.40 V — over the 5 V limit" in tab.btn_apply_all.toolTip()
+
+    # Lowering the offset back re-enables the button and restores its tooltip
+    tab.beamline.funcgen_setpoints.update("A2", offset_v=0.0)
+    assert tab.btn_apply_all.isEnabled()
+    assert tab.btn_apply_all.toolTip() == original_tooltip
+
+
+def test_greying_follows_setpoint_changes_without_a_redraw(tab):
+    _connect_gens(tab, a=True, b=False)
+    assert tab.btn_apply_all.isEnabled()
+
+    # Updating setpoint directly must update greying immediately, without tab.redraw()
+    tab.beamline.funcgen_setpoints.update("A1", amp_vpp=4.0, offset_v=3.5)
+    assert not tab.btn_apply_all.isEnabled()
+    assert "X+ (A1) input peak 5.50 V — over the 5 V limit" in tab.btn_apply_all.toolTip()
+
+    tab.beamline.funcgen_setpoints.update("A1", offset_v=0.0)
+    assert tab.btn_apply_all.isEnabled()
+
+
+def test_high_peak_confirmation_still_asked_above_4_v(tab, monkeypatch):
+    applied = []
+    tab.beamline.apply_all_channels = lambda p: applied.append(p) or True
+    _connect_gens(tab, a=True, b=True)
+    # A setpoint in the advisory zone (between 4.0 V and 5.0 V peak):
+    # e.g. amp_vpp = 4.0, offset_v = 2.5 -> peak = 2.5 + 2.0 = 4.5 V
+    tab.beamline.funcgen_setpoints.update("A1", amp_vpp=4.0, offset_v=2.5)
+    assert tab.btn_apply_all.isEnabled()
+
+    from PySide6.QtWidgets import QMessageBox
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.No)
+    tab.btn_apply_all.click()
+    assert applied == []
+
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
+    tab.btn_apply_all.click()
+    assert len(applied) == 1
+
+
+
 def test_redraw_does_not_fight_the_operator_typing_an_amplitude(tab):
     """Readback runs at 10 Hz; the setpoint boxes are driven by the shared
     model, so a redraw must never overwrite a half-typed value."""

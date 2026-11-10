@@ -61,3 +61,29 @@ def peak_status(shape: str, amp_vpp: float, offset_v: float):
     if peak > PEAK_WARN_VOLTS + 1e-9:
         return "warn", peak
     return "ok", peak
+
+
+def over_limit_channels(params_by_key: dict) -> list[tuple[str, float]]:
+    """Return [(key, input_peak)] for channels exceeding the 5 V rail.
+
+    Ordered A1, A2, B1, B2. Used by Apply buttons across the GUI to grey out
+    before the operator clicks, naming the offending channels in tooltips.
+    Takes {key: ChannelParams} or {key: object/dict} with shape, amp_vpp, offset_v.
+    """
+    offenders: list[tuple[str, float]] = []
+    for key in ("A1", "A2", "B1", "B2"):
+        if key not in params_by_key:
+            continue
+        p = params_by_key[key]
+        shape = getattr(p, "shape", None)
+        amp = getattr(p, "amp_vpp", None)
+        offset = getattr(p, "offset_v", None)
+        if shape is None and isinstance(p, dict):
+            shape = p.get("shape", "Triangle")
+            amp = p.get("amp_vpp", 0.0)
+            offset = p.get("offset_v", 0.0)
+        peak = channel_peak_volts(shape, amp, offset)
+        if peak > PEAK_MAX_VOLTS + 1e-9:
+            offenders.append((key, peak))
+    return offenders
+

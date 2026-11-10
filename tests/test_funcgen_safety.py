@@ -43,3 +43,36 @@ class TestChannelRole:
     def test_y_axis_channels_share_generator_b(self):
         y_keys = {k for k, v in CHANNEL_ROLE.items() if v in ("Y+", "Y-")}
         assert y_keys == {"B1", "B2"}
+
+
+def test_over_limit_channels_lists_offenders_in_order():
+    import pytest
+    from types import SimpleNamespace
+    from rbl.hardware.funcgen_safety import over_limit_channels
+
+    # 10 Vpp at 0 V -> exactly 5.0 V -> not listed
+    safe_params = SimpleNamespace(shape="Triangle", amp_vpp=10.0, offset_v=0.0)
+    assert over_limit_channels({"A1": safe_params}) == []
+
+    # 4 Vpp at +3.5 V -> 5.5 V -> listed with 5.5
+    over_ac = SimpleNamespace(shape="Sine", amp_vpp=4.0, offset_v=3.5)
+    res_ac = over_limit_channels({"A1": over_ac})
+    assert len(res_ac) == 1
+    assert res_ac[0] == ("A1", pytest.approx(5.5))
+
+    # DC shape at -5.2 V -> 5.2 V -> listed with 5.2
+    over_dc = SimpleNamespace(shape="DC", amp_vpp=0.0, offset_v=-5.2)
+    res_dc = over_limit_channels({"B2": over_dc})
+    assert len(res_dc) == 1
+    assert res_dc[0] == ("B2", pytest.approx(5.2))
+
+    # Two offenders across keys out of order: B1 and A2
+    # Result must be ordered A1, A2, B1, B2 (so A2 first, then B1)
+    ch_map = {
+        "B1": over_ac,
+        "A2": over_dc,
+        "A1": safe_params,
+    }
+    ordered = over_limit_channels(ch_map)
+    assert ordered == [("A2", pytest.approx(5.2)), ("B1", pytest.approx(5.5))]
+

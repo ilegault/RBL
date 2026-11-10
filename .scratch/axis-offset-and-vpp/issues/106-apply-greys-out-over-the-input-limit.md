@@ -69,3 +69,7 @@ pytest --tb=short -q -n auto --dist loadfile --durations=25
 ```
 
 ## Comments
+
+Progress (2026-11-10 14:21): criterion 1 done, test_over_limit_channels_lists_offenders_in_order green.
+Next: criterion 2 — Overview tab btn_apply_all greying and tooltip on over-limit setpoints.
+
