@@ -209,3 +209,21 @@ def test_a_high_frequency_is_not_flagged_by_float_dust(tab):
     panel.spn_freq.setValue(5_000_000.0)
     panel.update_readback(_readback(freq=5_000_000.0001))
     assert "frequency" not in panel.lbl_pending.text()
+
+
+def test_fg_apply_buttons_grey_out_over_the_input_limit(tab):
+    class _Stub:   # stands in for a connected DG1022Z; nothing is sent
+        pass
+    tab.beamline.dg_a = _Stub()
+    for panel in tab.panels.values():
+        panel.set_connected(True)
+    tab.beamline.funcgens_changed.emit(None)
+    assert tab.btn_apply_all.isEnabled()
+
+    tab.beamline.funcgen_setpoints.update("A2", amp_vpp=4.0, offset_v=-3.4)
+    line = "X− (A2) input peak 5.40 V — over the 5 V limit"
+    assert not tab.btn_apply_all.isEnabled()
+    assert line in tab.btn_apply_all.toolTip()
+    assert not tab.panels["A2"].btn_apply.isEnabled()
+    assert line in tab.panels["A2"].btn_apply.toolTip()
+    assert tab.panels["A1"].btn_apply.isEnabled()
