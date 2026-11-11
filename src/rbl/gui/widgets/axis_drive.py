@@ -10,16 +10,18 @@ beam differently — it just breaks the differential drive. So the Overview
 offers one amplitude and one frequency per axis and holds the pair together,
 including the 0 deg / 180 deg phase relationship, which is never exposed here.
 
-AMPLITUDE IS IN PEAK VOLTS, not the RIGOL's native peak-to-peak. The number an
-operator is checking against is the HV amplifier's peak output, and with the
-1000x gain a peak volt IS a kV at the plate — so 2.0 here reads straight
-across to the 2.00 kV on the amplifier bars below, with no halving in your
-head. It is also exactly the quantity the +/-5 V input interlock is defined
-on, since offset is fixed at 0 V. The Function Generators tab still shows the
-same setpoint in Vpp, which is what its instrument-shaped view should show;
-the conversion is one factor of two and lives in this file only.
+AMPLITUDE IS IN Vpp, the same number the Function Generators tab shows and the
+instrument itself takes. An earlier version showed peak volts here so it would
+read straight across to the amplifier bars, but that put a factor of two
+between this box and every other screen: the same setpoint read 2.0 here and
+4.0 on the FG tab, and two screens disagreeing about one setpoint is exactly
+what the shared model exists to prevent. One unit from the box to the
+instrument means no conversion exists anywhere in the path. What the operator
+needs to stay inside the +/-5 V interlock is shown separately, as the INPUT
+PEAK line under the boxes (see CONTEXT.md "Raster drive"), computed by
+peak_status so it classifies exactly as the FG tab does.
 
-Offset is not offered at all: the raster runs centred, so offset is 0 V.
+Offset is not offered yet: the raster runs centred, so offset is 0 V.
 
 Commands nothing. It edits a shared FuncGenSetpoints entry through its owner
 (signals out) and renders whatever readback it is handed — every path to a
@@ -40,22 +42,8 @@ from rbl.gui import theme
 from rbl.gui.widgets.inputs import QuietDoubleSpinBox, unit_row
 from rbl.gui.widgets.mini import VMiniBar
 from rbl.hardware.funcgen_driver import MAX_AMP_VPP
-from rbl.hardware.funcgen_safety import _AMP_GAIN, PEAK_MAX_VOLTS, peak_status
+from rbl.hardware.funcgen_safety import PEAK_WARN_VOLTS, peak_status
 from rbl.state.setpoints import AXIS_CHANNELS, AXIS_GENERATOR
-
-# Peak amplitude ceiling, in volts at the amplifier input. The generator's
-# limit is peak-to-peak; at 0 V offset the peak is exactly half of it, and
-# that half is also the interlock's ceiling — one number, three meanings.
-MAX_AMP_PEAK_V = MAX_AMP_VPP / 2.0
-
-
-def peak_to_vpp(peak_v: float) -> float:
-    """Displayed peak volts -> the RIGOL's native peak-to-peak setpoint."""
-    return peak_v * 2.0
-
-
-def vpp_to_peak(amp_vpp: float) -> float:
-    return amp_vpp / 2.0
 
 
 class AxisDriveControl(QGroupBox):
@@ -98,22 +86,18 @@ class AxisDriveControl(QGroupBox):
                                | Qt.AlignmentFlag.AlignVCenter)
 
         self.spn_amp = QuietDoubleSpinBox()
-        self.spn_amp.setRange(0.0, MAX_AMP_PEAK_V)
+        self.spn_amp.setRange(0.0, MAX_AMP_VPP)
         self.spn_amp.setDecimals(3)
-        self.spn_amp.setSingleStep(0.05)
+        self.spn_amp.setSingleStep(0.1)
         self.spn_amp.setMinimumWidth(20)
         self.spn_amp.setMaximumWidth(120)
         self.spn_amp.setMinimumHeight(22)
         self.spn_amp.setStyleSheet(f"font-size: {theme.FS_LABEL}px;")
         self.spn_amp.setToolTip(
-            f"Peak drive on both {self.slits[0]} and {self.slits[1]}, in volts "
-            "at the amplifier input.\n"
-            "The 1000x gain makes this the kV at the plate directly: 2.0 here "
-            "is ±2 kV on each plate.\n"
-            f"Offset is 0 V, so this is also the interlock peak and must stay "
-            f"within {PEAK_MAX_VOLTS:.0f} V.\n"
-            "The Function Generators tab shows the same setpoint peak-to-peak "
-            "(twice this)."
+            f"Peak-to-peak amplitude (Vpp) on both {self.slits[0]} and "
+            f"{self.slits[1]}, the same number the Function Generators tab "
+            "shows.\n"
+            "The input peak line below shows what the amplifier input sees."
         )
         self.spn_amp.valueChanged.connect(self._on_edited)
         # Units go in a label beside each box, never in the box as a spinbox
@@ -121,7 +105,7 @@ class AxisDriveControl(QGroupBox):
         # behind it and a select-all-and-retype takes it with it. That is the
         # "weird bugs" the units inside these boxes were causing.
         form.addRow(self._form_label("Amplitude:"),
-                    unit_row(self.spn_amp, "V pk", font_size=theme.FS_LABEL))
+                    unit_row(self.spn_amp, "Vpp", font_size=theme.FS_LABEL))
 
         self.spn_freq = QuietDoubleSpinBox()
         self.spn_freq.setRange(0.0001, 25_000_000.0)
@@ -145,8 +129,8 @@ class AxisDriveControl(QGroupBox):
         # Commanded amplitude marked on the same track as the measured one, so
         # "did the apply land?" is one glance rather than two numbers compared
         # in your head (the same idiom as the slit position bars).
-        self.bar = VMiniBar(f"{self.slits[0]}/{self.slits[1]}", 0.0, MAX_AMP_PEAK_V,
-                            unit="V pk", color=theme.SLIT_COLORS[self.slits[0]],
+        self.bar = VMiniBar(f"{self.slits[0]}/{self.slits[1]}", 0.0, MAX_AMP_VPP,
+                            unit="Vpp", color=theme.SLIT_COLORS[self.slits[0]],
                             decimals=2)
         # Minimum wide enough for the value label; no fixed cap so the bar
         # can grow with available space and compress when squeezed.
@@ -154,8 +138,8 @@ class AxisDriveControl(QGroupBox):
         row.addWidget(self.bar)
         lay.addLayout(row)
 
-        # What the amplitude does at the plates, and how much rail is left —
-        # the consequence, directly under the cause. Full width and NOT
+        # The input peak the amplitude produces — the consequence, directly
+        # under the cause. Full width and NOT
         # wrapping: a wrapping label inside the form above reports a height
         # the form does not reserve, and the second line lands under the
         # button below it.
@@ -210,16 +194,15 @@ class AxisDriveControl(QGroupBox):
         Function Generators tab edit arrives on, and it must not reformat a
         number the operator is part-way through typing in these boxes.
         """
-        peak = vpp_to_peak(amp_vpp)
         self._syncing = True
         try:
-            self.spn_amp.sync_value(peak)
+            self.spn_amp.sync_value(amp_vpp)
             self.spn_freq.sync_value(freq_hz)
             self.btn_output.setChecked(output_on)
         finally:
             self._syncing = False
         self.btn_output.setText("Output ON" if output_on else "Output OFF")
-        self.bar.set_target(peak)
+        self.bar.set_target(amp_vpp)
         self._update_hv_label(matched)
 
     def _on_edited(self, *_):
@@ -227,10 +210,7 @@ class AxisDriveControl(QGroupBox):
             return
         self._update_hv_label()
         self.bar.set_target(self.spn_amp.value())
-        # Out in native peak-to-peak: the setpoint model and every driver call
-        # below it speak the instrument's units, and only this widget's face
-        # is in peak volts.
-        self.params_edited.emit(self.axis, peak_to_vpp(self.spn_amp.value()),
+        self.params_edited.emit(self.axis, self.spn_amp.value(),
                                 self.spn_freq.value())
 
     def _on_output_toggled(self, checked: bool):
@@ -245,7 +225,7 @@ class AxisDriveControl(QGroupBox):
         """`channels`: channel key -> ChannelSnapshot, for this axis's two channels."""
         plus  = channels.get(self.channels[0])
         minus = channels.get(self.channels[1])
-        self.bar.set(None if plus is None else vpp_to_peak(plus.amp_vpp),
+        self.bar.set(None if plus is None else plus.amp_vpp,
                      stale=not connected)
 
         style = ("font-family: Consolas, 'Courier New', monospace; "
@@ -262,9 +242,9 @@ class AxisDriveControl(QGroupBox):
         out = "ON" if (plus.output_on and minus.output_on) else \
               ("OFF" if not (plus.output_on or minus.output_on) else "SPLIT")
         self.lbl_readback.setText(
-            f"{self.slits[0]} {vpp_to_peak(plus.amp_vpp):.2f} · "
-            f"{self.slits[1]} {vpp_to_peak(minus.amp_vpp):.2f} V pk"
-            f"  @ {plus.freq_hz:.4g} Hz  out={out}"
+            f"{self.slits[0]} {plus.amp_vpp:.2f} Vpp · "
+            f"{self.slits[1]} {minus.amp_vpp:.2f} Vpp"
+            f" @ {plus.freq_hz:.4g} Hz out={out}"
         )
         # A pair that disagrees is not driving a differential raster, whatever
         # the setpoint boxes say — call it out on the live line, not just the
@@ -282,27 +262,23 @@ class AxisDriveControl(QGroupBox):
     # ---- Consequence label -----------------------------------------------------
 
     def _update_hv_label(self, matched: bool = True):
-        """What this amplitude does at the plates, and how much rail is left.
+        """The input peak the typed amplitude puts on the amplifier input.
 
-        With offset fixed at 0 V the plate swings +/-peak*gain, and the peak
-        the EEL5000 input sees is the displayed number itself — the same
-        interlock the Function Generators tab enforces, evaluated by the same
-        function so the two screens can never classify a peak differently.
+        Offset is fixed at 0 V here, so the peak is half the Vpp. Evaluated by
+        peak_status, the same function the Function Generators tab uses, so the
+        two screens can never classify a peak differently. No kV figure is
+        shown beside an input: the operator types Vpp and checks volts.
         """
-        peak_v = self.spn_amp.value()
-        status, peak = peak_status("Triangle", peak_to_vpp(peak_v), 0.0)
-        plate_kv = peak_v * _AMP_GAIN / 1000.0
+        status, peak = peak_status("Triangle", self.spn_amp.value(), 0.0)
 
-        text = f"→ ±{plate_kv:.3f} kV/plate · {peak:.2f} of {PEAK_MAX_VOLTS:.0f} V in"
+        text = f"input peak {peak:.2f} V"
         if not matched:
             text += "  ⚠ pair differs"
         self.lbl_hv.setText(text)
         self.lbl_hv.setToolTip(
-            f"±{plate_kv:.3f} kV on each plate, so {2 * plate_kv:.3f} kV "
-            f"differential across the pair.\n"
-            f"The amplifier input sees {peak:.3f} V of its "
-            f"{PEAK_MAX_VOLTS:.0f} V maximum."
-            + ("\n\nThis axis's two channels hold different setpoints — set "
+            f"The amplifier input sees a peak of {peak:.3f} V "
+            f"(warn above {PEAK_WARN_VOLTS:.0f} V, blocked above 5 V)."
+            + ("\n\nThis axis's two channels hold different setpoints - set "
                "them per channel on the Function Generators tab."
                if not matched else "")
         )

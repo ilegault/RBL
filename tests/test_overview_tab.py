@@ -218,8 +218,8 @@ def test_funcgen_readback_feeds_the_axis_amplitude_bar(tab):
     tab.redraw()
     # MiniBar range is 0..MAX_AMP_VPP; 1.5 Vpp should read as a non-zero bar.
     assert tab.drives["X"].bar.fraction() > 0
-    assert "0.75" in tab.drives["X"].lbl_readback.text()   # 1.5 Vpp = 0.75 V pk
-    assert "out=ON" in tab.drives["X"].lbl_readback.text()
+    text = tab.drives["X"].lbl_readback.text()
+    assert text.startswith("X+ 1.50 Vpp · X- 1.50 Vpp @ 10 Hz out=ON")
 
 
 def test_axis_bar_blank_when_generator_not_connected(tab):
@@ -457,13 +457,12 @@ def _connect_gens(tab, a=True, b=True):
 def test_axis_edit_writes_both_channels_of_that_axis(tab):
     """X+ and X- are one push-pull pair — an axis-level amplitude that landed
     on only one of them would break the differential drive, not halve it."""
-    tab.drives["X"].spn_amp.setValue(2.0)     # peak volts on screen
+    tab.drives["X"].spn_amp.setValue(4.0)     # Vpp on screen
     tab.drives["X"].spn_freq.setValue(25.0)
 
     setpoints = tab.beamline.funcgen_setpoints
     for key in ("A1", "A2"):
-        # Stored peak-to-peak: the model and every driver call below it speak
-        # the instrument's units, and only the widget's face is in peak volts.
+        # Same Vpp on the box and in the model: no conversion anywhere.
         assert setpoints.get(key).amp_vpp == pytest.approx(4.0)
         assert setpoints.get(key).freq_hz == pytest.approx(25.0)
     # The other axis is untouched.
@@ -501,8 +500,8 @@ def test_apply_all_sends_every_channel_through_beamline(tab):
     applied = []
     tab.beamline.apply_all_channels = lambda p: applied.append(p) or True
     _connect_gens(tab)
-    tab.drives["X"].spn_amp.setValue(2.0)
-    tab.drives["Y"].spn_amp.setValue(3.0)
+    tab.drives["X"].spn_amp.setValue(4.0)
+    tab.drives["Y"].spn_amp.setValue(6.0)
 
     tab.btn_apply_all.click()
 
@@ -520,7 +519,7 @@ def test_apply_all_asks_before_a_high_peak(tab, monkeypatch):
     applied = []
     tab.beamline.apply_all_channels = lambda p: applied.append(p) or True
     _connect_gens(tab)
-    tab.drives["X"].spn_amp.setValue(4.5)   # peak 4.5 V, past the 4 V advisory
+    tab.drives["X"].spn_amp.setValue(9.0)   # input peak 4.5 V, past the 4 V advisory
 
     from PySide6.QtWidgets import QMessageBox
     monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.No)
@@ -539,7 +538,7 @@ def test_apply_all_does_not_ask_below_the_advisory_threshold(tab, monkeypatch):
     monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: pytest.fail(
         "an in-spec amplitude must not prompt"))
     _connect_gens(tab)
-    tab.drives["X"].spn_amp.setValue(2.0)   # peak 2 V
+    tab.drives["X"].spn_amp.setValue(4.0)   # input peak 2 V
 
     tab.btn_apply_all.click()
     assert len(applied) == 1
@@ -564,7 +563,7 @@ def test_redraw_does_not_fight_the_operator_typing_an_amplitude(tab):
     tab.redraw()
 
     assert tab.drives["X"].spn_amp.value() == pytest.approx(2.0)
-    # Readback 0.5 Vpp = 0.25 V peak on a 0..5 V peak scale.
+    # Readback 0.5 Vpp on a 0..10 Vpp scale.
     assert tab.drives["X"].bar.fraction() == pytest.approx(0.05)
 
 
@@ -573,7 +572,7 @@ def test_setpoint_change_from_elsewhere_lands_in_the_axis_boxes(tab):
     the shared model — neither tab holds a copy."""
     tab.beamline.funcgen_setpoints.update("A1", amp_vpp=7.5, freq_hz=2.0)
 
-    assert tab.drives["X"].spn_amp.value() == pytest.approx(3.75)
+    assert tab.drives["X"].spn_amp.value() == pytest.approx(7.5)
     assert tab.drives["X"].spn_freq.value() == pytest.approx(2.0)
     # A1 alone moved, so the pair no longer matches — say so rather than show
     # one channel's number as if it were both.
@@ -781,3 +780,51 @@ class TestConnectAllButton:
     def test_status_text_is_displayed(self, tab):
         tab.set_connect_all_status("connecting Galil…")
         assert "Galil" in tab.lbl_connect_all.text()
+
+
+def test_axis_amplitude_box_and_bar_are_in_vpp(tab):
+    from rbl.hardware.funcgen_driver import MAX_AMP_VPP
+    d = tab.drives["X"]
+    assert d.spn_amp.minimum() == 0.0
+    assert d.spn_amp.maximum() == pytest.approx(MAX_AMP_VPP)
+    assert d.spn_amp.decimals() == 3
+    assert d.spn_amp.singleStep() == pytest.approx(0.1)
+    d.bar.set(MAX_AMP_VPP / 2)
+    assert d.bar.fraction() == pytest.approx(0.5)
+    assert d.bar.lbl_value.text().endswith("Vpp")
+
+
+def test_axis_amplitude_round_trips_in_vpp(tab):
+    setpoints = tab.beamline.funcgen_setpoints
+    setpoints.update_axis("X", amp_vpp=4.0)
+    assert tab.drives["X"].spn_amp.text() == "4.000"
+    tab.drives["X"].spn_amp.setValue(3.0)
+    assert setpoints.get("A1").amp_vpp == pytest.approx(3.0)
+    assert setpoints.get("A2").amp_vpp == pytest.approx(3.0)
+
+
+def test_axis_input_peak_line_text_and_colour(tab):
+    from rbl.gui import theme
+    d = tab.drives["X"]
+    d.spn_amp.setValue(4.0)
+    assert d.lbl_hv.text() == "input peak 2.00 V"
+    assert theme.WARN not in d.lbl_hv.styleSheet()
+    assert theme.FAULT not in d.lbl_hv.styleSheet()
+    d.spn_amp.setValue(8.4)       # peak 4.2 V
+    assert theme.WARN in d.lbl_hv.styleSheet()
+    d.spn_amp.setValue(10.0)      # peak 5.0 V: at the limit, not above it
+    assert theme.FAULT not in d.lbl_hv.styleSheet()
+
+
+def test_axis_panel_text_has_no_peak_volts_or_kv(tab):
+    from rbl.gui import theme
+    d = tab.drives["X"]
+    d.spn_amp.setMaximum(20.0)    # reach the FAULT tier the 10 Vpp box cannot
+    d.spn_amp.setValue(10.2)
+    assert d.lbl_hv.text() == "input peak 5.10 V"
+    assert theme.FAULT in d.lbl_hv.styleSheet()
+    d.spn_amp.setMaximum(10.0)
+    for w in (d.spn_amp, d.lbl_hv, d.bar):
+        for text in (w.toolTip(), getattr(w, "text", lambda: "")()):
+            for banned in ("V pk", "kV/plate", "5 kV"):
+                assert banned not in text
