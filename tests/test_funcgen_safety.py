@@ -43,3 +43,23 @@ class TestChannelRole:
     def test_y_axis_channels_share_generator_b(self):
         y_keys = {k for k, v in CHANNEL_ROLE.items() if v in ("Y+", "Y-")}
         assert y_keys == {"B1", "B2"}
+
+
+def test_over_limit_channels_lists_offenders_in_order():
+    from rbl.hardware.funcgen_safety import over_limit_channels
+    from rbl.state.snapshots import ChannelParams
+
+    def p(shape, amp, off):
+        return ChannelParams(shape=shape, freq_hz=10.0, amp_vpp=amp, offset_v=off,
+                             phase_deg=0.0, start_phase_deg=0.0, load="INF",
+                             output_on=False)
+
+    # exactly 5.0 V is allowed
+    assert over_limit_channels({"A1": p("Triangle", 10.0, 0.0)}) == []
+    found = over_limit_channels({
+        "B2": p("DC", 0.0, -5.2),
+        "A2": p("Triangle", 4.0, 3.5),
+        "A1": p("Triangle", 10.0, 0.0),
+    })
+    assert [k for k, _ in found] == ["A2", "B2"]
+    assert found[0][1] == 5.5 and abs(found[1][1] - 5.2) < 1e-9

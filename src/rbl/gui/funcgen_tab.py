@@ -42,6 +42,8 @@ from rbl.hardware.funcgen_safety import (
     PEAK_MAX_VOLTS,
     PEAK_WARN_VOLTS,
     channel_peak_volts,
+    over_limit_channels,
+    over_limit_tooltip,
 )
 from rbl.state.setpoints import AXIS_CHANNELS, START_PHASE_DEFAULTS
 from rbl.state.snapshots import ChannelParams
@@ -248,6 +250,9 @@ class ChannelPanel(QGroupBox):
             "QPushButton:hover { background:#0063b1; }"
             "QPushButton:disabled { background:#c0c0c0; color:#888; }"
         )
+        self._connected = False
+        self._over_limit_tip = ""     # non-empty while this channel is over 5 V
+        self._apply_tip = self.btn_apply.toolTip()
         btn_row.addWidget(self.btn_apply)
         layout.addLayout(btn_row)
 
@@ -416,6 +421,21 @@ class ChannelPanel(QGroupBox):
                   self.spn_amp, self.spn_offset, self.spn_phase,
                   self.le_load, self.cbo_shape, self.btn_mirror):
             w.setEnabled(on)
+        self._connected = on
+        self._refresh_apply()
+
+    def set_over_limit(self, tip: str):
+        """Grey Apply while this channel's input peak is over the ceiling.
+
+        *tip* is the tooltip line naming the channel, or "" to clear. The
+        decision itself is made by over_limit_channels, not here.
+        """
+        self._over_limit_tip = tip
+        self._refresh_apply()
+
+    def _refresh_apply(self):
+        self.btn_apply.setEnabled(self._connected and not self._over_limit_tip)
+        self.btn_apply.setToolTip(self._over_limit_tip or self._apply_tip)
 
     def get_params(self) -> dict:
         phase = self.spn_phase.value()
@@ -683,6 +703,7 @@ class FuncGenTab(QWidget):
         for key, panel in self.panels.items():
             panel.apply_params(self._setpoints.get(key))
         self._setpoints.changed.connect(self._on_setpoint_changed)
+        self.beamline.funcgens_changed.connect(lambda _state: self._refresh_apply_guard())
 
         # ── Apply All ─────────────────────────────────────────────────────
         apply_all_row = QHBoxLayout()
@@ -696,6 +717,8 @@ class FuncGenTab(QWidget):
             "QPushButton:disabled { background:#c0c0c0; color:#888; }"
         )
         self.btn_apply_all.clicked.connect(self._apply_all)
+        self._apply_all_tip = self.btn_apply_all.toolTip()
+        self._refresh_apply_guard()
         apply_all_row.addWidget(self.btn_apply_all)
         left_layout.addLayout(apply_all_row)
 
@@ -860,7 +883,7 @@ class FuncGenTab(QWidget):
         any_connected = any(v is not None for v in self._gen.values())
         both_connected = all(v is not None for v in self._gen.values())
         self.btn_connect.setText("Disconnect" if any_connected else "Connect")
-        self.btn_apply_all.setEnabled(any_connected)
+        self._refresh_apply_guard()
 
         # Sharing a timebase only makes sense with BOTH units connected.
         self.chk_ext_ref.setEnabled(both_connected)
@@ -1007,6 +1030,23 @@ class FuncGenTab(QWidget):
         controls already hold those values), so this needs no source filter.
         """
         self.panels[key].apply_params(params)
+        self._refresh_apply_guard()
+
+    def _refresh_apply_guard(self):
+        """Grey every Apply that would send an over-limit channel.
+
+        Re-run on each setpoint change and connection change. All comparisons
+        go through over_limit_channels; Beamline's refusal remains the backstop.
+        """
+        connected = {k: self._gen[k] is not None for k in ("A", "B")}
+        over = dict(over_limit_channels(self._setpoints.all()))
+        for key, panel in self.panels.items():
+            panel.set_over_limit(
+                over_limit_tooltip([(key, over[key])]) if key in over else "")
+        offenders = [(k, p) for k, p in over.items() if connected[k[0]]]
+        self.btn_apply_all.setEnabled(any(connected.values()) and not offenders)
+        self.btn_apply_all.setToolTip(
+            over_limit_tooltip(offenders) if offenders else self._apply_all_tip)
 
     # ---- Apply helpers -------------------------------------------------------
     #
