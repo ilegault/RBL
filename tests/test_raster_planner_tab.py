@@ -28,6 +28,8 @@ from rbl.gui.raster_planner_tab import (
     RasterPlannerTab,
 )
 from rbl.hardware import slit_raster_model as srm
+from rbl.hardware.raster_plan import drive_summary, send_to_drive_rule
+from rbl.state.beamline import Beamline
 
 NOW = datetime(2026, 10, 7, 12, 0, 0)
 
@@ -292,7 +294,11 @@ class TestAsymmetry:
         tab.chk_sweep_offset.setChecked(True)
         tab.sb_offset_x_mm.setValue(1.5)
         tab.recompute()
-        assert "equal and opposite" in tab.lbl_gen_x.text()
+        # The DC term is stated as the + plate's offset and the - plate's negative.
+        text = tab.lbl_gen_x.text()
+        off = tab.solution["X"]["gen_offset_v"]
+        assert abs(off) > 0
+        assert f"offset {off:+.3f} V (X- {-off:+.3f} V)".replace("-0", "−0") in text
 
     def test_an_x_offset_does_not_disturb_y(self, tab):
         tab.recompute()
@@ -306,9 +312,9 @@ class TestAsymmetry:
 class TestTheDriveReadoutSaysWhoseVoltsTheseAre:
     def test_the_generator_line_names_the_channels_and_the_phase(self, tab):
         tab.recompute()
-        assert "Vpp" in tab.lbl_gen_x.text()
-        assert "180°" in tab.lbl_gen_x.text()
-        assert "X+" in tab.lbl_gen_x.text() and "X-" in tab.lbl_gen_x.text()
+        text = tab.lbl_gen_x.text()
+        assert "Vpp" in text and "input peak" in text
+        assert text == drive_summary(tab.solution["X"], "X-")
 
     def test_the_plate_line_gives_both_per_plate_and_differential(self, tab):
         tab.recompute()
@@ -335,7 +341,7 @@ class TestTheDriveReadoutSaysWhoseVoltsTheseAre:
     def test_the_generator_rail_is_checked_in_generator_volts(self, tab):
         tab.sb_patch_y_mm.setValue(400.0)
         tab.recompute()
-        assert "±5 V amplifier input" in tab.lbl_gen_y.text()
+        assert "over the 5 V limit" in tab.lbl_gen_y.text()
 
 
 class TestModeSwitch:
@@ -856,3 +862,100 @@ class TestTheJawPanel:
     def test_the_scale_says_it_is_measured_from_the_beam(self, tab):
         tab.recompute()
         assert "from the beam" in tab._ax_jaw_x.get_ylabel()
+
+
+def test_drive_summary_line():
+    assert drive_summary(
+        {"gen_amp_vpp": 4.0, "gen_offset_v": 0.4, "gen_peak_v": 2.4}, "X−"
+    ) == "4.000 Vpp, offset +0.400 V (X− −0.400 V) · input peak 2.40 V"
+    assert drive_summary(
+        {"gen_amp_vpp": 4.0, "gen_offset_v": 0.0, "gen_peak_v": 2.0}, "X-"
+    ) == "4.000 Vpp, offset 0 V · input peak 2.00 V"
+    over = drive_summary(
+        {"gen_amp_vpp": 8.0, "gen_offset_v": 2.0, "gen_peak_v": 6.0}, "Y-")
+    assert over.endswith(" · input peak 6.00 V — over the 5 V limit")
+    at_limit = drive_summary(
+        {"gen_amp_vpp": 8.0, "gen_offset_v": 1.0, "gen_peak_v": 5.0}, "Y-")
+    assert "over the" not in at_limit
+
+
+def test_send_to_drive_enable_rule():
+    good = {"gen_amp_vpp": 4.0, "gen_offset_v": 0.4, "gen_peak_v": 2.4}
+    sol = {"X": dict(good), "Y": dict(good)}
+    nan = float("nan")
+    assert send_to_drive_rule(True, sol, 517.0, 41.0)[0] is True
+    for args in (
+        (False, sol, 517.0, 41.0),
+        (True, {}, 517.0, 41.0),
+        (True, sol, nan, 41.0),
+        (True, sol, 517.0, nan),
+        (True, {"X": dict(good, gen_amp_vpp=nan), "Y": dict(good)}, 517.0, 41.0),
+        (True, {"X": dict(good), "Y": dict(good, gen_offset_v=nan)}, 517.0, 41.0),
+        (True, {"X": dict(good, gen_peak_v=5.5), "Y": dict(good)}, 517.0, 41.0),
+        (True, {"X": dict(good), "Y": dict(good, gen_peak_v=5.5)}, 517.0, 41.0),
+    ):
+        ok, reason = send_to_drive_rule(*args)
+        assert ok is False and reason
+
+
+@pytest.fixture
+def wired_tab(qapp):
+    bl = Beamline()
+    t = RasterPlannerTab(beamline=bl, now_fn=lambda: NOW)
+    t.sb_freq_x_hz.setValue(517.0)
+    t.sb_freq_y_hz.setValue(41.0)
+    t.sb_patch_x_mm.setValue(5.0)
+    t.sb_patch_y_mm.setValue(5.0)
+    t.recompute()
+    return bl, t
+
+
+def test_send_to_drive_writes_the_setpoints(wired_tab):
+    bl, t = wired_tab
+    assert t.btn_send_drive.isEnabled()
+    t.chk_jaw_offset.setChecked(True)
+    t.chk_sweep_offset.setChecked(True)
+    t.sb_offset_x_mm.setValue(1.5)
+    t.recompute()
+    assert abs(t.solution["X"]["gen_offset_v"]) > 0
+    t.btn_send_drive.click()
+    sp = bl.funcgen_setpoints
+    for ax, (plus, minus), freq in (("X", ("A1", "A2"), 517.0), ("Y", ("B1", "B2"), 41.0)):
+        d = t.solution[ax]
+        assert sp.get(plus).amp_vpp == pytest.approx(d["gen_amp_vpp"])
+        assert sp.get(minus).amp_vpp == pytest.approx(d["gen_amp_vpp"])
+        assert sp.get(plus).offset_v == pytest.approx(d["gen_offset_v"])
+        assert sp.get(minus).offset_v == pytest.approx(-d["gen_offset_v"])
+        assert sp.get(plus).freq_hz == pytest.approx(freq)
+        assert sp.get(minus).freq_hz == pytest.approx(freq)
+        assert sp.get(plus).shape == "Triangle" and sp.get(minus).shape == "Triangle"
+        assert sp.axis_linked(ax)
+
+
+def test_send_to_drive_commands_no_hardware(wired_tab, monkeypatch):
+    bl, t = wired_tab
+    calls = []
+    for name in ("set_channel", "apply_all_channels", "move_slit"):
+        monkeypatch.setattr(bl, name, lambda *a, _n=name, **k: calls.append(_n))
+    before = {k: bl.funcgen_setpoints.get(k).output_on for k in ("A1", "A2", "B1", "B2")}
+    t.btn_send_drive.click()
+    assert calls == []
+    after = {k: bl.funcgen_setpoints.get(k).output_on for k in ("A1", "A2", "B1", "B2")}
+    assert after == before
+
+
+def test_send_to_drive_status_line(wired_tab):
+    bl, t = wired_tab
+    assert t.lbl_sent.text() == ""
+    t.btn_send_drive.click()
+    text = t.lbl_sent.text()
+    x, y = t.solution["X"], t.solution["Y"]
+    assert text == (
+        f"Sent X: {x['gen_amp_vpp']:.3f} Vpp, {x['gen_offset_v']:+.3f} V @ 517 Hz"
+        f" · Y: {y['gen_amp_vpp']:.3f} Vpp, {y['gen_offset_v']:+.3f} V @ 41 Hz"
+        " — press Apply on the Overview")
+
+
+def test_send_to_drive_disabled_without_beamline(tab):
+    tab.recompute()
+    assert not tab.btn_send_drive.isEnabled()

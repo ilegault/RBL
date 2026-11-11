@@ -19,6 +19,11 @@ This module holds the computations that were previously embedded in the widget:
                            its own measured capacitance, with a green / amber /
                            red margin verdict under the continuous rating.
 
+  drive_summary /        — the planner's per-axis generator line and the
+  send_to_drive_rule       enable rule for "Send to drive", in the same words
+                           the Overview and FG tab use (Vpp, offset, input
+                           peak).  Pure so they are tested with plain dicts.
+
   envelope_status        — per-channel operating-envelope check: which channel
                            has the least headroom, whether it is inside the
                            walls, and a ``walls`` dict for plotting.  The widget
@@ -43,6 +48,7 @@ from rbl.config.calibration_config import (
 from rbl.config.hardware_config import AMP_CONTINUOUS_RATING_MA
 from rbl.config.raster_defaults import AMP_MAX_BANDWIDTH_HZ
 from rbl.hardware import slit_raster_model as srm
+from rbl.hardware.funcgen_safety import PEAK_MAX_VOLTS
 from rbl.hardware.load_model import envelope_walls, shape_k
 from rbl.hardware.raster_model import dwell_uniformity, required_drive
 
@@ -370,3 +376,59 @@ if __name__ == "__main__":
     print("[OK] envelope_status beyond bandwidth: exceeded_bandwidth=True")
 
     print("\n[OK] raster_plan self-test passed")
+
+
+def drive_summary(sol_axis: dict, minus_label: str) -> str:
+    """The generator line for one axis: Vpp, offset, input peak.
+
+    ``4.000 Vpp, offset +0.400 V (X- -0.400 V) · input peak 2.40 V``; a zero
+    offset reads ``offset 0 V``; above PEAK_MAX_VOLTS it appends
+    `` - over the 5 V limit``.  The values are the solver's ``gen_amp_vpp``,
+    ``gen_offset_v`` and ``gen_peak_v``.
+    """
+    nan = float("nan")
+    vpp = sol_axis.get("gen_amp_vpp", nan)
+    off = sol_axis.get("gen_offset_v", 0.0)
+    peak = sol_axis.get("gen_peak_v", nan)
+
+    def num(v, places):
+        return "—" if not math.isfinite(v) else f"{v:.{places}f}"
+
+    text = f"{num(vpp, 3)} Vpp, "
+    if math.isfinite(off) and abs(off) > 1e-9:
+        # Typographic minus, as in the ticket's wording of the line.
+        signed = lambda v: f"{v:+.3f}".replace("-", "−")  # noqa: E731
+        text += f"offset {signed(off)} V ({minus_label} {signed(-off)} V)"
+    else:
+        text += "offset 0 V"
+    text += f" · input peak {num(peak, 2)} V"
+    if math.isfinite(peak) and peak > PEAK_MAX_VOLTS:
+        text += f" — over the {PEAK_MAX_VOLTS:g} V limit"
+    return text
+
+
+def send_to_drive_rule(has_beamline: bool, sol: dict, freq_x_hz: float,
+                       freq_y_hz: float) -> tuple[bool, str]:
+    """(enabled, reason) for the planner's Send to drive button."""
+    if not has_beamline:
+        return False, "No Beamline connected to the planner; nothing to send to."
+    if not sol:
+        return False, "No solution yet."
+    freqs = {"X": freq_x_hz, "Y": freq_y_hz}
+    for ax in ("X", "Y"):
+        d = sol.get(ax)
+        if not d:
+            return False, "No solution yet."
+        for name, v in (("amplitude", d.get("gen_amp_vpp", float("nan"))),
+                        ("offset", d.get("gen_offset_v", float("nan"))),
+                        ("frequency", freqs[ax])):
+            if v is None or not math.isfinite(v):
+                return False, f"{ax} {name} is not a finite number."
+    for ax in ("X", "Y"):
+        peak = sol[ax].get("gen_peak_v", float("nan"))
+        if not math.isfinite(peak) or peak > PEAK_MAX_VOLTS:
+            return False, (f"{ax} input peak is over the {PEAK_MAX_VOLTS:g} V "
+                           f"limit. Lower the patch size.")
+    return True, ("Writes this plan's amplitude, offset and frequency into the "
+                  "shared setpoints. Sends nothing to the generators; press "
+                  "Apply on the Overview.")

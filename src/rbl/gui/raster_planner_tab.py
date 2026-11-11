@@ -152,7 +152,12 @@ from rbl.hardware import slit_raster_model as srm
 from rbl.hardware.raster_model import (
     displacement_mm,
 )
-from rbl.hardware.raster_plan import current_vs_frequency, steerer_limited_solve
+from rbl.hardware.raster_plan import (
+    current_vs_frequency,
+    drive_summary,
+    send_to_drive_rule,
+    steerer_limited_solve,
+)
 from rbl.hardware.raster_plan import envelope_status as _envelope_status
 
 _SPECIES_CFG_KEY = "raster_species"
@@ -552,6 +557,16 @@ class RasterPlannerTab(QWidget):
         self.lbl_gen_y = QLabel("—")
         self.lbl_gen_y.setWordWrap(True)
         left.addRow("Y — generator:", self.lbl_gen_y)
+
+        # Send to drive writes the plan into the shared setpoints. It never
+        # commands a generator: Apply on the Overview / FG tab still does that.
+        self.btn_send_drive = QPushButton("Send to drive")
+        self.btn_send_drive.setEnabled(False)
+        self.btn_send_drive.clicked.connect(self._send_to_drive)
+        left.addRow(self.btn_send_drive)
+        self.lbl_sent = QLabel("")
+        self.lbl_sent.setWordWrap(True)
+        left.addRow(self.lbl_sent)
         self.lbl_plate_y = QLabel("—")
         self.lbl_plate_y.setWordWrap(True)
         left.addRow("Y — plates:", self.lbl_plate_y)
@@ -842,6 +857,7 @@ class RasterPlannerTab(QWidget):
 
         self._show_blades(sol, slit_mode)
         self._show_drive(sol)
+        self._update_send_to_drive()
         self._show_patch(sol, d_slit, d_sample, d_alumina, slit_mode)
         self._show_dose(sol, slit_mode)
 
@@ -956,20 +972,10 @@ class RasterPlannerTab(QWidget):
         for ax, lbl_gen, lbl_plate in (("X", self.lbl_gen_x, self.lbl_plate_x),
                                        ("Y", self.lbl_gen_y, self.lbl_plate_y)):
             d = sol[ax]
-            vpp = d.get("gen_amp_vpp", float("nan"))
-            off_v = d.get("gen_offset_v", 0.0)
             peak_v = d.get("gen_peak_v", float("nan"))
-            plus, minus = BLADE_OF[(ax, "plus")], BLADE_OF[(ax, "minus")]
 
-            gen = f"{_mm(vpp, 4)} Vpp on {plus} and {minus}, 180° apart"
-            if abs(off_v) > 1e-9:
-                gen += (f", with {off_v:+.4f} V DC on {plus} and "
-                        f"{-off_v:+.4f} V DC on {minus} — equal and opposite, "
-                        f"since a common-mode offset cancels")
-            # The +/-5 V amplifier input rail, checked in GENERATOR volts, in
-            # the line where those volts are about to be typed.
+            gen = drive_summary(d, BLADE_OF[(ax, "minus")])
             if math.isfinite(peak_v) and peak_v > 5.0:
-                gen += f"   ⚠ peak {peak_v:.3f} V exceeds the ±5 V amplifier input"
                 lbl_gen.setStyleSheet(theme.status_label(theme.FAULT, bold=False))
             else:
                 lbl_gen.setStyleSheet("")
@@ -991,6 +997,31 @@ class RasterPlannerTab(QWidget):
             else:
                 lbl_plate.setText(body)
                 lbl_plate.setStyleSheet("")
+
+    def _update_send_to_drive(self):
+        ok, reason = send_to_drive_rule(
+            self._beamline is not None, self._solution,
+            self.sb_freq_x_hz.value(), self.sb_freq_y_hz.value())
+        self.btn_send_drive.setEnabled(ok)
+        self.btn_send_drive.setToolTip(reason)
+
+    def _send_to_drive(self):
+        """Write the plan into the shared setpoints. Commands no hardware."""
+        ok, _reason = send_to_drive_rule(
+            self._beamline is not None, self._solution,
+            self.sb_freq_x_hz.value(), self.sb_freq_y_hz.value())
+        if not ok:
+            return
+        setpoints = self._beamline.funcgen_setpoints
+        freqs = {"X": self.sb_freq_x_hz.value(), "Y": self.sb_freq_y_hz.value()}
+        parts = []
+        for ax in ("X", "Y"):
+            d = self._solution[ax]
+            setpoints.send_plan(ax, d["gen_amp_vpp"], d["gen_offset_v"], freqs[ax])
+            parts.append(f"{ax}: {d['gen_amp_vpp']:.3f} Vpp, "
+                         f"{d['gen_offset_v']:+.3f} V @ {freqs[ax]:.4g} Hz")
+        self.lbl_sent.setText(
+            "Sent " + " · ".join(parts) + " — press Apply on the Overview")
 
     def _show_patch(self, sol, d_slit, d_sample, d_alumina, slit_mode):
         parts = []
