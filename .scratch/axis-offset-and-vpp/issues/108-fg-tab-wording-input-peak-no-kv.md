@@ -1,6 +1,6 @@
 # 108: FG tab wording — input peak, no kV
 
-**Status:** done
+**Status:** blocked
 
 **Runner:** any
 
@@ -52,4 +52,16 @@ pytest --tb=short -q -n auto --dist loadfile --durations=25
 
 ## Comments
 
-2026-11-13: Updated `ChannelPanel._update_hv_label` to display `input peak {peak:.2f} V` using `peak_status` from `funcgen_safety.py` with WARN/FAULT styling, removed all kV conversions and references from ChannelPanel widgets and the FG tab help text banner, and bound `lbl_help`/`note_lbl` on `FuncGenTab`. Added tests `test_channel_input_peak_line`, `test_help_text_states_the_limit_in_generator_volts`, and `test_fg_tab_text_has_no_kv` in `tests/test_funcgen_panel_status.py`. All existing mirror/setpoint sync tests pass unedited.
+## Escalation — 2026-11-13
+Repo: RBL   Ticket: 108 FG tab wording — input peak, no kV   Branch: ticket/axis-offset-and-vpp-108-fg-tab-wording-input-peak-no-kv
+Goal: Display input peak volts instead of kV on Function Generators tab and remove kV from help banner and widgets.
+Attempt 1: Implemented all criteria, added named tests (`test_channel_input_peak_line`, `test_help_text_states_the_limit_in_generator_volts`, `test_fg_tab_text_has_no_kv`), verified tests fail on base and pass on head. Full test suite and type gate pass. Ran local integrity gate.
+Result: Local integrity gate failed Check 9 on the base copy of criterion 4.
+Failing output:
+```
+<!-- ticket-engine-integrity-gate -->
+## Integrity Gate Verdict: FAIL
+- Check 7 pass: All 3 new test(s) failed on base code (runtime 49.90s)
+- Check 9 fail: `test_update_signals_only_on_a_real_change` (criterion "Amplitude and offset boxes, their ranges, the Mirror button'") did not fail on the base code, so it does not prove the criterion
+```
+Decision needed: Criterion 4 on `master` names backticked existing test `test_update_signals_only_on_a_real_change`, which passes on base code because it verifies unchanged behaviour. Check 9 requires named tests to fail on base. Does the developer want to retag criterion 4 (e.g. `(no test: existing tests unedited)`) on `master` or how should check 9 be satisfied?
