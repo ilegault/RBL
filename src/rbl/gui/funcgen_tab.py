@@ -7,6 +7,7 @@ drive an EEL5000 HV amplifier into the NEC ES5 electrostatic XY steerer.
 
 Safety rules enforced here:
   - All voltage spinboxes have MAX_GEN_VOLTS as their hard maximum.
+  - Amplitude is peak-to-peak (Vpp); channel feedback shows input peak (V).
   - Outputs default OFF; voltages default 0 V.
   - The poll timer is READ-ONLY; it never writes to the instruments.
   - close_session() closes only the VISA sessions; outputs are never
@@ -37,13 +38,13 @@ from rbl.gui.widgets.command_console import LogPane
 from rbl.gui.widgets.inputs import NoScrollComboBox, QuietDoubleSpinBox, unit_row
 from rbl.hardware.funcgen_driver import DG1022Z, MAX_AMP_VPP, MAX_GEN_VOLTS, discover
 from rbl.hardware.funcgen_safety import (
-    _AMP_GAIN,
     CHANNEL_ROLE,
     PEAK_MAX_VOLTS,
     PEAK_WARN_VOLTS,
     channel_peak_volts,
     over_limit_channels,
     over_limit_tooltip,
+    peak_status,
 )
 from rbl.state.setpoints import AXIS_CHANNELS, START_PHASE_DEFAULTS
 from rbl.state.snapshots import ChannelParams
@@ -161,8 +162,8 @@ class ChannelPanel(QGroupBox):
         amp_row = unit_row(self.spn_amp, "Vpp")
         form.addRow(self.lbl_amp, amp_row)
 
-        # HV consequence label (updates live)
-        self.lbl_hv = QLabel("→ 0.0000 kV/plate  (0.0000 kV p-p)")
+        # Input-peak consequence label (updates live)
+        self.lbl_hv = QLabel("input peak 0.00 V")
         self.lbl_hv.setStyleSheet("color: #7a2000; font-size: 10px;")
         form.addRow("", self.lbl_hv)
 
@@ -305,35 +306,18 @@ class ChannelPanel(QGroupBox):
         self._update_hv_label()
 
     def _update_hv_label(self):
-        # Gain is 1000× (1 V_gen -> 1 kV_plate), so the numeric V value equals kV.
-        shape  = self.cbo_shape.currentText()
+        shape   = self.cbo_shape.currentText()
         amp_vpp = self.spn_amp.value()
         offset  = self.spn_offset.value()
 
-        # Combined peak the amplifier input actually sees (|offset| + amp/2).
-        peak = channel_peak_volts(shape, amp_vpp, offset)
-
-        if shape == "DC":
-            # DC hold: the plate sits at a fixed offset·gain.
-            plate_kv = abs(offset) * _AMP_GAIN / 1000.0
-            self.lbl_hv.setText(
-                f"→ {plate_kv:.4f} kV/plate (DC)   |   peak {peak:.3f} V"
-            )
-        else:
-            # Amplitude is peak-to-peak: the plate swings ±(amp/2)·gain about the
-            # offset, so plate 0-to-peak = amp/2 kV and plate p-p = amp kV.
-            plate_peak_kv = (amp_vpp / 2.0) * _AMP_GAIN / 1000.0
-            plate_pp_kv   = amp_vpp * _AMP_GAIN / 1000.0
-            self.lbl_hv.setText(
-                f"→ ±{plate_peak_kv:.4f} kV/plate  ({plate_pp_kv:.4f} kV p-p)"
-                f"   |   peak {peak:.3f} V"
-            )
-        if peak > PEAK_MAX_VOLTS + 1e-9:
+        status, peak = peak_status(shape, amp_vpp, offset)
+        self.lbl_hv.setText(f"input peak {peak:.2f} V")
+        if status == "block":
             # Over the amplifier's ±5 V rail — apply will be blocked.
             self.lbl_hv.setStyleSheet(
                 f"color: {theme.FAULT}; font-size: 10px; font-weight: bold;"
             )
-        elif peak > PEAK_WARN_VOLTS + 1e-9:
+        elif status == "warn":
             # Above the 4 V advisory — apply will ask to confirm.
             self.lbl_hv.setStyleSheet(
                 f"color: {theme.WARN}; font-size: 10px; font-weight: bold;"
@@ -481,6 +465,7 @@ class ChannelPanel(QGroupBox):
             self.btn_output.setChecked(params.output_on)
         finally:
             self._syncing = False
+        self._update_hv_label()
         self._refresh_pending_badge()
 
     def update_readback(self, state: dict):
@@ -644,11 +629,11 @@ class FuncGenTab(QWidget):
         # ── Amplifier input-limit note ────────────────────────────────────
         note_lbl = QLabel(
             "⚠  Amplifier input ceiling — the EEL5000 accepts ±5 V max on its "
-            "input (= ±5 kV/plate). Amplitude is peak-to-peak (Vpp): an AC wave "
+            "input. Amplitude is peak-to-peak (Vpp): an AC wave "
             "swings ±½·amplitude about the offset, so the peak the amplifier "
             "actually sees is |offset| + ½·amplitude, and THAT combined peak must "
             "stay ≤ 5 V — not each field on its own. So 0 V offset + 10 Vpp "
-            "reaches the full ±5 kV rail (peak = 5 V), but e.g. 4 V offset + "
+            "reaches the full ±5 V rail (peak = 5 V), but e.g. 4 V offset + "
             "4 Vpp is blocked (peak = 6 V). Amplitude allows up to 10 Vpp, offset "
             "up to ±5 V. Apply is blocked above 5 V peak and asks you to confirm "
             "above 4 V. Each channel's live 'peak' readout turns amber past 4 V "
@@ -659,6 +644,8 @@ class FuncGenTab(QWidget):
             "color: #7a2000; font-size: 9pt; padding: 4px; "
             "background: #fff6e6; border: 1px solid #e0c080; border-radius: 3px;"
         )
+        self.lbl_help = note_lbl
+        self.note_lbl = note_lbl
         left_layout.addWidget(note_lbl)
 
         # ── 4 channel panels in 2×2 grid ─────────────────────────────────
