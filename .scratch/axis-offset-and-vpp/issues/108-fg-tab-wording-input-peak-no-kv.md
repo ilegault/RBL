@@ -1,6 +1,6 @@
 # 108: FG tab wording — input peak, no kV
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
