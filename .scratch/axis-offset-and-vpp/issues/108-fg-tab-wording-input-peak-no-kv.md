@@ -36,8 +36,9 @@ generator volts only. Blocked by 106 only because both tickets edit `funcgen_tab
 - [ ] Amplitude and offset boxes, their ranges, the Mirror button's behaviour
       (`FuncGenTab._mirror_channel`, amplitude and frequency only) and the readback line
       (`ChannelPanel.update_readback`) are unchanged. Existing tests in
-      `tests/test_funcgen_panel_status.py` and `tests/test_setpoint_sync.py` pass with
-      no deletions. Test: the existing `test_update_signals_only_on_a_real_change` and the rest of tests/test_funcgen_panel_status.py and tests/test_setpoint_sync.py, unedited.
+      tests/test_funcgen_panel_status.py and tests/test_setpoint_sync.py pass unedited,
+      with no deletions. (no test: regression guard, these tests pass before and after
+      by design; integrity check 2 rejects deleted tests or lost assertions)
 
 Tests may fake the generator connection as `tests/test_funcgen_panel_status.py` does.
 
