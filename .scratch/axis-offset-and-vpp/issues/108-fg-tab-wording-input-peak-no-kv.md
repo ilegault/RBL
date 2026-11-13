@@ -1,6 +1,6 @@
 # 108: FG tab wording — input peak, no kV
 
-**Status:** ready-for-agent
+**Status:** blocked
 
 **Runner:** any
 
@@ -20,20 +20,20 @@ generator volts only. Blocked by 106 only because both tickets edit `funcgen_tab
 
 ## Acceptance criteria
 
-- [ ] `ChannelPanel.lbl_hv` (set in `ChannelPanel._update_hv_label`) reads exactly
+- [x] `ChannelPanel.lbl_hv` (set in `ChannelPanel._update_hv_label`) reads exactly
       `input peak 3.20 V` for Sine, 4.4 Vpp, +1.0 V offset, and `input peak 1.50 V` for
       shape DC at −1.5 V. It uses `channel_peak_volts` / `peak_status` from
       `src/rbl/hardware/funcgen_safety.py`, with the same WARN (> 4 V) and FAULT (> 5 V)
       roles the label uses today. A test drives the panel through
       `beamline.funcgen_setpoints.update(...)` and asserts both strings. Test: tests/test_funcgen_panel_status.py::`test_channel_input_peak_line`.
-- [ ] The FG tab help text (the paragraph around the "Amplitude is peak-to-peak (Vpp)"
+- [x] The FG tab help text (the paragraph around the "Amplitude is peak-to-peak (Vpp)"
       wording in `FuncGenTab.__init__`) still states: input peak = |offset| + ½·amplitude,
       Apply blocked above 5 V, confirmation above 4 V, 10 Vpp at 0 V reaches the limit,
       4 V + 4 Vpp is over it. It contains no `kV`. Test: tests/test_funcgen_panel_status.py::`test_help_text_states_the_limit_in_generator_volts`.
-- [ ] No `text()` or `toolTip()` of any `ChannelPanel` widget, and no FG tab help label,
+- [x] No `text()` or `toolTip()` of any `ChannelPanel` widget, and no FG tab help label,
       contains `kV/plate`, `kV p-p` or `5 kV`. A test walks `tab.panels.values()` and the
       help label and asserts this. Test: tests/test_funcgen_panel_status.py::`test_fg_tab_text_has_no_kv`.
-- [ ] Amplitude and offset boxes, their ranges, the Mirror button's behaviour
+- [x] Amplitude and offset boxes, their ranges, the Mirror button's behaviour
       (`FuncGenTab._mirror_channel`, amplitude and frequency only) and the readback line
       (`ChannelPanel.update_readback`) are unchanged. Existing tests in
       `tests/test_funcgen_panel_status.py` and `tests/test_setpoint_sync.py` pass with
@@ -51,3 +51,17 @@ pytest --tb=short -q -n auto --dist loadfile --durations=25
 ```
 
 ## Comments
+
+## Escalation — 2026-11-13
+Repo: RBL   Ticket: 108 FG tab wording — input peak, no kV   Branch: ticket/axis-offset-and-vpp-108-fg-tab-wording-input-peak-no-kv
+Goal: Display input peak volts instead of kV on Function Generators tab and remove kV from help banner and widgets.
+Attempt 1: Implemented all criteria, added named tests (`test_channel_input_peak_line`, `test_help_text_states_the_limit_in_generator_volts`, `test_fg_tab_text_has_no_kv`), verified tests fail on base and pass on head. Full test suite and type gate pass. Ran local integrity gate.
+Result: Local integrity gate failed Check 9 on the base copy of criterion 4.
+Failing output:
+```
+<!-- ticket-engine-integrity-gate -->
+## Integrity Gate Verdict: FAIL
+- Check 7 pass: All 3 new test(s) failed on base code (runtime 49.90s)
+- Check 9 fail: `test_update_signals_only_on_a_real_change` (criterion "Amplitude and offset boxes, their ranges, the Mirror button'") did not fail on the base code, so it does not prove the criterion
+```
+Decision needed: Criterion 4 on `master` names backticked existing test `test_update_signals_only_on_a_real_change`, which passes on base code because it verifies unchanged behaviour. Check 9 requires named tests to fail on base. Does the developer want to retag criterion 4 (e.g. `(no test: existing tests unedited)`) on `master` or how should check 9 be satisfied?
