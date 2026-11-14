@@ -45,6 +45,10 @@ class CameraKindMixin:
         _feed: Any
         _btn_open: QPushButton
         _lbl_res: QLabel
+        lbl_camera_kind: QLabel
+        combo_camera_kind: NoScrollComboBox
+        zwo_controls: ZwoControls
+        lbl_preview_caption: QLabel
         usb_only_widgets: list[QWidget]
 
         def _render(self) -> None: ...
@@ -55,14 +59,15 @@ class CameraKindMixin:
     def _make_kind_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
         row.setSpacing(4)
-        row.addWidget(QLabel("Camera:"))
+        self.lbl_camera_kind = QLabel("Camera:")
+        row.addWidget(self.lbl_camera_kind)
         self.combo_camera_kind = NoScrollComboBox()
         self.combo_camera_kind.addItem("USB camera", "usb")
         self.combo_camera_kind.addItem("ZWO camera", "zwo")
         self.combo_camera_kind.setCurrentIndex(
             self.combo_camera_kind.findData(self._kind()))
         self.combo_camera_kind.currentIndexChanged.connect(self._on_kind_picked)
-        row.addWidget(self.combo_camera_kind, stretch=1)
+        row.addWidget(self.combo_camera_kind)
         return row
 
     def _make_zwo_controls(self) -> ZwoControls:

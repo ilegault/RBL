@@ -18,7 +18,11 @@ It also maps a rectangle drawn over the Preview back to sensor coordinates
 (``view_rect_to_sensor_roi``, ticket 75), so ROI drawing needs no Qt maths in
 the widget; the Capture Process snaps the result.
 
-Pure: plain arrays in, plain arrays out. No Qt, no clock, no I/O.
+And provides the pure height-for-width sizing calculation
+(``preview_height_for_width``, ticket 89) so VideoView can cap Preview height
+to aspect ratio without widget maths or Qt dependency.
+
+Pure: plain arrays and numbers in, plain arrays and numbers out. No Qt, no clock, no I/O.
 """
 import cv2
 import numpy as np
@@ -106,3 +110,24 @@ def view_rect_to_sensor_roi(
     y0 = round((top - py) * scale_y)
     y1 = round((bottom - py) * scale_y)
     return roi["x"] + x0, roi["y"] + y0, x1 - x0, y1 - y0
+
+
+def preview_height_for_width(
+    width: int,
+    frame_size: tuple[int, int] | None,
+    max_height_per_width: float,
+) -> int:
+    """Preview height for a given width, capped by max_height_per_width.
+
+    Used when VideoView opts into height-follows-width (ticket 89): the Preview
+    takes the frame's aspect ratio, capped at 16:9 (or another ratio), so tall
+    or 1:1 sensor crops do not expand vertically and eat the Overview panel.
+    Returns the cap height when frame_size is None or has a zero side.
+    """
+    if frame_size is None or frame_size[0] <= 0 or frame_size[1] <= 0:
+        ratio = max_height_per_width
+    else:
+        frame_w, frame_h = frame_size
+        ratio = min(frame_h / frame_w, max_height_per_width)
+    return round(width * ratio)
+

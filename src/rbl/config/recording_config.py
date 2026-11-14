@@ -27,6 +27,11 @@ RECORD_FPS_MAX           = 120
 # eye on a still or slow-moving beam image.
 PREVIEW_EMIT_MAX_FPS     = 15
 
+# Maximum height-to-width ratio for the Overview Preview. Keeps the Preview
+# from eating the Session Recorder panel on tall or 1:1 frames (ticket 89).
+PREVIEW_MAX_HEIGHT_PER_WIDTH = 9 / 16
+
+
 # ---- Video segmentation ----------------------------------------------------
 
 SEGMENT_SECONDS_DEFAULT  = 600     # 10 min

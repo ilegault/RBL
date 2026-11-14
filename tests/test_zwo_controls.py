@@ -40,6 +40,7 @@ def recorder_and_widget(tmp_path, monkeypatch, qapp, capture_client):
 
     cam = CameraSource()
     capture_client.start("fake")
+    assert wait_until(lambda: capture_client.is_ready())
     rec = SessionRecorder(lambda: {"beamline_v": 1.0}, cam, capture=capture_client)
     rec.set_camera_kind("zwo")
 
@@ -73,8 +74,13 @@ def test_inputs_disabled_until_open_then_ranged_from_controls(recorder_and_widge
     assert wait_until(lambda: bool(rec.state()["zwo_info"]))
 
     # After open, they are enabled
+    # The ROI button is the one exception (ticket 91): at the full sensor with no
+    # Last ROI there is nothing to go back to, so it stays disabled.
     for inp in inputs:
+        if inp is widget.btn_full_sensor:
+            continue
         assert inp.isEnabled(), f"{inp} should be enabled after open"
+    assert not widget.btn_full_sensor.isEnabled()
 
     gain_max = rec.state()["zwo_info"]["controls"]["Gain"]["max"]
     assert widget.spin_gain.maximum() == gain_max
@@ -186,6 +192,26 @@ def test_take_darks_asks_first(recorder_and_widget, qapp):
     rec.stop()
 
 
+def test_a_status_message_repaints_the_status_line_by_itself(
+        recorder_and_widget, capture_client, qapp):
+    """A status message must announce itself with state_changed.
+
+    The status line is only redrawn from state_changed; if the status handler
+    stores the message silently the line stays blank until an unrelated event.
+    The message is delivered through the client's own signal, synchronously,
+    so nothing else can repaint the line in between.
+    """
+    _rec, widget, _ = recorder_and_widget
+    assert widget.lbl_status.text() == ""
+    capture_client.status.emit({
+        "type": "status", "acquired_fps": 12.5, "frames_written": 7,
+        "frames_dropped_camera": 0, "frames_dropped_queue": 0,
+        "sensor_temperature_c": 21.0, "bytes_per_hour": 2e9,
+        "disk_free_bytes": 50 * 1024**3,
+    })
+    assert "12.5 fps" in widget.lbl_status.text()
+
+
 def test_status_line_and_caption(recorder_and_widget, qapp):
     rec, widget, _ = recorder_and_widget
     rec.connect_zwo()
@@ -201,3 +227,55 @@ def test_status_line_and_caption(recorder_and_widget, qapp):
 
     assert preview_caption("auto") == "Display stretch: not intensity"
     assert preview_caption("linear") == "Linear display"
+
+
+def test_rows_are_packed(recorder_and_widget, qapp):
+    from tests.test_recording_panel import _same_row
+
+    rec, widget, _ = recorder_and_widget
+    _same_row(
+        widget.spin_exposure_ms,
+        widget.spin_gain,
+        widget.combo_bit_depth,
+        widget.spin_keep_one_in_n,
+    )
+    _same_row(
+        widget.spin_roi_x,
+        widget.btn_full_sensor,
+        widget.btn_take_darks,
+    )
+    _same_row(
+        widget.combo_preview,
+        widget.slider_brightness,
+    )
+
+
+
+def test_roi_button_swaps_and_locks(recorder_and_widget, qapp):
+    rec, widget, _ = recorder_and_widget
+    rec.connect_zwo()
+    assert wait_until(lambda: rec.state()["zwo_open"])
+    assert wait_until(lambda: bool(rec.state()["zwo_settings"]))
+    qapp.processEvents()
+
+    # At the full sensor with no Last ROI: "Back to ROI", nothing to go back to.
+    assert widget.btn_full_sensor.text() == "Back to ROI"
+    assert not widget.btn_full_sensor.isEnabled()
+
+    rec.set_zwo_settings(roi={"x": 64, "y": 32, "width": 640, "height": 480})
+    assert wait_until(lambda: rec.state()["zwo_last_roi"] is not None)
+    qapp.processEvents()
+    assert widget.btn_full_sensor.text() == "Full sensor"
+    assert widget.btn_full_sensor.isEnabled()
+
+    assert rec.start()
+    assert rec.start_video()
+    assert wait_until(lambda: rec.state()["zwo_recording"])
+    qapp.processEvents()
+    assert not widget.btn_full_sensor.isEnabled()
+    for spin in (widget.spin_roi_x, widget.spin_roi_y,
+                 widget.spin_roi_width, widget.spin_roi_height):
+        assert not spin.isEnabled()
+    rec.stop_video()
+    assert wait_until(lambda: not rec.state()["zwo_recording"])
+    rec.stop()

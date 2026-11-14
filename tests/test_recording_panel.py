@@ -397,3 +397,173 @@ def test_open_and_close_buttons_drive_the_zwo_camera(zwo_rig, which):
     open_btn.click()
     assert wait_until(lambda: not rec.state()["zwo_open"], 10.0)
     assert wait_until(lambda: open_btn.text() == "Open", 10.0)
+
+
+def _same_row(*widgets):
+    assert len(widgets) >= 2
+    parent = widgets[0].parentWidget()
+    assert parent is not None
+    root_layout = parent.layout()
+    assert root_layout is not None
+
+    def _find_layout(layout, widget):
+        for i in range(layout.count()):
+            item = layout.itemAt(i)
+            if item.widget() == widget:
+                return layout
+            child = item.layout()
+            if child is not None:
+                found = _find_layout(child, widget)
+                if found is not None:
+                    return found
+        return None
+
+    target = _find_layout(root_layout, widgets[0])
+    assert target is not None, f"Could not find layout for {widgets[0]}"
+    for w in widgets[1:]:
+        found_lay = _find_layout(root_layout, w)
+        assert found_lay is target, f"{w} is in layout {found_lay}, expected {target}"
+
+
+def test_preview_takes_no_spare_height(zwo_rig, qapp):
+    from rbl.config.recording_config import PREVIEW_MAX_HEIGHT_PER_WIDTH
+    from rbl.gui.widgets.video_view import VideoView
+    from rbl.hardware.preview_stretch import preview_height_for_width
+
+    rec, cam, _ = zwo_rig
+    view = _make_view("panel", rec, cam)
+    view.resize(800, 1600)
+    view.show()
+    qapp.processEvents()
+
+    feed = [w for w in view.findChildren(VideoView)][0]
+    expected = preview_height_for_width(feed.width(), None, PREVIEW_MAX_HEIGHT_PER_WIDTH)
+    assert abs(feed.height() - expected) <= 2
+
+
+def test_rows_are_packed(zwo_rig, qapp):
+    rec, cam, _ = zwo_rig
+    view = _make_view("panel", rec, cam)
+    view.show()
+
+    combo_camera_kind = view.combo_camera_kind
+    btn_open = [b for b in view.findChildren(QPushButton) if b.text() in ("Open", "Close")][0]
+    spin_csv = [s for s in view.findChildren(QSpinBox) if s.suffix().strip() == "s"][0]
+    btn_session = [b for b in view.findChildren(QPushButton) if "SESSION" in b.text()][0]
+    btn_video = [b for b in view.findChildren(QPushButton) if "Video" in b.text()][0]
+    btn_photo = [b for b in view.findChildren(QPushButton) if "Photo" in b.text()][0]
+    btn_note = [b for b in view.findChildren(QPushButton) if "Note" in b.text()][0]
+    btn_folder = [b for b in view.findChildren(QPushButton) if "Folder" in b.text()][0]
+    combo_fmt = [
+        c for c in view.findChildren(QComboBox)
+        if any(c.itemData(i) in ("MJPG", "YUY2") for i in range(c.count()))
+    ][0]
+    combo_master = [
+        c for c in view.findChildren(QComboBox)
+        if any("MJPEG q98" in c.itemText(i) for i in range(c.count()))
+    ][0]
+    combo_quality = [
+        c for c in view.findChildren(QComboBox)
+        if any("Standard (CRF" in c.itemText(i) for i in range(c.count()))
+    ][0]
+    combo_seg = [
+        c for c in view.findChildren(QComboBox)
+        if any("min" in c.itemText(i) for i in range(c.count()))
+    ][0]
+
+    _same_row(combo_camera_kind, btn_open)
+    _same_row(spin_csv, btn_session)
+    _same_row(btn_video, btn_photo, btn_note, btn_folder)
+    _same_row(combo_fmt, combo_master)
+    _same_row(combo_quality, combo_seg)
+
+
+# ---- Compact mode (ticket 90) -----------------------------------------------
+
+
+@pytest.mark.parametrize("kind", ["usb", "zwo"])
+def test_compact_mode_shows_only_run_controls(zwo_rig, kind):
+    rec, cam, _ = zwo_rig
+    view = _make_view("panel", rec, cam)
+    view.show()
+    if kind == "zwo":
+        view.combo_camera_kind.setCurrentIndex(1)
+    view.btn_compact.setChecked(True)
+    assert not any(w.isVisibleTo(view) for w in view.compact_hidden_widgets)
+    for w in view.compact_shown_widgets:
+        if w is view.lbl_preview_caption:
+            assert w.isVisibleTo(view) == (kind == "zwo")
+        else:
+            assert w.isVisibleTo(view)
+
+
+def test_compact_mode_survives_state_updates(zwo_rig):
+    rec, cam, _ = zwo_rig
+    view = _make_view("panel", rec, cam)
+    view.show()
+    view.combo_camera_kind.setCurrentIndex(1)
+    view.btn_compact.setChecked(True)
+    rec.state_changed.emit()
+    rec.settings_changed.emit()
+    assert not view.zwo_controls.isVisibleTo(view)
+    assert not view.combo_camera_kind.isVisibleTo(view)
+
+
+@pytest.mark.parametrize("kind", ["usb", "zwo"])
+def test_leaving_compact_restores_the_kind_rows(zwo_rig, kind):
+    rec, cam, _ = zwo_rig
+    view = _make_view("panel", rec, cam)
+    view.show()
+    if kind == "zwo":
+        view.combo_camera_kind.setCurrentIndex(1)
+    usb_vis_before = [w.isVisibleTo(view) for w in view.usb_only_widgets]
+    zwo_vis_before = view.zwo_controls.isVisibleTo(view)
+    caption_vis_before = view.lbl_preview_caption.isVisibleTo(view)
+
+    view.btn_compact.setChecked(True)
+    view.btn_compact.setChecked(False)
+
+    assert [w.isVisibleTo(view) for w in view.usb_only_widgets] == usb_vis_before
+    assert view.zwo_controls.isVisibleTo(view) == zwo_vis_before
+    assert view.lbl_preview_caption.isVisibleTo(view) == caption_vis_before
+
+
+def test_compact_starts_off(zwo_rig):
+    rec, cam, _ = zwo_rig
+    view = _make_view("panel", rec, cam)
+    view.show()
+    assert view.btn_compact.isChecked() is False
+    assert all(w.isVisibleTo(view) for w in view.usb_only_widgets)
+    assert not view.zwo_controls.isVisibleTo(view)
+
+    view.combo_camera_kind.setCurrentIndex(1)
+    assert view.btn_compact.isChecked() is False
+    assert not any(w.isVisibleTo(view) for w in view.usb_only_widgets)
+    assert view.zwo_controls.isVisibleTo(view)
+
+
+def test_compact_buttons_still_act(zwo_rig):
+    rec, cam, _ = zwo_rig
+    view = _make_view("panel", rec, cam)
+    view.show()
+    view.combo_camera_kind.setCurrentIndex(1)
+    rec.connect_zwo()
+    assert wait_until(lambda: rec.state()["zwo_open"], 10.0)
+
+    view.btn_compact.setChecked(True)
+
+    btn_session = [b for b in view.findChildren(QPushButton) if "SESSION" in b.text()][0]
+    btn_photo = [b for b in view.findChildren(QPushButton) if "Photo" in b.text()][0]
+
+    btn_session.click()
+    assert wait_until(lambda: rec.state()["recording"] is True, 10.0)
+
+    photo_emitted = []
+    rec.photo_taken.connect(lambda path: photo_emitted.append(path))
+    btn_photo.click()
+    assert wait_until(lambda: len(photo_emitted) > 0, 10.0)
+
+    rec.stop()
+    rec.disconnect_zwo()
+
+

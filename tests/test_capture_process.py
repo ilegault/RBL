@@ -689,3 +689,65 @@ def test_killed_process_keeps_counted_frames(tmp_path) -> None:
             assert np.array_equal(f, _expected(_k_of(f)))
     finally:
         c.kill()
+
+
+# --- Ticket 98: fake-camera seams for Open failure cases ---
+
+
+def test_fake_cameras_empty_sends_an_empty_hello(capture_child) -> None:
+    child: CaptureChild = capture_child(extra_args=["--fake-cameras-empty"])
+    hello = child.wait_for("hello", timeout=10.0)
+    assert hello.get("cameras") == []
+    check_hello(hello)
+
+
+def test_fake_fatal_is_the_only_line_and_exits_1(capture_child) -> None:
+    child: CaptureChild = capture_child(
+        extra_args=["--fake-fatal", "zwoasi.init failed: bad DLL"]
+    )
+    code = child.wait_exit(timeout=10.0)
+    assert code == 1
+    assert child.all_messages == [{"type": "fatal", "message": "zwoasi.init failed: bad DLL"}]
+
+
+def test_fake_no_hello_waits_for_stdin_to_close(capture_child) -> None:
+    child: CaptureChild = capture_child(extra_args=["--fake-no-hello"])
+    time.sleep(1.0)
+    assert len(child.all_messages) == 0
+    assert child.proc.poll() is None
+    child.close_stdin()
+    code = child.wait_exit(timeout=10.0)
+    assert code == 0
+    assert len(child.all_messages) == 0
+
+
+def test_fake_open_delay_delays_the_open_reply(capture_child) -> None:
+    child: CaptureChild = capture_child(extra_args=["--fake-open-delay-s", "1.0"])
+    child.wait_for("hello", timeout=10.0)
+    t0 = time.monotonic()
+    rep = child.request({"type": "open", "camera_index": 0})
+    dt = time.monotonic() - t0
+    assert rep["type"] == "ok"
+    assert dt >= 1.0
+
+
+@pytest.mark.parametrize(
+    "flag",
+    [
+        ["--fake-cameras-empty"],
+        ["--fake-fatal", "zwoasi.init failed: bad DLL"],
+        ["--fake-no-hello"],
+        ["--fake-open-delay-s", "1.0"],
+    ],
+)
+def test_fake_flags_need_the_fake_camera(capture_child, tmp_path: Path, flag: list[str]) -> None:
+    dll_path = tmp_path / "x.dll"
+    child: CaptureChild = capture_child(
+        extra_args=["--camera", "zwo", "--sdk-dll", str(dll_path), *flag]
+    )
+    code = child.wait_exit(timeout=10.0)
+    assert code == 2
+    assert len(child.raw_stdout_lines) == 0
+    stderr_text = "\n".join(child.stderr_lines)
+    assert "need --camera fake" in stderr_text
+

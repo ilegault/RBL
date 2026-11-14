@@ -8,10 +8,12 @@ on:
   push:
   pull_request:
     branches: [ master ]
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
 
 jobs:
   lint:
     runs-on: windows-latest
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4
@@ -47,6 +49,8 @@ jobs:
 
   test:
     runs-on: windows-latest
+    # The suite takes ~3 min. Without this a hung job runs for GitHub's 6 h default.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:

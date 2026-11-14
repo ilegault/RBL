@@ -30,17 +30,30 @@ DIGITAL ACTUATION AND STATUS DECODING (ADR 0003)
 ------------------------------------------------
 The Faraday Cup Controller ESM remote connector is operated via the LabJack T7
 and an LJTick-RelayDriver (LJTRD) with relay isolation:
-- Enable line (FIO0): closes relay 1 across ESM P1 5-13, enabling cup OUT control.
+- Interlock line (FIO0): closes relay 1 across ESM P1 5-13 (interlock).
+  The controller lets the cup go OUT by any route (remote command in AUTO, or the
+  front-panel buttons in LOCAL) only while this loop is closed (seen on hardware, 2026-11-10).
 - Command line (FIO1): closes relay 2 across ESM P1 1-9, commanding cup OUT.
-- Cup IN status (FIO2): isolated dry contact to GND (bit 2).
-- Cup OUT status (FIO3): isolated dry contact to GND (bit 3).
-- Controller AUTO mode (FIO4): isolated dry contact to GND (bit 4).
+- Cup IN status (FIO2): ESM P1 3-11, isolated dry contact to GND (bit 2).
+- Cup OUT status (FIO3): ESM P1 2-10, isolated dry contact to GND (bit 3).
+- Controller AUTO mode (FIO4): ESM P1 4-12, isolated dry contact to GND (bit 4).
+
+Wiring facts from the 2026-11-08 bench (cup-actuation ticket 12; spec "The hardware
+chain"). Neither is visible from software, and both break the mapping above silently:
+- P1 controls cup #3 only. The end-station cup must be on controller channel 3, or
+  these lines command and report a different cup.
+- Two cables, about 75 ft. Cable A carries the command pairs (5/13 to relay 1, 1/9 to
+  relay 2, both on the NO contacts; NC would invert the fail-safe). Cable B carries the
+  status lines, with P1 10, 11 and 12 tied at the breakout and returned on one wire to
+  LabJack GND. The controller does not tie them; the shared return is the breakout's.
 
 Polarity:
-Closed is zero. When a status contact closes, it pulls the FIO line to GND,
-reading as bit value 0 in FIO_STATE. The decoding function inverts.
+A status line reads 1 when its condition is asserted (bench, 2026-11-10, cup IN in
+AUTO: FIO2 = 1, FIO3 = 0, FIO4 = 1); the level is CUP_STATUS_ASSERTED_LEVEL. A
+disconnected status cable floats all three lines high on the T7's pull-ups and so
+reads INDETERMINATE with AUTO asserted.
 Fails-into-the-beam:
-Cup OUT requires both closures (enable and command). Any loss of drive opens both
+Cup OUT requires both closures (interlock and command). Any loss of drive opens both
 relays, and the cup pneumatic cylinder returns IN, intercepting the beam ahead
 of the specimen.
 
@@ -82,6 +95,7 @@ KEITHLEY_6482_DEFAULT_RESOURCE: str = "GPIB0::2::INSTR"
 # ---- Reconnect backoff schedule -------------------------------------------
 # Seconds to wait between reconnect attempts after a VISA communication failure.
 CUP_RECONNECT_BACKOFF_S: list[float] = [1.0, 2.0, 5.0, 10.0, 30.0]
+CUP_WORKER_RESTART_WAIT_MS: int = 6000  # driver VISA timeout (5000 ms) plus one second
 
 # ---- Acquisition trigger thresholds (ADR 0002) ---------------------------
 CUP_ARM_THRESHOLD_A: float = 0.5e-6        # 0.5 µA to trigger run arming
@@ -99,15 +113,16 @@ CUP_STALE_THRESHOLD_S: float = 3.0 * CUP_POLL_INTERVAL_IDLE_S
 
 # ---- Digital I/O lines & status bit positions (ADR 0003) -----------------
 # CB37 terminal board assignments for Faraday cup actuation and status contacts
-CUP_ENABLE_LINE: str = "FIO0"          # Relay 1 -> ESM P1 5-13 (enable cup OUT control)
+CUP_INTERLOCK_LINE: str = "FIO0"  # Relay 1 -> ESM P1 5-13 (interlock: closed is required for cup OUT, remote or front panel)  # noqa: E501
 CUP_COMMAND_OUT_LINE: str = "FIO1"     # Relay 2 -> ESM P1 1-9 (command cup OUT)
-CUP_ENABLE_OUT_LINE: str = CUP_ENABLE_LINE  # Alias for explicit role naming
 
 # Status bit positions in the raw FIO_STATE integer
-# Active-low dry contacts to GND: 0 = closed (asserted), 1 = open (not asserted)
+# Status lines read 1 when asserted (bench, 2026-11-10, cup IN in AUTO: FIO2=1, FIO3=0, FIO4=1)
 CUP_STATUS_BIT_IN: int = 2             # FIO2: cup IN contact
 CUP_STATUS_BIT_OUT: int = 3            # FIO3: cup OUT contact
 CUP_STATUS_BIT_AUTO: int = 4           # FIO4: controller AUTO mode contact
+# Status line reads 1 when asserted (bench, 2026-11-10, cup IN in AUTO: FIO2=1, FIO3=0, FIO4=1)
+CUP_STATUS_ASSERTED_LEVEL: int = 1
 
 # ---- Actuation timing & debounce (ADR 0003) ------------------------------
 CUP_MOVE_CONFIRMATION_TIMEOUT_S: float = 2.0  # Seconds before unconfirmed move raises a fault

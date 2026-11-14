@@ -319,11 +319,15 @@ pushed and no reviewer — human or AI — will ever see it.
 
 CI enforces that any pull request or commit modifying application code under `src/` must also modify tests under `tests/` (`scripts/check_tests_first.py`). Changes touching only documentation (`docs/`), build scripts (`scripts/`, `tools/`), CI configurations (`.github/`), or tests (`tests/`) pass automatically.
 
-When a change touching `src/` genuinely does not require test additions or modifications (e.g. comment-only clarification, pure structural cleanup fully covered by existing contract tests, or exploratory hardware bring-up), the author must declare an explicit and visible escape reason:
-- **Commit message or PR text**: Include `[no-test-needed: <reason>]`, `[tests-exempt: <reason>]`, or `[skip-test-gate]`.
-- **PR label**: Apply the `tests-exempt` or `skip-test-gate` label.
-
-The escape reason is recorded in the PR history and visible during code review; silent bypassing is not possible.
+A change under `src/` must also touch `tests/`. A `.py` file whose code is unchanged
+once docstrings and comments are removed does not count as a change. Otherwise the
+escape is explicit and visible, and its reach depends on where it is written: a tag
+(`[no-test-needed: <reason>]`, `[tests-exempt: <reason>]` or `[skip-test-gate]`) in
+a commit message covers only the files that commit changed, and a file is exempt
+only when every commit that changed it is tagged; the same tag in the PR title or
+body, or the `tests-exempt` / `skip-test-gate` label, covers the whole PR, and CI
+re-runs when the PR text or labels change. The check fails, never passes, when it
+cannot work out what changed.
 
 ### Implementing a ticket — the protocol
 
@@ -465,32 +469,300 @@ someone else's bug fix smuggled into it cannot be reviewed.
 <!-- ACTIVE-PLAN:START -->
 ## Active implementation plan
 
-_Written by the planning model on 2026-11-03 19:54. Implement this. If something in it is wrong, say so before changing course._
+_Written by the planning model on 2026-11-10 19:41. Implement this. If something in it is wrong, say so before changing course._
 
-# Active work: target-uncertainty cup insertions (set 7), plus what remains of sets 2-4 and 6
+# Active work: picoammeter connect fixes (set 12, new), Faraday cup status polarity and interlock name (set 11), axis offset and Vpp (set 10), tests-first gate fix (105), plus the work below
 
 This is a pointer, not the work.
 
-## Set 7 (new): end a cup insertion when its mean is precise enough
+## Set 12 (new): picoammeter connect — retarget, keep the reason, hint the fix
 
-- Spec: `.scratch/cup-target-uncertainty/spec.md`
-- Binding: `docs/adr/0003-commanded-and-confirmed-cup-position.md` (new amendment D,
-  2026-11-03, and C1), `docs/adr/0002-cup-acquisition-triggered-by-current.md`
-  (amendments A5-A8, B3), `docs/adr/0001-tests-first-and-no-muted-failures.md`.
-- Glossary (new in `CONTEXT.md`, "Cup actuation and dose"): **Insertion uncertainty**,
-  **Dwell mode** (fixed dwell / target uncertainty / maximum dwell), **Converged
-  insertion**.
-- Tickets: `.scratch/cup-target-uncertainty/issues/81...88`. 88 is
-  `ready-for-developer` (bench): an agent must not claim it.
-- Tracker conventions: `docs/agents/issue-tracker.md`
+- **Spec:** none of its own; the reader spec `.scratch/faraday-cup-reader/spec.md`. Each
+  ticket carries its own evidence (lab PC and laptop runs of 2026-11-10).
+- **Binding:** `docs/adr/0001-tests-first-and-no-muted-failures.md`.
+- **Glossary:** no change.
+- **Tickets:** `.scratch/picoammeter-connect/issues/115...120`. 115-118 are agent tickets,
+  all `Auto-merge: yes`. 119 and 120 are `ready-for-developer` (bench): an agent must not
+  claim them.
+- **Tracker conventions:** `docs/agents/issue-tracker.md`
 
 ### Next
 
-- **81** and **82** are unblocked and touch disjoint code; any order, or in parallel.
-  Start with **81**: it is the pure contract 83, 84 and 87 import.
-- Then 83 (after 81), 84 (after 83), then 85 and 87 (both after 84), then 86 (after 85).
+- **115**, **116**, **117** and **118** are all unblocked and edit different files, so they
+  can run in parallel. Start with **115**: it is the bug that stranded the lab PC on
+  `GPIB0::14::INSTR` with Connect doing nothing.
+- **119** and **120** (developer, bench) can start now; 119's last criterion (rebuild and
+  deploy) waits on 115, 116 and 117.
 
 ### Dependency order
+
+```
+115 ─┐
+116 ─┼─ 119 (developer, bench; last criterion only)
+117 ─┘
+118
+120 (developer, bench)
+```
+
+### Requirements that are not preferences
+
+- 115: the worker always runs on the most recently requested resource string, and the old
+  worker is **waited for** (`CUP_WORKER_RESTART_WAIT_MS`) before the new one starts, so two
+  workers never hold the same 6482. If it will not stop, no new worker starts.
+- 115/117/118: existing tests named in the tickets pass unedited; they are the proof that
+  the same-resource no-op, the read-error message and the summary counts did not change.
+- 116: the disconnected view shows the last failure reason until a successful connect or
+  an operator click; the tests drive the real `Beamline` relays in the worker's
+  error-then-disconnected order.
+- 117: `visa_error_hint` is a pure hardware-layer function with exact strings, tested with
+  literal messages copied from real output; it is never patched.
+- 118: `ASRL` resources are never opened by `visa_probe.py`.
+
+### Not in this set
+
+Auto-discovery changes; the backoff ladder; a "Retrying…" display; hints for other
+instruments; a serial probe in `visa_probe.py`; pinning a VISA DLL path in application code.
+
+---
+
+## Set 11 (new): cup status lines read 1 when asserted; FIO0 is the interlock line
+
+- **Spec:** `.scratch/cup-actuation/spec.md` (the tickets correct its polarity paragraph
+  and its "enable" wording).
+- **Binding:** `docs/adr/0003-commanded-and-confirmed-cup-position.md`,
+  `docs/adr/0001-tests-first-and-no-muted-failures.md`.
+- **Glossary (new in `CONTEXT.md`, edited by the planner, committed by the developer, no
+  ticket):** **Interlock** and **Asserted**; the **AUTO mode** entry gains that LOCAL still
+  needs the interlock closed. The name "enable" for FIO0 is retired.
+- **Tickets:** `.scratch/cup-actuation/issues/113-status-lines-read-1-when-asserted.md`,
+  `.scratch/cup-actuation/issues/114-fio0-is-the-interlock-line.md`. Both agent tickets,
+  both `Auto-merge: yes`. No bench ticket in this set.
+- **Evidence:** the 2026-11-10 comment on bench ticket 12 (Kipling, cup IN in AUTO:
+  FIO2 = 1, FIO3 = 0, FIO4 = 1). Ticket 12 is `ready-for-developer` and is not edited.
+- **Tracker conventions:** `docs/agents/issue-tracker.md`
+
+### Next
+
+- **113** is unblocked: start with it. It is the visible bug (the tab reports confirmed
+  OUT with the cup IN). Then **114**, which is blocked by 113 only because both edit
+  `cup_config.py`, `tests/test_cup_status.py` and `tests/test_cup_actuation.py`.
+- Set 11 touches only cup files and may run in parallel with set 10 and set 7.
+
+### Dependency order
+
+```
+113 ── 114
+```
+
+### Requirements that are not preferences
+
+- The polarity lives in `CUP_STATUS_ASSERTED_LEVEL` in `cup_config.py`, and
+  `decode_cup_status()` reads it at call time (no default argument, no import-time mask),
+  so the monkeypatch test can prove the constant is used.
+- The new decode tests use integer literals from the real hardware (20 = cup IN in AUTO),
+  never words built from the bit constants: a word derived from the rule under test cannot
+  catch the rule being wrong.
+- Only the two tests on 113's `Deletes tests:` line are removed; everything else is
+  rewritten in place under its existing name. If a tab or Beamline test fails after the
+  fixture words change, fix `src/`, not the assertion.
+- 114 is a rename with no behaviour change: the old names do not survive as aliases.
+
+### Not in this set
+
+A UI to change the status mapping or polarity (the developer chose a config constant);
+moving any line to another FIO; any change to when FIO0 or FIO1 is driven; ADR 0003's
+wording; ticket 12's checklist.
+
+---
+
+## Set 10 (new): axis offset on the Overview, amplitude in Vpp everywhere, Send to drive
+
+- **Spec:** `.scratch/axis-offset-and-vpp/spec.md`
+- **Binding:** `docs/adr/0001-tests-first-and-no-muted-failures.md`. The ±5 V interlock is
+  load-bearing (AGENTS.md §7).
+- **Glossary (new in `CONTEXT.md`, committed with the spec, no ticket):** a **Raster drive**
+  section with **Amplitude**, **Offset**, **Linked pair** / **unlinked pair** and **Input peak**,
+  plus a Known collisions entry: "Peak" means three things.
+- **Tickets:** `.scratch/axis-offset-and-vpp/issues/106...112`. 112 is `ready-for-developer`
+  (bench): an agent must not claim it.
+- **Tracker conventions:** `docs/agents/issue-tracker.md`
+
+### Next
+
+- **106**, **107** and **109** are unblocked and touch different files, so they can run in
+  parallel. Start with **109** (the setpoint model): 110 and 111 both wait on it.
+- **108** after 106 (both edit `funcgen_tab.py`). **110** after 107 and 109. **111** after 109.
+- Then **112** (developer, bench).
+
+### Dependency order
+
+```
+106 ── 108 ──────────────┐
+107 ─┐                   │
+109 ─┴─ 110 ─────────────┼─ 112 (developer, bench)
+109 ─── 111 ─────────────┘
+```
+
+### Requirements that are not preferences
+
+- `Beamline.set_channel` and `Beamline.apply_all_channels` (`src/rbl/state/funcgen_control.py`)
+  are not edited. Greying Apply is a front-end courtesy; Beamline stays the backstop.
+- The link flag lives in `FuncGenSetpoints` (non-GUI) so it is testable without widgets,
+  and is never saved. `update_axis` drops `offset_v`.
+- Every greying decision calls `over_limit_channels` in `funcgen_safety.py`. No widget
+  repeats the 5 V comparison.
+- Send to drive never sends a hardware command and never changes `output_on`.
+- Planner text and the Send-to-drive enable rule are pure functions, tested with plain dicts.
+- The peak-volt test in `tests/test_overview_tab.py` is rewritten in place under its own
+  name; no test is deleted.
+
+### Not in this set
+
+Saving setpoints or link state; per-plate amplitude or frequency on the Overview; the warn
+threshold; the HV pressure interlock; the Overview amplifier bars; the planner's kV physics
+lines; applying to hardware from the planner.
+
+---
+
+## Tests-first gate fix (new)
+
+- **Spec:** `.scratch/tests-first-gate-holes/spec.md` in `ilegault/ticket-engine`.
+- **Binding:** `docs/adr/0001-tests-first-and-no-muted-failures.md`. Glossary: no change.
+- **Ticket:** `.scratch/tests-first-gate-holes/issues/105-take-the-fixed-tests-first-check-and-rerun-on-pr-edits.md`.
+  `ready-for-agent` (ticket-engine 87 is merged). Held (`Auto-merge: no`), a leaf, blocks
+  nothing, touches no application code or tests.
+- **Next:** this ticket is unblocked and can run alongside the sets below. It edits
+  `AGENTS.md` and ADR 0001, so a PR open on those files may need a rebase first.
+
+Requirements an implementer might treat as preferences: `scripts/check_tests_first.py`
+is the canonical file byte for byte and is never edited here, not even for lint; `tests/test_check_tests_first.py` must pass unedited.
+If it cannot land as is, the ticket is escalated (`Status: blocked`).
+
+---
+
+## Active work: ZWO Open fails loudly (set 9), compact Session Recorder and Draft ROI (set 8), target-uncertainty cup insertions (set 7, in progress), plus bench tickets from earlier sets
+
+This is a pointer, not the work.
+
+### Set 9 (new): ZWO Open fails loudly
+
+- Spec: `.scratch/zwo-open-diagnostics/spec.md`
+- Binding: `docs/adr/0008-zwo-camera-owned-by-a-capture-process.md` (decisions 1, 3, 4, 5, 7),
+  `docs/adr/0001-tests-first-and-no-muted-failures.md`.
+- Glossary: no change (D18; **camera message** is a UI string, not a domain term).
+- Tickets: `.scratch/zwo-open-diagnostics/issues/98...104`. 104 is `ready-for-developer`
+  (bench): an agent must not claim it.
+- Tracker conventions: `docs/agents/issue-tracker.md`
+
+#### Next
+
+- **98** is unblocked: start with it. It adds the fake-child flags that every later test
+  drives. Then 99, then 100 (all three edit `capture_client.py` or feed it, so in order).
+- After 100: **101** and **102** in parallel (different files).
+- **103** waits on 102 **and** on set 8's 90, 94 and 95 (it adds its label into the rows
+  they rework). Then 104 (bench).
+- Set 9's 98-102 touch no GUI file and may run in parallel with set 8 and set 7.
+
+#### Dependency order
+
+```
+98 ── 99 ── 100 ─┬─ 101 ─────────────┐
+                 └─ 102 ─┐           ├─ 104 (developer, bench)
+set 8: 90, 94, 95 ───────┴─ 103 ─────┘
+```
+
+#### Requirements that are not preferences
+
+- The fake-child flags (`--fake-cameras-empty`, `--fake-fatal`, `--fake-no-hello`,
+  `--fake-open-delay-s`) are refused unless `--camera fake`; they are CLI flags, not
+  protocol messages.
+- Every `CaptureClient` error goes through `_fail` (logged at ERROR, then emitted); no other
+  `error.emit` exists. Every `SessionRecorder` `status.emit` goes through `_announce`.
+- Both timeouts are `CaptureClient` constructor arguments so tests expire them in well under
+  a second. The hello timeout kills the child; the open-reply timeout only warns and never
+  kills (ADR 0008 decision 5). Timeout messages format the client's actual timeout.
+- `child_log_level` and `drain_lines` are pure module-level functions, tested without a child.
+- `connect_zwo` refuses a second open while `zwo_opening` is true; the disabled Open button
+  is not the lock.
+- The views read the new state keys with `st.get` defaults so stand-in recorders still work.
+- Tests in Qt test modules add no private-attribute access: the ratchet in
+  `tests/test_layering.py` is at its limit (462). Find widgets by text or public name.
+
+#### Not in this set
+
+A debug toggle or per-message protocol trace; a diagnostics button; any change to the line
+protocol or `CAPTURE_PROTOCOL_VERSION`; reattaching to a Capture Process; deploying the DLL
+(bench ticket 80); edits to set 8's tickets.
+
+### Set 8: compact Session Recorder, compact mode, Last ROI, Draft ROI
+
+- Spec: `.scratch/camera-layout-and-draft-roi/spec.md`
+- Binding: `docs/adr/0008-zwo-camera-owned-by-a-capture-process.md` (decisions 6, 7),
+  `docs/adr/0001-tests-first-and-no-muted-failures.md`.
+- Glossary (new in `CONTEXT.md`, via ticket 96, held): **Draft ROI**, **Last ROI**,
+  **Compact mode**; the **Region of interest (ROI)** entry gains the recording lock.
+- Tickets: `.scratch/camera-layout-and-draft-roi/issues/89...97`. 96 changes `CONTEXT.md`
+  (Auto-merge: no, a leaf). 97 is `ready-for-developer` (bench): an agent must not claim it.
+- Tracker conventions: `docs/agents/issue-tracker.md`
+
+#### Next
+
+- **89**, **92**, **95** and **96** are unblocked. Start with **89**: 90 and 91 wait on it,
+  and it is the visible fix. **92** (pure geometry) touches no GUI file and can run in
+  parallel with 89. 95 edits `camera_tab.py`, as 93 and 94 later do, so land 95 before 93
+  starts.
+- Then 90 and 91 (both after 89), 93 (after 91 and 92), 94 (after 93), then 97 (bench).
+
+#### Dependency order
+
+```
+89 ─┬─ 90 ──────────────┐
+    └─ 91 ─┐            │
+92 ────────┴─ 93 ── 94 ─┼─ 97 (developer, bench)
+95 ─────────────────────┘
+96 (held: CONTEXT.md, leaf)
+```
+
+#### Requirements that are not preferences
+
+- Layout tickets move widgets; they change no handler, signal or enable rule, and keep
+  every existing attribute name (tests reference them).
+- The Preview's height-for-width is opt-in on `VideoView`; the Camera tab's feed is
+  unchanged. `VideoView` size hints stay constant (see its docstring).
+- Compact visibility is applied last in `RecordingPanel._render`, after `_render_kind`,
+  so a state change cannot undo it. Compact mode is never saved.
+- The recorder refuses every ROI change while ZWO video is recording or starting; the GUI
+  disabling the controls is not the lock.
+- Last ROI is learned only from a confirmed Capture Process reply, never from what was
+  typed or drawn.
+- Draft geometry is pure functions in `src/rbl/hardware/roi_geometry.py` (no Qt), held
+  in sensor pixels; the Camera tab only routes events into them.
+- A Draft changes nothing until Apply ROI. Drafting is off in full screen and while
+  recording.
+
+#### Not in this set
+
+ROI drawing on the Overview; saved compact-mode or aspect-preset preferences; any change
+to the Capture Process, its contract or `snap_roi`; any change to USB recording.
+
+### Set 7 (in progress): end a cup insertion when its mean is precise enough
+
+- Spec: `.scratch/cup-target-uncertainty/spec.md`
+- Binding: `docs/adr/0003-commanded-and-confirmed-cup-position.md` (amendment D,
+  2026-11-03, and C1), `docs/adr/0002-cup-acquisition-triggered-by-current.md`
+  (amendments A5-A8, B3), `docs/adr/0001-tests-first-and-no-muted-failures.md`.
+- Glossary (`CONTEXT.md`, "Cup actuation and dose"): **Insertion uncertainty**,
+  **Dwell mode** (fixed dwell / target uncertainty / maximum dwell), **Converged
+  insertion**.
+- Tickets: `.scratch/cup-target-uncertainty/issues/81...88`. 81 and 82 are done. 88 is
+  `ready-for-developer` (bench): an agent must not claim it.
+
+#### Next
+
+- **83** is unblocked. Then 84 (after 83), then 85 and 87 (both after 84), then 86
+  (after 85). Set 7 and set 8 touch disjoint code and may run in parallel.
+
+#### Dependency order
 
 ```
 81 ── 83 ── 84 ─┬─ 85 ── 86
@@ -498,7 +770,7 @@ This is a pointer, not the work.
 82 ── 88 (developer, bench)
 ```
 
-### Requirements that are not preferences
+#### Requirements that are not preferences
 
 - Insertion uncertainty and the bar numbers are pure functions in the dose model (no Qt,
   no clock) so the stopping rule is testable with lists of numbers.
@@ -513,17 +785,16 @@ This is a pointer, not the work.
 - Not-converged automatic insertions still count toward the dose; manual insertions
   never count.
 
-### Not in this set
+#### Not in this set
 
 Lowering NPLC or burst reads; correcting the uncertainty for sample correlation; any
 change to dose integration; an Overview history strip or a tab insertion history table;
 "no limit" for automatic insertions.
 
-## Remaining from earlier sets
+### Remaining from earlier sets
 
 Every agent ticket in earlier sets is `done`. Only `ready-for-developer` bench tickets
-remain, and an agent must not claim them: 12, 13, 14 (`.scratch/cup-actuation/`; 13, the
-6482 autorange settle time, bears on the settle window this set uses), 10
+remain, and an agent must not claim them: 12, 13, 14 (`.scratch/cup-actuation/`), 10
 (`.scratch/faraday-cup-reader/`), 52 (`.scratch/amplifier-load-and-spikes/`), 60
 (`.scratch/current-monitor-scale/`), 78, 79, 80 (`.scratch/zwo-capture/`).
 <!-- ACTIVE-PLAN:END -->

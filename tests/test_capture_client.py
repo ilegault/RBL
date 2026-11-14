@@ -1,8 +1,11 @@
 """CaptureClient against the real fake-camera Capture Process (Seam B)."""
 from __future__ import annotations
 
+import ast
 import csv
+import logging
 import os
+import pathlib
 import time
 
 import pytest
@@ -47,8 +50,10 @@ class Spy:
 
 def test_hello_open_status_preview(client):
     spy = Spy(client)
+    assert not client.is_ready()
     client.start("fake")
     assert wait_until(lambda: spy.hello)
+    assert client.is_ready()
     client.open()
     assert wait_until(lambda: spy.opened)
     assert spy.opened[0]["serial"] == "FAKE0001"
@@ -135,10 +140,300 @@ def test_shutdown_and_unexpected_exit(qapp):
         c2.shutdown()
 
 
-def test_missing_dll_launches_nothing(client, monkeypatch, tmp_path):
+def test_missing_dll_launches_nothing(client, monkeypatch, tmp_path, caplog):
     missing = tmp_path / "nope" / "ASICamera2.dll"
     monkeypatch.setenv("RBL_ZWO_SDK_DLL", str(missing))
     spy = Spy(client)
-    client.start("zwo")
-    assert spy.errors == [f"ZWO SDK library not found: {missing}"]
+    expected_text = (
+        f"ZWO SDK library not found: {missing}. "
+        "Copy ASICamera2.dll there or set RBL_ZWO_SDK_DLL."
+    )
+    with caplog.at_level(logging.ERROR, logger="rbl.capture"):
+        client.start("zwo")
+    assert spy.errors == [expected_text]
     assert not client.is_running()
+    records = [
+        r for r in caplog.records
+        if r.name == "rbl.capture" and r.levelno == logging.ERROR
+    ]
+    assert any(r.getMessage() == expected_text for r in records)
+
+
+def test_fatal_before_hello_is_reported_verbatim(client):
+    spy = Spy(client)
+    client.start("fake", extra_args=["--fake-fatal", "zwoasi.init failed: bad DLL"])
+    assert wait_until(lambda: spy.exits)
+    assert spy.errors == ["zwoasi.init failed: bad DLL"]
+    assert spy.hello == []
+
+
+def test_empty_camera_list_ends_the_attempt(client):
+    spy = Spy(client)
+    client.start("fake", extra_args=["--fake-cameras-empty"])
+    assert wait_until(lambda: spy.exits)
+    assert spy.errors == ["No ZWO camera detected on USB"]
+    assert spy.hello == []
+    assert spy.exits == [0]
+
+
+def test_refusals_are_logged(client, tmp_path, caplog):
+    spy = Spy(client)
+    client.start("fake")
+    assert wait_until(lambda: spy.hello)
+    with caplog.at_level(logging.ERROR, logger="rbl.capture"):
+        client.take_darks(str(tmp_path), 1)
+        assert wait_until(lambda: spy.errors)
+    error_text = spy.errors[-1]
+    records = [
+        r for r in caplog.records
+        if r.name == "rbl.capture" and r.levelno == logging.ERROR
+    ]
+    assert any(r.getMessage() == error_text for r in records)
+    assert client.is_running()
+
+
+def test_only_fail_emits_error():
+    client_py = (
+        pathlib.Path(__file__).resolve().parents[1]
+        / "src"
+        / "rbl"
+        / "services"
+        / "capture_client.py"
+    )
+    tree = ast.parse(client_py.read_text(encoding="utf-8"))
+
+    error_emit_calls = []
+
+    class Visitor(ast.NodeVisitor):
+        def __init__(self):
+            self.current_function = None
+
+        def visit_FunctionDef(self, node):
+            old = self.current_function
+            self.current_function = node.name
+            self.generic_visit(node)
+            self.current_function = old
+
+        def visit_AsyncFunctionDef(self, node):
+            old = self.current_function
+            self.current_function = node.name
+            self.generic_visit(node)
+            self.current_function = old
+
+        def visit_Call(self, node):
+            if (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr == "emit"
+                and isinstance(node.func.value, ast.Attribute)
+                and node.func.value.attr == "error"
+                and isinstance(node.func.value.value, ast.Name)
+                and node.func.value.value.id == "self"
+            ):
+                error_emit_calls.append((self.current_function, node))
+            self.generic_visit(node)
+
+    v = Visitor()
+    v.visit(tree)
+    assert len(error_emit_calls) == 1
+    assert error_emit_calls[0][0] == "_fail"
+
+
+def test_no_hello_times_out_and_kills_the_child(qapp):
+    c = CaptureClient(hello_timeout_s=0.3)
+    spy = Spy(c)
+    try:
+        c.start("fake", extra_args=["--fake-no-hello"])
+        assert wait_until(lambda: spy.exits, timeout_s=5.0)
+        assert spy.errors == ["Capture Process sent no hello within 0.3 s"]
+        assert not c.is_running()
+    finally:
+        c.shutdown()
+
+
+def test_hello_in_time_cancels_the_hello_timeout(qapp):
+    c = CaptureClient(hello_timeout_s=0.5)
+    spy = Spy(c)
+    try:
+        c.start("fake")
+        assert wait_until(lambda: spy.hello)
+        wait_until(lambda: False, timeout_s=1.0)
+        assert c.is_running()
+        assert spy.errors == []
+    finally:
+        c.shutdown()
+
+
+def test_open_reply_timeout_warns_and_keeps_the_child(qapp, caplog):
+    c = CaptureClient(open_reply_timeout_s=0.3)
+    spy = Spy(c)
+    timed_outs: list[bool] = []
+    c.open_timed_out.connect(lambda: timed_outs.append(True))
+    try:
+        with caplog.at_level(logging.WARNING, logger="rbl.capture"):
+            c.start("fake", extra_args=["--fake-open-delay-s", "1.5"])
+            assert wait_until(lambda: spy.hello)
+            c.open()
+            assert wait_until(lambda: len(timed_outs) == 1, timeout_s=3.0)
+            assert not spy.opened
+            assert c.is_running()
+            assert spy.errors == []
+            records = [
+                r
+                for r in caplog.records
+                if r.name == "rbl.capture" and r.levelno == logging.WARNING
+            ]
+            assert any("No reply to open" in r.getMessage() for r in records)
+            assert wait_until(lambda: spy.opened, timeout_s=3.0)
+            assert len(timed_outs) == 1
+    finally:
+        c.shutdown()
+
+
+def test_open_reply_in_time_does_not_time_out(qapp):
+    c = CaptureClient(open_reply_timeout_s=1.0)
+    spy = Spy(c)
+    timed_outs: list[bool] = []
+    c.open_timed_out.connect(lambda: timed_outs.append(True))
+    try:
+        c.start("fake")
+        assert wait_until(lambda: spy.hello)
+        c.open()
+        assert wait_until(lambda: spy.opened)
+        wait_until(lambda: False, timeout_s=1.5)
+        assert not timed_outs
+    finally:
+        c.shutdown()
+
+
+def test_timeout_defaults_come_from_config(qapp):
+    from rbl.config.capture_config import (
+        CAPTURE_HELLO_TIMEOUT_S,
+        CAPTURE_OPEN_REPLY_TIMEOUT_S,
+    )
+
+    c = CaptureClient()
+    assert c.hello_timeout_s == CAPTURE_HELLO_TIMEOUT_S == 10.0
+    assert c.open_reply_timeout_s == CAPTURE_OPEN_REPLY_TIMEOUT_S == 15.0
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        ("2026-11-09 20:52:01,123 INFO [rbl.capture] x", logging.INFO),
+        ("2026-11-09 20:52:01,123 DEBUG [rbl.capture] x", logging.DEBUG),
+        ("2026-11-09 20:52:01,123 WARNING [rbl.capture] x", logging.WARNING),
+        ("2026-11-09 20:52:01,123 ERROR [rbl.capture] x", logging.ERROR),
+        ("Traceback (most recent call last):", logging.WARNING),
+        ('  File "x.py", line 1', logging.WARNING),
+        ("", logging.WARNING),
+    ],
+)
+def test_child_log_level(line, expected):
+    from rbl.services.capture_client import child_log_level
+
+    assert child_log_level(line) == expected
+
+
+def test_drain_lines_keeps_the_partial_tail():
+    from rbl.services.capture_client import drain_lines
+
+    buf = bytearray(b"ab")
+    assert drain_lines(buf) == []
+    buf += b"c\nde"
+    assert drain_lines(buf) == [b"abc\n"]
+    assert buf == bytearray(b"de")
+
+
+def test_child_stderr_keeps_its_level_and_pid(client, caplog):
+    spy = Spy(client)
+    with caplog.at_level(logging.WARNING, logger="rbl.capture"):
+        client.start("fake", heartbeat_timeout_s=0.3)
+        assert wait_until(lambda: spy.hello)
+        assert wait_until(lambda: spy.exits, timeout_s=5.0)
+    pid = spy.hello[0]["pid"]
+    matching = [
+        r
+        for r in caplog.records
+        if r.name == "rbl.capture"
+        and r.levelno == logging.WARNING
+        and r.getMessage().startswith(f"[capture pid {pid}] ")
+        and "Heartbeat timed out" in r.getMessage()
+    ]
+    assert len(matching) == 1
+
+
+def test_open_sequence_is_narrated(client, caplog):
+    spy = Spy(client)
+    with caplog.at_level(logging.INFO, logger="rbl.capture"):
+        client.start("fake")
+        assert wait_until(lambda: spy.hello)
+        client.open()
+        assert wait_until(lambda: spy.opened)
+        client.shutdown()
+        assert wait_until(lambda: spy.exits)
+
+    info_msgs = [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == "rbl.capture" and r.levelno == logging.INFO
+    ]
+    it = iter(info_msgs)
+    assert any(m.startswith("Starting Capture Process:") for m in it)
+    assert any(m.startswith("Capture Process started, pid ") for m in it)
+    assert any(
+        m.startswith("Capture Process hello: protocol 1, cameras ['Fake ASI']")
+        for m in it
+    )
+    assert any(m.startswith("Sent open (id ") for m in it)
+    assert any(
+        m.startswith("Open reply ok (id ") and m.endswith("Fake ASI FAKE0001")
+        for m in it
+    )
+    assert any(
+        m.startswith("Capture Process exited: code 0")
+        and m.endswith("expected True")
+        for m in it
+    )
+
+
+def test_dll_resolution_is_logged(client, monkeypatch, tmp_path, caplog):
+    missing = tmp_path / "nope" / "ASICamera2.dll"
+    monkeypatch.setenv("RBL_ZWO_SDK_DLL", str(missing))
+    expected = f"ZWO SDK DLL: {missing} (from RBL_ZWO_SDK_DLL: True, exists: False)"
+    with caplog.at_level(logging.INFO, logger="rbl.capture"):
+        client.start("zwo")
+    records = [
+        r
+        for r in caplog.records
+        if r.name == "rbl.capture" and r.levelno == logging.INFO
+    ]
+    assert any(r.getMessage() == expected for r in records)
+
+
+def test_streaming_is_not_logged_per_message(client, caplog):
+    spy = Spy(client)
+    with caplog.at_level(logging.DEBUG, logger="rbl.capture"):
+        client.start("fake")
+        assert wait_until(lambda: spy.hello)
+        client.open()
+        assert wait_until(lambda: spy.preview)
+        non_child_records = [
+            r
+            for r in caplog.records
+            if r.name == "rbl.capture"
+            and not r.getMessage().startswith("[capture pid ")
+        ]
+        count_before = len(non_child_records)
+        assert count_before >= 5
+        wait_until(lambda: False, timeout_s=2.0)
+        count_after = len([
+            r
+            for r in caplog.records
+            if r.name == "rbl.capture"
+            and not r.getMessage().startswith("[capture pid ")
+        ])
+        assert count_after == count_before
+
+
+
+

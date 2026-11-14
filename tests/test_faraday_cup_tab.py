@@ -18,6 +18,7 @@ import csv
 import math
 import os
 from datetime import datetime
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -64,6 +65,28 @@ def win(qapp):
     qapp.processEvents()
 
 
+CONNECT_FAIL_MSG = (
+    "Failed to connect to Keithley 6482 on GPIB0::14::INSTR: "
+    "VI_ERROR_LIBRARY_NFOUND (-1073807202): A code library required by "
+    "VISA could not be located or loaded."
+)
+
+
+def tab_after_connect_failure(qapp):
+    """Real Beamline + tab, wired as app.py wires them, then the worker's
+    error-then-disconnected emission order via the public Beamline signals."""
+    beamline = Beamline()
+    tab = FaradayCupTab(beamline=beamline)
+    beamline.cup_error.connect(tab.on_cup_error)
+    beamline.cup_disconnected_evt.connect(tab.on_cup_disconnected)
+    tab.show()
+    qapp.processEvents()
+    beamline.cup_error.emit(CONNECT_FAIL_MSG)
+    beamline.cup_disconnected_evt.emit()
+    qapp.processEvents()
+    return beamline, tab
+
+
 class TestFaradayCupTabRendersCurrent:
     """Unit tests for FaradayCupTab rendering and lifecycle."""
 
@@ -77,6 +100,26 @@ class TestFaradayCupTabRendersCurrent:
         assert "—" in tab.lbl_current.text()
         assert "Not connected" in tab.lbl_detail.text()
         assert tab.btn_connect.text() == "Connect"
+
+    def test_connect_button_retargets_a_retrying_worker(self, qapp):
+        w1, w2 = MagicMock(), MagicMock()
+        w1.wait.return_value = True
+        w2.wait.return_value = True
+        with patch(
+            "rbl.state.picoammeter_link.PicoammeterWorker", side_effect=[w1, w2]
+        ) as cls:
+            beamline = Beamline()
+            tab = FaradayCupTab(beamline=beamline)
+            tab.show()
+            qapp.processEvents()
+
+            tab.le_resource.setText("GPIB0::14::INSTR")
+            tab.btn_connect.click()
+            tab.le_resource.setText("GPIB0::2::INSTR")
+            tab.btn_connect.click()
+
+            assert cls.call_args == call(resource_name="GPIB0::2::INSTR")
+            w2.start.assert_called_once()
 
     def test_connect_if_needed(self, qapp, monkeypatch):
         beamline = Beamline()
@@ -100,6 +143,24 @@ class TestFaradayCupTabRendersCurrent:
         monkeypatch.setattr(Beamline, "picoammeter_connected", property(lambda self: True))
         status2, detail2 = tab.connect_if_needed()
         assert status2 == "already"
+
+    def test_connect_failure_reason_survives_disconnect_event(self, qapp):
+        _beamline, tab = tab_after_connect_failure(qapp)
+        assert tab.lbl_detail.text() == "Not connected \u2014 " + CONNECT_FAIL_MSG
+        assert "Disconnected" in tab.status_pill.text()
+
+    def test_successful_connect_clears_failure_reason(self, qapp):
+        _beamline, tab = tab_after_connect_failure(qapp)
+        tab.on_cup_connected("KEITHLEY INSTRUMENTS INC.,MODEL 6482")
+        tab.on_cup_disconnected()
+        assert tab.lbl_detail.text() == "Not connected"
+
+    def test_connect_click_replaces_stale_failure_reason(self, qapp, monkeypatch):
+        beamline, tab = tab_after_connect_failure(qapp)
+        monkeypatch.setattr(beamline, "connect_picoammeter", lambda res=None: None)
+        tab.le_resource.setText("GPIB0::2::INSTR")
+        tab.btn_connect.click()
+        assert tab.lbl_detail.text() == "Connecting to GPIB0::2::INSTR\u2026"
 
     def test_renders_cup_current_autoscaling(self, qapp):
         beamline = Beamline()
@@ -577,11 +638,11 @@ class TestFaradayCupTabLivePlot:
         assert not tab.plot.redraw_timer.isActive()
 
 
-RAW_STATUS_IN = 1 << 3   # Bit 3 (OUT) open, Bit 2 (IN) closed (0), Bit 4 (AUTO) closed (0)
-RAW_STATUS_OUT = 1 << 2  # Bit 2 (IN) open, Bit 3 (OUT) closed (0), Bit 4 (AUTO) closed (0)
-RAW_STATUS_TRANSIT = (1 << 2) | (1 << 3)  # Both open (1), neither asserted
-RAW_STATUS_INDETERMINATE = 0  # Both closed (0), both asserted (fault)
-RAW_STATUS_NOT_AUTO = (1 << 3) | (1 << 4)  # IN closed (0), AUTO open (1)
+RAW_STATUS_IN = 20  # 0b10100: FIO2 (IN) = 1, FIO3 (OUT) = 0, FIO4 (AUTO) = 1
+RAW_STATUS_OUT = 24  # 0b11000: FIO2 (IN) = 0, FIO3 (OUT) = 1, FIO4 (AUTO) = 1
+RAW_STATUS_TRANSIT = 16  # 0b10000: FIO2 (IN) = 0, FIO3 (OUT) = 0, FIO4 (AUTO) = 1
+RAW_STATUS_INDETERMINATE = 28  # 0b11100: FIO2 (IN) = 1, FIO3 (OUT) = 1, FIO4 (AUTO) = 1
+RAW_STATUS_NOT_AUTO = 4  # 0b00100: FIO2 (IN) = 1, FIO3 (OUT) = 0, FIO4 (AUTO) = 0
 
 
 class TestFaradayCupActuationUI:

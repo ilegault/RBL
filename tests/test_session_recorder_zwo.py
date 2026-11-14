@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 from PySide6.QtWidgets import QApplication
 
+from rbl.capture.camera import FAKE_MODEL, FAKE_SERIAL
 from rbl.config import paths
 from rbl.hardware.camera_source import CameraSource
 from rbl.services.capture_client import CaptureClient
@@ -289,3 +290,195 @@ def test_usb_only_session_has_no_zwo_block(tmp_path, monkeypatch, qapp):
 
     assert "zwo" not in manifest
     assert rec.state()["camera_kind"] == "usb"
+
+
+def _open_fake_zwo(tmp_path, monkeypatch, capture_client):
+    monkeypatch.setattr("rbl.services.session_recorder._logs_dir", lambda: str(tmp_path / "logs"))
+    monkeypatch.setattr(paths, "ZWO_DARKS_DIR", tmp_path / "zwo_darks")
+    capture_client.start("fake")
+    rec = SessionRecorder(lambda: {"beamline_v": 1.0}, CameraSource(), capture=capture_client)
+    rec.set_camera_kind("zwo")
+    rec.connect_zwo()
+    assert wait_until(lambda: rec.state()["zwo_open"])
+    assert wait_until(lambda: bool(rec.state()["zwo_settings"]))
+    return rec
+
+
+def _confirmed_roi(rec):
+    r = rec.state()["zwo_settings"].get("roi") or {}
+    return (r.get("x"), r.get("y"), r.get("width"), r.get("height"))
+
+
+FULL_SENSOR = (0, 0, 1920, 1080)
+
+
+def test_last_roi_follows_confirmed_rois(tmp_path, monkeypatch, qapp, capture_client):
+    from rbl.config import zwo_settings_store
+
+    rec = _open_fake_zwo(tmp_path, monkeypatch, capture_client)
+    assert wait_until(lambda: _confirmed_roi(rec) == FULL_SENSOR)
+    assert rec.state()["zwo_last_roi"] is None
+
+    rec.set_zwo_settings(roi={"x": 64, "y": 32, "width": 640, "height": 480})
+    assert wait_until(lambda: _confirmed_roi(rec) != FULL_SENSOR)
+    confirmed = _confirmed_roi(rec)
+    assert rec.state()["zwo_last_roi"] == dict(
+        zip(("x", "y", "width", "height"), confirmed))
+
+    rec.set_zwo_settings(roi={"x": 0, "y": 0, "width": 1920, "height": 1080})
+    assert wait_until(lambda: _confirmed_roi(rec) == FULL_SENSOR)
+    assert rec.state()["zwo_last_roi"] == dict(
+        zip(("x", "y", "width", "height"), confirmed))
+    assert zwo_settings_store.load_settings()[0].last_roi == confirmed
+
+
+def test_swap_returns_to_the_exact_roi(tmp_path, monkeypatch, qapp, capture_client):
+    rec = _open_fake_zwo(tmp_path, monkeypatch, capture_client)
+    assert wait_until(lambda: _confirmed_roi(rec) == FULL_SENSOR)
+    assert rec.swap_zwo_roi() == -1  # full sensor, nothing remembered
+
+    rec.set_zwo_settings(roi={"x": 64, "y": 32, "width": 640, "height": 480})
+    assert wait_until(lambda: _confirmed_roi(rec) != FULL_SENSOR)
+    earlier = _confirmed_roi(rec)
+    rec.set_zwo_settings(roi={"x": 0, "y": 0, "width": 1920, "height": 1080})
+    assert wait_until(lambda: _confirmed_roi(rec) == FULL_SENSOR)
+
+    assert rec.swap_zwo_roi() >= 0
+    assert wait_until(lambda: _confirmed_roi(rec) == earlier)
+    assert rec.swap_zwo_roi() >= 0
+    assert wait_until(lambda: _confirmed_roi(rec) == FULL_SENSOR)
+
+
+def test_roi_is_locked_while_recording(tmp_path, monkeypatch, qapp, capture_client):
+    rec = _open_fake_zwo(tmp_path, monkeypatch, capture_client)
+    statuses: list[tuple[str, str]] = []
+    rec.status.connect(lambda msg, role: statuses.append((msg, role)))
+    before = _confirmed_roi(rec)
+
+    assert rec.start()
+    assert rec.start_video()
+    assert wait_until(lambda: rec.state()["zwo_recording"])
+
+    assert rec.set_zwo_settings(roi={"x": 64, "y": 32, "width": 640, "height": 480}) == -1
+    assert rec.swap_zwo_roi() == -1
+    assert ("Cannot change the ROI while video is recording", "warn") in statuses
+    deadline = time.monotonic() + 0.5
+    while time.monotonic() < deadline:
+        qapp.processEvents()
+        time.sleep(0.02)
+    assert _confirmed_roi(rec) == before
+
+    assert rec.set_zwo_settings(gain=120) >= 0
+    rec.stop_video()
+    assert wait_until(lambda: not rec.state()["zwo_recording"])
+    rec.stop()
+
+
+# ---- camera message and opening flag (ticket 102) --------------------------
+
+
+def _zwo_recorder(qapp, client):
+    """A recorder in ZWO mode on a real client, plus a list of (message, level) states."""
+    rec = SessionRecorder(lambda: {}, CameraSource(), capture=client)
+    rec.set_camera_kind("zwo")
+    history: list[tuple[str, str]] = []
+    rec.state_changed.connect(
+        lambda: history.append(
+            (rec.state()["camera_message"], rec.state()["camera_message_level"])
+        )
+    )
+    return rec, history
+
+
+def _message(rec) -> tuple[str, str]:
+    st = rec.state()
+    return st["camera_message"], st["camera_message_level"]
+
+
+def test_missing_dll_open_shows_both_stages(qapp, capture_client, monkeypatch, tmp_path):
+    monkeypatch.setenv("RBL_ZWO_SDK_DLL", str(tmp_path / "nope" / "ASICamera2.dll"))
+    rec, history = _zwo_recorder(qapp, capture_client)
+
+    rec.connect_zwo()
+
+    assert ("Starting Capture Process…", "neutral") in history
+    faults = [i for i, (text, level) in enumerate(history)
+              if level == "fault" and text.startswith("ZWO SDK library not found")]
+    assert faults, history
+    assert history.index(("Starting Capture Process…", "neutral")) < faults[-1]
+    assert _message(rec)[1] == "fault"
+    assert rec.state()["zwo_opening"] is False
+
+
+def test_open_on_a_running_child(qapp, capture_client):
+    capture_client.start("fake")
+    rec, _ = _zwo_recorder(qapp, capture_client)
+    assert wait_until(capture_client.is_ready)
+
+    rec.connect_zwo()
+
+    assert _message(rec) == ("Opening camera…", "neutral")
+    assert rec.state()["zwo_opening"] is True
+    assert wait_until(lambda: rec.state()["zwo_open"])
+    assert _message(rec) == (f"Opened {FAKE_MODEL} {FAKE_SERIAL}", "ok")
+    assert rec.state()["zwo_opening"] is False
+
+
+def test_open_timeout_then_late_open(qapp):
+    client = CaptureClient(open_reply_timeout_s=0.3)
+    try:
+        client.start("fake", extra_args=["--fake-open-delay-s", "1.5"])
+        rec, _ = _zwo_recorder(qapp, client)
+        assert wait_until(client.is_ready)
+
+        rec.connect_zwo()
+
+        warning = ("No reply to open after 0.3 s — the camera may be stalled on USB", "warn")
+        assert wait_until(lambda: _message(rec) == warning, 5.0)
+        assert rec.state()["zwo_opening"] is False
+        assert wait_until(lambda: rec.state()["zwo_open"], 10.0)
+        assert _message(rec) == (f"Opened {FAKE_MODEL} {FAKE_SERIAL}", "ok")
+    finally:
+        client.shutdown()
+
+
+def test_second_connect_while_opening_sends_no_second_open(qapp, capture_client):
+    capture_client.start("fake", extra_args=["--fake-open-delay-s", "1.0"])
+    rec, _ = _zwo_recorder(qapp, capture_client)
+    assert wait_until(capture_client.is_ready)
+    opened: list[dict] = []
+    capture_client.opened.connect(opened.append)
+
+    rec.connect_zwo()
+    rec.connect_zwo()
+
+    assert wait_until(lambda: rec.state()["zwo_open"], 10.0)
+    wait_until(lambda: False, 1.5)
+    assert len(opened) == 1
+
+
+def test_capture_errors_and_disconnect(qapp, capture_client):
+    # (a) a Capture Process that sees no camera: fault, and no open is ever answered.
+    empty = CaptureClient()
+    try:
+        empty.start("fake", extra_args=["--fake-cameras-empty"])
+        rec, _ = _zwo_recorder(qapp, empty)
+        opened: list[dict] = []
+        empty.opened.connect(opened.append)
+        rec.connect_zwo()
+        assert wait_until(
+            lambda: _message(rec) == ("No ZWO camera detected on USB", "fault"), 10.0)
+        wait_until(lambda: False, 0.5)
+        assert opened == []
+        assert rec.state()["zwo_opening"] is False
+    finally:
+        empty.shutdown()
+
+    # (b) disconnecting an opened camera clears the line.
+    capture_client.start("fake")
+    rec, _ = _zwo_recorder(qapp, capture_client)
+    rec.connect_zwo()
+    assert wait_until(lambda: rec.state()["zwo_open"])
+    rec.disconnect_zwo()
+    assert _message(rec) == ("", "neutral")
+    assert rec.state()["zwo_opening"] is False

@@ -115,3 +115,20 @@ _FULL = {"x": 0, "y": 0, "width": 1920, "height": 1080}
 )
 def test_view_rect_to_sensor_roi(view, painted, preview, roi, expected):
     assert view_rect_to_sensor_roi(view, painted, preview, roi) == expected
+
+
+@pytest.mark.parametrize(
+    "width, frame_size, max_ratio, expected",
+    [
+        (800, (1920, 1080), 9 / 16, 450),
+        (800, (1000, 1000), 9 / 16, 450),
+        (800, (2000, 500), 9 / 16, 200),
+        (800, None, 9 / 16, 450),
+        (800, (0, 0), 9 / 16, 450),
+    ],
+)
+def test_preview_height_for_width(width, frame_size, max_ratio, expected):
+    from rbl.hardware.preview_stretch import preview_height_for_width
+
+    assert preview_height_for_width(width, frame_size, max_ratio) == expected
+

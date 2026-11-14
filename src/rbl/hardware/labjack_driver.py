@@ -9,16 +9,18 @@ screw terminals); AIN6-AIN13 are the EEL5000 HV amplifier voltage/current monito
 WHY THIS EXISTS — DIGITAL PATH (ADR 0003)
 -----------------------------------------
 The T7 also drives and reads the Faraday Cup Controller through digital I/O lines
-on the CB37 terminal board. FIO0 (enable) and FIO1 (command-out) control external
+on the CB37 terminal board. FIO0 (interlock) and FIO1 (command-out) control external
 relays via an LJTick-RelayDriver. FIO2 (cup IN), FIO3 (cup OUT), and FIO4 (AUTO mode)
 read back isolated status contacts.
 
-Closed is zero:
-A status contact that is closed pulls its FIO line to ground and therefore reads as
-bit value 0 in FIO_STATE. The status decoding function inverts.
+Status line polarity:
+A status line reads 1 when its condition is asserted (bench, 2026-11-10, cup IN in
+AUTO: FIO2 = 1, FIO3 = 0, FIO4 = 1); the level is CUP_STATUS_ASSERTED_LEVEL. A
+disconnected status cable floats all three lines high on the T7's pull-ups and so
+reads INDETERMINATE with AUTO asserted.
 
 Fails-into-the-beam:
-Cup OUT requires both contact closures (relay 1 enable and relay 2 command). Any
+Cup OUT requires both contact closures (relay 1 interlock and relay 2 command). Any
 loss of drive — crash, disconnect, or power loss — opens both relays, and the
 cup returns IN where it safely intercepts the beam ahead of the specimen. The
 absence of drive is the safe state. Therefore, no software path drives the cup
@@ -46,7 +48,7 @@ except Exception as _e:
     LJM_AVAILABLE = False
     _LJM_IMPORT_ERROR = str(_e)
 
-from rbl.config.cup_config import CUP_COMMAND_OUT_LINE, CUP_ENABLE_LINE
+from rbl.config.cup_config import CUP_COMMAND_OUT_LINE, CUP_INTERLOCK_LINE
 
 # Number of AINs to configure on connect. AIN0-3 = log amps, AIN6-13 = HV amp
 # monitors. AIN4-5 are left unconfigured (spare).
@@ -104,7 +106,7 @@ class LabJackT7:
             ljm.eWriteName(self.handle, f"AIN{ch}_RESOLUTION_INDEX", 1)
 
         # Configure digital I/O lines for Faraday cup actuation and status.
-        # FIO0 (enable) and FIO1 (command-out) are outputs.
+        # FIO0 (interlock) and FIO1 (command-out) are outputs.
         # FIO2 (IN status), FIO3 (OUT status), FIO4 (AUTO status) are inputs.
         # FIO_DIRECTION: lower byte sets direction (1=output, 0=input).
         # Upper byte is inhibit mask (1=inhibit, 0=modify).
@@ -115,7 +117,7 @@ class LabJackT7:
 
         # Ensure both outputs start de-asserted (0).
         # Absence of drive is the safe state (cup fails into the beam).
-        ljm.eWriteName(self.handle, CUP_ENABLE_LINE, 0)
+        ljm.eWriteName(self.handle, CUP_INTERLOCK_LINE, 0)
         ljm.eWriteName(self.handle, CUP_COMMAND_OUT_LINE, 0)
 
 

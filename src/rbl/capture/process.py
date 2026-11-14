@@ -53,6 +53,16 @@ thread, which sends the reply, so the acquisition thread never waits on the disk
 A photo frame that is also written to the SER carries its file name to the frame log
 through ``StampedFrame.photo``. A camera loss, close or camera-affecting ``set`` while
 a job is open fails it with ``camera_error``, because its frames would not agree.
+
+FAKE FAILURE SEAMS FOR OPEN (ticket 98)
+----------------------------------------
+To let client and recorder tests exercise the Open failure modes end-to-end against a
+real child process without physical hardware attached, four CLI flags (accepted only
+when ``--camera fake``) simulate the ways a real camera open can fail:
+* ``--fake-cameras-empty``: hello sends an empty ``cameras: []`` list.
+* ``--fake-fatal MESSAGE``: sends a fatal line immediately and exits 1.
+* ``--fake-no-hello``: sends nothing; blocks until stdin EOF, then exits 0.
+* ``--fake-open-delay-s SECONDS``: fake camera sleeps in open before sending ok reply.
 """
 from __future__ import annotations
 
@@ -186,6 +196,30 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="Fake camera only: raise CameraLost after N frames",
+    )
+    parser.add_argument(
+        "--fake-cameras-empty",
+        action="store_true",
+        help="Fake camera only: hello carries an empty cameras list",
+    )
+    parser.add_argument(
+        "--fake-fatal",
+        type=str,
+        default=None,
+        metavar="MESSAGE",
+        help="Fake camera only: send fatal line with MESSAGE and exit 1",
+    )
+    parser.add_argument(
+        "--fake-no-hello",
+        action="store_true",
+        help="Fake camera only: send nothing and block until stdin closes, then exit 0",
+    )
+    parser.add_argument(
+        "--fake-open-delay-s",
+        type=float,
+        default=0.0,
+        metavar="SECONDS",
+        help="Fake camera only: sleep SECONDS in open before sending reply",
     )
     return parser
 
@@ -1085,6 +1119,17 @@ def main(argv: list[str]) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
 
+    if args.camera != "fake" and (
+        args.fake_cameras_empty
+        or args.fake_fatal is not None
+        or args.fake_no_hello
+        or args.fake_open_delay_s != 0.0
+    ):
+        parser.error(
+            "--fake-cameras-empty, --fake-fatal, --fake-no-hello and --fake-open-delay-s "
+            "need --camera fake"
+        )
+
     send_lock = threading.Lock()
 
     def send(msg: dict[str, Any]) -> None:
@@ -1110,7 +1155,25 @@ def main(argv: list[str]) -> int:
             return 1
         camera: CaptureCamera = ZwoCamera(args.sdk_dll)
     else:
-        camera = FakeCamera(fail_after=args.fake_fail_after)
+        if args.fake_fatal is not None:
+            send({"type": "fatal", "message": args.fake_fatal})
+            return 1
+        if args.fake_no_hello:
+            fd = sys.stdin.fileno()
+            while True:
+                try:
+                    chunk = os.read(fd, 4096)
+                except OSError:
+                    chunk = b""
+                if not chunk:
+                    break
+            return 0
+        if args.fake_cameras_empty:
+            camera_list = []
+        camera = FakeCamera(
+            fail_after=args.fake_fail_after,
+            open_delay_s=args.fake_open_delay_s,
+        )
 
     process = CaptureProcess(
         send=send,

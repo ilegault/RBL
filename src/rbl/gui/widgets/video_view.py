@@ -16,10 +16,24 @@ never recovered because the ratchet only turns one way.
 This widget breaks the loop: sizeHint and minimumSizeHint are constants, the
 frame is scaled at PAINT time into whatever rectangle the layout hands over,
 and the widget therefore exerts no pressure on the layout at all.
+
+Ticket 89 addition: height-for-width opt-in (set_height_follows_width). When
+enabled, the Preview's height follows its width at the frame's aspect ratio,
+capped at PREVIEW_MAX_HEIGHT_PER_WIDTH (16:9), with vertical size policy
+Preferred. This stops the Overview Preview from absorbing excess panel height.
+The Camera tab leaves it disabled (default).
+
+Ticket 93 addition: a Draft ROI outline (set_draft_fraction). The Camera tab holds
+the Draft in sensor pixels and hands this widget only a fraction of the frame being
+shown; the outline is mapped into painted_rect() at PAINT time, so a window resize
+needs no callback.  It is a screen-only overlay, never burned into frames.
 """
 from PySide6.QtCore import QPoint, QRect, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QImage, QPainter, QPen
 from PySide6.QtWidgets import QRubberBand, QSizePolicy, QWidget
+
+from rbl.config.recording_config import PREVIEW_MAX_HEIGHT_PER_WIDTH
+from rbl.hardware.preview_stretch import preview_height_for_width
 
 
 class VideoView(QWidget):
@@ -51,12 +65,30 @@ class VideoView(QWidget):
         self._rect_drawing = False
         self._drag_origin: "QPoint | None" = None
         self._band: "QRubberBand | None" = None
+        self._height_follows_width = False
+        self._draft_fraction: "tuple[float, float, float, float] | None" = None
 
         self.setStyleSheet("background: #111;")
         self.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
     # ---- public API --------------------------------------------------------
+
+    def set_height_follows_width(self, on: bool) -> None:
+        """Opt into height-for-width sizing (ticket 89).
+
+        When True, heightForWidth calculates height based on the frame's aspect
+        ratio capped at 16:9, vertical size policy becomes Preferred, and
+        geometry updates whenever the frame size changes. Off by default.
+        """
+        self._height_follows_width = bool(on)
+        if self._height_follows_width:
+            self.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        else:
+            self.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.updateGeometry()
 
     def set_frame(self, img: QImage) -> None:
         """Store a deep copy of img and schedule a repaint.
@@ -67,13 +99,28 @@ class VideoView(QWidget):
         image points to freed memory and the next paintEvent crashes.  .copy()
         makes the QImage own its buffer.
         """
+        prev_size = (
+            (self._frame.width(), self._frame.height())
+            if self._frame is not None and not self._frame.isNull()
+            else None
+        )
         self._frame = img.copy()
+        new_size = (
+            (self._frame.width(), self._frame.height())
+            if not self._frame.isNull()
+            else None
+        )
+        if self._height_follows_width and new_size != prev_size:
+            self.updateGeometry()
         self.update()
 
     def clear(self, text: str = "No camera") -> None:
         """Drop the frame and show placeholder text."""
+        had_frame = self._frame is not None and not self._frame.isNull()
         self._frame = None
         self._placeholder = text
+        if self._height_follows_width and had_frame:
+            self.updateGeometry()
         self.update()
 
     def set_crosshair(self, on: bool) -> None:
@@ -96,11 +143,36 @@ class VideoView(QWidget):
     def rect_drawing_enabled(self) -> bool:
         return self._rect_drawing
 
+    def set_draft_fraction(
+        self, f: "tuple[float, float, float, float] | None"
+    ) -> None:
+        """Outline a Draft ROI given as (x, y, w, h) fractions of the painted frame."""
+        if f == self._draft_fraction:
+            return
+        self._draft_fraction = f
+        self.update()
+
+    def draft_fraction(self) -> "tuple[float, float, float, float] | None":
+        return self._draft_fraction
+
     def painted_rect(self) -> QRect:
         """The rect the last frame was painted into (exposed for tests)."""
         return self._painted_rect_last
 
     # ---- size hints --------------------------------------------------------
+
+    def hasHeightForWidth(self) -> bool:
+        return self._height_follows_width
+
+    def heightForWidth(self, w: int) -> int:
+        if not self._height_follows_width:
+            return super().heightForWidth(w)
+        frame_size = (
+            (self._frame.width(), self._frame.height())
+            if self._frame is not None and not self._frame.isNull()
+            else None
+        )
+        return preview_height_for_width(w, frame_size, PREVIEW_MAX_HEIGHT_PER_WIDTH)
 
     def sizeHint(self) -> QSize:
         if self._scale_mode == "one_to_one" and self._frame is not None:
@@ -151,6 +223,18 @@ class VideoView(QWidget):
         else:
             img_to_draw = self._frame
         p.drawImage(target.topLeft(), img_to_draw)
+
+        if self._draft_fraction is not None:
+            fx, fy, fw, fh = self._draft_fraction
+            pen = QPen(QColor(255, 200, 0), 2)
+            pen.setStyle(Qt.PenStyle.DashLine)
+            p.setPen(pen)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRect(QRect(
+                round(target.x() + fx * target.width()),
+                round(target.y() + fy * target.height()),
+                round(fw * target.width()),
+                round(fh * target.height())))
 
         if self._crosshair:
             self._draw_crosshair(p)

@@ -37,6 +37,15 @@ Threading:
   Camera thread: VideoRecorder (moved there via moveToThread), frames.csv
   Transcode thread: TranscodeQueue
 
+Camera message (ticket 102): ``state()["camera_message"]`` / ``["camera_message_level"]``
+is one standing line saying where a camera Open got to ("Starting Capture Process…",
+"Opening camera…", "Opened <model> <serial>") or why it stopped (the CaptureClient's
+error text, or the open-reply timeout warning).  It exists because a ``status`` signal is
+a one-shot: an operator who looked away missed it and the Open button just stayed quiet.
+Every status text goes through ``_announce`` so both cameras share the one line.
+``zwo_opening`` is the one-open-at-a-time lock enforced here (a disabled button is not the
+lock); it clears on opened, error, timeout, child exit and disconnect.
+
 The VideoRecorder lives on the camera thread so AVI writes never touch the GUI
 thread.  offer_frame() is connected to CameraSource.frame_ready with
 DirectConnection so it executes on the camera thread without a queue round-trip.
@@ -188,6 +197,9 @@ class SessionRecorder(QObject):
         self._zwo_status: dict = {}
         self._zwo_settings_applied: dict = {}
         self._zwo_open_on_hello: bool = False
+        self._zwo_opening: bool = False
+        self._camera_message: str = ""
+        self._camera_message_level: str = "neutral"
         self._zwo_photo_snaps: dict[int, dict] = {}
         self._pending_start_recording_id: int = -1
         self._pending_set_ids: set[int] = set()
@@ -201,6 +213,8 @@ class SessionRecorder(QObject):
             self._capture.exited.connect(self._on_zwo_exited)
             self._capture.hello.connect(self._on_zwo_hello)
             self._capture.reply.connect(self._on_zwo_reply)
+            self._capture.error.connect(self._on_zwo_error)
+            self._capture.open_timed_out.connect(self._on_zwo_open_timed_out)
 
         # Photos
         self._photo_index: int = 0
@@ -267,7 +281,7 @@ class SessionRecorder(QObject):
         if kind not in ("usb", "zwo"):
             return
         if (self._video_recorder is not None) or self._zwo_video_active:
-            self.status.emit("Stop video before switching cameras", "warn")
+            self._announce("Stop video before switching cameras", "warn")
             return
         if kind == "zwo" and self._capture is None:
             return
@@ -284,13 +298,33 @@ class SessionRecorder(QObject):
         self.settings_changed.emit()
         self.state_changed.emit()
 
+    def _set_camera_message(self, text: str, level: str) -> None:
+        self._camera_message = text
+        self._camera_message_level = level
+        self.state_changed.emit()
+
+    def _announce(self, text: str, level: str) -> None:
+        """Emit ``status`` and keep the same words as the standing camera message."""
+        self.status.emit(text, level)
+        self._set_camera_message(text, level)
+
     def connect_zwo(self) -> None:
         if self._capture is None:
             return
+        if self._zwo_opening:
+            return
+        self._zwo_opening = True
         if not self._capture.is_running():
+            # The message is set before start() because start() can fail
+            # synchronously (missing DLL) and its fault must be the last word.
+            self._set_camera_message("Starting Capture Process…", "neutral")
             self._zwo_open_on_hello = True
             self._capture.start("zwo")
+        elif not self._capture.is_ready():
+            self._set_camera_message("Opening camera…", "neutral")
+            self._zwo_open_on_hello = True
         else:
+            self._set_camera_message("Opening camera…", "neutral")
             self._capture.open(0)
 
     def disconnect_zwo(self) -> None:
@@ -302,15 +336,57 @@ class SessionRecorder(QObject):
         self._capture.shutdown()
         self._zwo_info = {}
         self._zwo_settings_applied = {}
-        self.state_changed.emit()
+        self._zwo_opening = False
+        # Last, so a "not running" error from close() is cleared too.
+        self._set_camera_message("", "neutral")
 
     def set_zwo_settings(self, **fields: Any) -> int:
+        """Ask the Capture Process to apply ``fields``; the confirmed reply is the truth.
+
+        Any change to the ROI is refused while ZWO video is recording or
+        starting (the GUI disabling the controls is not the lock). Other fields
+        are unaffected.
+        """
         if self._capture is None:
+            return -1
+        if "roi" in fields and (self._zwo_video_active or self._zwo_starting_video):
+            self._announce("Cannot change the ROI while video is recording", "warn")
             return -1
         cmd_id = self._capture.apply(**fields)
         if cmd_id >= 0:
             self._pending_set_ids.add(cmd_id)
         return cmd_id
+
+    def _is_full_sensor(self, roi: tuple[int, int, int, int] | None) -> bool:
+        if roi is None:
+            return True
+        sw = self._zwo_info.get("sensor_width")
+        sh = self._zwo_info.get("sensor_height")
+        return tuple(roi) == (0, 0, sw, sh)
+
+    def swap_zwo_roi(self) -> int:
+        """At the full sensor apply the Last ROI; anywhere else apply the full sensor.
+
+        Returns -1 and sends nothing when at the full sensor with no Last ROI
+        (or when the sensor size is not yet known). Goes through
+        ``set_zwo_settings`` so the recording lock applies.
+        """
+        sw = self._zwo_info.get("sensor_width", 0)
+        sh = self._zwo_info.get("sensor_height", 0)
+        applied = self._zwo_settings_applied.get("roi")
+        current = (
+            (applied["x"], applied["y"], applied["width"], applied["height"])
+            if isinstance(applied, dict) else self._zwo_settings.roi
+        )
+        if self._is_full_sensor(current):
+            last = self._zwo_settings.last_roi
+            if last is None:
+                return -1
+            x, y, w, h = last
+            return self.set_zwo_settings(roi={"x": x, "y": y, "width": w, "height": h})
+        if not (sw > 0 and sh > 0):
+            return -1
+        return self.set_zwo_settings(roi={"x": 0, "y": 0, "width": sw, "height": sh})
 
     def set_zwo_preview(self, mode: str, brightness: float) -> None:
         if self._capture is not None and self._capture.is_open():
@@ -329,10 +405,10 @@ class SessionRecorder(QObject):
         if self._camera_kind != "zwo":
             return -1
         if self._zwo_video_active or self._zwo_starting_video:
-            self.status.emit("Cannot take dark frames while video is running", "warn")
+            self._announce("Cannot take dark frames while video is running", "warn")
             return -1
         if self._capture is None or not self._capture.is_open():
-            self.status.emit("Cannot take dark frames: camera is not open", "warn")
+            self._announce("Cannot take dark frames: camera is not open", "warn")
             return -1
         return self._capture.take_darks(str(paths.ZWO_DARKS_DIR), frames)
 
@@ -367,7 +443,7 @@ class SessionRecorder(QObject):
         try:
             os.makedirs(photos_dir, exist_ok=True)
         except OSError as exc:
-            self.status.emit(f"Cannot create session folder: {exc}", "fault")
+            self._announce(f"Cannot create session folder: {exc}", "fault")
             return False
 
         # Capture the timebase anchor.
@@ -403,7 +479,7 @@ class SessionRecorder(QObject):
             ef = open(os.path.join(self._folder, "events.csv"),
                       "w", newline="", encoding="utf-8")
         except OSError as exc:
-            self.status.emit(f"Cannot open events.csv: {exc}", "fault")
+            self._announce(f"Cannot open events.csv: {exc}", "fault")
             return False
         self._events_file = ef
         self._events_writer = csv.writer(ef, lineterminator="\n")
@@ -634,10 +710,16 @@ class SessionRecorder(QObject):
             "master_codec":      self._master_codec,
             "camera_kind":       self._camera_kind,
             "zwo_open":          bool(self._capture is not None and self._capture.is_open()),
+            "zwo_opening":       self._zwo_opening,
+            "camera_message":    self._camera_message,
+            "camera_message_level": self._camera_message_level,
             "zwo_recording":     self._zwo_video_active,
             "zwo_status":        dict(self._zwo_status),
             "zwo_info":          dict(self._zwo_info),
             "zwo_settings":      dict(self._zwo_settings_applied),
+            "zwo_last_roi":      (dict(zip(("x", "y", "width", "height"),
+                                           self._zwo_settings.last_roi))
+                                  if self._zwo_settings.last_roi is not None else None),
         }
 
     # ---- video control (ADR 0004 decision 7) -------------------------------
@@ -654,13 +736,13 @@ class SessionRecorder(QObject):
 
     def _start_zwo_video(self) -> bool:
         if not self._recording:
-            self.status.emit("Cannot start video: session is not recording", "warn")
+            self._announce("Cannot start video: session is not recording", "warn")
             return False
         if self._zwo_video_active or self._zwo_starting_video:
-            self.status.emit("Cannot start video: video is already running", "warn")
+            self._announce("Cannot start video: video is already running", "warn")
             return False
         if self._capture is None or not self._capture.is_open():
-            self.status.emit("Cannot start video: camera is not open", "warn")
+            self._announce("Cannot start video: camera is not open", "warn")
             return False
 
         t0_wall_utc = self._derive_wall(0.0)
@@ -678,17 +760,17 @@ class SessionRecorder(QObject):
 
     def _start_usb_video(self) -> bool:
         if not self._recording:
-            self.status.emit("Cannot start video: session is not recording", "warn")
+            self._announce("Cannot start video: session is not recording", "warn")
             return False
         if self._video_recorder is not None:
-            self.status.emit("Cannot start video: video is already running", "warn")
+            self._announce("Cannot start video: video is already running", "warn")
             return False
         if not self._camera.is_open():
-            self.status.emit("Cannot start video: camera is not open", "warn")
+            self._announce("Cannot start video: camera is not open", "warn")
             return False
         w, h = self._camera.actual_size()
         if w == 0 or h == 0:
-            self.status.emit("Cannot start video: camera frame size is invalid", "warn")
+            self._announce("Cannot start video: camera frame size is invalid", "warn")
             return False
 
         crf, preset = QUALITY_PRESETS[self._quality_label]
@@ -834,7 +916,7 @@ class SessionRecorder(QObject):
             return
         if free < DISK_WARN_BYTES:
             self._write_event("disk_low", f"disk_free={free}")
-            self.status.emit(f"Disk low: {free // 1024**3} GB free", "warn")
+            self._announce(f"Disk low: {free // 1024**3} GB free", "warn")
 
         if self._transcode_queue is not None:
             self._transcode_pending += 1
@@ -866,7 +948,7 @@ class SessionRecorder(QObject):
         if self._video_recorder is not None:
             self.stop_video(detail=f"video_error: {msg}")
         self._write_event("camera_lost", msg)
-        self.status.emit(f"Video error: {msg}", "warn")
+        self._announce(f"Video error: {msg}", "warn")
         self.state_changed.emit()
 
     def _on_camera_format_ready(self, fourcc: str) -> None:
@@ -879,7 +961,7 @@ class SessionRecorder(QObject):
         if self._video_recorder is not None:
             self.stop_video(detail="camera_closed")
         self._write_event("camera_lost", "camera closed during session")
-        self.status.emit("Camera lost — continuing CSV only", "warn")
+        self._announce("Camera lost — continuing CSV only", "warn")
         self.state_changed.emit()
 
     def _on_camera_error(self, msg: str) -> None:
@@ -888,7 +970,7 @@ class SessionRecorder(QObject):
         if self._video_recorder is not None:
             self.stop_video(detail="camera_closed")
         self._write_event("camera_lost", msg)
-        self.status.emit(f"Camera lost ({msg}) — continuing CSV only", "warn")
+        self._announce(f"Camera lost ({msg}) — continuing CSV only", "warn")
         self.state_changed.emit()
 
     # ---- internal: ZWO CaptureClient slots ---------------------------------
@@ -897,10 +979,26 @@ class SessionRecorder(QObject):
         if self._zwo_open_on_hello:
             self._zwo_open_on_hello = False
             if self._capture is not None:
+                self._set_camera_message("Opening camera…", "neutral")
                 self._capture.open(0)
 
+    def _on_zwo_error(self, text: str) -> None:
+        self._zwo_opening = False
+        self._zwo_open_on_hello = False
+        self._set_camera_message(text, "fault")
+
+    def _on_zwo_open_timed_out(self) -> None:
+        self._zwo_opening = False
+        timeout_s = self._capture.open_reply_timeout_s if self._capture is not None else 0.0
+        self._set_camera_message(
+            f"No reply to open after {timeout_s:g} s — the camera may be stalled on USB",
+            "warn",
+        )
+
     def _on_zwo_opened(self, msg: dict) -> None:
+        self._zwo_opening = False
         self._zwo_info = dict(msg)
+        self._set_camera_message(f"Opened {msg.get('model', '')} {msg.get('serial', '')}", "ok")
         if self._capture is None:
             return
         if self._zwo_settings.roi is not None:
@@ -932,7 +1030,12 @@ class SessionRecorder(QObject):
         self.state_changed.emit()
 
     def _on_zwo_status(self, msg: dict) -> None:
+        # state_changed is what makes ZwoControls repaint its status line. A status
+        # message that only stored the dict left the line blank (or stale) until some
+        # unrelated event happened to fire state_changed, so the operator could not
+        # trust fps / dropped-frame / disk-free readings while a run was in progress.
         self._zwo_status = {k: v for k, v in msg.items() if k != "type"}
+        self.state_changed.emit()
 
     def _on_zwo_event(self, event: str, detail: str) -> None:
         self._write_event(f"zwo_{event}", detail)
@@ -944,10 +1047,12 @@ class SessionRecorder(QObject):
                 if self._zwo_runs and self._zwo_runs[-1]["stopped_t_rel"] is None:
                     self._zwo_runs[-1]["stopped_t_rel"] = self._t_rel()
                 self._write_manifest()
-                self.status.emit(f"ZWO recording stopped ({detail}) — continuing CSV only", "warn")
+                self._announce(f"ZWO recording stopped ({detail}) — continuing CSV only", "warn")
                 self.state_changed.emit()
 
     def _on_zwo_exited(self, code: int) -> None:
+        self._zwo_opening = False
+        self._zwo_open_on_hello = False
         if self._zwo_video_active or self._zwo_starting_video:
             self._zwo_video_active = False
             self._zwo_starting_video = False
@@ -955,7 +1060,7 @@ class SessionRecorder(QObject):
             if self._zwo_runs and self._zwo_runs[-1]["stopped_t_rel"] is None:
                 self._zwo_runs[-1]["stopped_t_rel"] = self._t_rel()
             self._write_event("zwo_capture_lost", f"exit code {code}")
-            self.status.emit("ZWO camera lost — continuing CSV only", "warn")
+            self._announce("ZWO camera lost — continuing CSV only", "warn")
             self._write_manifest()
             self.state_changed.emit()
         self._zwo_info = {}
@@ -979,7 +1084,7 @@ class SessionRecorder(QObject):
             elif mtype == "error":
                 self._zwo_video_active = False
                 err_msg = msg.get("message", "")
-                self.status.emit(f"Cannot start ZWO video: {err_msg}", "warn")
+                self._announce(f"Cannot start ZWO video: {err_msg}", "warn")
                 self.state_changed.emit()
             return
 
@@ -996,8 +1101,12 @@ class SessionRecorder(QObject):
                     if "roi" in s and s["roi"] is not None:
                         r = s["roi"]
                         roi_tuple = (r["x"], r["y"], r["width"], r["height"])
+                    last_roi = self._zwo_settings.last_roi
+                    if roi_tuple is not None and not self._is_full_sensor(roi_tuple):
+                        last_roi = roi_tuple
                     self._zwo_settings = dataclasses.replace(
                         self._zwo_settings,
+                        last_roi=last_roi,
                         exposure_us=s.get("exposure_us", self._zwo_settings.exposure_us),
                         gain=s.get("gain", self._zwo_settings.gain),
                         bit_depth=s.get("bit_depth", self._zwo_settings.bit_depth),

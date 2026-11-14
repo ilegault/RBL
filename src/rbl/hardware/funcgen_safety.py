@@ -61,3 +61,37 @@ def peak_status(shape: str, amp_vpp: float, offset_v: float):
     if peak > PEAK_WARN_VOLTS + 1e-9:
         return "warn", peak
     return "ok", peak
+
+
+# Fixed ordering for every list the operator reads: X pair, then Y pair.
+_CHANNEL_ORDER = ("A1", "A2", "B1", "B2")
+
+
+def over_limit_channels(params_by_key: dict) -> list[tuple[str, float]]:
+    """Channels whose input peak is above the hard ceiling, as (key, peak).
+
+    Takes {key: ChannelParams}; ordered A1, A2, B1, B2. This is the ONE place a
+    front-end compares a peak against PEAK_MAX_VOLTS to decide whether to grey
+    an Apply button, so the Overview, the Function Generators tab and any later
+    screen cannot disagree about which setpoints are blocked. It is a courtesy
+    in front of Beamline's refusal, which stays the backstop on every path.
+    """
+    found = []
+    for key in _CHANNEL_ORDER:
+        params = params_by_key.get(key)
+        if params is None:
+            continue
+        peak = channel_peak_volts(params.shape, params.amp_vpp, params.offset_v)
+        if peak > PEAK_MAX_VOLTS + 1e-9:
+            found.append((key, peak))
+    return found
+
+
+def over_limit_tooltip(entries: list[tuple[str, float]]) -> str:
+    """One line per offending channel, for a greyed Apply button's tooltip."""
+    return "\n".join(
+        f"{CHANNEL_ROLE[key].replace('-', chr(0x2212))} ({key}) input peak "
+        f"{peak:.2f} V — over the {PEAK_MAX_VOLTS:.0f} V limit. "
+        f"Lower the amplitude or offset."
+        for key, peak in entries
+    )

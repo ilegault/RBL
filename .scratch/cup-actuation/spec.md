@@ -59,7 +59,7 @@ controller's position status back through the same T7, and make confirmed positi
 not inferred current — the boundary of an acquisition run.
 
 Two digital outputs reach the controller's ESM connector as dry contact closures: one
-enables cup-out control, one commands cup out. Three of the controller's isolated
+is the interlock, one commands cup out. Three of the controller's isolated
 status contacts come back as digital inputs: cup IN, cup OUT, and whether the
 controller is in AUTO mode and therefore listening at all. The status lines join the
 LabJack stream scan list, so position arrives in every window on the stream's own
@@ -159,19 +159,45 @@ LJTick-RelayDriver is wired by flying leads rather than plugged into a terminal
 block — its datasheet states that the VS pin "is not used by the LJTRD and thus is
 not connected to anything," so only GND, IOA and IOB carry signal.
 
-| CB37 pin | Signal | Role |
-|---|---|---|
-| 6 | FIO0 | LJTRD IOA → relay 1 → dry contact across ESM P1 **5–13**, enable cup OUT control |
-| 24 | FIO1 | LJTRD IOB → relay 2 → dry contact across ESM P1 **1–9**, command cup OUT |
-| 5 | FIO2 | cup **IN** status contact, other side to GND |
-| 23 | FIO3 | cup **OUT** status contact, other side to GND |
-| 4 | FIO4 | controller **AUTO mode** status contact, other side to GND |
-| 1 | GND | LJTRD GND and the common side of all three status contacts |
-| 27 | Vs | relay board VCC, input side only |
+| CB37 pin | Signal | ESM P1 pins | Role |
+|---|---|---|---|
+| 6 | FIO0 | **5–13** | LJTRD IOA → relay 1 COM/NO → dry contact across 5–13, interlock |
+| 24 | FIO1 | **1–9** | LJTRD IOB → relay 2 COM/NO → dry contact across 1–9, command cup OUT |
+| 5 | FIO2 | **3** (return 11) | cup **IN** status contact |
+| 23 | FIO3 | **2** (return 10) | cup **OUT** status contact |
+| 4 | FIO4 | **4** (return 12) | controller **AUTO mode** status contact |
+| 1 | GND | 10, 11, 12 tied at the breakout | LJTRD GND, and the single shared return of all three status contacts |
+| 27 | Vs | — | relay board input-header VCC (optocoupler side only); required with JD-VCC removed |
 
 The relay board's JD-VCC jumper is removed and the coil supply comes from a separate
 5 V source, so the coil and contact side is not sharing the LabJack's supply on a
 beamline that arcs at rough vacuum.
+
+**P1 controls cup #3 only.** The ESM's P1 remote connector commands and reports the cup
+on controller channel **3** and no other. The end-station cup must be cabled to channel 3
+at the controller; on the 2026-11-08 bench (ticket 12) it was found on another channel and
+moved. If the cups are ever re-cabled at the controller, P1 silently drives whichever cup
+sits on channel 3, and the status contacts report that cup too.
+
+**Cabling: two cables, one shared status return.** The controller is in the control
+room, about 75 ft from the relay board and the T7. Two 4-conductor shielded cables run
+between them, so the 28 V command pair never shares a jacket with the T7's inputs:
+
+- **Cable A, command.** Pair 5/13 → relay 1 COM/NO. Pair 1/9 → relay 2 COM/NO. The
+  relays are landed on **NO, never NC**: on NC a de-energised relay is a closed contact,
+  and the fail-safe inverts. Shield to P1 pin 8 at the controller end only.
+- **Cable B, status.** P1 3 → FIO2, 2 → FIO3, 4 → FIO4. Pins 11, 10 and 12 are tied
+  together at the P1 breakout and return on one conductor to CB37 GND. Shield to CB37
+  GND at the LabJack end only; at the controller end it is cut back and insulated, not
+  landed on pin 8, so this cable never bonds the controller's ground to the LabJack's. The controller does not provide this common: with power off, 10, 11 and
+  12 are not connected to each other, so the shared return exists only because the
+  breakout makes it.
+
+Measured at P1 on the bench (2026-11-08, controller in AUTO, open circuit): 28 V DC
+across 1–9 and 0 V across 5–13; closing 5–13 alone does not change 1–9. Neither closure
+alone moves the cup; both together move it OUT. Each status pair reads 0 V across it, so
+the contacts are dry and safe for the T7 inputs. 4–12 is closed in AUTO; 3–11 and 2–10
+follow the cup.
 
 The relay board is not optional and not redundant with the LJTRD. The controller
 requires a *dry* contact closure between its ESM pins; the LJTRD is a low-side switch
@@ -181,9 +207,10 @@ outputs cannot drive directly.
 
 Polarity, stated once because it is where this kind of work goes wrong: LJTRD
 output-high closes its switch, which pulls the relay board's active-low input down,
-which energises the relay. A status contact that is **closed** pulls its FIO line to
-ground and therefore reads as bit value **0**. Closed is zero. The decoding function
-inverts.
+which energises the relay. A status line reads 1 when its condition is asserted
+(bench, 2026-11-10, cup IN in AUTO: FIO2 = 1, FIO3 = 0, FIO4 = 1); the level is
+`CUP_STATUS_ASSERTED_LEVEL`. A disconnected status cable floats all three lines high
+on the T7's pull-ups and so reads INDETERMINATE with AUTO asserted.
 
 ### Fail-safe: the cup fails IN
 
@@ -197,7 +224,7 @@ No software path is load-bearing for this. It is a property of the wiring, and i
 must stay a property of the wiring. Do not add a shutdown handler that drives the cup
 anywhere; the absence of drive *is* the safe state.
 
-Relay 2 (command OUT) is the one that cycles. Relay 1 (enable) is held closed while
+Relay 2 (command OUT) is the one that cycles. Relay 1 (interlock) is held closed while
 the application is connected and in control, and opened on disconnect and on
 application shutdown, as an explicit release of control.
 

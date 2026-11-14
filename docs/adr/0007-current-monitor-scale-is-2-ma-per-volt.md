@@ -14,8 +14,12 @@ monitor is scaled **1 V = 2 mA** (±10 V = ±20 mA), and the current limit pot r
 0.5-20 mA, not 0.5-10 mA (`docs/hardware/eel5000-manufacturer-notes.md`).
 
 The usual way to settle this is to drive a known resistor and compare the monitor
-with a meter. That needs the amplifier output disconnected from the steerer plates,
-and on this beamline it cannot be disconnected.
+with a meter. That needs the amplifier output disconnected from the steerer plates.
+When this was written that was believed impossible on this beamline. *Corrected
+2026-11-08:* the HV cables unplug at the amplifier outputs (not at the plate end),
+and the resistor check is now part of the amplifier bench campaign
+(`.scratch/amplifier-load-and-spikes/issues/52-bench-campaign.md`, step 4). Until it
+runs, the decision below still rests on the manufacturer's word.
 
 The manufacturer's figure is consistent with everything else known. The corrected
 plate capacitance (~300 pF instead of ~1.5 nF) is close to the geometry estimate

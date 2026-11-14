@@ -1,6 +1,7 @@
 -r requirements.txt
 pytest>=9.1.1
 pytest-xdist>=3.6
+pytest-timeout>=2.3  # per-test hang guard, see pytest.ini
 ruff>=0.5.0
 mypy>=1.10.0
 tzdata>=2024.1  # zoneinfo has no IANA database on Windows; tests/test_log_rollover.py uses America/Chicago

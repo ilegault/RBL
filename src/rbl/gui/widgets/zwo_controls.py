@@ -13,6 +13,10 @@ This widget owns no hardware or camera state; it is a pure view of the
 SessionRecorder. All displayed values come from the snapped settings
 confirmed by the Capture Process (`state()["zwo_settings"]`), never from
 what was typed.
+
+Repacked into three compact rows plus status line (ticket 89): row 1 exposure,
+gain, bit depth, keep 1 in N; row 2 ROI, Full sensor, Take Darks; row 3 Preview
+stretch and brightness.
 """
 from __future__ import annotations
 
@@ -76,89 +80,83 @@ class ZwoControls(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(4)
 
-        # Exposure & Gain
-        row_exp_gain = QHBoxLayout()
-        row_exp_gain.setSpacing(4)
-        row_exp_gain.addWidget(QLabel("Exposure:"))
+        # Row 1: Exposure, Gain, Bit depth, Keep 1 in N
+        row1 = QHBoxLayout()
+        row1.setSpacing(4)
+        row1.addWidget(QLabel("Exposure:"))
         self.spin_exposure_ms = QuietDoubleSpinBox(self)
         self.spin_exposure_ms.setDecimals(3)
         self.spin_exposure_ms.setRange(0.001, 100_000.0)
         self.spin_exposure_ms.setValue(ZWO_EXPOSURE_US_DEFAULT / 1000.0)
-        row_exp_gain.addWidget(self.spin_exposure_ms)
-        row_exp_gain.addWidget(QLabel("ms"))
+        row1.addWidget(self.spin_exposure_ms)
+        row1.addWidget(QLabel("ms"))
 
-        row_exp_gain.addWidget(QLabel("Gain:"))
+        row1.addWidget(QLabel("Gain:"))
         self.spin_gain = NoScrollSpinBox(self)
         self.spin_gain.setRange(0, 1000)
         self.spin_gain.setValue(ZWO_GAIN_DEFAULT)
-        row_exp_gain.addWidget(self.spin_gain)
-        lay.addLayout(row_exp_gain)
+        row1.addWidget(self.spin_gain)
 
-        # Bit depth & Keep 1 in N
-        row_depth_keep = QHBoxLayout()
-        row_depth_keep.setSpacing(4)
-        row_depth_keep.addWidget(QLabel("Bit depth:"))
+        row1.addWidget(QLabel("Bit depth:"))
         self.combo_bit_depth = NoScrollComboBox(self)
         self.combo_bit_depth.addItem("RAW16 (default)", 16)
         self.combo_bit_depth.addItem("RAW8", 8)
-        row_depth_keep.addWidget(self.combo_bit_depth)
+        row1.addWidget(self.combo_bit_depth)
 
-        row_depth_keep.addWidget(QLabel("Keep 1 in N:"))
+        row1.addWidget(QLabel("Keep 1 in N:"))
         self.spin_keep_one_in_n = NoScrollSpinBox(self)
         self.spin_keep_one_in_n.setRange(1, CAPTURE_KEEP_ONE_IN_N_MAX)
         self.spin_keep_one_in_n.setValue(CAPTURE_KEEP_ONE_IN_N_DEFAULT)
-        row_depth_keep.addWidget(self.spin_keep_one_in_n)
-        lay.addLayout(row_depth_keep)
+        row1.addWidget(self.spin_keep_one_in_n)
+        row1.addStretch(1)
+        lay.addLayout(row1)
 
-        # ROI controls
-        row_roi = QHBoxLayout()
-        row_roi.setSpacing(4)
-        row_roi.addWidget(QLabel("ROI:"))
+        # Row 2: ROI controls, Full sensor, Take Darks
+        row2 = QHBoxLayout()
+        row2.setSpacing(4)
+        row2.addWidget(QLabel("ROI:"))
         self.spin_roi_x = NoScrollSpinBox(self)
         self.spin_roi_x.setRange(0, 10000)
-        row_roi.addWidget(self.spin_roi_x)
+        row2.addWidget(self.spin_roi_x)
 
         self.spin_roi_y = NoScrollSpinBox(self)
         self.spin_roi_y.setRange(0, 10000)
-        row_roi.addWidget(self.spin_roi_y)
+        row2.addWidget(self.spin_roi_y)
 
         self.spin_roi_width = NoScrollSpinBox(self)
         self.spin_roi_width.setRange(0, 10000)
-        row_roi.addWidget(self.spin_roi_width)
+        row2.addWidget(self.spin_roi_width)
 
         self.spin_roi_height = NoScrollSpinBox(self)
         self.spin_roi_height.setRange(0, 10000)
-        row_roi.addWidget(self.spin_roi_height)
+        row2.addWidget(self.spin_roi_height)
 
         self.btn_full_sensor = QPushButton("Full sensor", self)
-        row_roi.addWidget(self.btn_full_sensor)
-        lay.addLayout(row_roi)
+        row2.addWidget(self.btn_full_sensor)
 
-        # Preview & Brightness
-        row_prev = QHBoxLayout()
-        row_prev.setSpacing(4)
-        row_prev.addWidget(QLabel("Preview:"))
+        self.btn_take_darks = QPushButton("Take Darks", self)
+        row2.addWidget(self.btn_take_darks)
+        row2.addStretch(1)
+        lay.addLayout(row2)
+
+        # Row 3: Preview stretch & Brightness
+        row3 = QHBoxLayout()
+        row3.setSpacing(4)
+        row3.addWidget(QLabel("Preview:"))
         self.combo_preview = NoScrollComboBox(self)
         self.combo_preview.addItem("Auto stretch", "auto")
         self.combo_preview.addItem("Linear", "linear")
-        row_prev.addWidget(self.combo_preview)
+        row3.addWidget(self.combo_preview)
 
-        row_prev.addWidget(QLabel("Brightness:"))
+        row3.addWidget(QLabel("Brightness:"))
         self.slider_brightness = NoScrollSlider(Qt.Orientation.Horizontal, self)
         self.slider_brightness.setRange(
             int(PREVIEW_BRIGHTNESS_MIN * 100),
             int(PREVIEW_BRIGHTNESS_MAX * 100),
         )
         self.slider_brightness.setValue(int(PREVIEW_BRIGHTNESS_DEFAULT * 100))
-        row_prev.addWidget(self.slider_brightness)
-        lay.addLayout(row_prev)
-
-        # Take Darks
-        row_darks = QHBoxLayout()
-        row_darks.setSpacing(4)
-        self.btn_take_darks = QPushButton("Take Darks", self)
-        row_darks.addWidget(self.btn_take_darks)
-        lay.addLayout(row_darks)
+        row3.addWidget(self.slider_brightness, stretch=1)
+        lay.addLayout(row3)
 
         # Status line
         self.lbl_status = QLabel("", self)
@@ -210,11 +208,7 @@ class ZwoControls(QWidget):
         self._recorder.set_zwo_settings(roi=roi)
 
     def _on_full_sensor_clicked(self) -> None:
-        info = self._recorder.state().get("zwo_info", {})
-        sw = info.get("sensor_width", 0)
-        sh = info.get("sensor_height", 0)
-        if sw > 0 and sh > 0:
-            self._recorder.set_zwo_settings(roi={"x": 0, "y": 0, "width": sw, "height": sh})
+        self._recorder.swap_zwo_roi()
 
     def _on_preview_changed(self, *args: Any) -> None:
         mode = self.combo_preview.currentData() or "auto"
@@ -268,6 +262,21 @@ class ZwoControls(QWidget):
             inp.setEnabled(zwo_open)
 
         self.btn_take_darks.setEnabled(zwo_open and not zwo_recording)
+
+        # ROI is locked while ZWO video records (the recorder refuses too).
+        sw = info.get("sensor_width", 0)
+        sh = info.get("sensor_height", 0)
+        roi = settings.get("roi")
+        at_full = (not roi) or (
+            isinstance(roi, dict)
+            and (roi.get("x"), roi.get("y"), roi.get("width"), roi.get("height"))
+            == (0, 0, sw, sh))
+        last_roi = state.get("zwo_last_roi")
+        self.btn_full_sensor.setText("Back to ROI" if at_full else "Full sensor")
+        self.btn_full_sensor.setEnabled(
+            zwo_open and not zwo_recording and not (at_full and last_roi is None))
+        for spn in (self.spin_roi_x, self.spin_roi_y, self.spin_roi_width, self.spin_roi_height):
+            spn.setEnabled(zwo_open and not zwo_recording)
 
         # Control ranges
         controls = info.get("controls", {})
