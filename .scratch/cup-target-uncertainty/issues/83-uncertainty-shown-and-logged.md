@@ -1,6 +1,6 @@
 # 83: Show and log insertion uncertainty for every insertion (fixed dwell unchanged)
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 

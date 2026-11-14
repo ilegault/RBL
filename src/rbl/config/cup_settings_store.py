@@ -30,7 +30,8 @@ amendment A5): never a silent substitution, never an exception. An absent key is
 wrong key: it takes its default with no warning.
 
 Fields are judged in a fixed order (arm, release, dwell, period, settle, debounce,
-release interval) so a bad dwell and a bad period each report, instead of one rule
+release interval, target uncertainty, minimum converge samples) so a bad dwell and a
+bad period each report, instead of one rule
 masking the other. A cross-field rule compares against the value already accepted
 earlier in that order; for a partner not yet judged it uses that partner's raw value if
 it is a finite number, else its default; for the dwell, which has two partners, the
@@ -56,16 +57,19 @@ import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from rbl.config.cup_config import (
     CUP_ARM_DEBOUNCE_S,
     CUP_ARM_THRESHOLD_A,
     CUP_CYCLE_DWELL_S,
     CUP_CYCLE_PERIOD_S,
+    CUP_MIN_CONVERGE_SAMPLES,
     CUP_MOVE_CONFIRMATION_TIMEOUT_S,
     CUP_RELEASE_INTERVAL_S,
     CUP_RELEASE_THRESHOLD_A,
     CUP_SETTLE_WINDOW_S,
+    CUP_TARGET_UNCERTAINTY_DEFAULT,
 )
 from rbl.config.paths import CUP_SETTINGS_STORE
 
@@ -89,6 +93,8 @@ class CupSettings:
     cycle_dwell_s: float
     arm_debounce_s: float
     release_interval_s: float
+    target_uncertainty: float = CUP_TARGET_UNCERTAINTY_DEFAULT
+    min_converge_samples: int = CUP_MIN_CONVERGE_SAMPLES
 
     @classmethod
     def defaults(cls) -> "CupSettings":
@@ -101,6 +107,8 @@ class CupSettings:
             cycle_dwell_s=CUP_CYCLE_DWELL_S,
             arm_debounce_s=CUP_ARM_DEBOUNCE_S,
             release_interval_s=CUP_RELEASE_INTERVAL_S,
+            target_uncertainty=CUP_TARGET_UNCERTAINTY_DEFAULT,
+            min_converge_samples=CUP_MIN_CONVERGE_SAMPLES,
         )
 
 
@@ -131,7 +139,7 @@ def validate_settings(raw: dict) -> tuple[CupSettings, list[SettingsLoadWarning]
         raw = {}
     defaults = CupSettings.defaults()
     two_moves = 2 * CUP_MOVE_CONFIRMATION_TIMEOUT_S
-    accepted: dict[str, float] = {}
+    accepted: dict[str, Any] = {}  # min_converge_samples is int-cast at the end
     warnings: list[SettingsLoadWarning] = []
 
     def candidate(key: str) -> float:
@@ -185,7 +193,12 @@ def validate_settings(raw: dict) -> tuple[CupSettings, list[SettingsLoadWarning]
           else "must be above 0 and at most 60 s")
     judge("release_interval_s", lambda v: None if 0 < v <= 60.0
           else "must be above 0 and at most 60 s")
+    judge("target_uncertainty", lambda v: None if 0.005 <= v <= 0.5
+          else "must be between 0.005 and 0.5 (0.5 % to 50 %)")
+    judge("min_converge_samples", lambda v: None if v == int(v) and v >= 2
+          else "must be a whole number of at least 2")
 
+    accepted["min_converge_samples"] = int(accepted["min_converge_samples"])
     return CupSettings(**accepted), warnings
 
 
