@@ -1,12 +1,38 @@
 """
 test_picoammeter_worker.py
 Unit tests for PicoammeterWorker QThread lifecycle, polling rates, and error recovery.
+
+WHY THESE TESTS NEVER PUMP THE EVENT LOOP
+-----------------------------------------
+These tests once called QCoreApplication.processEvents() while they waited, and
+connected the worker's signals to plain callables (``readings.append``, lambdas).
+PySide queues such a connection to the main thread, so every emission became an
+event the main thread had to deliver. Two things then went wrong together, and
+together they killed a CI worker with "Fatal Python error: Aborted" / "Windows
+fatal exception: access violation" inside matplotlib (jobs 132270457599,
+132011959569):
+
+1. processEvents() runs EVERY pending event in the process, not just this
+   test's. Under ``pytest -n auto --dist loadfile`` this file shares a worker
+   process with GUI tests that ran earlier and left matplotlib canvases alive
+   with a ``draw_idle`` timer pending. Waiting here redrew other tests' figures.
+2. In acquiring mode the worker polls back to back (ticket 82). Against a
+   MagicMock instrument that answers instantly it emitted ~50 000 readings a
+   second, each one a queued event plus a recorded mock call. While the main
+   thread was busy in those foreign redraws (and starved of the GIL by the
+   spinning worker) the queue grew by ~125 MB a second.
+
+So: every connection below is a DirectConnection (the slot runs on the worker
+thread; ``list.append`` is atomic under the GIL), ``_wait_until`` only polls,
+and the fake instrument takes ``_FAKE_READ_S`` per read, as a real 6482 does,
+because "back to back" means the instrument sets the pace, not that a read is
+free. What these tests assert about the worker is unchanged.
 """
 import time
 from unittest.mock import MagicMock, patch
 
 import pytest
-from PySide6.QtCore import QCoreApplication
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from rbl.config.cup_config import (
@@ -22,14 +48,32 @@ def qapp():
     return QApplication.instance() or QApplication([])
 
 
+# Slots run on the worker thread: nothing is queued to the main thread, so the
+# tests never need to run the main event loop (see the module docstring).
+_DIRECT = Qt.ConnectionType.DirectConnection
+
+# One read of the fake 6482. A real one takes milliseconds per reading even at its
+# fastest integration time; a fake that answers in microseconds makes acquiring
+# mode a busy loop that no real instrument produces.
+_FAKE_READ_S = 0.002
+_FAKE_LINE = "+1.234567E-06,+0.123456,+00000000"
+
+
+def _paced_read(line=_FAKE_LINE):
+    def _read():
+        time.sleep(_FAKE_READ_S)
+        return line
+    return _read
+
+
 def _wait_until(predicate, timeout_s=10.0):
-    start = time.time()
-    while time.time() - start < timeout_s:
-        QCoreApplication.processEvents()
+    """Poll predicate. Never runs the event loop: that would run other tests'
+    leftover Qt timers in this process (see the module docstring)."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
         if predicate():
             return True
         time.sleep(0.005)
-    QCoreApplication.processEvents()
     return predicate()
 
 
@@ -61,14 +105,14 @@ class TestPicoammeterWorker:
         mock_inst = MagicMock()
         mock_inst.idn.return_value = "Keithley model 6482"
         mock_inst.protocol_mode = 1
-        mock_inst.read_raw.return_value = "+1.234567E-06,+0.123456,+00000000"
+        mock_inst.read_raw.side_effect = _paced_read()
         mock_driver_cls.return_value = mock_inst
 
         worker = PicoammeterWorker("GPIB0::14::INSTR")
         worker.set_acquiring(True)
 
         readings: list[Keithley6482Reading] = []
-        worker.reading_ready.connect(readings.append)
+        worker.reading_ready.connect(readings.append, _DIRECT)
 
         sleep_calls: list[float] = []
 
@@ -90,14 +134,14 @@ class TestPicoammeterWorker:
         mock_inst = MagicMock()
         mock_inst.idn.return_value = "Keithley model 6482"
         mock_inst.protocol_mode = 1
-        mock_inst.read_raw.return_value = "+1.234567E-06,+0.123456,+00000000"
+        mock_inst.read_raw.side_effect = _paced_read()
         mock_driver_cls.return_value = mock_inst
 
         worker = PicoammeterWorker("GPIB0::14::INSTR")
         worker.set_acquiring(False)
 
         readings: list[Keithley6482Reading] = []
-        worker.reading_ready.connect(readings.append)
+        worker.reading_ready.connect(readings.append, _DIRECT)
 
         sleep_calls: list[float] = []
 
@@ -122,14 +166,14 @@ class TestPicoammeterWorker:
         mock_inst = MagicMock()
         mock_inst.idn.return_value = "Keithley model 6482"
         mock_inst.protocol_mode = 1
-        mock_inst.read_raw.return_value = "+1.234567E-06,+0.123456,+00000000"
+        mock_inst.read_raw.side_effect = _paced_read()
         mock_driver_cls.return_value = mock_inst
 
         worker = PicoammeterWorker("GPIB0::14::INSTR")
         worker.set_acquiring(True)
 
         readings: list[Keithley6482Reading] = []
-        worker.reading_ready.connect(readings.append)
+        worker.reading_ready.connect(readings.append, _DIRECT)
 
         worker.start()
         try:
@@ -146,7 +190,7 @@ class TestPicoammeterWorker:
         mock_inst = MagicMock()
         mock_inst.idn.return_value = "Keithley model 6482"
         mock_inst.protocol_mode = 1
-        mock_inst.read_raw.return_value = "+1.234567E-06,+0.123456,+00000000"
+        mock_inst.read_raw.side_effect = _paced_read()
         mock_driver_cls.return_value = mock_inst
 
         with patch("rbl.hardware.picoammeter_worker.CUP_RECONNECT_BACKOFF_S", [0.01, 0.01]):
@@ -156,9 +200,11 @@ class TestPicoammeterWorker:
             raws: list[tuple[str, float]] = []
             connected_events: list[tuple[bool, str]] = []
 
-            worker.reading_ready.connect(readings.append)
-            worker.raw_ready.connect(lambda raw, t: raws.append((raw, t)))
-            worker.connected_changed.connect(lambda conn, idn: connected_events.append((conn, idn)))
+            worker.reading_ready.connect(readings.append, _DIRECT)
+            worker.raw_ready.connect(lambda raw, t: raws.append((raw, t)), _DIRECT)
+            worker.connected_changed.connect(
+                lambda conn, idn: connected_events.append((conn, idn)), _DIRECT
+            )
 
             worker.start()
 
@@ -191,6 +237,7 @@ class TestPicoammeterWorker:
             call_count += 1
             if call_count == 2:
                 raise RuntimeError("GPIB bus communication failure")
+            time.sleep(_FAKE_READ_S)
             return "+1.000000E-06,+0.100000,+00000000"
 
         mock_inst.read_raw.side_effect = _mock_read
@@ -199,7 +246,7 @@ class TestPicoammeterWorker:
         worker = PicoammeterWorker("GPIB0::14::INSTR", poll_interval_s=0.01)
 
         errors: list[str] = []
-        worker.error.connect(errors.append)
+        worker.error.connect(errors.append, _DIRECT)
 
         with patch("rbl.hardware.picoammeter_worker.CUP_RECONNECT_BACKOFF_S", [0.01, 0.01]):
             worker.start()
@@ -221,7 +268,7 @@ class TestPicoammeterWorker:
         )
         worker = PicoammeterWorker("GPIB0::2::INSTR", poll_interval_s=0.01)
         errors: list[str] = []
-        worker.error.connect(errors.append)
+        worker.error.connect(errors.append, _DIRECT)
 
         with patch("rbl.hardware.picoammeter_worker.CUP_RECONNECT_BACKOFF_S", [0.01]):
             worker.start()
