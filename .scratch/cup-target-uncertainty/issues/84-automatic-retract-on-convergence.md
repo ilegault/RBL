@@ -1,6 +1,6 @@
 # 84: Automatic insertions retract on convergence (target-uncertainty mode, set in the settings file)
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
