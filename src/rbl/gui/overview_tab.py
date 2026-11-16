@@ -85,6 +85,8 @@ from rbl.hardware.funcgen_safety import (
     CHANNEL_ROLE,
     PEAK_MAX_VOLTS,
     PEAK_WARN_VOLTS,
+    over_limit_channels,
+    over_limit_tooltip,
     peak_status,
 )
 from rbl.hardware.load_model import predicted_peak_ma
@@ -219,6 +221,7 @@ class OverviewTab(QWidget):
         # Setpoint edits are applied immediately, not on the redraw timer: they
         # are the operator's own keystrokes and must never lag behind them.
         self._setpoints.changed.connect(self._on_setpoint_changed)
+        self._refresh_apply_all()
         for axis in self.drives:
             self._sync_axis_from_setpoints(axis)
 
@@ -417,6 +420,7 @@ class OverviewTab(QWidget):
             "same sequence as the Function Generators tab's Apply All, and the "
             "only ordering that brings the raster up aligned."
         )
+        self._apply_all_tip = self.btn_apply_all.toolTip()
         self.btn_apply_all.setEnabled(False)
         self.btn_apply_all.clicked.connect(self._on_apply_all)
         lay.addWidget(self.btn_apply_all)
@@ -568,6 +572,7 @@ class OverviewTab(QWidget):
 
     def _on_funcgens(self, state: FuncGenState):
         self._funcgens = state
+        self._refresh_apply_all()
 
     def _on_scope(self, state: ScopeState):
         self._scope = state
@@ -719,6 +724,26 @@ class OverviewTab(QWidget):
         for axis, keys in AXIS_CHANNELS.items():
             if key in keys:
                 self._sync_axis_from_setpoints(axis)
+        self._refresh_apply_all()
+
+    def _refresh_apply_all(self):
+        """Enable Apply All only when it could succeed, and say why if not.
+
+        Connection AND the input limit: any channel on a connected generator
+        whose input peak is over the ceiling greys the button and names itself
+        in the tooltip. The comparison is over_limit_channels' alone. Called on
+        every setpoint and connection change, not on the redraw tick, so the
+        button never lags the operator's typing. Beamline still refuses an
+        over-limit apply; this only spares the operator the refusal.
+        """
+        connected = self._funcgens.connected
+        any_connected = any(connected.get(g, False) for g in ("A", "B"))
+        offenders = over_limit_channels({
+            k: p for k, p in self._setpoints.all().items()
+            if connected.get(k[0], False)})
+        self.btn_apply_all.setEnabled(any_connected and not offenders)
+        self.btn_apply_all.setToolTip(
+            over_limit_tooltip(offenders) if offenders else self._apply_all_tip)
 
     def _sync_axis_from_setpoints(self, axis: str):
         params = self._setpoints.axis_params(axis)
@@ -943,7 +968,7 @@ class OverviewTab(QWidget):
             ctrl.set_readback(funcgens.channels, connected)
             ctrl.set_connected(connected)
 
-        self.btn_apply_all.setEnabled(any_connected)
+        self._refresh_apply_all()
         # Sharing a timebase only means anything with BOTH units connected —
         # there is nothing to lock one generator to.
         both = all(funcgens.connected.get(g, False) for g in ("A", "B"))
