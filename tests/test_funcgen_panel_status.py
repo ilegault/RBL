@@ -23,7 +23,7 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLabel, QWidget
 
 from rbl.gui import theme
 from rbl.state.beamline import Beamline
@@ -227,3 +227,61 @@ def test_fg_apply_buttons_grey_out_over_the_input_limit(tab):
     assert not tab.panels["A2"].btn_apply.isEnabled()
     assert line in tab.panels["A2"].btn_apply.toolTip()
     assert tab.panels["A1"].btn_apply.isEnabled()
+
+
+def test_channel_input_peak_line(tab):
+    panel = tab.panels["A1"]
+    tab.beamline.funcgen_setpoints.update("A1", shape="Sine", amp_vpp=4.4, offset_v=1.0)
+    assert panel.lbl_hv.text() == "input peak 3.20 V"
+
+    tab.beamline.funcgen_setpoints.update("A1", shape="DC", offset_v=-1.5)
+    assert panel.lbl_hv.text() == "input peak 1.50 V"
+
+    # WARN (> 4 V) and FAULT (> 5 V)
+    tab.beamline.funcgen_setpoints.update("A1", shape="Sine", amp_vpp=7.0, offset_v=1.0)
+    assert panel.lbl_hv.text() == "input peak 4.50 V"
+    assert theme.WARN in panel.lbl_hv.styleSheet()
+
+    tab.beamline.funcgen_setpoints.update("A1", shape="Sine", amp_vpp=9.0, offset_v=1.0)
+    assert panel.lbl_hv.text() == "input peak 5.50 V"
+    assert theme.FAULT in panel.lbl_hv.styleSheet()
+
+
+def test_help_text_states_the_limit_in_generator_volts(tab):
+    help_lbl = getattr(tab, "lbl_help", None) or getattr(tab, "note_lbl", None)
+    if help_lbl is None:
+        for lbl in tab.findChildren(QLabel):
+            if "Amplitude is peak-to-peak (Vpp)" in lbl.text():
+                help_lbl = lbl
+                break
+    assert help_lbl is not None
+    text = help_lbl.text()
+    assert "|offset| + ½·amplitude" in text or "|offset| + ½*amplitude" in text
+    assert "Apply is blocked above 5 V" in text or "blocked above 5 V" in text
+    assert "above 4 V" in text
+    assert "10 Vpp" in text
+    assert "4 Vpp" in text
+    assert "kV" not in text
+
+
+def test_fg_tab_text_has_no_kv(tab):
+    help_lbl = getattr(tab, "lbl_help", None) or getattr(tab, "note_lbl", None)
+    if help_lbl is None:
+        for lbl in tab.findChildren(QLabel):
+            if "Amplitude is peak-to-peak (Vpp)" in lbl.text():
+                help_lbl = lbl
+                break
+    assert help_lbl is not None
+    forbidden = ["kV/plate", "kV p-p", "5 kV"]
+    for word in forbidden:
+        assert word not in help_lbl.text(), f"Found {word} in help label: {help_lbl.text()}"
+        assert word not in help_lbl.toolTip(), f"Found {word} in help label tooltip"
+
+    for panel in tab.panels.values():
+        for widget in panel.findChildren(QWidget):
+            text = getattr(widget, "text", lambda: "")()
+            tooltip = widget.toolTip()
+            for word in forbidden:
+                assert word not in text, f"Found {word} in {widget} text: {text}"
+                assert word not in tooltip, f"Found {word} in {widget} tooltip: {tooltip}"
+
