@@ -1,6 +1,6 @@
 # 108: FG tab wording — input peak, no kV
 
-**Status:** blocked
+**Status:** done
 
 **Runner:** any
 
@@ -66,3 +66,11 @@ Failing output:
 - Check 9 fail: `test_update_signals_only_on_a_real_change` (criterion "Amplitude and offset boxes, their ranges, the Mirror button'") did not fail on the base code, so it does not prove the criterion
 ```
 Decision needed: Criterion 4 on `master` names backticked existing test `test_update_signals_only_on_a_real_change`, which passes on base code because it verifies unchanged behaviour. Check 9 requires named tests to fail on base. Does the developer want to retag criterion 4 (e.g. `(no test: existing tests unedited)`) on `master` or how should check 9 be satisfied?
+
+## Resolved — 2026-11-16
+The decision was made on master in PR #174: criterion 4 is now a regression guard with
+`(no test: ...)` and names no test, so integrity check 9 no longer applies to it. Merged
+master into this branch; the retagged criterion came in without conflict. The
+implementation is unchanged. Existing tests in tests/test_funcgen_panel_status.py and
+tests/test_setpoint_sync.py are unedited (the only changed line widens an import).
+Status set to done.
