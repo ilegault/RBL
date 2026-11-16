@@ -1,6 +1,6 @@
 # 83: Show and log insertion uncertainty for every insertion (fixed dwell unchanged)
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -54,23 +54,23 @@ noise before any stopping rule exists.
 
 ## Acceptance criteria
 
-- [ ] `tests/test_cup_session_writer.py`: a test asserts the eight new names are the
+- [x] `tests/test_cup_session_writer.py`: a test asserts the eight new names are the
       last eight entries of `CSV_COLUMNS` in the order above and that every existing
       column keeps its index; a written insertion summary row carries the values given,
       and a sample row has the eight blank.
-- [ ] `tests/test_faraday_cup_tab.py`: feeding readings through `CupFeed` (prior art in
+- [x] `tests/test_faraday_cup_tab.py`: feeding readings through `CupFeed` (prior art in
       that file) for an insertion with a cup log open, `lbl_uncertainty.text()` reads
       `"too few samples (3/10)"` after three post-settle samples and a percentage with
       `n = 12` after twelve; after the run closes, the last row of the cup log has
       `dwell_mode == "fixed"`, `end_reason == "dwell_elapsed"`, and an
       `insertion_uncertainty` equal to `compute_insertion_uncertainty` on the same
       samples.
-- [ ] The same readout test with **no cup log open** shows the same text and writes no
+- [x] The same readout test with **no cup log open** shows the same text and writes no
       file.
-- [ ] `tests/test_cup_settings_store.py`: defaults, a value at each bound accepted, and
+- [x] `tests/test_cup_settings_store.py`: defaults, a value at each bound accepted, and
       `target_uncertainty = 0.9` and `min_converge_samples = 1` each fall back to the
       default with a warning naming the key.
-- [ ] An existing insertion's timing is unchanged: the existing scheduler and tab dwell
+- [x] An existing insertion's timing is unchanged: the existing scheduler and tab dwell
       tests pass unchanged.
 
 May fake: the instrument feeds (`CupFeed`, `CupActuationFeed`) and modal dialogs. Must be
