@@ -362,6 +362,14 @@ only the tool that has that command.
    is worse than none.
 10. **After pushing, watch CI and fix what it finds** — up to two fix-and-push
     cycles, then escalate. See the section directly below; it is binding.
+11. **The claim commit carries no test-gate escape tag, and no PR title or body ever
+    quotes one.** A claim commit changes only the ticket file under `.scratch/`, which
+    the tests-first gate already passes, so a tag there exempts nothing and only makes
+    the engine's integrity gate HOLD the branch for a human. Worse, an escape tag
+    written anywhere in a PR title or body, even inside a sentence reporting on it,
+    exempts the **whole PR** from the tests-first gate (ticket 84, PR #177). When a
+    report must mention one, name it in words ("the claim commit's escape tag") and
+    never type the bracketed tag itself.
 
 ### Watching CI, and fixing what it finds
 
