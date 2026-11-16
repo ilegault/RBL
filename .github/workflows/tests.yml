@@ -71,8 +71,16 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
 
+      # --max-worker-restart=0: a worker process that crashes (segfault, abort,
+      # access violation) ends the run at once, red, with "worker gwN crashed".
+      # Without it xdist replaces the worker, and under --dist loadfile its
+      # remove_node() puts back EVERY file the dead worker ever ran, finished ones
+      # included. Handing out those empty files stalls the workers waiting for a
+      # shutdown that never comes, so the job used to sit at 99% until the
+      # 20-minute timeout cancelled it (pytest-xdist 3.8.0; reproduced locally by
+      # aborting one test). A crash is a defect to fix, not something to retry.
       - name: Run tests
         env:
           QT_QPA_PLATFORM: offscreen
           PYTHONUTF8: "1"
-        run: pytest --tb=short -q -n auto --dist loadfile --durations=25
+        run: pytest --tb=short -q -n auto --dist loadfile --max-worker-restart=0 --durations=25
