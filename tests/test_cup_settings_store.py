@@ -36,12 +36,19 @@ def test_cup_settings_frozen_dataclass_fields():
         "release_interval_s",
         "target_uncertainty",
         "min_converge_samples",
+        "dwell_mode",
+        "max_dwell_s",
     }
     field_names = {f.name for f in dataclasses.fields(CupSettings)}
     assert field_names == expected_fields
 
     for f in dataclasses.fields(CupSettings):
-        assert f.type is (int if f.name == "min_converge_samples" else float)
+        expected_type = (
+            int if f.name == "min_converge_samples"
+            else str if f.name == "dwell_mode"
+            else float
+        )
+        assert f.type is expected_type
 
     settings = CupSettings.defaults()
     with pytest.raises(dataclasses.FrozenInstanceError):
@@ -460,3 +467,64 @@ def test_new_settings_absent_take_defaults_without_warning():
     assert settings.target_uncertainty == 0.05
     assert settings.min_converge_samples == 10
     assert isinstance(settings.min_converge_samples, int)
+
+
+# ---------------------------------------------------------------------------
+# Ticket 84: dwell_mode and max_dwell_s
+# ---------------------------------------------------------------------------
+def test_dwell_mode_and_max_dwell_defaults():
+    s = CupSettings.defaults()
+    assert s.dwell_mode == "fixed"
+    assert s.max_dwell_s == pytest.approx(5.0)
+    settings, warnings = validate_settings(_valid())
+    assert warnings == []
+    assert settings.dwell_mode == "fixed"
+    assert settings.max_dwell_s == pytest.approx(5.0)
+
+
+@pytest.mark.parametrize("bad_mode", ["auto", 1, True, None, ""])
+def test_bad_dwell_mode_falls_back_with_warning(bad_mode):
+    settings, warnings = validate_settings(_valid(dwell_mode=bad_mode))
+    assert [w.key for w in warnings] == ["dwell_mode"]
+    assert settings.dwell_mode == "fixed"
+
+
+@pytest.mark.parametrize("bad_max", [1.0, 0.5, -2.0, "5s", float("nan")])
+def test_max_dwell_not_above_settle_falls_back_with_warning(bad_max):
+    settings, warnings = validate_settings(_valid(settle_window_s=1.0, max_dwell_s=bad_max))
+    assert [w.key for w in warnings] == ["max_dwell_s"]
+    assert settings.max_dwell_s == pytest.approx(5.0)
+
+
+def test_period_rule_uses_active_modes_dwell():
+    # In target_uncertainty mode, max_dwell_s governs the period check even if
+    # cycle_dwell_s is smaller, and a period too short for max_dwell_s + 2 moves is rejected.
+    s_ok, w_ok = validate_settings(_valid(
+        dwell_mode="target_uncertainty",
+        cycle_dwell_s=3.0,
+        max_dwell_s=10.0,
+        cycle_period_s=10.0 + _T2,
+    ))
+    assert w_ok == []
+    assert s_ok.dwell_mode == "target_uncertainty"
+    assert s_ok.max_dwell_s == pytest.approx(10.0)
+
+    s_bad, w_bad = validate_settings(_valid(
+        dwell_mode="target_uncertainty",
+        cycle_dwell_s=3.0,
+        max_dwell_s=10.0,
+        cycle_period_s=9.5 + _T2,
+    ))
+    assert [w.key for w in w_bad] == ["cycle_period_s"]
+    assert s_bad.cycle_period_s == pytest.approx(CupSettings.defaults().cycle_period_s)
+
+    # In fixed mode, max_dwell_s > cycle_period_s does not condemn cycle_period_s.
+    s_fixed, w_fixed = validate_settings(_valid(
+        dwell_mode="fixed",
+        cycle_dwell_s=3.0,
+        max_dwell_s=20.0,
+        cycle_period_s=3.0 + _T2,
+    ))
+    assert w_fixed == []
+    assert s_fixed.max_dwell_s == pytest.approx(20.0)
+

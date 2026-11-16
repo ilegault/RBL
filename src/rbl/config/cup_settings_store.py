@@ -64,6 +64,7 @@ from rbl.config.cup_config import (
     CUP_ARM_THRESHOLD_A,
     CUP_CYCLE_DWELL_S,
     CUP_CYCLE_PERIOD_S,
+    CUP_MAX_DWELL_S,
     CUP_MIN_CONVERGE_SAMPLES,
     CUP_MOVE_CONFIRMATION_TIMEOUT_S,
     CUP_RELEASE_INTERVAL_S,
@@ -95,6 +96,8 @@ class CupSettings:
     release_interval_s: float
     target_uncertainty: float = CUP_TARGET_UNCERTAINTY_DEFAULT
     min_converge_samples: int = CUP_MIN_CONVERGE_SAMPLES
+    dwell_mode: str = "fixed"
+    max_dwell_s: float = CUP_MAX_DWELL_S
 
     @classmethod
     def defaults(cls) -> "CupSettings":
@@ -109,6 +112,8 @@ class CupSettings:
             release_interval_s=CUP_RELEASE_INTERVAL_S,
             target_uncertainty=CUP_TARGET_UNCERTAINTY_DEFAULT,
             min_converge_samples=CUP_MIN_CONVERGE_SAMPLES,
+            dwell_mode="fixed",
+            max_dwell_s=CUP_MAX_DWELL_S,
         )
 
 
@@ -119,7 +124,7 @@ class SettingsLoadWarning:
     key: str
     found: str
     reason: str
-    fallback: float
+    fallback: float | str
 
 
 _MAX_CYCLE_PERIOD_S = 604800.0  # one week
@@ -168,11 +173,34 @@ def validate_settings(raw: dict) -> tuple[CupSettings, list[SettingsLoadWarning]
             found = "<unprintable>"
         warnings.append(SettingsLoadWarning(key, found, reason, fallback))
 
+    if "dwell_mode" not in raw:
+        accepted["dwell_mode"] = defaults.dwell_mode
+    else:
+        raw_mode = raw["dwell_mode"]
+        if isinstance(raw_mode, str) and raw_mode in ("fixed", "target_uncertainty"):
+            accepted["dwell_mode"] = raw_mode
+        else:
+            accepted["dwell_mode"] = defaults.dwell_mode
+            try:
+                found_mode = repr(raw_mode)
+            except Exception:
+                found_mode = "<unprintable>"
+            warnings.append(
+                SettingsLoadWarning(
+                    "dwell_mode",
+                    found_mode,
+                    "must be 'fixed' or 'target_uncertainty'",
+                    defaults.dwell_mode,
+                )
+            )
+    target_mode = accepted["dwell_mode"] == "target_uncertainty"
+
     judge("arm_threshold_a", lambda v: None if 1e-9 <= v <= 1e-3
           else "must be between 1e-9 A and 1e-3 A")
     judge("release_threshold_a", lambda v: None if 0 < v < accepted["arm_threshold_a"]
           else "must be above 0 and below the arm threshold")
-    def dwell_rule(v: float) -> str | None:
+
+    def _active_dwell_rule(v: float) -> str | None:
         # Judged before its partners, so try the operator's pair first, then the
         # defaults: a bad settle window or period must not also condemn a good dwell.
         for settle, period in (
@@ -183,11 +211,20 @@ def validate_settings(raw: dict) -> tuple[CupSettings, list[SettingsLoadWarning]
                 return None
         return "must exceed the settle window and fit, with two moves, inside the period"
 
-    judge("cycle_dwell_s", dwell_rule)
+    def _inactive_dwell_rule(v: float) -> str | None:
+        for settle in (got("settle_window_s"), defaults.settle_window_s):
+            if v > settle:
+                return None
+        return "must exceed the settle window"
+
+    judge("cycle_dwell_s", _inactive_dwell_rule if target_mode else _active_dwell_rule)
+    judge("max_dwell_s", _active_dwell_rule if target_mode else _inactive_dwell_rule)
+    active_dwell = accepted["max_dwell_s"] if target_mode else accepted["cycle_dwell_s"]
     judge("cycle_period_s", lambda v: None
-          if accepted["cycle_dwell_s"] + two_moves <= v <= _MAX_CYCLE_PERIOD_S
+          if active_dwell + two_moves <= v <= _MAX_CYCLE_PERIOD_S
           else "must hold the dwell plus two moves and be at most one week")
-    judge("settle_window_s", lambda v: None if 0 <= v < accepted["cycle_dwell_s"]
+    judge("settle_window_s", lambda v: None
+          if 0 <= v < accepted["cycle_dwell_s"] and v < accepted["max_dwell_s"]
           else "must be at least 0 and below the dwell")
     judge("arm_debounce_s", lambda v: None if 0 < v <= 60.0
           else "must be above 0 and at most 60 s")

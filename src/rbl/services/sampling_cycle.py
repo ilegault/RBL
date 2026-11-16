@@ -84,10 +84,13 @@ class CycleInsert:
 class CycleRetract:
     """Scheduler action: command the cup OUT — the dwell has expired.
 
-    t is the nominal retract time (insertion time + dwell_s).
+    t is the nominal retract time (insertion time + dwell_s, max_dwell_s, or the
+    convergence timestamp). reason is ``"dwell_elapsed"`` in fixed mode, or
+    ``"converged"`` / ``"max_dwell"`` in target-uncertainty mode.
     """
 
     t: float
+    reason: str = "dwell_elapsed"
 
 
 @dataclass(frozen=True)
@@ -143,18 +146,26 @@ class SamplingCycleScheduler:
         self,
         period_s: float = 300.0,
         dwell_s: float = 3.0,
+        dwell_mode: str = "fixed",
+        max_dwell_s: float = 5.0,
     ) -> None:
         self._period_s: float = period_s
         self._dwell_s: float = dwell_s
+        self._dwell_mode: str = dwell_mode
+        self._max_dwell_s: float = max_dwell_s
         self._state: CycleState = CycleState.DISARMED
         self._next_insertion_t: float = float("inf")
         self._current_insertion_t: float = float("inf")  # nominal start of active insertion
         self._dwell_end_t: float = float("inf")
+        self._retract_reason: str = "dwell_elapsed"
+        self._converged_this_insertion: bool = False
         self._manual_run_open: bool = False
         # Edits queue here until the next boundary (period) or insertion start
-        # (dwell); None means nothing is queued.
+        # (dwell, dwell_mode, max_dwell); None means nothing is queued.
         self._pending_period_s: float | None = None
         self._pending_dwell_s: float | None = None
+        self._pending_dwell_mode: str | None = None
+        self._pending_max_dwell_s: float | None = None
         self._saved_boundary_t: float | None = None
 
     # ── Read-only properties ───────────────────────────────────────────────
@@ -188,6 +199,26 @@ class SamplingCycleScheduler:
     def pending_dwell_s(self) -> float | None:
         """Queued dwell not yet in force, or None."""
         return self._pending_dwell_s
+
+    @property
+    def dwell_mode(self) -> str:
+        """Current dwell mode (``"fixed"`` or ``"target_uncertainty"``)."""
+        return self._dwell_mode
+
+    @property
+    def max_dwell_s(self) -> float:
+        """Current maximum dwell in target-uncertainty mode, in seconds."""
+        return self._max_dwell_s
+
+    @property
+    def pending_dwell_mode(self) -> str | None:
+        """Queued dwell mode not yet in force, or None."""
+        return self._pending_dwell_mode
+
+    @property
+    def pending_max_dwell_s(self) -> float | None:
+        """Queued maximum dwell not yet in force, or None."""
+        return self._pending_max_dwell_s
 
     @property
     def saved_boundary_t(self) -> float | None:
@@ -237,6 +268,21 @@ class SamplingCycleScheduler:
         """
         self._pending_dwell_s = dwell_s
 
+    def set_dwell_mode(self, dwell_mode: str) -> None:
+        """Update the dwell mode (``"fixed"`` or ``"target_uncertainty"``).
+
+        Queued like `set_dwell`: takes effect at the next insertion or on `arm`.
+        """
+        self._pending_dwell_mode = dwell_mode
+
+    def set_max_dwell(self, max_dwell_s: float) -> None:
+        """Update the target-uncertainty maximum dwell duration.
+
+        Queued like `set_dwell`: takes effect at the next insertion or on `arm`.
+        Independent of the fixed dwell (`dwell_s`).
+        """
+        self._pending_max_dwell_s = max_dwell_s
+
     def _apply_pending_period(self) -> None:
         if self._pending_period_s is not None:
             self._period_s = self._pending_period_s
@@ -246,6 +292,12 @@ class SamplingCycleScheduler:
         if self._pending_dwell_s is not None:
             self._dwell_s = self._pending_dwell_s
             self._pending_dwell_s = None
+        if self._pending_dwell_mode is not None:
+            self._dwell_mode = self._pending_dwell_mode
+            self._pending_dwell_mode = None
+        if self._pending_max_dwell_s is not None:
+            self._max_dwell_s = self._pending_max_dwell_s
+            self._pending_max_dwell_s = None
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
@@ -272,6 +324,8 @@ class SamplingCycleScheduler:
         self._state = CycleState.WAITING
         self._current_insertion_t = float("inf")
         self._dwell_end_t = float("inf")
+        self._retract_reason = "dwell_elapsed"
+        self._converged_this_insertion = False
         self._manual_run_open = False
 
         if resume_at is not None and resume_at > t:
@@ -296,6 +350,8 @@ class SamplingCycleScheduler:
         self._next_insertion_t = float("inf")
         self._current_insertion_t = float("inf")
         self._dwell_end_t = float("inf")
+        self._retract_reason = "dwell_elapsed"
+        self._converged_this_insertion = False
         self._manual_run_open = False
 
     def stop(self, t: float) -> CycleRetract | None:
@@ -331,6 +387,8 @@ class SamplingCycleScheduler:
             self._next_insertion_t = t + self._period_s
             self._current_insertion_t = float("inf")
             self._dwell_end_t = float("inf")
+            self._retract_reason = "dwell_elapsed"
+            self._converged_this_insertion = False
 
     def notify_manual_retract(self, t: float) -> None:  # noqa: ARG002
         """Operator commanded cup OUT manually. Manual run is now closed.
@@ -340,6 +398,20 @@ class SamplingCycleScheduler:
         call, the next insertion fires as scheduled (not skipped).
         """
         self._manual_run_open = False
+
+    def notify_converged(self, t: float) -> None:
+        """Signal that the current insertion has met its target uncertainty at ``t``.
+
+        In target-uncertainty mode during INSERTING, schedules retract at ``t``
+        (if earlier than max dwell) with reason ``"converged"``. Ignored in
+        fixed mode, outside INSERTING, or after already converging this insertion.
+        """
+        if self._state != CycleState.INSERTING or self._dwell_mode != "target_uncertainty":
+            return
+        if not self._converged_this_insertion and t < self._dwell_end_t:
+            self._dwell_end_t = t
+            self._retract_reason = "converged"
+            self._converged_this_insertion = True
 
     # ── Time-to-event queries ──────────────────────────────────────────────
 
@@ -394,12 +466,19 @@ class SamplingCycleScheduler:
                     self._apply_pending_dwell()
                     self._state = CycleState.INSERTING
                     self._current_insertion_t = due_t
-                    self._dwell_end_t = due_t + self._dwell_s
+                    self._converged_this_insertion = False
+                    if self._dwell_mode == "target_uncertainty":
+                        self._dwell_end_t = due_t + self._max_dwell_s
+                        self._retract_reason = "max_dwell"
+                    else:
+                        self._dwell_end_t = due_t + self._dwell_s
+                        self._retract_reason = "dwell_elapsed"
                     return CycleInsert(t=due_t)
 
         elif self._state == CycleState.INSERTING:
             if t >= self._dwell_end_t:
                 retract_t = self._dwell_end_t
+                reason = self._retract_reason
                 # Transition back to WAITING.
                 # Next insertion is one period from the start of this insertion,
                 # not from the retract time. This keeps the period accurate as
@@ -416,6 +495,8 @@ class SamplingCycleScheduler:
                 self._next_insertion_t = self._current_insertion_t + self._period_s
                 self._current_insertion_t = float("inf")
                 self._dwell_end_t = float("inf")
-                return CycleRetract(t=retract_t)
+                self._retract_reason = "dwell_elapsed"
+                self._converged_this_insertion = False
+                return CycleRetract(t=retract_t, reason=reason)
 
         return None

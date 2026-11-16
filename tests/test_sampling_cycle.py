@@ -746,3 +746,81 @@ class TestSavedBoundaryAndResume:
         assert retract.t == pytest.approx(301.0)
         assert s.state == CycleState.DISARMED
 
+
+class TestTargetUncertaintyMode:
+    """Ticket 84 — target-uncertainty mode, notify_converged, and independent dwells."""
+
+    def test_target_mode_retracts_on_notify_converged(self):
+        s = SamplingCycleScheduler(
+            period_s=300.0, dwell_s=3.0, dwell_mode="target_uncertainty", max_dwell_s=5.0
+        )
+        s.arm(t=0.0)
+        ins = s.tick(t=300.0)
+        assert ins == CycleInsert(t=300.0)
+
+        s.notify_converged(300.0 + 1.7)
+        ret = s.tick(t=300.0 + 1.7)
+        assert ret == CycleRetract(t=300.0 + 1.7, reason="converged")
+        assert s.state == CycleState.WAITING
+        # Next insertion stays anchored to t_insert + period_s
+        assert s.next_insertion_t == pytest.approx(600.0)
+
+    def test_target_mode_retracts_at_max_dwell_without_convergence(self):
+        s = SamplingCycleScheduler(
+            period_s=300.0, dwell_s=3.0, dwell_mode="target_uncertainty", max_dwell_s=5.0
+        )
+        s.arm(t=0.0)
+        assert s.tick(t=300.0) == CycleInsert(t=300.0)
+        assert s.tick(t=303.0) is None
+        ret = s.tick(t=305.0)
+        assert ret == CycleRetract(t=305.0, reason="max_dwell")
+
+    def test_fixed_mode_ignores_notify_converged(self):
+        s = SamplingCycleScheduler(
+            period_s=300.0, dwell_s=3.0, dwell_mode="fixed", max_dwell_s=5.0
+        )
+        s.arm(t=0.0)
+        # notify_converged outside INSERTING is also ignored
+        s.notify_converged(100.0)
+        assert s.tick(t=300.0) == CycleInsert(t=300.0)
+
+        s.notify_converged(301.7)
+        assert s.tick(t=301.7) is None
+        ret = s.tick(t=303.0)
+        assert ret == CycleRetract(t=303.0, reason="dwell_elapsed")
+
+    def test_pending_mode_and_max_dwell_apply_at_next_insertion_and_dwells_are_independent(self):
+        s = SamplingCycleScheduler(
+            period_s=300.0, dwell_s=3.0, dwell_mode="fixed", max_dwell_s=5.0
+        )
+        s.arm(t=0.0)
+        assert s.tick(t=300.0) == CycleInsert(t=300.0)
+
+        # Queue mode and max_dwell during INSERTING — must not alter current insertion
+        s.set_dwell_mode("target_uncertainty")
+        s.set_max_dwell(7.0)
+        assert s.dwell_mode == "fixed"
+        assert s.max_dwell_s == pytest.approx(5.0)
+        assert s.dwell_s == pytest.approx(3.0)
+
+        s.notify_converged(301.5)
+        assert s.tick(t=301.5) is None
+        assert s.tick(t=303.0) == CycleRetract(t=303.0, reason="dwell_elapsed")
+
+        # Next insertion picks up target_uncertainty and max_dwell_s=7.0; dwell_s unchanged
+        assert s.tick(t=600.0) == CycleInsert(t=600.0)
+        assert s.dwell_mode == "target_uncertainty"
+        assert s.max_dwell_s == pytest.approx(7.0)
+        assert s.dwell_s == pytest.approx(3.0)
+        assert s.tick(t=605.0) is None
+        assert s.tick(t=607.0) == CycleRetract(t=607.0, reason="max_dwell")
+
+        # Changing fixed dwell never changes max_dwell_s, and vice versa
+        s.set_dwell(2.5)
+        assert s.pending_dwell_s == pytest.approx(2.5)
+        assert s.max_dwell_s == pytest.approx(7.0)
+        s.set_max_dwell(8.0)
+        assert s.pending_max_dwell_s == pytest.approx(8.0)
+        assert s.dwell_s == pytest.approx(3.0)
+
+

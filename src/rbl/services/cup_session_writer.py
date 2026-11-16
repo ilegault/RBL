@@ -255,6 +255,9 @@ class CupSessionWriter:
         settle_window_s: float = CUP_SETTLE_WINDOW_S,
         continuation: dict[str, Any] | None = None,
         min_converge_samples: int | None = None,
+        dwell_mode: str | None = None,
+        target_uncertainty: float | None = None,
+        max_dwell_s: float | None = None,
     ) -> None:
         """Open a session file.
 
@@ -279,6 +282,9 @@ class CupSessionWriter:
         self._release_interval_s = release_interval_s
         self._settle_window_s: float = float(settle_window_s)
         self._min_converge_samples: int | None = min_converge_samples
+        self._dwell_mode: str | None = dwell_mode
+        self._target_uncertainty: float | None = target_uncertainty
+        self._max_dwell_s: float | None = max_dwell_s
         self.session_id: str = session_id or _new_session_id()
         self.output_dir: Path = Path(output_dir) if output_dir is not None else FARADAY_CUP_DIR
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -315,6 +321,9 @@ class CupSessionWriter:
         self._metadata.setdefault("entry_date", self._entry_date)
         self._metadata.setdefault("cycle_period_s", self._cycle_period_s)
         self._metadata.setdefault("cycle_dwell_s", self._cycle_dwell_s)
+        self._metadata.setdefault("dwell_mode", self._dwell_mode)
+        self._metadata.setdefault("target_uncertainty", self._target_uncertainty)
+        self._metadata.setdefault("max_dwell_s", self._max_dwell_s)
 
         self._file = open(self._csv_path, "w", newline="", encoding="utf-8")
         self._writer = csv.DictWriter(self._file, fieldnames=CSV_COLUMNS)
@@ -362,13 +371,18 @@ class CupSessionWriter:
         entry_date_str = _format_header_val(self._entry_date)
         period_str = _format_header_val(self._cycle_period_s, ".1f")
         dwell_str = _format_header_val(self._cycle_dwell_s, ".1f")
+        mode_str = _format_header_val(self._dwell_mode)
+        target_str = _format_header_val(self._target_uncertainty, ".3f")
+        max_dwell_str = _format_header_val(self._max_dwell_s, ".1f")
 
         self._file.write(
             f"# session_header: species={species_str}  energy={energy_str}  "
             f"charge_state={cs_str}  area={area_str}  "
             f"k={k_str}  k_depth={depth_str}  "
             f"srim_version={srim_str}  entry_date={entry_date_str}  "
-            f"cycle_period={period_str}  cycle_dwell={dwell_str}\n"
+            f"cycle_period={period_str}  cycle_dwell={dwell_str}  "
+            f"dwell_mode={mode_str}  target_uncertainty={target_str}  "
+            f"max_dwell={max_dwell_str}\n"
         )
         self._file.write(
             "# record types: sample, run_opened, run_closed, idle_heartbeat, "

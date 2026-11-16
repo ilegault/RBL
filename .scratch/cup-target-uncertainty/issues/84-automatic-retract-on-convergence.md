@@ -1,6 +1,6 @@
 # 84: Automatic insertions retract on convergence (target-uncertainty mode, set in the settings file)
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -48,22 +48,22 @@ settings file only; the tab controls come in the next ticket.
 
 ## Acceptance criteria
 
-- [ ] `tests/test_sampling_cycle.py`: target mode, arm at 0, insert at the boundary,
+- [x] `tests/test_sampling_cycle.py`: target mode, arm at 0, insert at the boundary,
       `notify_converged(t_insert + 1.7)`, next `tick` returns `CycleRetract(t_insert +
       1.7, "converged")`; without `notify_converged`, `tick(t_insert + 5.0)` returns
       reason `"max_dwell"`; in fixed mode `notify_converged` changes nothing and the
       retract is at `t_insert + dwell_s` with `"dwell_elapsed"`.
-- [ ] `tests/test_sampling_cycle.py`: `set_dwell_mode`/`set_max_dwell` during INSERTING
+- [x] `tests/test_sampling_cycle.py`: `set_dwell_mode`/`set_max_dwell` during INSERTING
       do not change the current insertion and apply at the next; `set_max_dwell` never
       changes `dwell_s` and `set_dwell` never changes `max_dwell_s`.
-- [ ] `tests/test_faraday_cup_tab.py`: with `dwell_mode = "target_uncertainty"` in the
+- [x] `tests/test_faraday_cup_tab.py`: with `dwell_mode = "target_uncertainty"` in the
       settings file under `tmp_path`, automatic insertion running and feeds that
       converge (steady current, 10+ post-settle samples), the tab commands cup OUT before
       the max dwell and the summary row has `end_reason == "converged"`, a non-blank
       `converged_after_s` and `counted_in_dose == True`.
-- [ ] Same with a noisy feed that never reaches 5 %: cup OUT at max dwell,
+- [x] Same with a noisy feed that never reaches 5 %: cup OUT at max dwell,
       `end_reason == "max_dwell"`, `converged_after_s` blank, `counted_in_dose == True`.
-- [ ] `tests/test_cup_settings_store.py`: bad `dwell_mode` and `max_dwell_s <=
+- [x] `tests/test_cup_settings_store.py`: bad `dwell_mode` and `max_dwell_s <=
       settle_window_s` fall back with a warning; the period rule uses the active mode's
       dwell.
 
@@ -83,3 +83,9 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+### 2026-11-15 — Implemented and verified
+
+- `src/rbl/config/cup_config.py`, `src/rbl/config/cup_settings_store.py`: added `CUP_MAX_DWELL_S = 5.0`, `CupSettings.dwell_mode` (`"fixed"` | `"target_uncertainty"`) and `CupSettings.max_dwell_s`, and validation/period-rule dispatch by active mode (`tests/test_cup_settings_store.py`).
+- `src/rbl/services/sampling_cycle.py`: added `dwell_mode`, `max_dwell_s`, `set_dwell_mode`, `set_max_dwell`, `notify_converged`, and `CycleRetract.reason` (`"dwell_elapsed"`, `"converged"`, `"max_dwell"`) while keeping the scheduler clockless and Qt-free (`tests/test_sampling_cycle.py`).
+- `src/rbl/gui/faraday_cup_tab.py`, `src/rbl/services/cup_session_writer.py`: wired automatic convergence notification and `converged_after_s` latching on the tab, propagated `CycleRetract.reason` into `end_reason`, and recorded `dwell_mode`, `target_uncertainty`, `max_dwell_s`, and `converged_after_s` in the cup log header and insertion summary rows (`tests/test_faraday_cup_tab.py`).
