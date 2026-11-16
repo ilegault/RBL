@@ -157,6 +157,16 @@ CSV_COLUMNS: list[str] = [
     "origin",
     "counted_in_dose",
     "total_beam_on_s",
+    # Target-uncertainty columns (ADR 0003 amendment D), again appended last. Written
+    # on insertion summary rows only.
+    "dwell_mode",
+    "target_uncertainty",
+    "min_converge_samples",
+    "max_dwell_s",
+    "insertion_uncertainty",
+    "uncertainty_reason",
+    "end_reason",
+    "converged_after_s",
 ]
 
 # Who caused an insertion. Anything else is a caller bug, not a new category.
@@ -244,6 +254,7 @@ class CupSessionWriter:
         release_interval_s: float = CUP_RELEASE_INTERVAL_S,
         settle_window_s: float = CUP_SETTLE_WINDOW_S,
         continuation: dict[str, Any] | None = None,
+        min_converge_samples: int | None = None,
     ) -> None:
         """Open a session file.
 
@@ -267,6 +278,7 @@ class CupSessionWriter:
         self._arm_debounce_s = arm_debounce_s
         self._release_interval_s = release_interval_s
         self._settle_window_s: float = float(settle_window_s)
+        self._min_converge_samples: int | None = min_converge_samples
         self.session_id: str = session_id or _new_session_id()
         self.output_dir: Path = Path(output_dir) if output_dir is not None else FARADAY_CUP_DIR
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -337,7 +349,8 @@ class CupSessionWriter:
             f"run end current={self._release_threshold_a:.3e} A  "
             f"run start debounce={self._arm_debounce_s:.1f} s  "
             f"run end interval={self._release_interval_s:.1f} s  "
-            f"settle_window={self._settle_window_s:.1f} s\n"
+            f"settle_window={self._settle_window_s:.1f} s  "
+            f"min_converge_samples={_format_header_val(self._min_converge_samples)}\n"
         )
         species_str = _format_header_val(self._species)
         energy_str = _format_header_val(self._energy)
@@ -901,6 +914,14 @@ class CupSessionWriter:
         origin: str = "automatic",
         counted_in_dose: bool = True,
         total_beam_on_s: float | None = None,
+        dwell_mode: str = "",
+        target_uncertainty: float | None = None,
+        min_converge_samples: int | None = None,
+        max_dwell_s: float | None = None,
+        insertion_uncertainty: float | None = None,
+        uncertainty_reason: str = "",
+        end_reason: str = "",
+        converged_after_s: float | None = None,
     ) -> None:
         """Write a per-insertion summary row to the CSV archive and flush immediately.
 
@@ -920,6 +941,11 @@ class CupSessionWriter:
         series from operator-made ones. ``total_beam_on_s`` is the running total
         beam-on time across continued sessions. An unknown ``origin`` raises
         before anything is written.
+
+        The eight trailing keyword arguments (ADR 0003 amendment D) say how the
+        insertion was governed and how precise it was: ``insertion_uncertainty`` is a
+        fraction, or blank with ``uncertainty_reason`` saying why; ``end_reason`` is why
+        the insertion ended. Each is blank when not given.
         """
         if origin not in INSERTION_ORIGINS:
             raise ValueError(
@@ -985,6 +1011,16 @@ class CupSessionWriter:
             "total_beam_on_s": (
                 f"{total_beam_on_s:.3f}" if total_beam_on_s is not None else ""
             ),
+            "dwell_mode": dwell_mode,
+            "target_uncertainty": _safe_float(target_uncertainty, ".6e"),
+            "min_converge_samples": (
+                str(min_converge_samples) if min_converge_samples is not None else ""
+            ),
+            "max_dwell_s": _safe_float(max_dwell_s, ".3f"),
+            "insertion_uncertainty": _safe_float(insertion_uncertainty, ".6e"),
+            "uncertainty_reason": uncertainty_reason,
+            "end_reason": end_reason,
+            "converged_after_s": _safe_float(converged_after_s, ".3f"),
         }
         self._write_row(row)
 

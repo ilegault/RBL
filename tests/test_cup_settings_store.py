@@ -15,9 +15,11 @@ from rbl.config.cup_config import (
     CUP_ARM_THRESHOLD_A,
     CUP_CYCLE_DWELL_S,
     CUP_CYCLE_PERIOD_S,
+    CUP_MIN_CONVERGE_SAMPLES,
     CUP_RELEASE_INTERVAL_S,
     CUP_RELEASE_THRESHOLD_A,
     CUP_SETTLE_WINDOW_S,
+    CUP_TARGET_UNCERTAINTY_DEFAULT,
 )
 from rbl.config.cup_settings_store import CupSettings
 from rbl.config.paths import CONFIG_DIR, CUP_SETTINGS_STORE
@@ -32,12 +34,14 @@ def test_cup_settings_frozen_dataclass_fields():
         "cycle_dwell_s",
         "arm_debounce_s",
         "release_interval_s",
+        "target_uncertainty",
+        "min_converge_samples",
     }
     field_names = {f.name for f in dataclasses.fields(CupSettings)}
     assert field_names == expected_fields
 
     for f in dataclasses.fields(CupSettings):
-        assert f.type is float
+        assert f.type is (int if f.name == "min_converge_samples" else float)
 
     settings = CupSettings.defaults()
     with pytest.raises(dataclasses.FrozenInstanceError):
@@ -53,6 +57,8 @@ def test_cup_settings_defaults():
     assert defaults.cycle_dwell_s == CUP_CYCLE_DWELL_S
     assert defaults.arm_debounce_s == CUP_ARM_DEBOUNCE_S
     assert defaults.release_interval_s == CUP_RELEASE_INTERVAL_S
+    assert defaults.target_uncertainty == CUP_TARGET_UNCERTAINTY_DEFAULT == 0.05
+    assert defaults.min_converge_samples == CUP_MIN_CONVERGE_SAMPLES == 10
 
 
 def test_no_default_literals_in_module():
@@ -413,3 +419,44 @@ def test_save_and_load_readme_and_roundtrip(tmp_path, monkeypatch):
     loaded_settings, warnings = load_settings()
     assert warnings == []
     assert loaded_settings == custom_settings
+
+
+# ---------------------------------------------------------------------------
+# Ticket 83: target_uncertainty and min_converge_samples
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("key,value", [
+    ("target_uncertainty", 0.005),
+    ("target_uncertainty", 0.5),
+    ("target_uncertainty", 0.05),
+    ("min_converge_samples", 2),
+    ("min_converge_samples", 10),
+    ("min_converge_samples", 500),
+])
+def test_new_settings_accept_values_at_the_bounds(key, value):
+    settings, warnings = validate_settings(_valid(**{key: value}))
+    assert warnings == []
+    assert getattr(settings, key) == value
+
+
+@pytest.mark.parametrize("key,value", [
+    ("target_uncertainty", 0.9),
+    ("target_uncertainty", 0.004),
+    ("target_uncertainty", "5 %"),
+    ("min_converge_samples", 1),
+    ("min_converge_samples", 2.5),
+    ("min_converge_samples", True),
+])
+def test_new_settings_bad_value_falls_back_with_warning_naming_the_key(key, value):
+    settings, warnings = validate_settings(_valid(**{key: value}))
+    assert [w.key for w in warnings] == [key]
+    assert getattr(settings, key) == getattr(CupSettings.defaults(), key)
+
+
+def test_new_settings_absent_take_defaults_without_warning():
+    raw = _valid()
+    del raw["target_uncertainty"], raw["min_converge_samples"]
+    settings, warnings = validate_settings(raw)
+    assert warnings == []
+    assert settings.target_uncertainty == 0.05
+    assert settings.min_converge_samples == 10
+    assert isinstance(settings.min_converge_samples, int)
