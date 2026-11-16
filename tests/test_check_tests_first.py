@@ -150,6 +150,13 @@ def test_extract_event_info(tmp_path):
 
 
 def test_cli_end_to_end_scenarios(tmp_path, monkeypatch, capsys):
+    # main() defaults --event-path to $GITHUB_EVENT_PATH. On a pull_request CI
+    # run that is the real PR payload, and an escape tag quoted anywhere in the
+    # PR title or body exempts the whole run, so scenario 2 below returned 0
+    # (PR #177, whose body quoted its claim commit's tag). These scenarios are
+    # about the CLI's own arguments, so the runner's event must not leak in.
+    monkeypatch.delenv("GITHUB_EVENT_PATH", raising=False)
+
     # 1. No src changes -> exit 0
     code = main(["--files", "docs/README.md", "tests/test_foo.py"])
     assert code == 0
