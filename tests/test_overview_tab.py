@@ -781,3 +781,59 @@ class TestConnectAllButton:
     def test_status_text_is_displayed(self, tab):
         tab.set_connect_all_status("connecting Galil…")
         assert "Galil" in tab.lbl_connect_all.text()
+
+
+# ---- Apply All greys out over the 5 V input limit ----------------------------
+
+def _connect_gens_for_apply(tab, a=True, b=False):
+    tab.beamline.funcgens_changed.emit(FuncGenState(
+        connected={"A": a, "B": b}, timebase={}, channels=_funcgen_pair(amp=1.5)))
+
+
+def test_apply_all_greys_out_over_the_input_limit(tab):
+    _connect_gens_for_apply(tab)
+    tab.redraw()
+    original_tip = tab.btn_apply_all.toolTip()
+    assert tab.btn_apply_all.isEnabled()
+
+    tab.beamline.funcgen_setpoints.update("A2", amp_vpp=4.0, offset_v=-3.4)
+    assert not tab.btn_apply_all.isEnabled()
+    assert "X− (A2) input peak 5.40 V — over the 5 V limit" in tab.btn_apply_all.toolTip()
+
+    tab.beamline.funcgen_setpoints.update("A2", offset_v=-1.0)
+    assert tab.btn_apply_all.isEnabled()
+    assert tab.btn_apply_all.toolTip() == original_tip
+
+
+def test_an_over_limit_channel_on_an_unconnected_generator_does_not_grey_apply(tab):
+    _connect_gens_for_apply(tab, a=True, b=False)
+    tab.beamline.funcgen_setpoints.update("B1", amp_vpp=4.0, offset_v=-3.4)
+    assert tab.btn_apply_all.isEnabled()
+
+
+def test_greying_follows_setpoint_changes_without_a_redraw(tab):
+    _connect_gens_for_apply(tab)          # no tab.redraw(): the signal alone must do it
+    assert tab.btn_apply_all.isEnabled()
+    tab.beamline.funcgen_setpoints.update("A1", amp_vpp=2.0, offset_v=4.5)
+    assert not tab.btn_apply_all.isEnabled()
+    tab.beamline.funcgen_setpoints.update("A1", offset_v=0.0)
+    assert tab.btn_apply_all.isEnabled()
+    # a connection change alone re-evaluates too
+    tab.beamline.funcgen_setpoints.update("B1", amp_vpp=2.0, offset_v=4.5)
+    assert tab.btn_apply_all.isEnabled()
+    _connect_gens_for_apply(tab, a=True, b=True)
+    assert not tab.btn_apply_all.isEnabled()
+
+
+def test_high_peak_confirmation_still_asked_above_4_v(tab, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+    asked, sent = [], []
+    monkeypatch.setattr(QMessageBox, "question",
+                        lambda *a, **k: asked.append(a) or QMessageBox.StandardButton.No)
+    monkeypatch.setattr(tab.beamline, "apply_all_channels",
+                        lambda p: sent.append(p) or True)
+    _connect_gens_for_apply(tab)
+    tab.beamline.funcgen_setpoints.update("A1", amp_vpp=9.0, offset_v=0.0)  # 4.5 V
+    assert tab.btn_apply_all.isEnabled()
+    tab.btn_apply_all.click()
+    assert len(asked) == 1 and sent == []
