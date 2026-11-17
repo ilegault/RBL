@@ -94,6 +94,13 @@ HOME_SEEK_SPEED_COUNTS_PER_SEC = 500
 # detector ("the switch never tripped"), not a schedule.
 HOME_SEEK_TIMEOUT_S = 180.0
 
+# The only Galil stop code (SC) a home pass may end on. Code 10 is "stopped
+# after homing (HM) or find index (FI)"; 2/3 are the forward/reverse limit or
+# soft limit, 4 is ST, 7 is AB (DMC-40x0/41x3 command reference, SC). Any other
+# code means the pass ended somewhere that is not the home switch, and zero
+# must not be defined there.
+HOME_STOP_CODE = 10
+
 # What HV is put back to once homing is done. HM's second stage — the slow
 # re-approach that fixes where the zero lands — runs at HV, and the homing
 # routine turns it down to 58 cps for the final pass. Restoring it matters for

@@ -54,6 +54,8 @@ def _galil(home=False, reverse=False, moving=False):
         "home_switch": home, "reverse_switch": reverse, "forward_switch": False,
     }
     g.is_moving.return_value = moving
+    # A fixture for a SUCCESSFUL run: every pass stops on the home switch.
+    g.get_stop_code.return_value = SC.HOME_STOP_CODE
     return g
 
 
@@ -103,13 +105,27 @@ class TestSeekHomeLimit:
         g.stop.assert_called_with("A")
 
     def test_stops_on_the_reverse_limit_too(self):
-        """Home and reverse are read separately but mean the same thing here.
-        Waiting only for `home_switch` would jog into a reverse limit and sit
-        there until the timeout on any stage where they are one switch."""
+        """Reaching the reverse limit is no longer "home reached": the seek
+        fails, stops the axis, and says so."""
         g = _jogging_galil(_switches(), _switches(reverse=True))
-        ok, _ = AxisHomeRoutine(g, "B").seek_home_limit()
-        assert ok
+        ok, msg = AxisHomeRoutine(g, "B").seek_home_limit()
+        assert not ok
+        assert "reached the reverse limit before the home switch" in msg
         g.stop.assert_called_with("B")
+
+    def test_seek_fails_on_the_reverse_limit_before_home(self):
+        g = _jogging_galil(_switches(), _switches(reverse=True))
+        ok, msg = AxisHomeRoutine(g, "A").seek_home_limit()
+        assert not ok
+        assert "reached the reverse limit before the home switch" in msg
+        g.stop.assert_called_with("A")
+
+    def test_seek_fails_when_it_starts_on_the_reverse_limit(self):
+        g = _galil(reverse=True)
+        ok, msg = AxisHomeRoutine(g, "A").seek_home_limit()
+        assert not ok
+        assert "reached the reverse limit before the home switch" in msg
+        g.jog_start.assert_not_called()
 
     def test_no_jog_when_already_on_the_limit(self):
         g = _galil(home=True)
@@ -169,8 +185,9 @@ class TestSeekAgainstTheRealDriver:
         assert AxisHomeRoutine(g, "A")._at_home_limit() is False
 
     def test_an_axis_on_its_reverse_limit_is_detected(self):
+        """Only the reverse limit active is NOT the home limit any more."""
         g = self._driver(**{"MG _LFA": "1", "MG _LRA": "0", "MG _HMA": "1"})
-        assert AxisHomeRoutine(g, "A")._at_home_limit() is True
+        assert AxisHomeRoutine(g, "A")._at_home_limit() is False
 
     def test_an_axis_on_its_home_switch_is_detected(self):
         g = self._driver(**{"MG _LFA": "1", "MG _LRA": "1", "MG _HMA": "0"})
@@ -249,6 +266,22 @@ class TestRoutineEndToEnd:
         assert ok
         g.jog_start.assert_not_called()
         assert g.begin_home.call_count == 3
+
+
+def _multi_routine(g, axes="ABCD", **kw):
+    from rbl.hardware.galil_workers import MultiAxisHomeRoutine
+    return MultiAxisHomeRoutine(g, axes, **kw)
+
+
+class TestStopCodeGate:
+    def test_a_pass_that_stops_on_a_limit_sets_no_zero(self):
+        g = _galil(moving=False)
+        g.get_stop_code.side_effect = [10, 3]
+        ok, msg = AxisHomeRoutine(g, "A").run()
+        assert not ok
+        assert "pass 2/3 did not stop on the home switch (stop code 3)" in msg
+        g.define_zero.assert_not_called()
+        g.set_speed.assert_any_call("A", SC.DEFAULT_SPEED_COUNTS_PER_SEC)
 
 
 class TestHomingWorkerSeekFlag:
@@ -635,6 +668,29 @@ class TestMultiAxisHomeRoutine:
         g.begin_home_multi.assert_not_called()
         g.define_zero_multi.assert_not_called()
         assert ("C", False) in seen
+
+    def test_together_sets_no_zero_when_one_axis_stops_off_home(self):
+        g = _galil(moving=False)
+        g.get_stop_code.side_effect = lambda a: 3 if a == "C" else 10
+        ok, msg = _multi_routine(g).run(seek_first=False)
+        assert not ok
+        assert "C (stop code 3)" in msg
+        g.define_zero_multi.assert_not_called()
+
+    def test_together_fails_a_seek_on_the_reverse_limit(self):
+        g = _galil(moving=False)
+        g.get_switch_states.side_effect = lambda a: _switches(
+            home=(a != "C"), reverse=(a == "C"))
+        seen = []
+        ok, _ = _multi_routine(
+            g, axis_done=lambda a, o, m: seen.append((a, o, m))
+        ).run(seek_first=True)
+        assert not ok
+        g.begin_home_multi.assert_not_called()
+        g.define_zero_multi.assert_not_called()
+        assert any(a == "C" and not o
+                   and "reached the reverse limit before the home switch" in m
+                   for a, o, m in seen)
 
     def test_every_axis_is_reported_when_the_run_succeeds(self):
         g = _galil(moving=False)
