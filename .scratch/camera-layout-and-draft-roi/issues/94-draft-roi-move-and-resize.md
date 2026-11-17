@@ -1,6 +1,6 @@
 # 94: Draft ROI: move and resize by dragging
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
