@@ -1,6 +1,6 @@
 # 130: Edge-return routine
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -51,21 +51,21 @@ zero, so running it does not change where the slits think home is.
 
 ## Acceptance criteria
 
-- [ ] Test `test_edge_return_collects_one_reading_per_cycle` in `tests/test_edge_return_routine.py`
+- [x] Test `test_edge_return_collects_one_reading_per_cycle` in `tests/test_edge_return_routine.py`
       (new file): a `MagicMock(spec=GalilController)` that is never moving, has clear switches,
       `get_stop_code` returning `SC.HOME_STOP_CODE` and `get_position.side_effect = [1000, 1002, 999]`;
       `EdgeReturnRoutine(g, "A", 58, cycles=3, out_counts=2000).run()` returns
       `(True, "A: 3 edge returns at 58 cps", [1000, 1002, 999])`.
-- [ ] Test `test_edge_return_never_defines_zero` in `tests/test_edge_return_routine.py`: after that
+- [x] Test `test_edge_return_never_defines_zero` in `tests/test_edge_return_routine.py`: after that
       run, `g.define_zero` and `g.define_zero_multi` were never called, `g.move_relative` was called
       three times with `("A", 2000)`, and every `begin_home` call was `("A", 58, fine_speed=58)`.
-- [ ] Test `test_edge_return_stops_on_a_bad_stop_code` in `tests/test_edge_return_routine.py`:
+- [x] Test `test_edge_return_stops_on_a_bad_stop_code` in `tests/test_edge_return_routine.py`:
       `get_stop_code.side_effect = [10, 3]`; the run returns `False`, a message containing
       `"cycle 2/3 did not stop on the home switch (stop code 3)"`, and readings of length 1.
-- [ ] Test `test_edge_return_cancel_keeps_the_readings_so_far` in `tests/test_edge_return_routine.py`:
+- [x] Test `test_edge_return_cancel_keeps_the_readings_so_far` in `tests/test_edge_return_routine.py`:
       a `cancelled` callable that turns true after the first reading; the run returns `False`,
       `"cancelled after 1 cycles"` in the message, and one reading.
-- [ ] Test `test_edge_return_worker_emits_done_with_readings` in `tests/test_edge_return_routine.py`:
+- [x] Test `test_edge_return_worker_emits_done_with_readings` in `tests/test_edge_return_routine.py`:
       `EdgeReturnWorker` on the same mock, `run()` called directly (not `start()`), collects one `done`
       emission whose third argument is the readings list.
 
@@ -86,3 +86,5 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+2026-11-17: EdgeReturnRoutine, EdgeReturnWorker and EDGE_RETURN_DEFAULT_* added; all five tests pass; CI green on PR 190. One recording-panel test failed once under local load and passed alone and in CI.
