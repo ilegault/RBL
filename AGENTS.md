@@ -465,13 +465,70 @@ someone else's bug fix smuggled into it cannot be reviewed.
 <!-- ACTIVE-PLAN:START -->
 ## Active implementation plan
 
-_Written by the planning model on 2026-11-10 19:41. Implement this. If something in it is wrong, say so before changing course._
+_Written by the planning model on 2026-11-17 18:57. Implement this. If something in it is wrong, say so before changing course._
 
-# Active work: picoammeter connect fixes (set 12, new), Faraday cup status polarity and interlock name (set 11), axis offset and Vpp (set 10), tests-first gate fix (105), plus the work below
+# Active work: slit motion (set 13, new), plus the earlier sets below
 
 This is a pointer, not the work.
 
-## Set 12 (new): picoammeter connect — retarget, keep the reason, hint the fix
+## Set 13 (new): slit motion — slit speed, trustworthy homing, zeroed, edge-return test
+
+- **Spec:** `.scratch/slit-motion/spec.md`
+- **Binding:** `docs/adr/0001-tests-first-and-no-muted-failures.md`.
+- **Glossary:** new section **Slit motion** in `CONTEXT.md`: *slit speed*, *home switch*,
+  *home pass*, *zeroed*, *lost step*, *edge-return test*.
+- **Tickets:** `.scratch/slit-motion/issues/121...134`. 121–133 are agent tickets, all
+  `Auto-merge: yes`. 134 is `ready-for-developer` (bench): an agent must not claim it.
+- **Tracker conventions:** `docs/agents/issue-tracker.md`
+
+### Next
+
+- **121**, **123** and **129** are unblocked and touch different files. Start with **123**:
+  homing can currently put zero on the reverse limit without saying so, and that is the most
+  serious defect in the set. 121 (moves ignore the Speed box) and 129 (pure math) can run in
+  parallel with it.
+- **134** (developer, bench) can start now; its last two items wait on 131.
+
+### Dependency order
+
+```
+121 ── 122 ──┬── 126 ──┬── 127
+             │         ├── 132 ──┐
+             └─────────┴── 128 ──┴── 133
+123 ── 124 ──┬── 125 ──┐
+             └── 130 ──┼── 131
+129 ───────────────────┘
+134 (developer, bench; last two items need 131)
+```
+
+The Stepper Motors tab (`motor_tab.py`) is edited by 122, 125, 126, 128, 131, 132, 133; the
+chain above keeps two of them from running at once except 125/131 against 126/128/132. If two
+PRs on `motor_tab.py` are open together, land one and rebase the other.
+
+### Requirements that are not preferences
+
+- 121: every move through `Beamline` sends `SP <slit speed>` immediately before `PA`. No move
+  may rely on a speed left on the controller by an earlier jog, home or connect.
+- 123: a home pass is accepted only on Galil stop code 10. Any other code fails the run and
+  **no zero is defined**. The seek accepts the home switch only, never the reverse limit.
+- 124: the back-out runs before anything else in every one of the four homing entry points.
+  Directions do not change anywhere: positive counts are away from home on all four axes.
+- 126: `Beamline` is the only owner of zeroed. Reconnect and emergency stop clear it; limit
+  trips and Motor Off do not.
+- 128: the floor applies only to zeroed axes and never to homing or the edge-return test.
+- 129/130: the edge-return test never calls `define_zero` or `define_zero_multi`.
+
+### Not in this set
+
+Stepper Position Maintenance (encoders), saving speeds between runs, SP ≠ HV within a pass,
+writing controller soft limits (BL/FL), any direction or CN/MT change, hardware fixes for lost
+steps.
+
+---
+
+## Earlier sets, carried forward unchanged
+
+## Set 12: picoammeter connect — retarget, keep the reason, hint the fix
 
 - **Spec:** none of its own; the reader spec `.scratch/faraday-cup-reader/spec.md`. Each
   ticket carries its own evidence (lab PC and laptop runs of 2026-11-10).

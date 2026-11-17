@@ -399,6 +399,36 @@ depend on the beamline, and is kept in a library reused across sessions.
 
 ---
 
+## Slit motion
+
+**Slit speed** — the one speed an axis moves at, in counts per second. It applies
+to every motion of that axis: a jog, and a move commanded from any screen. There is
+no separate jog speed or move speed.
+
+**Home switch** — the optical sensor on each slit axis that marks its reference
+point. It trips when the jaw is fully in, at beam centre.
+
+**Home pass** — one run of the controller's homing sequence: a search toward the
+home switch, then a slow re-approach that stops on the switch's transition. Homing
+is several home passes, each at its own speed, followed by defining that point as
+zero.
+
+**Zeroed** — an axis whose zero has been defined (by homing, or by the operator) since the
+Galil was last connected. Reconnecting the Galil or an emergency stop makes every
+axis not zeroed again. A slit position on an axis that is not zeroed is an offset
+from wherever the controller happened to start, not a distance from beam centre.
+
+**Lost step** — a step the controller sent that the motor did not take. The
+controller still counts it, so the commanded position moves on and the jaw does
+not. A stalled stepper loses steps in whole groups of four full steps.
+
+**Edge-return test** — a measurement of homing repeatability: move an axis out, find
+the home switch's transition again with one home pass, read the commanded position
+there without redefining zero, and repeat. How the readings spread, and whether
+they jump in lost-step-sized groups, separates switch jitter from lost steps.
+
+---
+
 ## Known collisions
 
 **"Beam current" means two things.** The four slit currents and the one cup
