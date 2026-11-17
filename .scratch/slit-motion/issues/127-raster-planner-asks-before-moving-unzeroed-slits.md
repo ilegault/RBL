@@ -1,6 +1,6 @@
 # 127: The Raster Planner asks before moving slits that are not zeroed
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
