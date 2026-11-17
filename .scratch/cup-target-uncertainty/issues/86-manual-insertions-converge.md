@@ -38,16 +38,18 @@ themselves, for bench testing.
 
 ## Acceptance criteria
 
-- [ ] Checkbox off: an Insert-button insertion fed a converging current is never
+All tests in `tests/test_faraday_cup_tab.py`.
+
+- [ ] Test `test_manual_insertion_is_not_retracted_with_the_converge_box_off`: checkbox off: an Insert-button insertion fed a converging current is never
       commanded OUT by the tab; the readout still reaches a percentage.
-- [ ] Checkbox on: the same insertion is commanded OUT on convergence; its row has
+- [ ] Test `test_manual_insertion_retracts_on_convergence_with_the_box_on`: checkbox on: the same insertion is commanded OUT on convergence; its row has
       `end_reason == "converged"`, `counted_in_dose == False`.
-- [ ] Checkbox on, no limit off, noisy feed: commanded OUT at `max_dwell_s`,
+- [ ] Test `test_manual_insertion_max_dwell_and_no_time_limit`: checkbox on, no limit off, noisy feed: commanded OUT at `max_dwell_s`,
       `end_reason == "max_dwell"`. No limit on: still in after `3 * max_dwell_s`, then
       commanded OUT when the feed converges, with `max_dwell_s` blank in the row.
-- [ ] Checkbox on but controller reported in LOCAL (via `CupActuationFeed`): no OUT
+- [ ] Test `test_manual_insertion_in_local_mode_issues_no_out_command`: checkbox on but controller reported in LOCAL (via `CupActuationFeed`): no OUT
       command is issued on convergence.
-- [ ] The second checkbox is disabled while the first is unchecked, and the first is
+- [ ] Test `test_manual_converge_checkboxes_enable_rules`: the second checkbox is disabled while the first is unchecked, and the first is
       disabled in fixed-dwell mode.
 
 May fake: instrument and actuation feeds, modal dialogs, the clock. Must be real: the tab,
