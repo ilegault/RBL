@@ -1,6 +1,6 @@
 # 121: Every slit move carries its slit speed
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
