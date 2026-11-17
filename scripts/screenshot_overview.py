@@ -154,7 +154,11 @@ def push_scene(beamline, scene: Scene) -> None:
     needs raw volts, and its consumers are the calibration/characterization
     runners.
     """
-    beamline.ingest_motor_poll(scene.motor_poll, scene.zeroed)
+    # Beamline owns zeroed (ticket 126): mark it there, then ingest the poll.
+    if scene.zeroed:
+        for axis in scene.motor_poll:
+            beamline.mark_zeroed(axis)
+    beamline.ingest_motor_poll(scene.motor_poll)
     beamline.ingest_labjack_window(scene.labjack_payload, active_profile="FULL")
     beamline.ingest_funcgen_readback(scene.funcgen_connected,
                                      scene.funcgen_timebase,

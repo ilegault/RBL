@@ -1,6 +1,6 @@
 # 126: Beamline owns "zeroed", per axis, and it can turn off
 
-**Status:** blocked
+**Status:** in-progress
 
 **Runner:** any
 
@@ -130,3 +130,7 @@ implementers may not edit `scripts/`. I did not add a compatibility parameter, s
 Decision needed: a human (or a ticket permitting it) updates `scripts/screenshot_overview.py` as above, then this branch
 should go green. One further failure seen once under -n auto, `test_capture_client.py::test_hello_in_time_cancels_the_hello_timeout`,
 passed on rerun (timing flake, unrelated).
+
+### 2026-11-17 - block lifted
+
+The block was lifted because the orchestrator clarified that scripts/screenshot_overview.py is editable (only the gate scripts are off limits); it is updated in this PR.
