@@ -23,7 +23,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from unittest.mock import MagicMock
 
 import pytest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from rbl.config import hardware_config as SC
 from rbl.hardware import galil_workers
@@ -266,6 +266,14 @@ class TestRoutineEndToEnd:
         assert ok
         g.jog_start.assert_not_called()
         assert g.begin_home.call_count == 3
+
+    def test_routine_uses_the_speeds_it_is_given(self):
+        g = _galil()
+        ok, msg = AxisHomeRoutine(g, "A", speeds=(400, 150, 30)).home_passes()
+        assert ok, msg
+        passes = [(c.args[1], c.kwargs["fine_speed"])
+                  for c in g.begin_home.call_args_list]
+        assert passes == [(400, 400), (150, 150), (30, 30)]
 
 
 class TestBackOutOfHome:
@@ -565,6 +573,69 @@ class TestMotorTabAutoHome:
         tab._emergency_stop()
         assert tab._parallel_worker._cancelled is True
 
+    def test_edited_pass_speeds_reach_the_next_auto_home(self, tab, monkeypatch):
+        tab.spn_pass1.setValue(300)
+        tab.spn_pass2.setValue(120)
+        tab.spn_pass3.setValue(40)
+        mock_worker_cls = MagicMock()
+        monkeypatch.setattr("rbl.gui.motor_tab.AutoHomeAllWorker", mock_worker_cls)
+
+        monkeypatch.setattr(
+            "rbl.gui.motor_tab.QMessageBox.question",
+            lambda *a, **k: QMessageBox.StandardButton.Yes)
+        tab.btn_auto_home_seq.click()
+
+        mock_worker_cls.assert_called_once()
+        assert mock_worker_cls.call_args.kwargs["speeds"] == (300, 120, 40)
+
+    def test_edited_pass_speeds_reach_a_per_axis_home(self, tab, monkeypatch):
+        tab.spn_pass1.setValue(300)
+        tab.spn_pass2.setValue(120)
+        tab.spn_pass3.setValue(40)
+        mock_worker_cls = MagicMock()
+        monkeypatch.setattr("rbl.gui.motor_tab.HomingWorker", mock_worker_cls)
+
+        tab.axes["A"].btn_home.click()
+
+        mock_worker_cls.assert_called_once()
+        assert mock_worker_cls.call_args.kwargs["speeds"] == (300, 120, 40)
+
+    def test_edited_pass_speeds_reach_the_next_together_home(self, tab, monkeypatch):
+        tab.spn_pass1.setValue(300)
+        tab.spn_pass2.setValue(120)
+        tab.spn_pass3.setValue(40)
+        mock_worker_cls = MagicMock()
+        monkeypatch.setattr("rbl.gui.motor_tab.MultiAxisHomeWorker", mock_worker_cls)
+
+        monkeypatch.setattr(
+            "rbl.gui.motor_tab.QMessageBox.question",
+            lambda *a, **k: QMessageBox.StandardButton.Yes)
+        tab.btn_auto_home_par.click()
+
+        mock_worker_cls.assert_called_once()
+        assert mock_worker_cls.call_args.kwargs["speeds"] == (300, 120, 40)
+
+    def test_pass_speed_boxes_disabled_while_homing(self, tab, monkeypatch):
+        boxes = (tab.spn_pass1, tab.spn_pass2, tab.spn_pass3)
+        monkeypatch.setattr(
+            "rbl.gui.motor_tab.QMessageBox.question",
+            lambda *a, **k: QMessageBox.StandardButton.Yes)
+        started = []
+        for cls in (AutoHomeAllWorker, HomingWorker):
+            monkeypatch.setattr(cls, "start", lambda self: started.append(self))
+            monkeypatch.setattr(cls, "isRunning", lambda self: True)
+        assert all(b.isEnabled() for b in boxes)
+
+        tab.btn_auto_home_seq.click()
+        assert not any(b.isEnabled() for b in boxes)
+        started.pop().done.emit(True, "all homed")
+        assert all(b.isEnabled() for b in boxes)
+
+        tab.axes["A"].btn_home.click()
+        assert not any(b.isEnabled() for b in boxes)
+        started.pop().done.emit(True, "A: homed")
+        assert all(b.isEnabled() for b in boxes)
+
 
 class TestSeekAndHomeButton:
     def test_each_panel_offers_the_two_step_procedure_in_one_click(self, tab):
@@ -676,6 +747,14 @@ class TestMultiAxisHomeRoutine:
         passes = [(c.args[1], c.kwargs["fine_speed"])
                   for c in g.begin_home_multi.call_args_list]
         assert passes == [(225, 225), (112, 112), (58, 58)]
+
+    def test_together_uses_the_speeds_it_is_given(self):
+        g = _galil()
+        ok, msg = _multi_routine(g, "ABCD", speeds=(400, 150, 30)).home_passes()
+        assert ok, msg
+        passes = [(c.args[1], c.kwargs["fine_speed"])
+                  for c in g.begin_home_multi.call_args_list]
+        assert passes == [(400, 400), (150, 150), (30, 30)]
 
     def test_the_seek_starts_every_axis_with_one_jog(self):
         # Every axis clear on the first look, every axis arrived on the next —

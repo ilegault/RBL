@@ -597,6 +597,20 @@ class TestMoveSlit:
             beamline.set_slit_speed_cps("B", 0)
         assert beamline.slit_speed_cps("B") == SC.DEFAULT_SPEED_COUNTS_PER_SEC
 
+    def test_home_pass_speeds_are_validated(self, beamline):
+        assert beamline.home_pass_speeds() == SC.HOME_PASS_SPEEDS_COUNTS_PER_SEC
+        with pytest.raises(ValueError):
+            beamline.set_home_pass_speeds((100, 0, 50))
+        assert beamline.home_pass_speeds() == SC.HOME_PASS_SPEEDS_COUNTS_PER_SEC
+        with pytest.raises(ValueError):
+            beamline.set_home_pass_speeds((100, 50))
+        assert beamline.home_pass_speeds() == SC.HOME_PASS_SPEEDS_COUNTS_PER_SEC
+        with pytest.raises(ValueError):
+            beamline.set_home_pass_speeds((100, SC.HOME_PASS_SPEED_MAX_COUNTS_PER_SEC + 1, 50))
+        assert beamline.home_pass_speeds() == SC.HOME_PASS_SPEEDS_COUNTS_PER_SEC
+        beamline.set_home_pass_speeds((300, 120, 40))
+        assert beamline.home_pass_speeds() == (300, 120, 40)
+
     def test_move_slit_fails_when_galil_not_connected(self, beamline):
         from unittest.mock import MagicMock
         beamline.galil = MagicMock(connected=False)

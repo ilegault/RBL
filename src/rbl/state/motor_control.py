@@ -47,6 +47,11 @@ class MotorControlMixin:
         # module docstring, WHY EVERY MOVE SENDS ITS SPEED.
         self._slit_speed_cps: dict[str, int] = {
             a: SC.DEFAULT_SPEED_COUNTS_PER_SEC for a in SC.AXIS_LETTERS}
+        # Shared three-pass homing speeds (counts/s), editable on the Stepper
+        # Motors tab and passed into every homing run started after they change.
+        self._home_pass_speeds: tuple[int, int, int] = (
+            SC.HOME_PASS_SPEEDS_COUNTS_PER_SEC
+        )
 
     def slit_speed_cps(self, axis_letter: str) -> int:
         return self._slit_speed_cps[axis_letter]
@@ -55,6 +60,20 @@ class MotorControlMixin:
         if cps < 1:
             raise ValueError(f"slit speed must be >= 1 count/s, got {cps}")
         self._slit_speed_cps[axis_letter] = int(cps)
+
+    def home_pass_speeds(self) -> tuple[int, int, int]:
+        return self._home_pass_speeds
+
+    def set_home_pass_speeds(self, speeds) -> None:
+        parsed = tuple(int(s) for s in speeds)
+        if len(parsed) != 3 or any(
+            not (1 <= s <= SC.HOME_PASS_SPEED_MAX_COUNTS_PER_SEC) for s in parsed
+        ):
+            raise ValueError(
+                f"home pass speeds must be 3 values in 1..{SC.HOME_PASS_SPEED_MAX_COUNTS_PER_SEC}, "
+                f"got {speeds!r}"
+            )
+        self._home_pass_speeds = (parsed[0], parsed[1], parsed[2])
 
     def move_axis_counts(self, axis_letter: str, counts: int) -> bool:
         """Send one absolute move at the axis's slit speed. Driver exceptions

@@ -118,6 +118,12 @@ HOME_START_BACKOFF_TRIES = 3
 EDGE_RETURN_DEFAULT_CYCLES = 10
 EDGE_RETURN_DEFAULT_OUT_COUNTS = 2000
 
+# Default three-pass homing speeds (coarse -> medium -> fine, counts/s) and the
+# upper bound the Stepper Motors tab's pass-speed boxes accept. Each pass sets
+# both SP and HV to its speed.
+HOME_PASS_SPEEDS_COUNTS_PER_SEC: tuple[int, int, int] = (225, 112, 58)
+HOME_PASS_SPEED_MAX_COUNTS_PER_SEC = 5000
+
 # --- Amplifier / motor configuration (2HA075520 amplifier) -------------------
 MOTOR_TYPE      = -2.5  # MT: step motor, active-high step pulse
 STEP_RESOLUTION = 2     # YA: 1=full, 2=half, 4=quarter, 8=eighth
