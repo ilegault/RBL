@@ -69,6 +69,35 @@ from rbl.hardware.galil_workers import (
     MultiAxisHomeWorker,
 )
 
+
+def dp_axes(command: str) -> str:
+    """Return the axis letters defined by a Galil ``DP`` command.
+
+    Supports named form (``DPA=0``, ``DP A=0``, ``DP C=0``) and positional
+    form (``DP 0,,5`` -> ``"AC"``, first four slots only). Anything not
+    starting with ``DP`` or ``DP`` with no arguments returns ``""``.
+    """
+    s = command.strip().upper()
+    if not s.startswith("DP"):
+        return ""
+    if len(s) > 2 and s[2].isalpha() and s[2] not in SC.AXIS_LETTERS:
+        return ""
+    rest = s[2:].strip()
+    if not rest:
+        return ""
+    if "=" in rest:
+        found: list[str] = []
+        for part in rest.split(","):
+            if "=" not in part:
+                continue
+            lhs = part.split("=", 1)[0].strip()
+            for ch in lhs:
+                if ch in SC.AXIS_LETTERS and ch not in found:
+                    found.append(ch)
+        return "".join(found)
+    slots = rest.split(",")[:len(SC.AXIS_LETTERS)]
+    return "".join(SC.AXIS_LETTERS[i] for i, slot in enumerate(slots) if slot.strip())
+
 # ─── Per-axis control groupbox ────────────────────────────────────────────────
 
 class AxisControls(QGroupBox):
@@ -94,11 +123,11 @@ class AxisControls(QGroupBox):
         # this panel's workers. While it is set, the 5 Hz poll must not paint
         # over it with "Idle", which is what update_state would otherwise do
         # between two of the sequencer's commands.
+        # WHO OWNS ZEROED: Beamline (_zeroed_axes) is the single owner of zeroed,
+        # per axis — turned on by homing, Zero (DP), or a console DP, and
+        # cleared on Galil connect and emergency stop (not by limit trips or
+        # Motor Off, where the controller/stepper holds its position).
         self._external_status: str | None = None
-        # Has this axis had its zero established since the app started?  The
-        # controller does not remember, and every mm figure downstream is wrong
-        # without it, so consumers get told rather than left to assume.
-        self.zeroed = False
 
         main_layout = QVBoxLayout(self)
         main_layout.setSpacing(2)
@@ -442,7 +471,7 @@ class AxisControls(QGroupBox):
         try:
             self.log(f"> DP {self.axis}=0")
             g.define_zero(self.axis)
-            self.zeroed = True
+            self.beamline.mark_zeroed(self.axis)
         except (GalilError, ConnectionError) as e:
             self.log(f"! {e}")
 
@@ -541,8 +570,8 @@ class AxisControls(QGroupBox):
         self.homing_state_changed.emit(False)
         self.set_motion_controls_enabled(bool(g is not None and g.connected))
         if success:
-            # Homing ends on DP=0, so the axis is now referenced.
-            self.zeroed = True
+            # Homing ends on DP=0, so this axis is now zeroed on Beamline.
+            self.beamline.mark_zeroed(self.axis)
         self.log(f"{'✓' if success else '✗'} {msg}")
         if not success:
             QMessageBox.warning(self, "Homing failed", msg)
@@ -620,10 +649,10 @@ class MotorTab(QWidget):
     slit_state = Signal(dict)
 
     # Raw per-axis poll snapshot (axis letter -> {pos, moving, switches,
-    # enabled}, exactly GalilPollWorker.state's shape) plus the all-axes-zeroed
-    # flag. Feeds Beamline.ingest_motor_poll, which has richer per-axis fields
-    # (pos_counts, moving, enabled, switches) than slit_state carries.
-    raw_state_changed = Signal(dict, bool)
+    # enabled}, exactly GalilPollWorker.state's shape). Feeds
+    # Beamline.ingest_motor_poll, which fills in per-axis zeroed from
+    # Beamline's own state (WHO OWNS ZEROED) and publishes MotorState.
+    raw_state_changed = Signal(dict)
 
     # Emitted when the Galil link drops. Feeds Beamline.motors_disconnected.
     motors_disconnected = Signal()
@@ -951,10 +980,8 @@ class MotorTab(QWidget):
         if panel is None:
             return
         if ok:
-            # The routine ends on DP=0, so this axis is now referenced — the
-            # same flag the panel's own Home button sets, and what the rest of
-            # the app reads as "mm figures mean something on this axis".
-            panel.zeroed = True
+            # The routine ends on DP=0, so this axis is now zeroed on Beamline.
+            self.beamline.mark_zeroed(axis)
         panel.set_external_status("Homed ✓" if ok else "Home FAILED",
                                   theme.OK if ok else theme.FAULT)
 
@@ -1105,6 +1132,7 @@ class MotorTab(QWidget):
                 speed=SC.DEFAULT_SPEED_COUNTS_PER_SEC,
                 accel=SC.DEFAULT_ACCEL_COUNTS_PER_SEC2,
             )
+            self.beamline.clear_zeroed()
             for axis, panel in self.axes.items():
                 try:
                     lim = self.galil.get_soft_limits(axis)
@@ -1176,7 +1204,7 @@ class MotorTab(QWidget):
         if not self.galil.connected:
             return
         self._log_line("> AB  (EMERGENCY STOP)")
-        self.galil.abort()
+        self.beamline.emergency_stop()
 
     def _cancel_all_homing(self):
         """Tell every homing run in progress to stop — sequencer and panels.
@@ -1199,6 +1227,8 @@ class MotorTab(QWidget):
         try:
             resp = self.galil.cmd(cmd)
             self._log_line(f"> {cmd}\n< {resp if resp else ':'}")
+            for axis in dp_axes(cmd):
+                self.beamline.mark_zeroed(axis)
         except (GalilError, ConnectionError) as e:
             self._log_line(f"! {e}")
         self.manual_cmd.clear()
@@ -1209,15 +1239,14 @@ class MotorTab(QWidget):
         for axis, axis_state in snapshot.items():
             self.axes[axis].update_state(axis_state)
 
-        zeroed = all(p.zeroed for p in self.axes.values())
         positions = {SC.AXIS_NAMES[axis]: SC.counts_to_mm(axis, st["pos"])
                      for axis, st in snapshot.items()}
         self.slit_state.emit({
             "connected": True,
-            "zeroed":    zeroed,
+            "zeroed":    self.beamline.all_zeroed(),
             "positions": positions,
         })
-        self.raw_state_changed.emit(snapshot, zeroed)
+        self.raw_state_changed.emit(snapshot)
 
     def _on_poll_error(self, msg: str):
         self._log_line(f"! Poll thread error: {msg}")

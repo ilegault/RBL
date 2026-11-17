@@ -63,8 +63,8 @@ def test_end_to_end_session_through_main_window(qapp):
     try:
         # ── 1. Stepper Motors Poll ───────────────────────────────────────────
         # Mark axes zeroed and drive 4-axis motor poll (A=X+, B=X-, C=Y+, D=Y-)
-        for p in win.motor_tab.axes.values():
-            p.zeroed = True
+        for axis in SC.AXIS_LETTERS:
+            win.beamline.mark_zeroed(axis)
         pos_a = SC.mm_to_counts("A", 2.5)
         pos_b = SC.mm_to_counts("B", 1.5)
         pos_c = SC.mm_to_counts("C", 3.0)

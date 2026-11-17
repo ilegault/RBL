@@ -490,12 +490,12 @@ class TestMotorTabAutoHome:
 
     def test_a_homed_axis_is_marked_referenced(self, tab):
         """The routine ends on DP=0, so mm figures on that axis now mean
-        something — the same flag the panel's own Home button sets."""
-        assert tab.axes["A"].zeroed is False
+        something — recorded on Beamline per axis."""
+        assert tab.beamline.is_zeroed("A") is False
         tab._on_auto_axis_finished("A", True, "A: homed")
-        assert tab.axes["A"].zeroed is True
+        assert tab.beamline.is_zeroed("A") is True
         tab._on_auto_axis_finished("B", False, "B: failed")
-        assert tab.axes["B"].zeroed is False
+        assert tab.beamline.is_zeroed("B") is False
 
     def test_emergency_stop_cancels_a_running_sequence(self, tab):
         """An abort with a homing run still going is not a stop — the next
@@ -541,7 +541,7 @@ class TestMotorTabAutoHome:
         moments — so outcomes still arrive one axis at a time."""
         for axis in "ABCD":
             tab._on_auto_axis_finished(axis, True, f"{axis}: homed")
-        assert all(p.zeroed for p in tab.axes.values())
+        assert tab.beamline.all_zeroed()
 
     def test_together_releases_everything_when_it_finishes(self, tab):
         tab._lock_axes_for_auto_home(True, "Homing together…")

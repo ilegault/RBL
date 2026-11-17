@@ -51,8 +51,10 @@ class TestMotorIngestion:
     def test_emits_motor_state_keyed_by_slit_label(self, beamline):
         received = []
         beamline.motors_changed.connect(received.append)
+        for axis in SC.AXIS_LETTERS:
+            beamline.mark_zeroed(axis)
         snapshot = {axis: self._snapshot(pos=1000) for axis in SC.AXIS_LETTERS}
-        beamline.ingest_motor_poll(snapshot, zeroed=True)
+        beamline.ingest_motor_poll(snapshot)
 
         assert len(received) == 1
         state = received[0]
@@ -65,10 +67,22 @@ class TestMotorIngestion:
         received = []
         beamline.motors_changed.connect(received.append)
         snapshot = {"A": self._snapshot(pos=6300)}
-        beamline.ingest_motor_poll(snapshot, zeroed=False)
+        beamline.ingest_motor_poll(snapshot)
         axis_snap = received[0].axes[SC.AXIS_NAMES["A"]]
         assert axis_snap.pos_counts == 6300
         assert axis_snap.pos_mm == pytest.approx(SC.counts_to_mm("A", 6300))
+
+    def test_motor_state_reports_zeroed_per_axis(self, beamline):
+        received = []
+        beamline.motors_changed.connect(received.append)
+        beamline.mark_zeroed("B")
+        snapshot = {axis: self._snapshot(pos=0) for axis in SC.AXIS_LETTERS}
+        beamline.ingest_motor_poll(snapshot)
+
+        state = received[0]
+        assert state.axes["X-"].zeroed is True
+        assert state.axes["X+"].zeroed is False
+        assert state.zeroed is False
 
     def test_disconnected_state_is_empty(self, beamline):
         received = []
@@ -159,12 +173,13 @@ class TestBeamReconstruction:
         assert beamline.reconstruct_beam(sigma_mm=1.0) is None
 
     def test_centred_beam_from_symmetric_currents(self, beamline):
+        for axis in SC.AXIS_LETTERS:
+            beamline.mark_zeroed(axis)
         beamline.ingest_motor_poll(
             {axis: {"pos": SC.mm_to_counts(axis, 10.0), "moving": False,
                     "switches": {"forward_switch": False, "reverse_switch": False,
                                  "home_switch": False}, "enabled": True}
              for axis in SC.AXIS_LETTERS},
-            zeroed=True,
         )
         payload = self._payload_equal_currents(3.0)
         beamline.ingest_labjack_window(payload)
@@ -630,6 +645,16 @@ class TestMoveSlit:
         beamline.galil = MagicMock(connected=False)
         beamline.emergency_stop()
         beamline.galil.abort.assert_not_called()
+
+    def test_emergency_stop_clears_zeroed(self, beamline):
+        from unittest.mock import MagicMock
+        beamline.galil = MagicMock(connected=True)
+        beamline.mark_zeroed("A")
+        beamline.mark_zeroed("C")
+        beamline.emergency_stop()
+        beamline.galil.abort.assert_called_once()
+        assert beamline.is_zeroed("A") is False
+        assert beamline.is_zeroed("C") is False
 
 
 class TestSnapshotsCarryWhatTheTabsNeed:

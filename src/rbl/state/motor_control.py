@@ -25,6 +25,15 @@ the Overview and the slit crawls (or the reverse). Every move through Beamline
 now sends `SP <slit speed>` immediately before `PA` (`move_axis_counts`), so no
 move relies on speed state left on the controller by an earlier jog, home or
 connect.
+
+WHO OWNS ZEROED
+---------------
+Beamline (`_zeroed_axes`) is the single owner of zeroed, per axis. An axis
+becomes zeroed when homing finishes, when the operator clicks Zero (`DP`), or
+when a `DP` command succeeds in the Command Console. Reconnecting the Galil and
+emergency stop clear zeroed for every axis. Limit trips and Motor Off (`MO`) do
+not clear it: the controller decelerates and keeps counting on a limit, and a
+de-energised stepper re-energises to the same position.
 """
 from rbl.config import hardware_config as SC
 from rbl.hardware.galil_driver import GalilController
@@ -52,6 +61,20 @@ class MotorControlMixin:
         self._home_pass_speeds: tuple[int, int, int] = (
             SC.HOME_PASS_SPEEDS_COUNTS_PER_SEC
         )
+        # Axes whose zero has been defined since the last connect / E-stop.
+        self._zeroed_axes: set[str] = set()
+
+    def mark_zeroed(self, axis_letter: str) -> None:
+        self._zeroed_axes.add(axis_letter)
+
+    def clear_zeroed(self) -> None:
+        self._zeroed_axes.clear()
+
+    def is_zeroed(self, axis_letter: str) -> bool:
+        return axis_letter in self._zeroed_axes
+
+    def all_zeroed(self) -> bool:
+        return all(a in self._zeroed_axes for a in SC.AXIS_LETTERS)
 
     def slit_speed_cps(self, axis_letter: str) -> int:
         return self._slit_speed_cps[axis_letter]
@@ -84,7 +107,7 @@ class MotorControlMixin:
 
     # ---- Ingestion ------------------------------------------------------------
 
-    def ingest_motor_poll(self, snapshot: dict, zeroed: bool):
+    def ingest_motor_poll(self, snapshot: dict):
         """snapshot: axis letter -> {pos, moving, switches, enabled}, exactly
         what GalilPollWorker.state emits."""
         axes = {}
@@ -98,12 +121,14 @@ class MotorControlMixin:
                 moving=st["moving"],
                 enabled=st.get("enabled", True),
                 switches=st["switches"],
+                zeroed=self.is_zeroed(axis_letter),
             )
             # The Galil reports each slit as a distance from centre with no
             # sign; the '-' slits live on the negative side of the axis.
             edges[slit] = abs(pos_mm) if slit.endswith("+") else -abs(pos_mm)
         self._slit_edges_mm = edges
-        self.motors_changed.emit(MotorState(connected=True, zeroed=zeroed, axes=axes))
+        self.motors_changed.emit(
+            MotorState(connected=True, zeroed=self.all_zeroed(), axes=axes))
 
     def motors_disconnected(self):
         self._slit_edges_mm = {}
@@ -174,7 +199,8 @@ class MotorControlMixin:
             return False
 
     def emergency_stop(self):
-        """Abort all motion immediately (Galil AB command)."""
+        """Abort all motion immediately (Galil AB command) and clear zeroed."""
+        self.clear_zeroed()
         if not self.galil.connected:
             return
         try:

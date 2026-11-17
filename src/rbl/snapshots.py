@@ -36,6 +36,7 @@ class AxisSnapshot:
     moving: bool
     enabled: bool
     switches: dict
+    zeroed: bool = False
 
 
 @dataclass(frozen=True)
