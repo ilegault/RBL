@@ -1,6 +1,6 @@
 # 125: The three home pass speeds are adjustable in the app
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -54,21 +54,21 @@ HV) for its pass, exactly as today. Not saved between runs.
 
 ## Acceptance criteria
 
-- [ ] Test `test_routine_uses_the_speeds_it_is_given` in `tests/test_auto_home.py`:
+- [x] Test `test_routine_uses_the_speeds_it_is_given` in `tests/test_auto_home.py`:
       `AxisHomeRoutine(_galil(), "A", speeds=(400, 150, 30)).home_passes()` succeeds and the
       `(speed, fine_speed)` pairs of the three `begin_home` calls are `[(400, 400), (150, 150), (30, 30)]`.
-- [ ] Test `test_together_uses_the_speeds_it_is_given` in `tests/test_auto_home.py` (class
+- [x] Test `test_together_uses_the_speeds_it_is_given` in `tests/test_auto_home.py` (class
       `TestMultiAxisHomeRoutine`): the same with `MultiAxisHomeRoutine(g, "ABCD", speeds=(400, 150, 30))`
       and `begin_home_multi`.
-- [ ] Test `test_edited_pass_speeds_reach_the_next_auto_home` in `tests/test_auto_home.py` (class
+- [x] Test `test_edited_pass_speeds_reach_the_next_auto_home` in `tests/test_auto_home.py` (class
       `TestMotorTabAutoHome`, `tab` fixture): set `spn_pass1/2/3` to 300, 120, 40; patch
       `rbl.gui.motor_tab.AutoHomeAllWorker` with a `MagicMock` class and accept the confirmation as
       the class's existing tests do; start the sequential run; the mock class was constructed with
       `speeds=(300, 120, 40)`.
-- [ ] Test `test_edited_pass_speeds_reach_a_per_axis_home` in `tests/test_auto_home.py`: same edit,
+- [x] Test `test_edited_pass_speeds_reach_a_per_axis_home` in `tests/test_auto_home.py`: same edit,
       patch `rbl.gui.motor_tab.HomingWorker`, click axis A's Home button; constructed with
       `speeds=(300, 120, 40)`.
-- [ ] Test `test_home_pass_speeds_are_validated` in `tests/test_beamline.py`: a fresh `Beamline`
+- [x] Test `test_home_pass_speeds_are_validated` in `tests/test_beamline.py`: a fresh `Beamline`
       returns `SC.HOME_PASS_SPEEDS_COUNTS_PER_SEC`; `set_home_pass_speeds((100, 0, 50))` and
       `set_home_pass_speeds((100, 50))` each raise `ValueError` and leave the speeds unchanged.
 
@@ -89,3 +89,6 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+### 2026-11-17
+Implemented: pass-speed config + Beamline validation, `speeds=` through routines/workers, three QuietDoubleSpinBox on the tab (locked while homing). Local gate and CI green (PR #191).
