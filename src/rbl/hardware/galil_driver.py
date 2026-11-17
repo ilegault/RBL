@@ -201,6 +201,18 @@ class GalilController:
         self.cmd(f"PA {prefix}{position_counts}")
         self.cmd(f"BG {axis}")
 
+    def move_absolute_at(self, axis: str, position_counts: int,
+                         speed_counts_per_sec: int):
+        """Absolute move at an explicit speed: SP, then PA, then BG.
+
+        The Galil keeps one speed per axis, shared with jog and HM's first
+        stage, so a move that does not send its own inherits whatever the
+        last jog or home left behind."""
+        prefix = "," * "ABCD".index(axis)
+        self.cmd(f"SP {prefix}{speed_counts_per_sec}")
+        self.cmd(f"PA {prefix}{position_counts}")
+        self.cmd(f"BG {axis}")
+
     def move_relative(self, axis: str, delta_counts: int):
         prefix = "," * "ABCD".index(axis)
         self.cmd(f"PR {prefix}{delta_counts}")

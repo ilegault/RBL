@@ -41,9 +41,14 @@ class _FakeGalil:
     def __init__(self):
         self.connected = True
         self.moves = []
+        self.speeds = []
 
     def move_absolute(self, axis, counts):
         self.moves.append((axis, counts))
+
+    def move_absolute_at(self, axis, counts, speed):
+        self.moves.append((axis, counts))
+        self.speeds.append(speed)
 
 
 @pytest.fixture
@@ -71,6 +76,16 @@ def test_overview_move_reaches_the_command_console(screens):
     beamline.move_slit("X+", 3.0)
     text = motors.console.toPlainText()
     assert "PA A=" in text and "X+" in text and "mm" in text
+
+
+def test_overview_move_carries_the_slit_speed(screens):
+    """The Galil keeps one speed per axis; a move that does not send its own
+    runs at whatever the last jog left behind."""
+    motors, overview, beamline = screens
+    beamline.set_slit_speed_cps("C", 300)
+    beamline.move_slit("Y+", 4.0)
+    assert beamline.galil.speeds == [300]
+    assert "SP C=300" in motors.console.toPlainText()
 
 
 def test_both_screens_are_told_the_same_achievable_target(screens):

@@ -578,8 +578,24 @@ class TestMoveSlit:
         beamline.galil = MagicMock(connected=True)
         ok = beamline.move_slit("X+", 5.0)
         assert ok is True
-        axis_letter = beamline.galil.move_absolute.call_args.args[0]
+        axis_letter = beamline.galil.move_absolute_at.call_args.args[0]
         assert SC.AXIS_NAMES[axis_letter] == "X+"
+
+    def test_move_slit_sends_the_axis_slit_speed(self, beamline):
+        from unittest.mock import MagicMock
+        beamline.galil = MagicMock(connected=True)
+        beamline.set_slit_speed_cps("A", 640)
+        beamline.move_slit("X+", 5.0)
+        beamline.galil.move_absolute_at.assert_called_once_with(
+            "A", SC.mm_to_counts("A", 5.0), 640)
+        beamline.galil.move_absolute.assert_not_called()
+
+    def test_slit_speed_defaults_and_rejects_below_one(self, beamline):
+        for axis in SC.AXIS_LETTERS:
+            assert beamline.slit_speed_cps(axis) == SC.DEFAULT_SPEED_COUNTS_PER_SEC
+        with pytest.raises(ValueError):
+            beamline.set_slit_speed_cps("B", 0)
+        assert beamline.slit_speed_cps("B") == SC.DEFAULT_SPEED_COUNTS_PER_SEC
 
     def test_move_slit_fails_when_galil_not_connected(self, beamline):
         from unittest.mock import MagicMock
