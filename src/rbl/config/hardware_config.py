@@ -108,6 +108,12 @@ HOME_STOP_CODE = 10
 # value rather than inherit the last run's fine-approach speed.
 DEFAULT_HOME_VELOCITY_COUNTS_PER_SEC = 256
 
+# Start-of-home back-out: an axis left on its home switch when its motor was
+# turned off (MO) gives homing a confusing start, so every homing run backs out
+# away from home (+counts) before seeking or running HM. 1000 counts ≈ 1.6 mm.
+HOME_START_BACKOFF_COUNTS = 1000
+HOME_START_BACKOFF_TRIES = 3
+
 # --- Amplifier / motor configuration (2HA075520 amplifier) -------------------
 MOTOR_TYPE      = -2.5  # MT: step motor, active-high step pulse
 STEP_RESOLUTION = 2     # YA: 1=full, 2=half, 4=quarter, 8=eighth

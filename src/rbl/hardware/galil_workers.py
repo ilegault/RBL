@@ -45,6 +45,14 @@ to aim it.)
 the home limit trips) followed by HOME (the three-pass HM, then DP=0) — and
 `AutoHomeAllWorker` is that routine run over all four axes on ONE thread, so at
 most one axis is ever in motion and at most one command is ever on the wire.
+
+BACKING OUT FIRST
+-----------------
+An axis that was turned off (MO) while sitting on its home switch (or reverse
+limit) gives homing a confusing start. Every homing entry point therefore begins
+by backing out (`HOME_START_BACKOFF_COUNTS` away from home, up to
+`HOME_START_BACKOFF_TRIES` times) until neither the home switch nor the reverse
+limit is active, unless the axis is already on its forward limit.
 """
 import time
 
@@ -146,6 +154,9 @@ class AxisHomeRoutine:
         """
         axis = self.axis
         try:
+            ok, msg = self.back_out_of_home()
+            if not ok:
+                return False, msg
             if seek_first:
                 ok, msg = self.seek_home_limit()
                 if not ok:
@@ -153,6 +164,38 @@ class AxisHomeRoutine:
             return self.home_passes()
         except Exception as e:
             return False, f"{axis}: homing error — {e}"
+
+    # ---- Phase 0: back out of home ------------------------------------------
+
+    def back_out_of_home(self) -> tuple[bool, str]:
+        """Back off the home switch / reverse limit before seeking or homing."""
+        g, axis = self.galil, self.axis
+        sw = g.get_switch_states(axis)
+        if sw["forward_switch"]:
+            self._progress(f"{axis}: on the forward limit — no back-out needed")
+            return True, ""
+        if not sw["home_switch"] and not sw["reverse_switch"]:
+            return True, ""
+
+        g.set_speed(axis, SC.HOME_SEEK_SPEED_COUNTS_PER_SEC)
+        tries = SC.HOME_START_BACKOFF_TRIES
+        counts = SC.HOME_START_BACKOFF_COUNTS
+        for _ in range(tries):
+            if self._cancelled():
+                return False, f"{axis}: cancelled while backing out of home"
+            self._progress(f"{axis}: backing out of home ({counts} counts)…")
+            g.move_relative(axis, counts)
+            if not self.wait_idle(timeout=15.0):
+                return False, f"{axis}: timeout backing out of home"
+            sw = g.get_switch_states(axis)
+            if not sw["home_switch"] and not sw["reverse_switch"]:
+                return True, ""
+
+        return (
+            False,
+            f"{axis}: still on the home switch after backing out "
+            f"{tries} × {counts} counts — zero not set",
+        )
 
     # ---- Phase 1: seek ------------------------------------------------------
 
@@ -425,6 +468,9 @@ class MultiAxisHomeRoutine:
     def run(self, seek_first: bool = True) -> tuple[bool, str]:
         """Home every axis together. Returns (success, message), never raises."""
         try:
+            ok, msg = self.back_out_of_homes()
+            if not ok:
+                return False, msg
             if seek_first:
                 ok, msg = self.seek_home_limits()
                 if not ok:
@@ -434,6 +480,48 @@ class MultiAxisHomeRoutine:
             return False, f"{self.axes}: homing error — {e}"
         finally:
             self._restore_speeds()
+
+    # ---- Phase 0: back out of home, all axes at once ------------------------
+
+    def back_out_of_homes(self) -> tuple[bool, str]:
+        """Back off the home switch / reverse limit on any axis that needs it."""
+        g = self.galil
+        pending = []
+        for a in self.axes:
+            sw = g.get_switch_states(a)
+            if sw["forward_switch"]:
+                self._progress(f"{a}: on the forward limit — no back-out needed")
+            elif sw["home_switch"] or sw["reverse_switch"]:
+                pending.append(a)
+
+        if not pending:
+            return True, ""
+
+        tries = SC.HOME_START_BACKOFF_TRIES
+        counts = SC.HOME_START_BACKOFF_COUNTS
+        g.set_speed_multi("".join(pending), SC.HOME_SEEK_SPEED_COUNTS_PER_SEC)
+        for _ in range(tries):
+            if self._cancelled():
+                return False, "Cancelled while backing out of home"
+            moving = "".join(pending)
+            self._progress(f"{moving}: backing out of home ({counts} counts)…")
+            g.move_relative_multi(moving, counts)
+            if not self.wait_idle(moving, timeout=15.0):
+                return False, "Timeout while backing out of home"
+            still = []
+            for a in pending:
+                sw = g.get_switch_states(a)
+                if sw["home_switch"] or sw["reverse_switch"]:
+                    still.append(a)
+            pending = still
+            if not pending:
+                return True, ""
+
+        msg = ("Still on the home switch after backing out: "
+               + ", ".join(pending) + " — no zero set")
+        for a in pending:
+            self._axis_done(a, False, msg)
+        return False, msg
 
     # ---- Phase 1: seek, all axes at once -------------------------------------
 
