@@ -1,6 +1,6 @@
 # 87: Overview cup panel: uncertainty and insertion bars
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
