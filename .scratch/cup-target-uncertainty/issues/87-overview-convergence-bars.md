@@ -43,19 +43,24 @@ arithmetic.
 
 ## Acceptance criteria
 
-- [ ] `tests/test_cup_panel.py`: given a `CupView` with `drain_fraction=0.5`,
-      `uncertainty=0.10`, `target=0.05`, target mode, the uncertainty bar's value is
-      50 % of its range, the target mark is visible, and the text contains `"10.0 %"`
-      and `"5 %"`.
-- [ ] Given `converged=True` the bar uses the OK colour; given `reason_text="no valid
+All tests in `tests/test_cup_panel.py`.
+
+- [ ] Test `test_uncertainty_bar_fills_to_drain_fraction_and_shows_target_mark_in_target_mode`:
+      given a `CupView` with `drain_fraction=0.5`, `uncertainty=0.10`, `target=0.05`,
+      target mode, the uncertainty bar's value is 50 % of its range, the target mark is
+      visible, and the text contains `"10.0 %"` and `"5 %"`.
+- [ ] Test `test_uncertainty_bar_colours_reason_and_fixed_mode_target_mark`: given
+      `converged=True` the bar uses the OK colour; given `reason_text="no valid
       samples"` it shows that text and the grey colour; in fixed mode the target mark is
       hidden.
-- [ ] Given `dwell_limit_s=None` and `elapsed_s=12.3` the insertion bar text is
-      `"12.3 s"`.
-- [ ] Given `insertion_open=False` and `last_insertion_text="last: 4.2 % · converged ·
+- [ ] Test `test_insertion_bar_with_no_dwell_limit_shows_elapsed_only`: given
+      `dwell_limit_s=None` and `elapsed_s=12.3` the insertion bar text is `"12.3 s"`.
+- [ ] Test `test_closed_insertion_hides_bars_and_shows_last_insertion_text`: given
+      `insertion_open=False` and `last_insertion_text="last: 4.2 % · converged ·
       n = 23 · 1.8 s"`, both bars are hidden and that text is shown.
-- [ ] A rig test (prior art: `test_charge_text_matches_the_faraday_tab_after_an_insertion_closes`)
-      feeds a converging insertion through the real tab and asserts the panel's
+- [ ] Test `test_rig_converging_insertion_matches_tabs_uncertainty_percentage`: a rig
+      test, built like the existing rig test for the charge text after an insertion
+      closes, feeds a converging insertion through the real tab and asserts the panel's
       uncertainty text matches the tab's `lbl_uncertainty` percentage.
 
 May fake: instrument feeds. Must be real: the tab, the panel, `CupView`.
