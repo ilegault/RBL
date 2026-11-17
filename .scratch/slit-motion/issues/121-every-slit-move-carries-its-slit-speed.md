@@ -1,6 +1,6 @@
 # 121: Every slit move carries its slit speed
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -54,22 +54,22 @@ immediately before the `PA`.
 
 ## Acceptance criteria
 
-- [ ] Test `test_move_absolute_at_sends_sp_then_pa_then_bg` in `tests/test_galil_protocol.py`:
+- [x] Test `test_move_absolute_at_sends_sp_then_pa_then_bg` in `tests/test_galil_protocol.py`:
       using that file's `FakeGalilSocket`, `move_absolute_at("C", 3653, 750)` puts exactly
       `["SP ,,750", "PA ,,3653", "BG C"]` on the socket, in that order.
-- [ ] Test `test_move_slit_sends_the_axis_slit_speed` in `tests/test_beamline.py`: with
+- [x] Test `test_move_slit_sends_the_axis_slit_speed` in `tests/test_beamline.py`: with
       `beamline.galil = MagicMock(connected=True)`, `set_slit_speed_cps("A", 640)` then
       `move_slit("X+", 5.0)`; `beamline.galil.move_absolute_at` was called once with
       `("A", SC.mm_to_counts("A", 5.0), 640)` and `beamline.galil.move_absolute` was never called.
-- [ ] Test `test_slit_speed_defaults_and_rejects_below_one` in `tests/test_beamline.py`: a fresh
+- [x] Test `test_slit_speed_defaults_and_rejects_below_one` in `tests/test_beamline.py`: a fresh
       `Beamline` returns `SC.DEFAULT_SPEED_COUNTS_PER_SEC` from `slit_speed_cps(axis)` for all
       four letters; `set_slit_speed_cps("B", 0)` raises `ValueError` and
       `slit_speed_cps("B")` is still the default afterwards.
-- [ ] Test `test_overview_move_carries_the_slit_speed` in `tests/test_slit_cross_screen.py`: on
+- [x] Test `test_overview_move_carries_the_slit_speed` in `tests/test_slit_cross_screen.py`: on
       the `screens` fixture, `beamline.set_slit_speed_cps("C", 300)`, then
       `beamline.move_slit("Y+", 4.0)` (the Overview's path, as the file's existing console test drives it);
       `beamline.galil.speeds == [300]` and the console text contains `"SP C=300"`.
-- [ ] The existing test `test_move_slit_converts_label_to_axis_and_mm_to_counts` in
+- [x] The existing test `test_move_slit_converts_label_to_axis_and_mm_to_counts` in
       `tests/test_beamline.py` is rewritten in place (same name) to read the axis letter from
       `beamline.galil.move_absolute_at.call_args.args[0]`. Every other existing test passes
       unedited apart from the `_FakeGalil` helper change above.
