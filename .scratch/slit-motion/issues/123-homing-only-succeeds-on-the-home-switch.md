@@ -1,6 +1,6 @@
 # 123: Homing only succeeds when a pass stopped on the home switch
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -55,26 +55,26 @@ not a weakened test.
 
 ## Acceptance criteria
 
-- [ ] Test `test_get_stop_code_reads_mg_sc` in `tests/test_galil_protocol.py`: with
+- [x] Test `test_get_stop_code_reads_mg_sc` in `tests/test_galil_protocol.py`: with
       `FakeGalilSocket(responses={"MG _SCB": "10.0000"})`, `get_stop_code("B") == 10` and the
       socket's `sent` list contains `"MG _SCB"`.
-- [ ] Test `test_a_pass_that_stops_on_a_limit_sets_no_zero` in `tests/test_auto_home.py`:
+- [x] Test `test_a_pass_that_stops_on_a_limit_sets_no_zero` in `tests/test_auto_home.py`:
       `_galil()` with `get_stop_code.side_effect = [10, 3]`; `AxisHomeRoutine(g, "A").run()`
       returns `(False, msg)` with `"pass 2/3 did not stop on the home switch (stop code 3)"` in
       `msg`; `g.define_zero` was never called; `g.set_speed` was called with
       `("A", SC.DEFAULT_SPEED_COUNTS_PER_SEC)` (speeds restored on the failure path).
-- [ ] Test `test_seek_fails_on_the_reverse_limit_before_home` in `tests/test_auto_home.py`:
+- [x] Test `test_seek_fails_on_the_reverse_limit_before_home` in `tests/test_auto_home.py`:
       `_jogging_galil(_switches(), _switches(reverse=True))`; `seek_home_limit()` returns
       `(False, msg)` with `"reached the reverse limit before the home switch"` in `msg`, and
       `g.stop` was called with `"A"`. The existing test `test_stops_on_the_reverse_limit_too`
       is rewritten in place (same name) to assert this failure, and
       `test_an_axis_on_its_reverse_limit_is_detected` is rewritten in place to assert that an
       axis with only its reverse limit active is NOT at the home limit.
-- [ ] Test `test_together_sets_no_zero_when_one_axis_stops_off_home` in `tests/test_auto_home.py`
+- [x] Test `test_together_sets_no_zero_when_one_axis_stops_off_home` in `tests/test_auto_home.py`
       (class `TestMultiAxisHomeRoutine`): a `_galil()` whose `get_stop_code` returns 10 for A, B, D
       and 3 for C on the first pass; `MultiAxisHomeRoutine(g).run(seek_first=False)` returns
       `False` with `"C (stop code 3)"` in the message, and `g.define_zero_multi` was never called.
-- [ ] Every other test in `tests/test_auto_home.py` passes with only the `_galil()` helper change. (no test: regression check by the existing suite)
+- [x] Every other test in `tests/test_auto_home.py` passes with only the `_galil()` helper change. (no test: regression check by the existing suite)
 
 **What tests may fake:** the controller (`MagicMock(spec=GalilController)` via the file's helpers,
 or `FakeGalilSocket` for the driver test) and `time.sleep` (the file's `no_sleep` fixture).
