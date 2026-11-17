@@ -267,6 +267,14 @@ class TestRoutineEndToEnd:
         g.jog_start.assert_not_called()
         assert g.begin_home.call_count == 3
 
+    def test_routine_uses_the_speeds_it_is_given(self):
+        g = _galil()
+        ok, msg = AxisHomeRoutine(g, "A", speeds=(400, 150, 30)).home_passes()
+        assert ok, msg
+        passes = [(c.args[1], c.kwargs["fine_speed"])
+                  for c in g.begin_home.call_args_list]
+        assert passes == [(400, 400), (150, 150), (30, 30)]
+
 
 class TestBackOutOfHome:
     def test_homing_backs_out_before_anything_else(self):
@@ -565,6 +573,63 @@ class TestMotorTabAutoHome:
         tab._emergency_stop()
         assert tab._parallel_worker._cancelled is True
 
+    def test_edited_pass_speeds_reach_the_next_auto_home(self, tab, monkeypatch):
+        tab.spn_pass1.setValue(300)
+        tab.spn_pass2.setValue(120)
+        tab.spn_pass3.setValue(40)
+        mock_worker_cls = MagicMock()
+        monkeypatch.setattr("rbl.gui.motor_tab.AutoHomeAllWorker", mock_worker_cls)
+
+        tab._start_auto_home()
+
+        mock_worker_cls.assert_called_once()
+        assert mock_worker_cls.call_args.kwargs["speeds"] == (300, 120, 40)
+
+    def test_edited_pass_speeds_reach_a_per_axis_home(self, tab, monkeypatch):
+        tab.spn_pass1.setValue(300)
+        tab.spn_pass2.setValue(120)
+        tab.spn_pass3.setValue(40)
+        mock_worker_cls = MagicMock()
+        monkeypatch.setattr("rbl.gui.motor_tab.HomingWorker", mock_worker_cls)
+
+        tab.axes["A"].btn_home.click()
+
+        mock_worker_cls.assert_called_once()
+        assert mock_worker_cls.call_args.kwargs["speeds"] == (300, 120, 40)
+
+    def test_edited_pass_speeds_reach_the_next_together_home(self, tab, monkeypatch):
+        tab.spn_pass1.setValue(300)
+        tab.spn_pass2.setValue(120)
+        tab.spn_pass3.setValue(40)
+        mock_worker_cls = MagicMock()
+        monkeypatch.setattr("rbl.gui.motor_tab.MultiAxisHomeWorker", mock_worker_cls)
+
+        tab._start_auto_home_parallel()
+
+        mock_worker_cls.assert_called_once()
+        assert mock_worker_cls.call_args.kwargs["speeds"] == (300, 120, 40)
+
+    def test_pass_speed_boxes_disabled_while_homing(self, tab, monkeypatch):
+        for box in (tab.spn_pass1, tab.spn_pass2, tab.spn_pass3):
+            assert box.isEnabled()
+
+        tab._lock_axes_for_auto_home(True, "Queued for auto-home")
+        for box in (tab.spn_pass1, tab.spn_pass2, tab.spn_pass3):
+            assert not box.isEnabled()
+        tab._lock_axes_for_auto_home(False)
+        for box in (tab.spn_pass1, tab.spn_pass2, tab.spn_pass3):
+            assert box.isEnabled()
+
+        monkeypatch.setattr(HomingWorker, "start", lambda self: None)
+        monkeypatch.setattr(HomingWorker, "isRunning", lambda self: True)
+        panel = tab.axes["A"]
+        panel._start_homing(seek_first=False)
+        for box in (tab.spn_pass1, tab.spn_pass2, tab.spn_pass3):
+            assert not box.isEnabled()
+        panel._on_homing_done(True, "A: homed")
+        for box in (tab.spn_pass1, tab.spn_pass2, tab.spn_pass3):
+            assert box.isEnabled()
+
 
 class TestSeekAndHomeButton:
     def test_each_panel_offers_the_two_step_procedure_in_one_click(self, tab):
@@ -676,6 +741,14 @@ class TestMultiAxisHomeRoutine:
         passes = [(c.args[1], c.kwargs["fine_speed"])
                   for c in g.begin_home_multi.call_args_list]
         assert passes == [(225, 225), (112, 112), (58, 58)]
+
+    def test_together_uses_the_speeds_it_is_given(self):
+        g = _galil()
+        ok, msg = self._routine(g, "ABCD", speeds=(400, 150, 30)).home_passes()
+        assert ok, msg
+        passes = [(c.args[1], c.kwargs["fine_speed"])
+                  for c in g.begin_home_multi.call_args_list]
+        assert passes == [(400, 400), (150, 150), (30, 30)]
 
     def test_the_seek_starts_every_axis_with_one_jog(self):
         # Every axis clear on the first look, every axis arrived on the next —

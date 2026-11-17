@@ -8,7 +8,7 @@ Features:
     Move, Overview, and Raster Planner) and target position in cps OR mm/s / mm
     (unit toggle).
   - Per-axis Enable (SH) / Disable (MO) buttons; also single-axis and all-axis.
-  - Automated homing with progressive speed retry (225 → 112 → 58 cps), per
+  - Automated homing with three passes at the Pass 1 / 2 / 3 speeds, per
     axis and for the whole set.
   - Big red EMERGENCY STOP always visible.
 
@@ -16,7 +16,7 @@ HOMING, AND THE EIGHT CLICKS IT USED TO TAKE
 --------------------------------------------
 On a stepper HM is a two-stage search — a fast pass at SP until the home input
 changes state, then a slow re-approach at HV that is what actually fixes the
-zero. The routine runs it three times at 225 / 112 / 58 cps for repeatability,
+zero. The routine runs it three times at the Pass 1 / 2 / 3 speeds for repeatability,
 but from the far end of the travel that last pass would take minutes and time
 out, so the working procedure was always to jog the axis down onto its limit by
 hand FIRST, then press Home. Two gestures per axis, eight before the slits were
@@ -74,6 +74,8 @@ from rbl.hardware.galil_workers import (
 class AxisControls(QGroupBox):
     """One self-contained panel for one slit."""
 
+    homing_state_changed = Signal(bool)
+
     def __init__(self, axis_letter: str, get_galil_fn, log_fn, beamline,
                  parent=None):
         super().__init__(f"{SC.AXIS_NAMES[axis_letter]}  (axis {axis_letter})", parent)
@@ -86,6 +88,7 @@ class AxisControls(QGroupBox):
         # — and one made there also reaches this panel. See Beamline.move_slit.
         self.beamline  = beamline
         self._homing_worker: HomingWorker | None = None
+        self._homing_in_progress = False
         # A status line held by something outside this panel — the all-axes
         # auto-home sequencer, which drives this axis without owning one of
         # this panel's workers. While it is set, the 5 Hz poll must not paint
@@ -225,10 +228,10 @@ class AxisControls(QGroupBox):
             "QPushButton:disabled { background:#c0c0c0; color:#888; }"
         )
         self.btn_home.setToolTip(
-            f"HM from wherever axis {axis_letter} is now: three passes "
-            "(225 / 112 / 58 cps), then DP=0.\n"
+            f"HM from wherever axis {axis_letter} is now: three passes at "
+            "the Pass 1 / 2 / 3 speeds, then DP=0.\n"
             "Use this when the axis is already near its home switch — from "
-            "the far end of the travel the 58 cps pass will time out."
+            "the far end of the travel a slow final pass will time out."
         )
         self.btn_home.clicked.connect(lambda: self._start_homing(seek_first=False))
         home_row.addWidget(self.btn_home)
@@ -511,10 +514,15 @@ class AxisControls(QGroupBox):
 
         # A jog or a Move on this axis mid-run would collide with the routine's
         # own motion. The home buttons stay live — they are the Cancel.
+        self._homing_in_progress = True
+        self.homing_state_changed.emit(True)
         self.set_motion_controls_enabled(False)
 
-        self._homing_worker = HomingWorker(g, self.axis, self,
-                                           seek_first=seek_first)
+        self._homing_worker = HomingWorker(
+            g, self.axis, self,
+            seek_first=seek_first,
+            speeds=self.beamline.home_pass_speeds(),
+        )
         self._homing_worker.progress.connect(self.log)
         self._homing_worker.done.connect(self._on_homing_done)
         self._homing_worker.start()
@@ -529,6 +537,8 @@ class AxisControls(QGroupBox):
         # Only hand the controls back if there is still something to command:
         # the link may have dropped underneath the run, which is one of the
         # ways it ends.
+        self._homing_in_progress = False
+        self.homing_state_changed.emit(False)
         self.set_motion_controls_enabled(bool(g is not None and g.connected))
         if success:
             # Homing ends on DP=0, so the axis is now referenced.
@@ -634,6 +644,7 @@ class MotorTab(QWidget):
         # time — each start path refuses while the other is going.
         self._auto_worker: AutoHomeAllWorker | None = None          # sequential
         self._parallel_worker: MultiAxisHomeWorker | None = None    # together
+        self._auto_homing_locked = False
 
         outer_layout = QHBoxLayout(self)
         outer_layout.setContentsMargins(8, 8, 8, 8)
@@ -739,6 +750,7 @@ class MotorTab(QWidget):
         for i, axis in enumerate(SC.AXIS_LETTERS):
             panel = AxisControls(axis, lambda: self.galil, self._log_line,
                                  beamline, self)
+            panel.homing_state_changed.connect(self._update_pass_speeds_enabled)
             self.axes[axis] = panel
             grid.addWidget(panel, i // 2, i % 2)
         left_layout.addLayout(grid, stretch=1)
@@ -839,6 +851,33 @@ class MotorTab(QWidget):
         row.addWidget(self.btn_auto_home_par, stretch=1)
         lay.addLayout(row)
 
+        speeds_row = QHBoxLayout()
+        speeds_row.setSpacing(6)
+        speeds_tip = (
+            "Speed of each home pass, for both its search and its slow "
+            "re-approach. Shared by all four axes. Used by the next homing run."
+        )
+        initial_speeds = self.beamline.home_pass_speeds()
+        pass_boxes = []
+        for label_text, val in zip(
+            ("Pass 1 (cps)", "Pass 2 (cps)", "Pass 3 (cps)"), initial_speeds
+        ):
+            lbl = QLabel(label_text)
+            spn = QuietDoubleSpinBox()
+            spn.setDecimals(0)
+            spn.setRange(1.0, float(SC.HOME_PASS_SPEED_MAX_COUNTS_PER_SEC))
+            spn.setSingleStep(10.0)
+            spn.setValue(float(val))
+            spn.setToolTip(speeds_tip)
+            lbl.setToolTip(speeds_tip)
+            speeds_row.addWidget(lbl)
+            speeds_row.addWidget(spn)
+            pass_boxes.append(spn)
+        self.spn_pass1, self.spn_pass2, self.spn_pass3 = pass_boxes
+        for spn in pass_boxes:
+            spn.valueChanged.connect(self._on_pass_speeds_changed)
+        lay.addLayout(speeds_row)
+
         self.lbl_auto_home = QLabel(self._AUTO_HOME_STANDING)
         self.lbl_auto_home.setWordWrap(True)
         self.lbl_auto_home.setStyleSheet(
@@ -889,7 +928,10 @@ class MotorTab(QWidget):
                                  theme.WARN)
         self._log_line("# Auto-home ALL — sequential, one command at a time.")
 
-        self._auto_worker = AutoHomeAllWorker(self.galil, SC.AXIS_LETTERS, self)
+        self._auto_worker = AutoHomeAllWorker(
+            self.galil, SC.AXIS_LETTERS, self,
+            speeds=self.beamline.home_pass_speeds(),
+        )
         self._auto_worker.progress.connect(self._log_line)
         self._auto_worker.axis_started.connect(self._on_auto_axis_started)
         self._auto_worker.axis_finished.connect(self._on_auto_axis_finished)
@@ -925,6 +967,21 @@ class MotorTab(QWidget):
         if not ok:
             QMessageBox.warning(self, "Auto-home did not complete", summary)
 
+    def _on_pass_speeds_changed(self, _value=None):
+        self.beamline.set_home_pass_speeds((
+            int(round(self.spn_pass1.value())),
+            int(round(self.spn_pass2.value())),
+            int(round(self.spn_pass3.value())),
+        ))
+
+    def _update_pass_speeds_enabled(self, _active=None):
+        enabled = (
+            not self._auto_homing_locked
+            and not any(p._homing_in_progress for p in self.axes.values())
+        )
+        for spn in (self.spn_pass1, self.spn_pass2, self.spn_pass3):
+            spn.setEnabled(enabled)
+
     def _lock_axes_for_auto_home(self, locked: bool, status: str = None):
         """Take the per-axis controls out of reach while the sequencer runs.
 
@@ -933,6 +990,8 @@ class MotorTab(QWidget):
         live — it is the one control that must never be locked out — and so
         does the Cancel on the button that started this.
         """
+        self._auto_homing_locked = locked
+        self._update_pass_speeds_enabled()
         for panel in self.axes.values():
             panel.set_enabled(not locked and self.galil.connected)
             panel.set_external_status(status if locked else None)
@@ -969,7 +1028,10 @@ class MotorTab(QWidget):
         self._set_auto_home_note("Homing all four axes together…", theme.WARN)
         self._log_line(f"# Auto-home ALL — together. HM {axes} ; BG {axes}.")
 
-        self._parallel_worker = MultiAxisHomeWorker(self.galil, axes, self)
+        self._parallel_worker = MultiAxisHomeWorker(
+            self.galil, axes, self,
+            speeds=self.beamline.home_pass_speeds(),
+        )
         self._parallel_worker.progress.connect(self._log_line)
         self._parallel_worker.axis_finished.connect(self._on_auto_axis_finished)
         self._parallel_worker.done.connect(self._on_parallel_home_done)

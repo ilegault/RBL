@@ -139,7 +139,7 @@ class AxisHomeRoutine:
     # pass's second stage ran at whatever the controller had it at, and turning
     # SP down pass by pass was tuning the stage that does not determine the
     # answer.
-    SPEEDS   = [225, 112, 58]
+    SPEEDS   = SC.HOME_PASS_SPEEDS_COUNTS_PER_SEC
     BACKOFFS = [1000, 500, 250]   # counts to back off before each pass
 
     _SEEK_SETTLE_S = 0.5    # let BG actually start the jog before believing _BG
@@ -147,11 +147,12 @@ class AxisHomeRoutine:
     _IDLE_POLL_S   = 0.2
 
     def __init__(self, galil: GalilController, axis: str,
-                 progress=None, cancelled=None):
+                 progress=None, cancelled=None, speeds=None):
         self.galil      = galil
         self.axis       = axis
         self._progress  = progress or (lambda _msg: None)
         self._cancelled = cancelled or (lambda: False)
+        self.speeds     = tuple(speeds) if speeds is not None else self.SPEEDS
 
     # ---- The whole routine ---------------------------------------------------
 
@@ -305,7 +306,7 @@ class AxisHomeRoutine:
         """Coarse -> medium -> fine HM, then DP=0 on the final position."""
         g    = self.galil
         axis = self.axis
-        n    = len(self.SPEEDS)
+        n    = len(self.speeds)
 
         # If already on home switch, back off using the coarse distance first
         sw = g.get_switch_states(axis)
@@ -315,7 +316,7 @@ class AxisHomeRoutine:
             if not self.wait_idle(timeout=15.0):
                 return False, "Timeout while backing off home switch"
 
-        for pass_num, (speed, backoff) in enumerate(zip(self.SPEEDS, self.BACKOFFS)):
+        for pass_num, (speed, backoff) in enumerate(zip(self.speeds, self.BACKOFFS)):
             if self._cancelled():
                 return False, "Homing cancelled by user"
 
@@ -410,11 +411,12 @@ class HomingWorker(QThread):
     _BACKOFFS = AxisHomeRoutine.BACKOFFS
 
     def __init__(self, galil: GalilController, axis: str, parent=None,
-                 seek_first: bool = False):
+                 seek_first: bool = False, speeds=None):
         super().__init__(parent)
         self.galil      = galil
         self.axis       = axis
         self.seek_first = seek_first
+        self.speeds     = speeds
         self._cancelled = False
 
     def cancel(self):
@@ -425,6 +427,7 @@ class HomingWorker(QThread):
             self.galil, self.axis,
             progress=self.progress.emit,
             cancelled=lambda: self._cancelled,
+            speeds=self.speeds,
         )
         ok, msg = routine.run(seek_first=self.seek_first)
         self.done.emit(ok, msg)
@@ -467,12 +470,13 @@ class MultiAxisHomeRoutine:
     _IDLE_POLL_S   = AxisHomeRoutine._IDLE_POLL_S
 
     def __init__(self, galil: GalilController, axes=None,
-                 progress=None, cancelled=None, axis_done=None):
+                 progress=None, cancelled=None, axis_done=None, speeds=None):
         self.galil      = galil
         self.axes       = "".join(axes if axes is not None else SC.AXIS_LETTERS)
         self._progress  = progress or (lambda _msg: None)
         self._cancelled = cancelled or (lambda: False)
         self._axis_done = axis_done or (lambda _axis, _ok, _msg: None)
+        self.speeds     = tuple(speeds) if speeds is not None else self.SPEEDS
 
     # ---- The whole routine ---------------------------------------------------
 
@@ -645,7 +649,7 @@ class MultiAxisHomeRoutine:
     def home_passes(self) -> tuple[bool, str]:
         g = self.galil
         axes = self.axes
-        n = len(self.SPEEDS)
+        n = len(self.speeds)
 
         on_switch = "".join(a for a in axes
                             if g.get_switch_states(a)["home_switch"])
@@ -656,7 +660,7 @@ class MultiAxisHomeRoutine:
             if not self.wait_idle(on_switch, timeout=15.0):
                 return False, "Timeout while backing off the home switches"
 
-        for pass_num, (speed, backoff) in enumerate(zip(self.SPEEDS, self.BACKOFFS)):
+        for pass_num, (speed, backoff) in enumerate(zip(self.speeds, self.BACKOFFS)):
             if self._cancelled():
                 return False, "Homing cancelled by user"
 
@@ -736,11 +740,12 @@ class MultiAxisHomeWorker(QThread):
     done          = Signal(bool, str)
 
     def __init__(self, galil: GalilController, axes=None, parent=None,
-                 seek_first: bool = True):
+                 seek_first: bool = True, speeds=None):
         super().__init__(parent)
         self.galil      = galil
         self.axes       = "".join(axes if axes is not None else SC.AXIS_LETTERS)
         self.seek_first = seek_first
+        self.speeds     = speeds
         self._cancelled = False
 
     def cancel(self):
@@ -752,6 +757,7 @@ class MultiAxisHomeWorker(QThread):
             progress=self.progress.emit,
             cancelled=lambda: self._cancelled,
             axis_done=self.axis_finished.emit,
+            speeds=self.speeds,
         )
         ok, msg = routine.run(seek_first=self.seek_first)
         self.done.emit(ok, msg)
@@ -780,12 +786,14 @@ class AutoHomeAllWorker(QThread):
     done          = Signal(bool, str)    # all succeeded, summary
 
     def __init__(self, galil: GalilController, axes=None, parent=None,
-                 seek_first: bool = True, stop_on_failure: bool = True):
+                 seek_first: bool = True, stop_on_failure: bool = True,
+                 speeds=None):
         super().__init__(parent)
         self.galil           = galil
         self.axes            = list(axes if axes is not None else SC.AXIS_LETTERS)
         self.seek_first      = seek_first
         self.stop_on_failure = stop_on_failure
+        self.speeds          = speeds
         self._cancelled      = False
 
     def cancel(self):
@@ -809,6 +817,7 @@ class AutoHomeAllWorker(QThread):
                 self.galil, axis,
                 progress=self.progress.emit,
                 cancelled=lambda: self._cancelled,
+                speeds=self.speeds,
             )
             ok, msg = routine.run(seek_first=self.seek_first)
 
