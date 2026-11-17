@@ -41,12 +41,12 @@ until **Apply ROI** (93). Dragging anywhere else draws a new Draft, as in 93.
 with a 1920 × 1080 frame. `CameraTab` tests use `zwo_tab` and emit the three signals
 directly. The recorder and the fake Capture Process are real.
 
-- [ ] `tests/test_video_view.py::test_press_on_draft_grabs_instead_of_drawing`: with
+- [ ] Test `test_press_on_draft_grabs_instead_of_drawing` in `tests/test_video_view.py`: with
   `set_draft_fraction((0.25, 0.25, 0.5, 0.5))`, a drag starting at the painted centre emits
   `draft_grabbed("inside", ~0.5, ~0.5)` and `draft_dragged`, and **no** `rect_drawn`; a drag
   starting 2 px from the draft's top-left corner emits `draft_grabbed("tl", ...)`; a drag
   starting outside the draft emits `rect_drawn` as before.
-- [ ] `tests/test_camera_tab.py::test_dragging_inside_moves_the_draft`: Draft
+- [ ] Test `test_dragging_inside_moves_the_draft` in `tests/test_camera_tab.py`: Draft
   `(400, 200, 640, 360)` at full sensor; `draft_grabbed("inside", f0)`, `draft_dragged(f0 + 0.1 in x)`:
   `draft()` is `(592, 200, 640, 360)` (±1 px); dragging far past the right edge gives
   `x + width == 1920` and the same size.

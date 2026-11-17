@@ -226,6 +226,7 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -233,6 +234,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QRadioButton,
     QVBoxLayout,
     QWidget,
 )
@@ -377,6 +379,11 @@ class FaradayCupTab(QWidget):
         self.cycle.set_dwell(loaded_settings.cycle_dwell_s)
         self._last_cycle_period: float = loaded_settings.cycle_period_s
         self._last_cycle_dwell: float = loaded_settings.cycle_dwell_s
+        self._last_dwell_mode: str = loaded_settings.dwell_mode
+        self._last_max_dwell: float = loaded_settings.max_dwell_s
+        self._last_target_uncertainty: float = loaded_settings.target_uncertainty
+        self._active_target_uncertainty: float = loaded_settings.target_uncertainty
+        self._pending_target_uncertainty: float | None = None
 
         # Dose & displacement damage tracking (ADR 0003)
         self._patch_width_x_mm: float = 0.0
@@ -703,7 +710,7 @@ class FaradayCupTab(QWidget):
         cycle_lay.setSpacing(16)
         _cycle_vlay.addLayout(cycle_lay)
 
-        # Period and dwell spinners (uses project input widgets, never bare spinbox)
+        # Period spinner (uses project input widgets, never bare spinbox)
         cycle_lay.addWidget(QLabel("Period:"))
         self.spn_cycle_period = QuietDoubleSpinBox()
         self.spn_cycle_period.setRange(0.1, 604800.0)
@@ -714,17 +721,6 @@ class FaradayCupTab(QWidget):
         )
         self.spn_cycle_period.editingFinished.connect(self._on_cycle_period_changed)
         cycle_lay.addLayout(unit_row(self.spn_cycle_period, "s"))
-
-        cycle_lay.addWidget(QLabel("Dwell:"))
-        self.spn_cycle_dwell = QuietDoubleSpinBox()
-        self.spn_cycle_dwell.setRange(0.1, 604800.0)
-        self.spn_cycle_dwell.setDecimals(1)
-        self.spn_cycle_dwell.setValue(self._settings.cycle_dwell_s)
-        self.spn_cycle_dwell.setToolTip(
-            "Seconds the cup stays in the beam per scheduled insertion"
-        )
-        self.spn_cycle_dwell.editingFinished.connect(self._on_cycle_dwell_changed)
-        cycle_lay.addLayout(unit_row(self.spn_cycle_dwell, "s"))
 
         # Start button (start-only: Stop below is the only way an operator stops)
         self.btn_cycle_arm = QPushButton("Start automatic cup insertion")
@@ -754,6 +750,76 @@ class FaradayCupTab(QWidget):
         )
         self.lbl_cycle_state.setMinimumWidth(260)
         cycle_lay.addWidget(self.lbl_cycle_state, stretch=1)
+
+        # Dwell mode toggle, fixed dwell, max dwell, and target uncertainty (ticket 85)
+        _dwell_lay = QHBoxLayout()
+        _dwell_lay.setSpacing(12)
+        _cycle_vlay.addLayout(_dwell_lay)
+
+        self.rad_dwell_fixed = QRadioButton("Fixed dwell")
+        self.rad_dwell_target = QRadioButton("Target uncertainty")
+        self._dwell_mode_group = QButtonGroup(self)
+        self._dwell_mode_group.addButton(self.rad_dwell_fixed)
+        self._dwell_mode_group.addButton(self.rad_dwell_target)
+        if self._settings.dwell_mode == "target_uncertainty":
+            self.rad_dwell_target.setChecked(True)
+        else:
+            self.rad_dwell_fixed.setChecked(True)
+        self._dwell_mode_group.buttonClicked.connect(self._on_dwell_mode_changed)
+        _dwell_lay.addWidget(self.rad_dwell_fixed)
+        _dwell_lay.addWidget(self.rad_dwell_target)
+
+        _dwell_lay.addWidget(QLabel("Fixed dwell:"))
+        self.spn_cycle_dwell = QuietDoubleSpinBox()
+        self.spn_cycle_dwell.setRange(0.1, 604800.0)
+        self.spn_cycle_dwell.setDecimals(1)
+        self.spn_cycle_dwell.setValue(self._settings.cycle_dwell_s)
+        self.spn_cycle_dwell.setToolTip(
+            "Seconds the cup stays in the beam per scheduled insertion in Fixed dwell mode"
+        )
+        self.spn_cycle_dwell.editingFinished.connect(self._on_cycle_dwell_changed)
+        _dwell_lay.addLayout(unit_row(self.spn_cycle_dwell, "s"))
+
+        _dwell_lay.addWidget(QLabel("Max dwell (target uncertainty):"))
+        self.spn_max_dwell = QuietDoubleSpinBox()
+        self.spn_max_dwell.setRange(0.1, 604800.0)
+        self.spn_max_dwell.setDecimals(1)
+        self.spn_max_dwell.setValue(self._settings.max_dwell_s)
+        self.spn_max_dwell.setToolTip(
+            "Maximum seconds an insertion may run in Target uncertainty mode"
+        )
+        self.spn_max_dwell.editingFinished.connect(self._on_max_dwell_changed)
+        _dwell_lay.addLayout(unit_row(self.spn_max_dwell, "s"))
+
+        _target_col = QVBoxLayout()
+        _target_col.setSpacing(2)
+        _target_row = QHBoxLayout()
+        _target_row.setSpacing(4)
+        _target_row.addWidget(QLabel("Target uncertainty:"))
+        self.spn_target_uncertainty = QuietDoubleSpinBox()
+        self.spn_target_uncertainty.setRange(0.5, 50.0)
+        self.spn_target_uncertainty.setDecimals(1)
+        self.spn_target_uncertainty.setSingleStep(0.5)
+        self.spn_target_uncertainty.setValue(self._settings.target_uncertainty * 100.0)
+        self.spn_target_uncertainty.setToolTip(
+            "Relative standard error target for ending an insertion early (0.5 % to 50.0 %)"
+        )
+        self.spn_target_uncertainty.editingFinished.connect(
+            self._on_target_uncertainty_changed
+        )
+        _target_row.addLayout(unit_row(self.spn_target_uncertainty, "%"))
+        _target_col.addLayout(_target_row)
+        self.lbl_target_help = QLabel(
+            "Precision of each insertion's mean, not of the dose."
+        )
+        self.lbl_target_help.setStyleSheet(
+            f"color: {theme.MUTED}; font-style: italic; font-size: {theme.FS_LABEL}px;"
+        )
+        _target_col.addWidget(self.lbl_target_help)
+        _dwell_lay.addLayout(_target_col)
+        _dwell_lay.addStretch()
+
+        self._update_dwell_mode_enabled()
 
         # Permanent note (ADR 0002 amendment A7, ticket 15)
         self.lbl_cycle_permanent = QLabel("Changes apply from the next insertion.")
@@ -1070,7 +1136,7 @@ class FaradayCupTab(QWidget):
             "cycle_dwell_s": self.cycle.dwell_s,
             "min_converge_samples": self._settings.min_converge_samples,
             "dwell_mode": self.cycle.dwell_mode,
-            "target_uncertainty": self._settings.target_uncertainty,
+            "target_uncertainty": self._active_target_uncertainty,
             "max_dwell_s": self.cycle.max_dwell_s,
         }
 
@@ -1183,7 +1249,7 @@ class FaradayCupTab(QWidget):
             self._insertion_samples,
             None if math.isnan(start) else start,
             self._settle_window_s,
-            self._settings.target_uncertainty,
+            self._active_target_uncertainty,
             self._settings.min_converge_samples,
             self.acquisition.detector.release_threshold,
         )
@@ -1289,7 +1355,7 @@ class FaradayCupTab(QWidget):
                 counted_in_dose=counted,
                 total_beam_on_s=self._accumulator.total_beam_on_s,
                 dwell_mode=mode,
-                target_uncertainty=self._settings.target_uncertainty if target_mode else None,
+                target_uncertainty=self._active_target_uncertainty if target_mode else None,
                 min_converge_samples=self._settings.min_converge_samples,
                 max_dwell_s=self.cycle.max_dwell_s if target_mode else None,
                 insertion_uncertainty=unc.uncertainty,
@@ -1882,6 +1948,9 @@ class FaradayCupTab(QWidget):
             )
         if restart is not None and not restart.beam_on_during_gap:
             self._accumulator.exclude_interval(gap_start_t, t_now)
+        if self._pending_target_uncertainty is not None:
+            self._active_target_uncertainty = self._pending_target_uncertainty
+            self._pending_target_uncertainty = None
         mode = self.cycle.arm(t=t_now, resume_at=resume_at)
         next_ins_t = (
             self.cycle.next_insertion_t
@@ -2037,32 +2106,58 @@ class FaradayCupTab(QWidget):
                 self.beamline.command_cup_out()
         self._update_cycle_view(t_now)
 
+    def _selected_dwell_mode(self) -> str:
+        """Return the dwell mode currently selected in the radio toggle."""
+        return "target_uncertainty" if self.rad_dwell_target.isChecked() else "fixed"
+
+    def _update_dwell_mode_enabled(self) -> None:
+        """Enable only the active mode's dwell and target controls."""
+        target_mode = self._selected_dwell_mode() == "target_uncertainty"
+        self.spn_cycle_dwell.setEnabled(not target_mode)
+        self.spn_max_dwell.setEnabled(target_mode)
+        self.spn_target_uncertainty.setEnabled(target_mode)
+
+    def _current_raw_settings(self, **overrides: object) -> dict[str, object]:
+        """Build a raw settings dict from the current tab controls for validate_settings."""
+        raw: dict[str, object] = {
+            "arm_threshold_a": self.acquisition.detector.arm_threshold,
+            "release_threshold_a": self.acquisition.detector.release_threshold,
+            "settle_window_s": self._settle_window_s,
+            "cycle_period_s": self.spn_cycle_period.value(),
+            "cycle_dwell_s": self.spn_cycle_dwell.value(),
+            "arm_debounce_s": self._settings.arm_debounce_s,
+            "release_interval_s": self._settings.release_interval_s,
+            "dwell_mode": self._selected_dwell_mode(),
+            "max_dwell_s": self.spn_max_dwell.value(),
+            "target_uncertainty": self.spn_target_uncertainty.value() / 100.0,
+            "min_converge_samples": self._settings.min_converge_samples,
+        }
+        raw.update(overrides)
+        return raw
+
+    def _show_cycle_warning(self, message: str) -> None:
+        self.lbl_cycle_warning.setText(message)
+        self.lbl_cycle_warning.setStyleSheet(theme.status_label(theme.FAULT))
+        self.lbl_cycle_warning.setVisible(True)
+
+    def _clear_cycle_warning(self) -> None:
+        self.lbl_cycle_warning.setText("")
+        self.lbl_cycle_warning.setVisible(False)
+
     def _on_cycle_period_changed(self) -> None:
         """Validate and apply updated period from the spinner to the scheduler."""
         new_val = self.spn_cycle_period.value()
         if new_val == self._last_cycle_period:
             return
-        raw = {
-            "arm_threshold_a": self.acquisition.detector.arm_threshold,
-            "release_threshold_a": self.acquisition.detector.release_threshold,
-            "settle_window_s": self._settle_window_s,
-            "cycle_period_s": new_val,
-            "cycle_dwell_s": self.spn_cycle_dwell.value(),
-            "arm_debounce_s": self._settings.arm_debounce_s,
-            "release_interval_s": self._settings.release_interval_s,
-        }
-        _, warnings = validate_settings(raw)
+        _, warnings = validate_settings(self._current_raw_settings(cycle_period_s=new_val))
         period_warn = next((w for w in warnings if w.key == "cycle_period_s"), None)
         if period_warn is not None:
             self.spn_cycle_period.sync_value(self._last_cycle_period)
-            self.lbl_cycle_warning.setText(f"Period: {period_warn.reason}")
-            self.lbl_cycle_warning.setStyleSheet(theme.status_label(theme.FAULT))
-            self.lbl_cycle_warning.setVisible(True)
+            self._show_cycle_warning(f"Period: {period_warn.reason}")
         else:
             old_val = self._last_cycle_period
             self._last_cycle_period = new_val
-            self.lbl_cycle_warning.setText("")
-            self.lbl_cycle_warning.setVisible(False)
+            self._clear_cycle_warning()
             self.cycle.set_period(new_val)
             writer = self.cup_log.writer
             if writer is not None:
@@ -2073,31 +2168,19 @@ class FaradayCupTab(QWidget):
             self._update_cycle_view(time.time())
 
     def _on_cycle_dwell_changed(self) -> None:
-        """Validate and apply updated dwell from the spinner to the scheduler."""
+        """Validate and apply updated fixed dwell from the spinner to the scheduler."""
         new_val = self.spn_cycle_dwell.value()
         if new_val == self._last_cycle_dwell:
             return
-        raw = {
-            "arm_threshold_a": self.acquisition.detector.arm_threshold,
-            "release_threshold_a": self.acquisition.detector.release_threshold,
-            "settle_window_s": self._settle_window_s,
-            "cycle_period_s": self.spn_cycle_period.value(),
-            "cycle_dwell_s": new_val,
-            "arm_debounce_s": self._settings.arm_debounce_s,
-            "release_interval_s": self._settings.release_interval_s,
-        }
-        _, warnings = validate_settings(raw)
+        _, warnings = validate_settings(self._current_raw_settings(cycle_dwell_s=new_val))
         dwell_warn = next((w for w in warnings if w.key == "cycle_dwell_s"), None)
         if dwell_warn is not None:
             self.spn_cycle_dwell.sync_value(self._last_cycle_dwell)
-            self.lbl_cycle_warning.setText(f"Dwell: {dwell_warn.reason}")
-            self.lbl_cycle_warning.setStyleSheet(theme.status_label(theme.FAULT))
-            self.lbl_cycle_warning.setVisible(True)
+            self._show_cycle_warning(f"Fixed dwell: {dwell_warn.reason}")
         else:
             old_val = self._last_cycle_dwell
             self._last_cycle_dwell = new_val
-            self.lbl_cycle_warning.setText("")
-            self.lbl_cycle_warning.setVisible(False)
+            self._clear_cycle_warning()
             self.cycle.set_dwell(new_val)
             writer = self.cup_log.writer
             if writer is not None:
@@ -2106,6 +2189,87 @@ class FaradayCupTab(QWidget):
                 )
             self._save_current_settings()
             self._update_cycle_view(time.time())
+
+    def _on_dwell_mode_changed(self) -> None:
+        """Validate and apply dwell mode toggle to the scheduler and settings."""
+        new_mode = self._selected_dwell_mode()
+        if new_mode == self._last_dwell_mode:
+            return
+        _, warnings = validate_settings(self._current_raw_settings(dwell_mode=new_mode))
+        mode_warn = next(
+            (w for w in warnings if w.key in ("dwell_mode", "max_dwell_s", "cycle_dwell_s")),
+            None,
+        )
+        if mode_warn is not None:
+            if self._last_dwell_mode == "target_uncertainty":
+                self.rad_dwell_target.setChecked(True)
+            else:
+                self.rad_dwell_fixed.setChecked(True)
+            self._update_dwell_mode_enabled()
+            self._show_cycle_warning(f"Dwell mode: {mode_warn.reason}")
+            return
+        old_mode = self._last_dwell_mode
+        self._last_dwell_mode = new_mode
+        self._clear_cycle_warning()
+        self._update_dwell_mode_enabled()
+        self.cycle.set_dwell_mode(new_mode)
+        writer = self.cup_log.writer
+        if writer is not None:
+            writer.write_settings_changed(time.time(), "dwell_mode", old_mode, new_mode)
+        self._save_current_settings()
+        self._update_cycle_view(time.time())
+
+    def _on_max_dwell_changed(self) -> None:
+        """Validate and apply updated max dwell from the spinner to the scheduler."""
+        new_val = self.spn_max_dwell.value()
+        if new_val == self._last_max_dwell:
+            return
+        _, warnings = validate_settings(self._current_raw_settings(max_dwell_s=new_val))
+        dwell_warn = next((w for w in warnings if w.key == "max_dwell_s"), None)
+        if dwell_warn is not None:
+            self.spn_max_dwell.sync_value(self._last_max_dwell)
+            self._show_cycle_warning(f"Max dwell: {dwell_warn.reason}")
+        else:
+            old_val = self._last_max_dwell
+            self._last_max_dwell = new_val
+            self._clear_cycle_warning()
+            self.cycle.set_max_dwell(new_val)
+            writer = self.cup_log.writer
+            if writer is not None:
+                writer.write_settings_changed(
+                    time.time(), "max_dwell_s", old_val, new_val
+                )
+            self._save_current_settings()
+            self._update_cycle_view(time.time())
+
+    def _on_target_uncertainty_changed(self) -> None:
+        """Validate and apply updated target uncertainty (percent UI -> fraction)."""
+        new_val = self.spn_target_uncertainty.value() / 100.0
+        if math.isclose(new_val, self._last_target_uncertainty, rel_tol=0.0, abs_tol=1e-9):
+            return
+        _, warnings = validate_settings(
+            self._current_raw_settings(target_uncertainty=new_val)
+        )
+        tu_warn = next((w for w in warnings if w.key == "target_uncertainty"), None)
+        if tu_warn is not None:
+            self.spn_target_uncertainty.sync_value(self._last_target_uncertainty * 100.0)
+            self._show_cycle_warning(f"Target uncertainty: {tu_warn.reason}")
+            return
+        old_val = self._last_target_uncertainty
+        self._last_target_uncertainty = new_val
+        self._clear_cycle_warning()
+        if self.cycle.is_armed:
+            self._pending_target_uncertainty = new_val
+        else:
+            self._active_target_uncertainty = new_val
+            self._pending_target_uncertainty = None
+        writer = self.cup_log.writer
+        if writer is not None:
+            writer.write_settings_changed(
+                time.time(), "target_uncertainty", old_val, new_val
+            )
+        self._save_current_settings()
+        self._update_cycle_view(time.time())
 
     def _save_current_settings(self) -> bool:
         """Construct CupSettings from current tab state and save to disk."""
@@ -2125,7 +2289,11 @@ class FaradayCupTab(QWidget):
             ),
             arm_debounce_s=self._settings.arm_debounce_s,
             release_interval_s=self._settings.release_interval_s,
-            target_uncertainty=self._settings.target_uncertainty,
+            target_uncertainty=(
+                self._pending_target_uncertainty
+                if self._pending_target_uncertainty is not None
+                else self._active_target_uncertainty
+            ),
             min_converge_samples=self._settings.min_converge_samples,
             dwell_mode=(
                 self.cycle.pending_dwell_mode
@@ -2190,6 +2358,9 @@ class FaradayCupTab(QWidget):
             return
 
         if isinstance(result, CycleInsert):
+            if self._pending_target_uncertainty is not None:
+                self._active_target_uncertainty = self._pending_target_uncertainty
+                self._pending_target_uncertainty = None
             # Scheduled insertion — command cup IN if no move is already in flight
             if not self._move_in_flight and self._actuation_connected:
                 self._start_move(CupPosition.IN)
@@ -2262,7 +2433,7 @@ class FaradayCupTab(QWidget):
         else:
             self.lbl_cycle_fault.setVisible(False)
 
-        # Update pending label from scheduler's pending state (ticket 15)
+        # Update pending label from scheduler's pending state (tickets 15, 85)
         parts = []
         if self.cycle.pending_period_s is not None:
             p = self.cycle.pending_period_s
@@ -2271,6 +2442,21 @@ class FaradayCupTab(QWidget):
         if self.cycle.pending_dwell_s is not None:
             d = self.cycle.pending_dwell_s
             parts.append(f"Dwell {d:.1f} s pending, applies at next insertion")
+        if self.cycle.pending_dwell_mode is not None:
+            m_label = (
+                "Target uncertainty"
+                if self.cycle.pending_dwell_mode == "target_uncertainty"
+                else "Fixed dwell"
+            )
+            parts.append(f"Dwell mode {m_label} pending, applies at next insertion")
+        if self.cycle.pending_max_dwell_s is not None:
+            md = self.cycle.pending_max_dwell_s
+            parts.append(f"Max dwell {md:.1f} s pending, applies at next insertion")
+        if self._pending_target_uncertainty is not None:
+            tu = self._pending_target_uncertainty * 100.0
+            parts.append(
+                f"Target uncertainty {tu:.1f} % pending, applies at next insertion"
+            )
 
         if parts:
             self.lbl_cycle_pending.setText("; ".join(parts))
