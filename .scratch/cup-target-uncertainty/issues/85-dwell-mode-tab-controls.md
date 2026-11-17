@@ -1,6 +1,6 @@
 # 85: Faraday Cup tab controls for dwell mode, both dwells and the target
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
