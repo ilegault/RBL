@@ -1,6 +1,6 @@
 # 126: Beamline owns "zeroed", per axis, and it can turn off
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -69,23 +69,23 @@ otherwise unchanged.
 
 ## Acceptance criteria
 
-- [ ] Test `test_reconnect_clears_zeroed` in `tests/test_motor_tab_zeroed.py` (new file): a real
+- [x] Test `test_reconnect_clears_zeroed` in `tests/test_motor_tab_zeroed.py` (new file): a real
       `Beamline` and `MotorTab`; `beamline.galil` replaced by a `MagicMock(connected=True)` whose
       `model_info` returns `"DMC4103"` and `get_soft_limits` returns
       `{"forward_counts": 0, "back_counts": 0}`; `rbl.gui.motor_tab.GalilPollWorker` patched with a
       `MagicMock` class. Mark all four axes zeroed, call `tab._do_connect()`;
       `beamline.all_zeroed() is False` and `beamline.is_zeroed("A") is False`.
-- [ ] Test `test_emergency_stop_clears_zeroed` in `tests/test_beamline.py`: with
+- [x] Test `test_emergency_stop_clears_zeroed` in `tests/test_beamline.py`: with
       `beamline.galil = MagicMock(connected=True)`, `mark_zeroed("A")`, `mark_zeroed("C")`, then
       `emergency_stop()`; `galil.abort` called once and `is_zeroed("A")`, `is_zeroed("C")` are both
       `False`.
-- [ ] Test `test_motor_state_reports_zeroed_per_axis` in `tests/test_beamline.py`: `mark_zeroed("B")`
+- [x] Test `test_motor_state_reports_zeroed_per_axis` in `tests/test_beamline.py`: `mark_zeroed("B")`
       only, then `ingest_motor_poll` with all four axes; the emitted state has
       `axes["X-"].zeroed is True`, `axes["X+"].zeroed is False`, and `state.zeroed is False`.
-- [ ] Test `test_dp_axes_parses_the_console_forms` in `tests/test_motor_tab_zeroed.py`:
+- [x] Test `test_dp_axes_parses_the_console_forms` in `tests/test_motor_tab_zeroed.py`:
       `dp_axes("DPA=0") == "A"`, `dp_axes("DP C=0") == "C"`, `dp_axes("DP 0,,5") == "AC"`,
       `dp_axes("DP ,,,0") == "D"`, `dp_axes("DP") == ""`, `dp_axes("MG _RPA") == ""`.
-- [ ] Test `test_console_dp_marks_the_named_axis_zeroed` in `tests/test_motor_tab_zeroed.py`: a real
+- [x] Test `test_console_dp_marks_the_named_axis_zeroed` in `tests/test_motor_tab_zeroed.py`: a real
       `Beamline` and `MotorTab` with `beamline.galil` replaced by a `MagicMock(connected=True)` whose
       `cmd` returns `""`; type `"DP ,0"` into `manual_cmd` and call `_send_manual()`;
       `beamline.is_zeroed("B") is True` and `is_zeroed("A") is False`. With `cmd` raising
@@ -107,3 +107,30 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+### 2026-11-17 - blocked (implementer)
+
+Implemented per the ticket: Beamline owns zeroed (mark/clear/is/all), AxisSnapshot.zeroed,
+ingest_motor_poll(snapshot) with no zeroed parameter, raw_state_changed Signal(dict), connect and
+E-stop clear it, console DP marks it, docstrings updated, rebased over 125 and 130. Ruff, tests-first
+and type gate pass locally.
+
+What fails: 6 tests in `tests/test_screenshot_overview.py` (test_scene_round_trips_through_the_real_conversion,
+test_scene_reaches_the_overview_screen, test_feed_stops_when_real_data_arrives,
+test_feed_stops_when_an_instrument_connects, test_feed_survives_its_own_pushes,
+test_screenshot_mode_arranges_titles_and_unhooks_connect_all), all with
+`TypeError: MotorControlMixin.ingest_motor_poll() takes 2 positional arguments but 3 were given`
+at `scripts/screenshot_overview.py:157` (`beamline.ingest_motor_poll(scene.motor_poll, scene.zeroed)`).
+
+Cause: the ticket drops the `zeroed` parameter, but the screenshot-mode script (ticket 61) still calls the
+old signature. The tests are right; the fix belongs in `scripts/screenshot_overview.py`
+(call `mark_zeroed` per axis when `scene.zeroed`, then `ingest_motor_poll(scene.motor_poll)`), and
+implementers may not edit `scripts/`. I did not add a compatibility parameter, since that contradicts the ticket.
+
+Decision needed: a human (or a ticket permitting it) updates `scripts/screenshot_overview.py` as above, then this branch
+should go green. One further failure seen once under -n auto, `test_capture_client.py::test_hello_in_time_cancels_the_hello_timeout`,
+passed on rerun (timing flake, unrelated).
+
+### 2026-11-17 - block lifted
+
+The block was lifted because the orchestrator clarified that scripts/screenshot_overview.py is editable (only the gate scripts are off limits); it is updated in this PR.
