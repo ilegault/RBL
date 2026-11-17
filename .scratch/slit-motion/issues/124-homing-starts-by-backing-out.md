@@ -1,6 +1,6 @@
 # 124: Every homing run starts by backing out of home
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -60,24 +60,24 @@ escalate rather than editing its assertions.
 
 ## Acceptance criteria
 
-- [ ] Test `test_homing_backs_out_before_anything_else` in `tests/test_auto_home.py`: a `_galil()`
+- [x] Test `test_homing_backs_out_before_anything_else` in `tests/test_auto_home.py`: a `_galil()`
       whose `get_switch_states` returns home-active on the first read and clear on every later
       read; `AxisHomeRoutine(g, "A").run()` returns success, and the first motion call in
       `g.method_calls` is `move_relative("A", SC.HOME_START_BACKOFF_COUNTS)`, before any
       `begin_home` or `jog_start`.
-- [ ] Test `test_back_out_gives_up_after_the_last_try` in `tests/test_auto_home.py`: switches report
+- [x] Test `test_back_out_gives_up_after_the_last_try` in `tests/test_auto_home.py`: switches report
       the home switch active on every read; `run()` returns `(False, msg)` with
       `"still on the home switch after backing out 3"` in `msg`; `move_relative` was called exactly
       `SC.HOME_START_BACKOFF_TRIES` times with `SC.HOME_START_BACKOFF_COUNTS`; `begin_home` and
       `define_zero` were never called.
-- [ ] Test `test_no_back_out_on_the_forward_limit` in `tests/test_auto_home.py`: switches report the
+- [x] Test `test_no_back_out_on_the_forward_limit` in `tests/test_auto_home.py`: switches report the
       forward limit active and nothing else; `back_out_of_home()` returns `(True, "")` and
       `move_relative` was never called.
-- [ ] Test `test_together_backs_out_only_the_axes_on_home` in `tests/test_auto_home.py` (class
+- [x] Test `test_together_backs_out_only_the_axes_on_home` in `tests/test_auto_home.py` (class
       `TestMultiAxisHomeRoutine`): B and D report home active on their first read and clear after;
       A and C are clear throughout. `MultiAxisHomeRoutine(g).run(seek_first=False)` succeeds, and
       the first `move_relative_multi` call is `("BD", SC.HOME_START_BACKOFF_COUNTS)`.
-- [ ] Test `test_seek_and_home_button_backs_out_first` in `tests/test_auto_home.py`: drive the
+- [x] Test `test_seek_and_home_button_backs_out_first` in `tests/test_auto_home.py`: drive the
       Stepper Motors tab's per-axis Seek + Home the way the file's `TestSeekAndHomeButton` class
       already does, with the controller reporting axis A on its home switch at the start; the
       first motion command the controller receives is the back-out `move_relative`.
