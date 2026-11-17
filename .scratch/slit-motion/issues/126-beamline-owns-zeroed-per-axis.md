@@ -1,6 +1,6 @@
 # 126: Beamline owns "zeroed", per axis, and it can turn off
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -69,23 +69,23 @@ otherwise unchanged.
 
 ## Acceptance criteria
 
-- [ ] Test `test_reconnect_clears_zeroed` in `tests/test_motor_tab_zeroed.py` (new file): a real
+- [x] Test `test_reconnect_clears_zeroed` in `tests/test_motor_tab_zeroed.py` (new file): a real
       `Beamline` and `MotorTab`; `beamline.galil` replaced by a `MagicMock(connected=True)` whose
       `model_info` returns `"DMC4103"` and `get_soft_limits` returns
       `{"forward_counts": 0, "back_counts": 0}`; `rbl.gui.motor_tab.GalilPollWorker` patched with a
       `MagicMock` class. Mark all four axes zeroed, call `tab._do_connect()`;
       `beamline.all_zeroed() is False` and `beamline.is_zeroed("A") is False`.
-- [ ] Test `test_emergency_stop_clears_zeroed` in `tests/test_beamline.py`: with
+- [x] Test `test_emergency_stop_clears_zeroed` in `tests/test_beamline.py`: with
       `beamline.galil = MagicMock(connected=True)`, `mark_zeroed("A")`, `mark_zeroed("C")`, then
       `emergency_stop()`; `galil.abort` called once and `is_zeroed("A")`, `is_zeroed("C")` are both
       `False`.
-- [ ] Test `test_motor_state_reports_zeroed_per_axis` in `tests/test_beamline.py`: `mark_zeroed("B")`
+- [x] Test `test_motor_state_reports_zeroed_per_axis` in `tests/test_beamline.py`: `mark_zeroed("B")`
       only, then `ingest_motor_poll` with all four axes; the emitted state has
       `axes["X-"].zeroed is True`, `axes["X+"].zeroed is False`, and `state.zeroed is False`.
-- [ ] Test `test_dp_axes_parses_the_console_forms` in `tests/test_motor_tab_zeroed.py`:
+- [x] Test `test_dp_axes_parses_the_console_forms` in `tests/test_motor_tab_zeroed.py`:
       `dp_axes("DPA=0") == "A"`, `dp_axes("DP C=0") == "C"`, `dp_axes("DP 0,,5") == "AC"`,
       `dp_axes("DP ,,,0") == "D"`, `dp_axes("DP") == ""`, `dp_axes("MG _RPA") == ""`.
-- [ ] Test `test_console_dp_marks_the_named_axis_zeroed` in `tests/test_motor_tab_zeroed.py`: a real
+- [x] Test `test_console_dp_marks_the_named_axis_zeroed` in `tests/test_motor_tab_zeroed.py`: a real
       `Beamline` and `MotorTab` with `beamline.galil` replaced by a `MagicMock(connected=True)` whose
       `cmd` returns `""`; type `"DP ,0"` into `manual_cmd` and call `_send_manual()`;
       `beamline.is_zeroed("B") is True` and `is_zeroed("A") is False`. With `cmd` raising
