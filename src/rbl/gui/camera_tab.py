@@ -28,10 +28,12 @@ camera_kind_mixin.py).  The USB-only controls are collected in
 (``zwo_controls``).  The ZWO Preview is drawn as decoded, with a caption under
 the view.  The USB path is unchanged (ADR 0008 decision 7).
 
-ROI drawing (tickets 75, 93): to choose an ROI, draw over the Preview.  Drawing
+ROI drawing (tickets 75, 93, 94): to choose an ROI, draw over the Preview.  Drawing
 makes a **Draft ROI**, held in sensor pixels on this tab (``draft()``) and outlined
-on the Preview; it changes nothing until **Apply ROI**, because an ROI change starts
-a new Segment (ADR 0008 decision 6) and must be explicit.  The Aspect row shapes the
+on the Preview; dragging inside the Draft moves it and dragging a corner resizes
+it with the opposite corner fixed and the aspect preset held.  It changes nothing
+until **Apply ROI**, because an ROI change starts a new Segment (ADR 0008 decision 6)
+and must be explicit.  The Aspect row shapes the
 Draft (Free, 1:1, 4:3, 16:9 or Custom W:H) through ``roi_geometry.fit_ratio``;
 Discard or Esc drops it.  The numeric boxes still show the snapped result the
 Capture Process replied with, never the Draft.  When the applied ROI is the full
@@ -77,7 +79,13 @@ from rbl.gui.widgets.camera_kind_mixin import CameraKindMixin
 from rbl.gui.widgets.inputs import NoScrollComboBox, NoScrollSpinBox
 from rbl.gui.widgets.video_view import VideoView
 from rbl.hardware.preview_stretch import view_rect_to_sensor_roi
-from rbl.hardware.roi_geometry import fit_ratio, to_fraction
+from rbl.hardware.roi_geometry import (
+    fit_ratio,
+    move_rect,
+    point_from_fraction,
+    resize_from_corner,
+    to_fraction,
+)
 
 _CV2_OK = importlib.util.find_spec("cv2") is not None
 
@@ -134,6 +142,8 @@ class CameraTab(CameraKindMixin, QWidget):
         # The applied ROI at which the Draft was last discarded or applied.
         self._draft_handled_at: "tuple[int, int, int, int] | None" = None
         self._drafting = False
+        # Active grab state (ticket 94): (kind, start_rect, start_point) or None.
+        self._draft_grab: "tuple[str, tuple[int, int, int, int], tuple[int, int]] | None" = None
 
         self._build_ui()
         self._connect_signals()
@@ -282,6 +292,9 @@ class CameraTab(CameraKindMixin, QWidget):
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._feed.double_clicked.connect(self._toggle_fullscreen)
         self._feed.rect_drawn.connect(self._on_rect_drawn)
+        self._feed.draft_grabbed.connect(self._on_draft_grabbed)
+        self._feed.draft_dragged.connect(self._on_draft_dragged)
+        self._feed.draft_released.connect(self._on_draft_released)
         self._scroll.setWidget(self._feed)
         lay.addWidget(self._scroll, stretch=1)
         lay.addWidget(self._make_preview_caption())
@@ -463,8 +476,52 @@ class CameraTab(CameraKindMixin, QWidget):
         if bounds is None:
             return
         self._draft = fit_ratio((sx, sy, sw, sh), self._current_ratio(), bounds)
+        self._draft_grab = None
         self._sync_draft_overlay()
         self._sync_draft_buttons()
+
+    def _on_draft_grabbed(self, kind: str, fx: float, fy: float) -> None:
+        if not self._drafting or self._draft is None:
+            return
+        applied = (
+            self._applied_roi()
+            or self._roi_tuple(self._zwo_preview_fields.get("roi"))
+        )
+        if applied is None:
+            return
+        self._draft_grab = (
+            kind,
+            self._draft,
+            point_from_fraction(fx, fy, applied),
+        )
+
+    def _on_draft_dragged(self, fx: float, fy: float) -> None:
+        if self._draft_grab is None or not self._drafting:
+            return
+        applied = (
+            self._applied_roi()
+            or self._roi_tuple(self._zwo_preview_fields.get("roi"))
+        )
+        if applied is None:
+            return
+        kind, start_rect, start_pt = self._draft_grab
+        pointer = point_from_fraction(fx, fy, applied)
+        if kind == "inside":
+            self._draft = move_rect(
+                start_rect,
+                pointer[0] - start_pt[0],
+                pointer[1] - start_pt[1],
+                applied,
+            )
+        else:
+            self._draft = resize_from_corner(
+                start_rect, kind, pointer, self._current_ratio(), applied
+            )
+        self._sync_draft_overlay()
+        self._sync_draft_buttons()
+
+    def _on_draft_released(self) -> None:
+        self._draft_grab = None
 
     def _apply_draft(self) -> None:
         if self._draft is None or not self._drafting:
@@ -472,6 +529,7 @@ class CameraTab(CameraKindMixin, QWidget):
         x, y, w, h = self._draft
         self._draft_handled_at = self._applied_roi()
         self._draft = None
+        self._draft_grab = None
         self._recorder.set_zwo_settings(roi={"x": x, "y": y, "width": w, "height": h})
         self._sync_draft_overlay()
         self._sync_draft_buttons()
@@ -481,6 +539,7 @@ class CameraTab(CameraKindMixin, QWidget):
             return
         self._draft_handled_at = self._applied_roi()
         self._draft = None
+        self._draft_grab = None
         self._sync_draft_overlay()
         self._sync_draft_buttons()
 
@@ -493,6 +552,7 @@ class CameraTab(CameraKindMixin, QWidget):
             self._draft_handled_at = None
         if not self._drafting:
             self._draft = None
+            self._draft_grab = None
         elif self._draft is None and applied is not None:
             info = st.get("zwo_info") or {}
             full = (0, 0, int(info.get("sensor_width", 0)), int(info.get("sensor_height", 0)))

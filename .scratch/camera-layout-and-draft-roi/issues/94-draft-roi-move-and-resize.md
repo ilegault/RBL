@@ -1,6 +1,6 @@
 # 94: Draft ROI: move and resize by dragging
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -41,18 +41,18 @@ until **Apply ROI** (93). Dragging anywhere else draws a new Draft, as in 93.
 with a 1920 × 1080 frame. `CameraTab` tests use `zwo_tab` and emit the three signals
 directly. The recorder and the fake Capture Process are real.
 
-- [ ] Test `test_press_on_draft_grabs_instead_of_drawing` in `tests/test_video_view.py`: with
+- [x] Test `test_press_on_draft_grabs_instead_of_drawing` in `tests/test_video_view.py`: with
   `set_draft_fraction((0.25, 0.25, 0.5, 0.5))`, a drag starting at the painted centre emits
   `draft_grabbed("inside", ~0.5, ~0.5)` and `draft_dragged`, and **no** `rect_drawn`; a drag
   starting 2 px from the draft's top-left corner emits `draft_grabbed("tl", ...)`; a drag
   starting outside the draft emits `rect_drawn` as before.
-- [ ] Test `test_dragging_inside_moves_the_draft` in `tests/test_camera_tab.py`: Draft
+- [x] Test `test_dragging_inside_moves_the_draft` in `tests/test_camera_tab.py`: Draft
   `(400, 200, 640, 360)` at full sensor; `draft_grabbed("inside", f0)`, `draft_dragged(f0 + 0.1 in x)`:
   `draft()` is `(592, 200, 640, 360)` (±1 px); dragging far past the right edge gives
   `x + width == 1920` and the same size.
-- [ ] `test_dragging_a_corner_resizes_with_the_preset`: preset `"16:9"`, grab `"br"`, drag
+- [x] `test_dragging_a_corner_resizes_with_the_preset`: preset `"16:9"`, grab `"br"`, drag
   outward: the Draft's top-left is unchanged and `w * 9 == h * 16` within ±1.
-- [ ] `test_dragging_sends_nothing_until_apply`: after any sequence of grab/drag/release,
+- [x] `test_dragging_sends_nothing_until_apply`: after any sequence of grab/drag/release,
   the confirmed ROI 0.5 s later is unchanged; `btn_apply_roi.click()` then makes it
   `snap_roi(*draft(), 1920, 1080)`.
 
@@ -68,3 +68,9 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+### 2026-11-17 — Implemented
+- `src/rbl/gui/widgets/video_view.py`: added `_DRAFT_GRIP_PX = 8`, `draft_grabbed`, `draft_dragged`, `draft_released`, and hit-testing via `roi_geometry.hit_test` in `mousePressEvent` when rect drawing is on and a Draft is shown.
+- `src/rbl/gui/camera_tab.py`: wired `draft_grabbed`/`draft_dragged`/`draft_released` to `roi_geometry.point_from_fraction`, `move_rect`, and `resize_from_corner`, updating the Draft overlay without sending any command to the camera until Apply ROI.
+- Tests: `test_press_on_draft_grabs_instead_of_drawing` (`tests/test_video_view.py`), `test_dragging_inside_moves_the_draft`, `test_dragging_a_corner_resizes_with_the_preset`, and `test_dragging_sends_nothing_until_apply` (`tests/test_camera_tab.py`).
+- Gate: `ruff check .`, `check_tests_first.py`, and `type_gate.py` (0 hard-layer, 139 soft-layer) passed; `pytest` had 2902 passed with `tests/test_screenshot_overview.py` crashing with a pre-existing Windows access violation in matplotlib GC (reproduced identically on `origin/master`).
