@@ -1,6 +1,6 @@
 # 122: The Stepper Motors tab's Speed box sets the slit speed
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
