@@ -77,3 +77,9 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+Summary (2026-11-17):
+- `src/rbl/services/cup_log.py`: extended `CupView` with defaulted bar/uncertainty/elapsed/last-insertion fields.
+- `src/rbl/gui/faraday_cup_tab.py`: populated `CupView` from `compute_convergence_bars`, `_live_uncertainty`, elapsed sample time, dwell limit, and `lbl_last_insertion.text()` in `_emit_cup_view`.
+- `src/rbl/gui/widgets/cup_panel.py`: added stacked uncertainty bar (with 25 % target mark in target mode, WARN/OK/MUTED colours) and insertion bar, plus `lbl_last_insertion` when `insertion_open` is False.
+- `tests/test_cup_panel.py`: added 5 tests covering all acceptance criteria (unit `CupView` rendering + real tab/panel rig test).
