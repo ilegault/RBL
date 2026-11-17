@@ -1,6 +1,6 @@
 # 103: Both camera views: a camera message line by Open, and Open held while opening
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
