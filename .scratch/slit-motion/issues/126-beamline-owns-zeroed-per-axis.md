@@ -1,6 +1,6 @@
 # 126: Beamline owns "zeroed", per axis, and it can turn off
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
