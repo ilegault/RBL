@@ -294,7 +294,7 @@ class TestMotorTabUnits:
     def test_default_speed_is_cps(self, motor):
         import rbl.config.hardware_config as SC
         panel = motor.axes["A"]
-        assert panel._speed_in_cps() == SC.DEFAULT_JOG_SPEED
+        assert panel._speed_in_cps() == SC.DEFAULT_SPEED_COUNTS_PER_SEC
 
     def test_speed_cps_to_mms_round_trip(self, motor):
         panel = motor.axes["A"]
@@ -302,6 +302,22 @@ class TestMotorTabUnits:
         panel.cbo_speed_unit.setCurrentText("mm/s")
         # ~1 mm/s back in cps must be ~630
         assert abs(panel._speed_in_cps() - 630) <= 2
+
+    def test_switching_speed_unit_keeps_the_slit_speed(self, qapp):
+        from rbl.gui.motor_tab import MotorTab
+        from rbl.state.beamline import Beamline
+
+        beamline = Beamline()
+        mt = MotorTab(beamline)
+        try:
+            panel = mt.axes["A"]
+            panel.spn_speed.setValue(1260)
+            panel.cbo_speed_unit.setCurrentText("mm/s")
+            assert abs(beamline.slit_speed_cps("A") - 1260) <= 1
+            panel.cbo_speed_unit.setCurrentText("cps")
+            assert abs(beamline.slit_speed_cps("A") - 1260) <= 1
+        finally:
+            mt.abort_and_close()
 
     def test_target_counts_to_mm_and_back(self, motor):
         panel = motor.axes["A"]

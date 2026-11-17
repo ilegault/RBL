@@ -77,7 +77,6 @@ SLIT_DEFAULT_STEP_MM = 0.1
 # --- Motion parameters (per spec email) --------------------------------------
 DEFAULT_SPEED_COUNTS_PER_SEC   = 1000
 DEFAULT_ACCEL_COUNTS_PER_SEC2  = 25600
-DEFAULT_JOG_SPEED              = 500   # cps
 
 # --- Automatic homing: the seek phase ----------------------------------------
 # The jog that puts an axis onto its home limit before HM runs — the "-Jog
