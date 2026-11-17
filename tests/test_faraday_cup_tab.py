@@ -3406,3 +3406,256 @@ class TestTargetUncertaintyAutomaticRetract:
         assert summary["converged_after_s"] == ""
         assert summary["counted_in_dose"] == "true"
 
+
+class TestDwellModeTabControls:
+    """Ticket 85 — Faraday Cup tab controls for dwell mode, both dwells and the target."""
+
+    def test_dwell_mode_toggle_enables_active_fields(self, qapp, tmp_path, monkeypatch):
+        from PySide6.QtWidgets import QLabel
+
+        import rbl.config.cup_settings_store as store
+
+        monkeypatch.setattr(store, "STORE_PATH", tmp_path / "cup_settings.json")
+        tab, _ = make_connected_cup_tab(qapp, tmp_path)
+
+        labels = [lbl.text() for lbl in tab.findChildren(QLabel)]
+        assert any("Fixed dwell" in t for t in labels)
+        assert any("Max dwell (target uncertainty)" in t for t in labels)
+        assert any("Target uncertainty" in t for t in labels)
+        assert any(
+            t == "Precision of each insertion's mean, not of the dose." for t in labels
+        )
+
+        # Default mode is fixed
+        assert tab.rad_dwell_fixed.text() == "Fixed dwell"
+        assert tab.rad_dwell_target.text() == "Target uncertainty"
+        assert tab.rad_dwell_fixed.isChecked() is True
+        assert tab.spn_cycle_dwell.isEnabled() is True
+        assert tab.spn_max_dwell.isEnabled() is False
+        assert tab.spn_target_uncertainty.isEnabled() is False
+
+        # Switch to target uncertainty
+        tab.rad_dwell_target.click()
+        qapp.processEvents()
+        assert tab.rad_dwell_target.isChecked() is True
+        assert tab.spn_cycle_dwell.isEnabled() is False
+        assert tab.spn_max_dwell.isEnabled() is True
+        assert tab.spn_target_uncertainty.isEnabled() is True
+
+        # Switch back to fixed dwell
+        tab.rad_dwell_fixed.click()
+        qapp.processEvents()
+        assert tab.rad_dwell_fixed.isChecked() is True
+        assert tab.spn_cycle_dwell.isEnabled() is True
+        assert tab.spn_max_dwell.isEnabled() is False
+        assert tab.spn_target_uncertainty.isEnabled() is False
+
+        tab.close()
+
+    def test_editing_max_dwell_leaves_fixed_dwell_unchanged_and_vice_versa(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        import rbl.config.cup_settings_store as store
+
+        store_file = tmp_path / "cup_settings.json"
+        monkeypatch.setattr(store, "STORE_PATH", store_file)
+        tab, _ = make_connected_cup_tab(qapp, tmp_path)
+
+        initial_fixed = tab.spn_cycle_dwell.value()
+
+        # Switch to target uncertainty and edit max dwell to 7.0
+        tab.rad_dwell_target.click()
+        qapp.processEvents()
+        tab.spn_max_dwell.setValue(7.0)
+        tab.spn_max_dwell.editingFinished.emit()
+        qapp.processEvents()
+
+        loaded, warnings = store.load_settings(store_file)
+        assert warnings == []
+        assert loaded.max_dwell_s == pytest.approx(7.0)
+        assert loaded.cycle_dwell_s == pytest.approx(initial_fixed)
+
+        # Switch back to fixed dwell and edit fixed dwell to 4.5
+        tab.rad_dwell_fixed.click()
+        qapp.processEvents()
+        tab.spn_cycle_dwell.setValue(4.5)
+        tab.spn_cycle_dwell.editingFinished.emit()
+        qapp.processEvents()
+
+        loaded, warnings = store.load_settings(store_file)
+        assert warnings == []
+        assert loaded.cycle_dwell_s == pytest.approx(4.5)
+        assert loaded.max_dwell_s == pytest.approx(7.0)
+
+        tab.close()
+
+    def test_pending_target_uncertainty_applies_at_next_insertion(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        import rbl.config.cup_settings_store as store
+        from rbl.config.cup_settings_store import CupSettings, save_settings
+        from rbl.hardware.cup_status import CupPosition
+        from rbl.snapshots import CupActuationState
+
+        store_file = tmp_path / "cup_settings.json"
+        monkeypatch.setattr(store, "STORE_PATH", store_file)
+        assert save_settings(CupSettings(
+            arm_threshold_a=0.5e-6,
+            release_threshold_a=0.25e-6,
+            settle_window_s=1.0,
+            cycle_period_s=300.0,
+            cycle_dwell_s=3.0,
+            arm_debounce_s=1.0,
+            release_interval_s=3.0,
+            target_uncertainty=0.05,
+            min_converge_samples=10,
+            dwell_mode="target_uncertainty",
+            max_dwell_s=5.0,
+        )) is True
+
+        beamline = Beamline()
+        monkeypatch.setattr(beamline, "command_cup_in", lambda: None)
+        monkeypatch.setattr(beamline, "command_cup_out", lambda: None)
+
+        cup_log = CupLog(test_root=tmp_path)
+        tab = FaradayCupTab(beamline=beamline, cup_log=cup_log)
+        feed = CupFeed(tab, beamline=beamline)
+        sw = cup_log.open_test(datetime(2026, 10, 8, 9, 0, 0))
+        tab.show()
+        qapp.processEvents()
+
+        def act(confirmed, commanded, t):
+            tab.on_cup_actuation_state(CupActuationState(
+                connected=True,
+                commanded=commanded,
+                confirmed=confirmed,
+                auto_mode=True,
+                stale=False,
+                last_transition_t=t,
+                t=t,
+            ))
+            qapp.processEvents()
+
+        tab.spn_k.setValue(1e-15)
+        tab.spn_charge_state.setValue(1)
+        tab.on_patch_dimensions_changed(10.0, 10.0)
+        act(CupPosition.OUT, CupPosition.OUT, 0.0)
+        tab.btn_cycle_arm.click()
+        qapp.processEvents()
+
+        # First insertion at t=300.0
+        act(CupPosition.OUT, CupPosition.OUT, 300.0)
+        act(CupPosition.IN, CupPosition.IN, 300.2)
+        feed.send_reading(1.0e-6, timestamp=300.2, t_host=300.2)
+        qapp.processEvents()
+
+        # Change target uncertainty mid-insertion to 10.0 %
+        tab.spn_target_uncertainty.setValue(10.0)
+        tab.spn_target_uncertainty.editingFinished.emit()
+        qapp.processEvents()
+        assert tab.lbl_cycle_pending.isVisible() is True
+        assert "applies at next insertion" in tab.lbl_cycle_pending.text()
+
+        # Retract first insertion at max_dwell (305.0)
+        act(CupPosition.IN, CupPosition.IN, 305.0)
+        act(CupPosition.OUT, CupPosition.OUT, 305.2)
+        feed.send_reading(0.0, timestamp=305.2, t_host=305.2)
+        qapp.processEvents()
+
+        # Second insertion at t=600.0 -> pending target applies
+        act(CupPosition.OUT, CupPosition.OUT, 600.0)
+        assert tab.lbl_cycle_pending.isVisible() is False
+        act(CupPosition.IN, CupPosition.IN, 600.2)
+        feed.send_reading(1.0e-6, timestamp=600.2, t_host=600.2)
+        qapp.processEvents()
+        act(CupPosition.IN, CupPosition.IN, 605.0)
+        act(CupPosition.OUT, CupPosition.OUT, 605.2)
+        feed.send_reading(0.0, timestamp=605.2, t_host=605.2)
+        qapp.processEvents()
+
+        path = sw.csv_path
+        sw.close()
+        tab.close()
+
+        with open(path, encoding="utf-8") as f:
+            rows = list(csv.DictReader(
+                line for line in f.read().splitlines() if not line.startswith("#")
+            ))
+        summaries = [r for r in rows if r["record_type"] == "insertion_summary"]
+        assert len(summaries) == 2
+        assert float(summaries[0]["target_uncertainty"]) == pytest.approx(0.05)
+        assert float(summaries[1]["target_uncertainty"]) == pytest.approx(0.10)
+
+    def test_dwell_mode_max_dwell_and_target_write_settings_changed_rows(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        import rbl.config.cup_settings_store as store
+
+        monkeypatch.setattr(store, "STORE_PATH", tmp_path / "cup_settings.json")
+        beamline = Beamline()
+        cup_log = CupLog(test_root=tmp_path)
+        tab = FaradayCupTab(beamline=beamline, cup_log=cup_log)
+        sw = cup_log.open_test(datetime(2026, 10, 8, 9, 0, 0))
+        tab.show()
+        qapp.processEvents()
+
+        tab.rad_dwell_target.click()
+        qapp.processEvents()
+        tab.spn_max_dwell.setValue(8.0)
+        tab.spn_max_dwell.editingFinished.emit()
+        qapp.processEvents()
+        tab.spn_target_uncertainty.setValue(2.5)
+        tab.spn_target_uncertainty.editingFinished.emit()
+        qapp.processEvents()
+
+        path = sw.csv_path
+        sw.close()
+        tab.close()
+
+        with open(path, encoding="utf-8") as f:
+            rows = list(csv.DictReader(
+                line for line in f.read().splitlines() if not line.startswith("#")
+            ))
+        changed = [r for r in rows if r["record_type"] == "settings_changed"]
+        details = [r["details"] for r in changed]
+        assert any(
+            "key=dwell_mode" in d and "fixed" in d and "target_uncertainty" in d
+            for d in details
+        )
+        assert any(
+            "key=max_dwell_s" in d and "5.00000000e+00" in d and "8.00000000e+00" in d
+            for d in details
+        )
+        assert any(
+            "key=target_uncertainty" in d
+            and "5.00000000e-02" in d
+            and "2.50000000e-02" in d
+            for d in details
+        )
+
+    def test_new_controls_stay_enabled_when_acquisition_run_open(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        import rbl.config.cup_settings_store as store
+
+        monkeypatch.setattr(store, "STORE_PATH", tmp_path / "cup_settings.json")
+        tab, _ = make_connected_cup_tab(qapp, tmp_path)
+
+        tab.btn_force_start.click()
+        qapp.processEvents()
+        assert tab.acquisition.is_acquiring is True
+
+        # Mode radios and fixed dwell stay enabled while acquiring
+        assert tab.rad_dwell_fixed.isEnabled() is True
+        assert tab.rad_dwell_target.isEnabled() is True
+        assert tab.spn_cycle_dwell.isEnabled() is True
+
+        # Switching to target uncertainty while acquiring keeps max dwell and target enabled
+        tab.rad_dwell_target.click()
+        qapp.processEvents()
+        assert tab.spn_max_dwell.isEnabled() is True
+        assert tab.spn_target_uncertainty.isEnabled() is True
+
+        tab.close()
+
+

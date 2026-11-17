@@ -1,6 +1,6 @@
 # 85: Faraday Cup tab controls for dwell mode, both dwells and the target
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -36,17 +36,17 @@ The operator switches mode and edits the target and both dwells from the Faraday
 
 ## Acceptance criteria
 
-- [ ] A tab test asserts that selecting `"Target uncertainty"` enables the max dwell and
+- [x] A tab test asserts that selecting `"Target uncertainty"` enables the max dwell and
       target fields and disables the fixed dwell field, and the reverse for fixed.
-- [ ] A tab test asserts editing max dwell to 7.0 leaves `cycle_dwell_s` unchanged in the
+- [x] A tab test asserts editing max dwell to 7.0 leaves `cycle_dwell_s` unchanged in the
       saved settings file (temp path), and vice versa.
-- [ ] A tab test with automatic insertion running asserts changing the target during an
+- [x] A tab test with automatic insertion running asserts changing the target during an
       insertion leaves that insertion's summary row with the old target and the next
       insertion's row with the new one; `lbl_cycle_pending` shows the pending text in
       between.
-- [ ] A tab test asserts each of the three changes writes one settings-change row with
+- [x] A tab test asserts each of the three changes writes one settings-change row with
       old and new values.
-- [ ] A tab test asserts the three new controls stay enabled while an acquisition run is
+- [x] A tab test asserts the three new controls stay enabled while an acquisition run is
       open (they are not under the settings lock).
 
 May fake: instrument feeds, modal dialogs, the clock. Must be real: the tab, scheduler,
@@ -64,3 +64,5 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+- **2026-11-17**: Implemented dwell mode toggle (`Fixed dwell` / `Target uncertainty`), relabelled `Fixed dwell` field, added `Max dwell (target uncertainty)` and `Target uncertainty` (%) fields with help text, pending change queueing (including `_pending_target_uncertainty` applied on `CycleInsert`/`arm`), and `settings_changed` logging for `dwell_mode`, `max_dwell_s`, and `target_uncertainty` in `src/rbl/gui/faraday_cup_tab.py` and `src/rbl/services/cup_session_writer.py`. Verified by `TestDwellModeTabControls` in `tests/test_faraday_cup_tab.py` (5/5 passed), 312 cup/layering tests passed, `ruff check .` passed, `check_tests_first.py` passed, and `type_gate.py` passed (0 hard-layer errors, ratchet 139 unchanged). Note: full `-n auto` pytest run hit a pre-existing Windows access violation in `tests/test_screenshot_overview.py` during Python 3.14 GC in `matplotlib/cbook.py` (unrelated to this ticket).

@@ -108,6 +108,9 @@ ALLOWED_SETTINGS_CHANGE_KEYS: frozenset[str] = frozenset({
     "settle_window_s",
     "cycle_period_s",
     "cycle_dwell_s",
+    "dwell_mode",
+    "max_dwell_s",
+    "target_uncertainty",
 })
 
 
@@ -796,8 +799,8 @@ class CupSessionWriter:
         self,
         t_host: float,
         key: str,
-        old_value: float,
-        new_value: float,
+        old_value: float | str,
+        new_value: float | str,
     ) -> None:
         """Write a marker recording that an acquisition setting changed mid-session.
 
@@ -815,10 +818,9 @@ class CupSessionWriter:
                 f"Allowed keys: {sorted(ALLOWED_SETTINGS_CHANGE_KEYS)}"
             )
 
-        det = (
-            f"key={key}, old_value={_safe_float(old_value)}, "
-            f"new_value={_safe_float(new_value)}"
-        )
+        old_str = old_value if isinstance(old_value, str) else _safe_float(old_value)
+        new_str = new_value if isinstance(new_value, str) else _safe_float(new_value)
+        det = f"key={key}, old_value={old_str}, new_value={new_str}"
         row = {
             "record_type": "settings_changed",
             "iso_timestamp": _now_iso(),
