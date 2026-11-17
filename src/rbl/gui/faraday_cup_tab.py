@@ -261,6 +261,7 @@ from rbl.hardware.dose_model import (
     DoseTotals,
     InsertionCurrentStats,
     InsertionUncertainty,
+    compute_convergence_bars,
     compute_insertion_uncertainty,
     patch_area_cm2,
     uncertainty_reason_text,
@@ -1126,14 +1127,72 @@ class FaradayCupTab(QWidget):
         area = self._area_cm2
         k = self.displacement_coeff
         has_fluence = cs > 0 and area > 0.0
+        insertion_open = bool(self.acquisition.is_acquiring)
+        counted = self._resolve_insertion_origin() == "automatic"
+        dwell_mode = self.cycle.dwell_mode if counted else self._settings.dwell_mode
+        target = self._settings.target_uncertainty
+        drain_fraction: float | None = None
+        uncertainty: float | None = None
+        reason_text: str | None = None
+        n = 0
+        n_needed: int | None = None
+        time_left_s: float | None = None
+        converged = False
+        elapsed_s = 0.0
+        dwell_limit_s: float | None = None
+        if insertion_open:
+            if self._insertion_samples and not math.isnan(self._current_run_start_t):
+                elapsed_s = max(
+                    0.0, self._insertion_samples[-1][0] - self._current_run_start_t
+                )
+            if dwell_mode == "fixed":
+                dwell_limit_s = (
+                    self.cycle.dwell_s if counted else self._settings.cycle_dwell_s
+                )
+            elif not counted and getattr(
+                self._settings, "manual_no_time_limit", False
+            ):
+                dwell_limit_s = None
+            else:
+                dwell_limit_s = (
+                    self.cycle.max_dwell_s if counted else self._settings.max_dwell_s
+                )
+            if self._live_uncertainty is not None:
+                unc = self._live_uncertainty
+                bars = compute_convergence_bars(
+                    unc, target, self._settings.min_converge_samples
+                )
+                drain_fraction = bars.drain_fraction
+                uncertainty = unc.uncertainty
+                if unc.reason is not None:
+                    reason_text = uncertainty_reason_text(
+                        unc.reason, unc.n, self._settings.min_converge_samples
+                    )
+                n = bars.n
+                n_needed = bars.n_needed
+                time_left_s = bars.time_left_s
+                converged = unc.converged
         view = CupView(
             logging=self.cup_log.writer is not None,
             log_path=self.cup_log.path,
-            run_open=bool(self.acquisition.is_acquiring),
+            run_open=insertion_open,
             automatic_running=bool(self.cycle.is_armed),
             charge_c=q,
             fluence=self._accumulator.fluence(cs, area) if has_fluence else None,
             dpa=self._accumulator.dpa(cs, area, k) if has_fluence and k > 0.0 else None,
+            insertion_open=insertion_open,
+            dwell_mode=dwell_mode,
+            drain_fraction=drain_fraction,
+            uncertainty=uncertainty,
+            target=target,
+            reason_text=reason_text,
+            n=n,
+            n_needed=n_needed,
+            time_left_s=time_left_s,
+            converged=converged,
+            elapsed_s=elapsed_s,
+            dwell_limit_s=dwell_limit_s,
+            last_insertion_text=self.lbl_last_insertion.text() or None,
         )
         if view == self._last_cup_view:
             return

@@ -1,6 +1,6 @@
 # 87: Overview cup panel: uncertainty and insertion bars
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -43,18 +43,18 @@ arithmetic.
 
 ## Acceptance criteria
 
-- [ ] `tests/test_cup_panel.py`: given a `CupView` with `drain_fraction=0.5`,
+- [x] `tests/test_cup_panel.py`: given a `CupView` with `drain_fraction=0.5`,
       `uncertainty=0.10`, `target=0.05`, target mode, the uncertainty bar's value is
       50 % of its range, the target mark is visible, and the text contains `"10.0 %"`
       and `"5 %"`.
-- [ ] Given `converged=True` the bar uses the OK colour; given `reason_text="no valid
+- [x] Given `converged=True` the bar uses the OK colour; given `reason_text="no valid
       samples"` it shows that text and the grey colour; in fixed mode the target mark is
       hidden.
-- [ ] Given `dwell_limit_s=None` and `elapsed_s=12.3` the insertion bar text is
+- [x] Given `dwell_limit_s=None` and `elapsed_s=12.3` the insertion bar text is
       `"12.3 s"`.
-- [ ] Given `insertion_open=False` and `last_insertion_text="last: 4.2 % · converged ·
+- [x] Given `insertion_open=False` and `last_insertion_text="last: 4.2 % · converged ·
       n = 23 · 1.8 s"`, both bars are hidden and that text is shown.
-- [ ] A rig test (prior art: `test_charge_text_matches_the_faraday_tab_after_an_insertion_closes`)
+- [x] A rig test (prior art: `test_charge_text_matches_the_faraday_tab_after_an_insertion_closes`)
       feeds a converging insertion through the real tab and asserts the panel's
       uncertainty text matches the tab's `lbl_uncertainty` percentage.
 
@@ -72,3 +72,9 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+Summary (2026-11-17):
+- `src/rbl/services/cup_log.py`: extended `CupView` with defaulted bar/uncertainty/elapsed/last-insertion fields.
+- `src/rbl/gui/faraday_cup_tab.py`: populated `CupView` from `compute_convergence_bars`, `_live_uncertainty`, elapsed sample time, dwell limit, and `lbl_last_insertion.text()` in `_emit_cup_view`.
+- `src/rbl/gui/widgets/cup_panel.py`: added stacked uncertainty bar (with 25 % target mark in target mode, WARN/OK/MUTED colours) and insertion bar, plus `lbl_last_insertion` when `insertion_open` is False.
+- `tests/test_cup_panel.py`: added 5 tests covering all acceptance criteria (unit `CupView` rendering + real tab/panel rig test).

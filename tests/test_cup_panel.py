@@ -250,3 +250,138 @@ def test_main_window_wires_the_overview_panel_to_the_faraday_tab(qapp):
     finally:
         win.close()
         qapp.processEvents()
+
+
+def test_uncertainty_bar_fills_to_drain_fraction_and_shows_target_mark_in_target_mode(qapp):
+    panel = CupPanel(CupLog())
+    panel.show()
+    panel.on_cup_view(CupView(
+        logging=False,
+        log_path=None,
+        run_open=True,
+        automatic_running=True,
+        charge_c=0.0,
+        fluence=None,
+        dpa=None,
+        insertion_open=True,
+        dwell_mode="target_uncertainty",
+        drain_fraction=0.5,
+        uncertainty=0.10,
+        target=0.05,
+        n=8,
+        n_needed=16,
+        time_left_s=1.2,
+        converged=False,
+        elapsed_s=2.0,
+        dwell_limit_s=5.0,
+    ))
+    qapp.processEvents()
+    try:
+        bar = panel.uncertainty_bar
+        assert bar.value() / bar.maximum() == pytest.approx(0.5)
+        assert panel.uncertainty_target_mark.isVisible()
+        assert "10.0 %" in panel.lbl_uncertainty_bar.text()
+        assert "5 %" in panel.lbl_uncertainty_bar.text()
+        assert theme.WARN in bar.styleSheet()
+    finally:
+        panel.close()
+
+
+def test_uncertainty_bar_colours_reason_and_fixed_mode_target_mark(qapp):
+    panel = CupPanel(CupLog())
+    panel.show()
+    try:
+        panel.on_cup_view(CupView(
+            logging=False, log_path=None, run_open=True, automatic_running=True,
+            charge_c=0.0, fluence=None, dpa=None,
+            insertion_open=True, dwell_mode="target_uncertainty",
+            drain_fraction=0.2, uncertainty=0.04, target=0.05,
+            n=12, n_needed=12, time_left_s=0.0, converged=True,
+            elapsed_s=2.5, dwell_limit_s=5.0,
+        ))
+        qapp.processEvents()
+        assert theme.OK in panel.uncertainty_bar.styleSheet()
+
+        panel.on_cup_view(CupView(
+            logging=False, log_path=None, run_open=True, automatic_running=True,
+            charge_c=0.0, fluence=None, dpa=None,
+            insertion_open=True, dwell_mode="target_uncertainty",
+            drain_fraction=None, uncertainty=None, target=0.05,
+            reason_text="no valid samples", n=0, converged=False,
+            elapsed_s=1.5, dwell_limit_s=5.0,
+        ))
+        qapp.processEvents()
+        assert panel.lbl_uncertainty_bar.text() == "no valid samples"
+        assert theme.MUTED in panel.uncertainty_bar.styleSheet()
+
+        panel.on_cup_view(CupView(
+            logging=False, log_path=None, run_open=True, automatic_running=True,
+            charge_c=0.0, fluence=None, dpa=None,
+            insertion_open=True, dwell_mode="fixed",
+            drain_fraction=0.2, uncertainty=0.04, target=0.05,
+            n=12, converged=True,
+            elapsed_s=1.5, dwell_limit_s=3.0,
+        ))
+        qapp.processEvents()
+        assert not panel.uncertainty_target_mark.isVisible()
+        assert theme.OK not in panel.uncertainty_bar.styleSheet()
+        assert "→" not in panel.lbl_uncertainty_bar.text()
+    finally:
+        panel.close()
+
+
+def test_insertion_bar_with_no_dwell_limit_shows_elapsed_only(qapp):
+    panel = CupPanel(CupLog())
+    panel.show()
+    try:
+        panel.on_cup_view(CupView(
+            logging=False, log_path=None, run_open=True, automatic_running=False,
+            charge_c=0.0, fluence=None, dpa=None,
+            insertion_open=True, dwell_mode="target_uncertainty",
+            elapsed_s=12.3, dwell_limit_s=None,
+        ))
+        qapp.processEvents()
+        assert panel.lbl_insertion_bar.text() == "12.3 s"
+        assert panel.insertion_bar.value() == 0
+    finally:
+        panel.close()
+
+
+def test_closed_insertion_hides_bars_and_shows_last_insertion_text(qapp):
+    panel = CupPanel(CupLog())
+    panel.show()
+    try:
+        summary = "last: 4.2 % · converged · n = 23 · 1.8 s"
+        panel.on_cup_view(CupView(
+            logging=False, log_path=None, run_open=False, automatic_running=False,
+            charge_c=0.0, fluence=None, dpa=None,
+            insertion_open=False, last_insertion_text=summary,
+        ))
+        qapp.processEvents()
+        assert panel.uncertainty_bar.isHidden()
+        assert panel.insertion_bar.isHidden()
+        assert not panel.lbl_last_insertion.isHidden()
+        assert panel.lbl_last_insertion.text() == summary
+    finally:
+        panel.close()
+
+
+def test_rig_converging_insertion_matches_tabs_uncertainty_percentage(rig, qapp):
+    tab, panel, _, beamline, _ = rig
+    feed = CupFeed(tab, beamline=beamline)
+    tab.on_cup_actuation_state(_actuation(0.0, CupPosition.IN))
+    feed.send_reading(0.0, timestamp=0.0, t_host=0.0)
+    tab.btn_force_start.click()
+    qapp.processEvents()
+
+    # Feed >10 post-settle samples with small variation so uncertainty converges cleanly.
+    for i in range(15):
+        t = 1.5 + i * 0.1
+        current = 2.0e-6 + (0.05e-6 if i % 2 == 0 else -0.05e-6)
+        feed.send_reading(current, timestamp=t, t_host=t)
+    qapp.processEvents()
+
+    assert not panel.uncertainty_bar.isHidden()
+    tab_pct = tab.lbl_uncertainty.text().split(" (")[0]
+    assert tab_pct.endswith("%")
+    assert tab_pct in panel.lbl_uncertainty_bar.text()
