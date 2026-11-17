@@ -467,3 +467,9 @@ class TestMultiAxisMotion:
         g = make_galil()
         g.stop("ABCD")
         assert g.sock.sent == ["ST ABCD"]
+
+
+def test_move_absolute_at_sends_sp_then_pa_then_bg():
+    g = make_galil()
+    g.move_absolute_at("C", 3653, 750)
+    assert g.sock.sent == ["SP ,,750", "PA ,,3653", "BG C"]

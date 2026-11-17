@@ -15,6 +15,16 @@ without ever appearing in the console and without moving the Stepper Motors
 tab's Target box — the operator's own action was invisible on the screen that
 exists to show it. Both signals go out from `move_slit()`, the single path to
 the controller, so neither screen can miss a command the other made.
+
+WHY EVERY MOVE SENDS ITS SPEED
+------------------------------
+The Galil keeps ONE speed register per axis (SP), shared by jog, PA/PR moves and
+HM's first stage. A move that sends only PA + BG therefore runs at whatever the
+last jog or home left there: jog fast on the Stepper Motors tab, then move from
+the Overview and the slit crawls (or the reverse). Every move through Beamline
+now sends `SP <slit speed>` immediately before `PA` (`move_axis_counts`), so no
+move relies on speed state left on the controller by an earlier jog, home or
+connect.
 """
 from rbl.config import hardware_config as SC
 from rbl.hardware.galil_driver import GalilController
@@ -33,6 +43,25 @@ class MotorControlMixin:
         # Last-seen slit edges (SIGNED mm), cached so reconstruct_beam() can be
         # called on demand without re-deriving them from a poll.
         self._slit_edges_mm: dict[str, float] = {}
+        # Per-axis slit speed (counts/s) sent before every move; see the
+        # module docstring, WHY EVERY MOVE SENDS ITS SPEED.
+        self._slit_speed_cps: dict[str, int] = {
+            a: SC.DEFAULT_SPEED_COUNTS_PER_SEC for a in SC.AXIS_LETTERS}
+
+    def slit_speed_cps(self, axis_letter: str) -> int:
+        return self._slit_speed_cps[axis_letter]
+
+    def set_slit_speed_cps(self, axis_letter: str, cps: int) -> None:
+        if cps < 1:
+            raise ValueError(f"slit speed must be >= 1 count/s, got {cps}")
+        self._slit_speed_cps[axis_letter] = int(cps)
+
+    def move_axis_counts(self, axis_letter: str, counts: int) -> bool:
+        """Send one absolute move at the axis's slit speed. Driver exceptions
+        propagate: callers handle them."""
+        self.galil.move_absolute_at(axis_letter, counts,
+                                    self.slit_speed_cps(axis_letter))
+        return True
 
     # ---- Ingestion ------------------------------------------------------------
 
@@ -114,12 +143,12 @@ class MotorControlMixin:
         # Motors tab, which has always worked in counts.
         counts = SC.mm_to_counts(axis_letter, mm)
         reachable_mm = SC.counts_to_mm(axis_letter, counts)
-        self.log_motor(f"> PA {axis_letter}={counts} ({reachable_mm:+.3f} mm) ; "
-                       f"BG {axis_letter}   [{slit}]")
+        speed = self.slit_speed_cps(axis_letter)
+        self.log_motor(f"> SP {axis_letter}={speed} ; PA {axis_letter}={counts} "
+                       f"({reachable_mm:+.3f} mm) ; BG {axis_letter}   [{slit}]")
         self.note_slit_target(slit, reachable_mm)
         try:
-            self.galil.move_absolute(axis_letter, counts)
-            return True
+            return self.move_axis_counts(axis_letter, counts)
         except Exception as e:
             self.log_motor(f"! {slit}: {e}")
             self.command_failed.emit("motors", f"{slit}: {e}")
