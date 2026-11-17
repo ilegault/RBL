@@ -3262,3 +3262,147 @@ class TestInsertionUncertaintyReadout:
         assert text.endswith("% (n = 12)")
         assert list(tmp_path.rglob("*.csv")) == []
         tab.close()
+
+
+class TestTargetUncertaintyAutomaticRetract:
+    """Ticket 84 — automatic insertions retract on convergence or max_dwell in target mode."""
+
+    STEADY = [
+        1.00e-6, 1.04e-6, 0.97e-6, 1.02e-6, 0.99e-6, 1.05e-6,
+        0.96e-6, 1.01e-6, 1.03e-6, 0.98e-6, 1.02e-6, 1.00e-6,
+    ]
+    # Alternates 0.5 uA and 2.5 uA -> relative SE stays well above 5 %
+    NOISY = [
+        0.5e-6, 2.5e-6, 0.5e-6, 2.5e-6, 0.5e-6, 2.5e-6,
+        0.5e-6, 2.5e-6, 0.5e-6, 2.5e-6, 0.5e-6, 2.5e-6,
+    ]
+
+    def run_automatic_insertion(self, qapp, tmp_path, monkeypatch, currents):
+        import rbl.config.cup_settings_store as store
+        from rbl.config.cup_settings_store import CupSettings, save_settings
+        from rbl.hardware.cup_status import CupPosition
+        from rbl.snapshots import CupActuationState
+
+        store_file = tmp_path / "cup_settings.json"
+        monkeypatch.setattr(store, "STORE_PATH", store_file)
+        assert save_settings(CupSettings(
+            arm_threshold_a=0.5e-6,
+            release_threshold_a=0.25e-6,
+            settle_window_s=1.0,
+            cycle_period_s=300.0,
+            cycle_dwell_s=3.0,
+            arm_debounce_s=1.0,
+            release_interval_s=3.0,
+            target_uncertainty=0.05,
+            min_converge_samples=10,
+            dwell_mode="target_uncertainty",
+            max_dwell_s=5.0,
+        )) is True
+
+        beamline = Beamline()
+        commands: list[tuple[str, float]] = []
+        current_t = [0.0]
+        monkeypatch.setattr(
+            beamline, "command_cup_in", lambda: commands.append(("IN", current_t[0]))
+        )
+        monkeypatch.setattr(
+            beamline, "command_cup_out", lambda: commands.append(("OUT", current_t[0]))
+        )
+
+        cup_log = CupLog(test_root=tmp_path)
+        tab = FaradayCupTab(beamline=beamline, cup_log=cup_log)
+        feed = CupFeed(tab, beamline=beamline)
+        sw = cup_log.open_test(datetime(2026, 10, 8, 9, 0, 0))
+        tab.show()
+        qapp.processEvents()
+
+        def act(confirmed, commanded, t):
+            current_t[0] = t
+            tab.on_cup_actuation_state(CupActuationState(
+                connected=True,
+                commanded=commanded,
+                confirmed=confirmed,
+                auto_mode=True,
+                stale=False,
+                last_transition_t=t,
+                t=t,
+            ))
+            qapp.processEvents()
+
+        # Arm at t=0.0, advance to period boundary t=300.0 -> CycleInsert
+        tab.spn_k.setValue(1e-15)
+        tab.spn_charge_state.setValue(1)
+        tab.on_patch_dimensions_changed(10.0, 10.0)
+        act(CupPosition.OUT, CupPosition.OUT, 0.0)
+        tab.btn_cycle_arm.click()
+        qapp.processEvents()
+        assert tab.cycle.is_armed
+        act(CupPosition.OUT, CupPosition.OUT, 300.0)
+        assert ("IN", 300.0) in commands
+
+        # Cup confirms IN at t=300.2 -> opens run
+        act(CupPosition.IN, CupPosition.IN, 300.2)
+        feed.send_reading(1.0e-6, timestamp=300.2, t_host=300.2)
+        qapp.processEvents()
+
+        # Post-settle samples starting at t=301.3 (settle_window_s = 1.0 -> > 301.2)
+        for i, val in enumerate(currents):
+            t_s = 301.3 + 0.1 * i
+            feed.send_reading(val, timestamp=t_s, t_host=t_s)
+            qapp.processEvents()
+            act(CupPosition.IN, CupPosition.IN, t_s)
+            if any(cmd == "OUT" for cmd, _ in commands):
+                break
+
+        # If not yet retracted by samples, advance to max_dwell (300.0 + 5.0 = 305.0)
+        if not any(cmd == "OUT" for cmd, _ in commands):
+            act(CupPosition.IN, CupPosition.IN, 305.0)
+
+        out_cmds = [t for cmd, t in commands if cmd == "OUT"]
+        assert len(out_cmds) == 1
+
+        # Cup confirms OUT -> closes run
+        t_out = out_cmds[0] + 0.2
+        act(CupPosition.OUT, CupPosition.OUT, t_out)
+        feed.send_reading(0.0, timestamp=t_out, t_host=t_out)
+        qapp.processEvents()
+
+        path = sw.csv_path
+        sw.close()
+        tab.close()
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+        header_lines = [line for line in text.splitlines() if line.startswith("#")]
+        rows = list(csv.DictReader(line for line in text.splitlines() if not line.startswith("#")))
+        summary = [r for r in rows if r["record_type"] == "insertion_summary"][-1]
+        return out_cmds[0], header_lines, summary
+
+    def test_converging_feed_retracts_before_max_dwell_and_counts(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        t_out, header_lines, summary = self.run_automatic_insertion(
+            qapp, tmp_path, monkeypatch, self.STEADY
+        )
+        assert t_out < 305.0
+        assert summary["dwell_mode"] == "target_uncertainty"
+        assert summary["end_reason"] == "converged"
+        assert summary["converged_after_s"] != ""
+        assert float(summary["converged_after_s"]) > 0.0
+        assert summary["counted_in_dose"] == "true"
+        assert float(summary["target_uncertainty"]) == pytest.approx(0.05)
+        assert float(summary["max_dwell_s"]) == pytest.approx(5.0)
+        header_text = "\n".join(header_lines)
+        assert "dwell_mode=target_uncertainty" in header_text
+        assert "target_uncertainty=" in header_text
+        assert "max_dwell=" in header_text
+
+    def test_noisy_feed_retracts_at_max_dwell_and_still_counts(self, qapp, tmp_path, monkeypatch):
+        t_out, _, summary = self.run_automatic_insertion(
+            qapp, tmp_path, monkeypatch, self.NOISY
+        )
+        assert t_out == pytest.approx(305.0)
+        assert summary["dwell_mode"] == "target_uncertainty"
+        assert summary["end_reason"] == "max_dwell"
+        assert summary["converged_after_s"] == ""
+        assert summary["counted_in_dose"] == "true"
+

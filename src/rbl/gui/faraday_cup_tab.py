@@ -370,6 +370,8 @@ class FaradayCupTab(QWidget):
         self.cycle = SamplingCycleScheduler(
             period_s=loaded_settings.cycle_period_s,
             dwell_s=loaded_settings.cycle_dwell_s,
+            dwell_mode=loaded_settings.dwell_mode,
+            max_dwell_s=loaded_settings.max_dwell_s,
         )
         self.cycle.set_period(loaded_settings.cycle_period_s)
         self.cycle.set_dwell(loaded_settings.cycle_dwell_s)
@@ -398,8 +400,9 @@ class FaradayCupTab(QWidget):
         # log open (ADR 0002 B3). Cleared when a run opens; (t, current or None).
         self._insertion_samples: list[tuple[float, float | None]] = []
         self._live_uncertainty: InsertionUncertainty | None = None
+        self._converged_after_s: float | None = None
         # Why the insertion in progress is ending, when something other than the dwell
-        # is doing it: "operator" or "fault". None means the dwell elapsed.
+        # is doing it: "operator", "fault", "converged", or "max_dwell". None means dwell_elapsed.
         self._end_reason_hint: str | None = None
         self._confirmed_in_t: float = float("nan")
         self._confirmed_out_t: float = float("nan")
@@ -1050,7 +1053,7 @@ class FaradayCupTab(QWidget):
 
     # ── Cup log (spec C2) ─────────────────────────────────────────────────────
 
-    def _writer_settings(self) -> dict[str, float]:
+    def _writer_settings(self) -> dict[str, object]:
         """Constructor settings for a cup log that is about to open.
 
         A header that reports a different number than the detector actually used
@@ -1066,6 +1069,9 @@ class FaradayCupTab(QWidget):
             "cycle_period_s": self.cycle.period_s,
             "cycle_dwell_s": self.cycle.dwell_s,
             "min_converge_samples": self._settings.min_converge_samples,
+            "dwell_mode": self.cycle.dwell_mode,
+            "target_uncertainty": self._settings.target_uncertainty,
+            "max_dwell_s": self.cycle.max_dwell_s,
         }
 
     def _on_cup_log_opened(self, path: str, kind: str) -> None:
@@ -1201,6 +1207,7 @@ class FaradayCupTab(QWidget):
         """A run just opened: start a fresh sample list and forget the last end reason."""
         self._insertion_samples = []
         self._live_uncertainty = None
+        self._converged_after_s = None
         self._end_reason_hint = None
 
     def _resolve_end_reason(self) -> str:
@@ -1252,8 +1259,12 @@ class FaradayCupTab(QWidget):
             f"last: {self._uncertainty_percent_or_reason(unc)} · {end_reason}"
             f" · n = {unc.n} · {dwell:.1f} s"
         )
+        mode = self.cycle.dwell_mode if counted else self._settings.dwell_mode
+        target_mode = mode == "target_uncertainty"
+        converged_after_s = self._converged_after_s if target_mode else None
         self._insertion_samples = []
         self._live_uncertainty = None
+        self._converged_after_s = None
         self._end_reason_hint = None
         writer = self.cup_log.writer
         if writer is not None:
@@ -1277,11 +1288,14 @@ class FaradayCupTab(QWidget):
                 origin=origin,
                 counted_in_dose=counted,
                 total_beam_on_s=self._accumulator.total_beam_on_s,
-                dwell_mode="fixed",
+                dwell_mode=mode,
+                target_uncertainty=self._settings.target_uncertainty if target_mode else None,
                 min_converge_samples=self._settings.min_converge_samples,
+                max_dwell_s=self.cycle.max_dwell_s if target_mode else None,
                 insertion_uncertainty=unc.uncertainty,
                 uncertainty_reason=unc.reason.value if unc.reason is not None else "",
                 end_reason=end_reason,
+                converged_after_s=converged_after_s,
             )
         self._last_commanded_in_t = None
         self._current_run_start_t = float("nan")
@@ -1567,7 +1581,12 @@ class FaradayCupTab(QWidget):
             self._insertion_samples.append(
                 (t_sample, state.current if usable else None)
             )
-            self._live_uncertainty = self._insertion_uncertainty()
+            unc = self._insertion_uncertainty()
+            self._live_uncertainty = unc
+            if unc.converged and self._converged_after_s is None:
+                self._converged_after_s = unc.post_settle_elapsed_s
+                if self._resolve_insertion_origin() == "automatic":
+                    self.cycle.notify_converged(t_sample)
             run_id = self.acquisition.current_run_id or 1
             writer = self.cup_log.writer
             if writer is not None:
@@ -2108,6 +2127,16 @@ class FaradayCupTab(QWidget):
             release_interval_s=self._settings.release_interval_s,
             target_uncertainty=self._settings.target_uncertainty,
             min_converge_samples=self._settings.min_converge_samples,
+            dwell_mode=(
+                self.cycle.pending_dwell_mode
+                if self.cycle.pending_dwell_mode is not None
+                else self.cycle.dwell_mode
+            ),
+            max_dwell_s=(
+                self.cycle.pending_max_dwell_s
+                if self.cycle.pending_max_dwell_s is not None
+                else self.cycle.max_dwell_s
+            ),
         )
         ok = cup_settings_store.save_settings(settings)
         if not ok:
@@ -2169,7 +2198,8 @@ class FaradayCupTab(QWidget):
                     self.beamline.command_cup_in()
 
         elif isinstance(result, CycleRetract):
-            # Dwell expired — command cup OUT
+            # Dwell expired (fixed dwell, converged, or max_dwell) — command cup OUT
+            self._end_reason_hint = result.reason
             if not self._move_in_flight and self._actuation_connected:
                 self._start_move(CupPosition.OUT)
                 if self.beamline is not None:
