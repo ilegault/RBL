@@ -144,6 +144,11 @@ class TestReads:
         g = make_galil({"MG _RPB": "100.7"})
         assert g.get_position("B") == 101
 
+    def test_get_stop_code_reads_mg_sc(self):
+        g = make_galil({"MG _SCB": "10.0000"})
+        assert g.get_stop_code("B") == 10
+        assert "MG _SCB" in g.sock.sent
+
     def test_is_moving_true(self):
         g = make_galil({"MG _BGA": "1.0000"})
         assert g.is_moving("A") is True

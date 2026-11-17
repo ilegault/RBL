@@ -26,6 +26,17 @@ enough to run out the pass timeout. So the working procedure has always been:
 jog the axis down onto the limit by hand first, THEN press Home. Two gestures
 per axis, eight for a set of slits, every time the program starts.
 
+A PASS IS ACCEPTED ONLY ON STOP CODE 10, AND THE SEEK ONLY ON THE HOME SWITCH
+-----------------------------------------------------------------------------
+Nothing used to check WHY a pass stopped. A pass that ran into the reverse
+limit also ends with the axis at rest, `wait_idle` returned True, and DP=0
+put zero on the limit without a word; the seek likewise counted the reverse
+limit as "home reached". A wrong zero is worse than a failed home, so after
+each pass the routine reads the Galil's stop code (`_SC`) and anything other
+than `HOME_STOP_CODE` (10, "stopped after HM/FI") fails the run with no zero
+defined. The seek arrives on the home switch only; meeting the reverse limit
+first is a failure that points at the switch and its cable.
+
 (HM picks its own stage-1 DIRECTION from the initial state of the home input,
 so the seek below is not steering it — the seek exists to shorten stage 1, not
 to aim it.)
@@ -152,11 +163,9 @@ class AxisHomeRoutine:
         switch sits at the low-count end of the travel, so both the manual jog
         and HM's own search go the same way.
 
-        Stops on EITHER the home switch or the reverse limit. They are read
-        separately but mean the same thing here: the axis has reached the end
-        HM searches from. Waiting only for `home_switch` would jog straight
-        into a reverse limit and sit there until the timeout on any stage
-        where the two are the same physical switch.
+        Succeeds on the HOME SWITCH only. The reverse limit is a failure: the
+        axis ran past where the home switch should have been, and a zero
+        defined from there would be wrong without saying so.
         """
         g, axis = self.galil, self.axis
         timeout = SC.HOME_SEEK_TIMEOUT_S if timeout is None else timeout
@@ -164,9 +173,12 @@ class AxisHomeRoutine:
         if self._cancelled():
             return False, f"{axis}: cancelled before seeking the home limit"
 
-        if self._at_home_limit():
+        arrival = self._arrival()
+        if arrival == "home":
             self._progress(f"{axis}: already on the home limit — no seek needed")
             return True, ""
+        if arrival == "reverse":
+            return False, self._reverse_msg(axis)
 
         speed = SC.HOME_SEEK_SPEED_COUNTS_PER_SEC
         self._progress(
@@ -182,7 +194,11 @@ class AxisHomeRoutine:
                 g.stop(axis)
                 return False, f"{axis}: cancelled while seeking the home limit"
 
-            if self._at_home_limit():
+            arrival = self._arrival()
+            if arrival == "reverse":
+                g.stop(axis)
+                return False, self._reverse_msg(axis)
+            if arrival == "home":
                 g.stop(axis)
                 self._progress(f"{axis}: home limit reached")
                 if not self.wait_idle(timeout=15.0):
@@ -194,9 +210,12 @@ class AxisHomeRoutine:
                 # latched between two polls (CN's arg1 latches limits), or
                 # something faulted — ask the switches which, rather than
                 # reporting a success the axis did not achieve.
-                if self._at_home_limit():
+                arrival = self._arrival()
+                if arrival == "home":
                     self._progress(f"{axis}: home limit reached")
                     return True, ""
+                if arrival == "reverse":
+                    return False, self._reverse_msg(axis)
                 return False, (
                     f"{axis}: jog stopped before reaching the home limit — "
                     f"check the axis is energised (SH {axis}) and not sitting "
@@ -208,9 +227,23 @@ class AxisHomeRoutine:
         g.stop(axis)
         return False, f"{axis}: timed out after {timeout:.0f} s seeking the home limit"
 
-    def _at_home_limit(self) -> bool:
+    def _arrival(self) -> str:
+        """One switch read: "home", "reverse" (reverse limit WITHOUT the home
+        switch), or "" (neither)."""
         sw = self.galil.get_switch_states(self.axis)
-        return bool(sw["home_switch"] or sw["reverse_switch"])
+        if sw["home_switch"]:
+            return "home"
+        if sw["reverse_switch"]:
+            return "reverse"
+        return ""
+
+    def _at_home_limit(self) -> bool:
+        return self._arrival() == "home"
+
+    @staticmethod
+    def _reverse_msg(axis: str) -> str:
+        return (f"{axis}: reached the reverse limit before the home switch — "
+                f"check the home switch and its cable")
 
     # ---- Phase 2: the three HM passes ---------------------------------------
 
@@ -255,6 +288,13 @@ class AxisHomeRoutine:
                 time.sleep(0.3)
                 self._restore_speeds()
                 return False, f"{axis}: homing timed out on pass {pass_num+1}/{n}"
+
+            code = g.get_stop_code(axis)
+            if code != SC.HOME_STOP_CODE:
+                self._restore_speeds()
+                return False, (
+                    f"{axis}: pass {pass_num+1}/{n} did not stop on the home "
+                    f"switch (stop code {code}) — zero not set")
 
             self._progress(f"{axis}: pass {pass_num+1}/{n} complete")
 
@@ -410,10 +450,24 @@ class MultiAxisHomeRoutine:
         if self._cancelled():
             return False, "Cancelled before seeking the home limits"
 
-        pending = [a for a in self.axes if not self._at_home_limit(a)]
-        already = [a for a in self.axes if a not in pending]
+        failed: dict[str, str] = {}
+        pending = []
+        already = []
+        for a in self.axes:
+            arrival = self._arrival(a)
+            if arrival == "home":
+                already.append(a)
+            elif arrival == "reverse":
+                failed[a] = AxisHomeRoutine._reverse_msg(a)
+            else:
+                pending.append(a)
         if already:
             self._progress(f"{','.join(already)}: already on the home limit")
+        if failed:
+            for axis, msg in failed.items():
+                self._axis_done(axis, False, msg)
+            return False, ("Seek failed on " + ", ".join(sorted(failed))
+                           + " — no axis was homed")
         if not pending:
             return True, ""
 
@@ -426,7 +480,6 @@ class MultiAxisHomeRoutine:
         g.jog_start_multi(moving, -speed)
         time.sleep(self._SEEK_SETTLE_S)
 
-        failed: dict[str, str] = {}
         deadline = time.time() + timeout
         while pending and time.time() < deadline:
             if self._cancelled():
@@ -434,16 +487,27 @@ class MultiAxisHomeRoutine:
                 return False, "Cancelled while seeking the home limits"
 
             for axis in list(pending):
-                if self._at_home_limit(axis):
+                arrival = self._arrival(axis)
+                if arrival == "reverse":
+                    g.stop(axis)
+                    pending.remove(axis)
+                    failed[axis] = AxisHomeRoutine._reverse_msg(axis)
+                    self._progress(failed[axis])
+                elif arrival == "home":
                     g.stop(axis)
                     pending.remove(axis)
                     self._progress(f"{axis}: home limit reached")
                 elif not g.is_moving(axis):
-                    if self._at_home_limit(axis):
+                    arrival = self._arrival(axis)
+                    if arrival == "home":
                         pending.remove(axis)
                         self._progress(f"{axis}: home limit reached")
                         continue
                     pending.remove(axis)
+                    if arrival == "reverse":
+                        failed[axis] = AxisHomeRoutine._reverse_msg(axis)
+                        self._progress(failed[axis])
+                        continue
                     failed[axis] = (
                         f"{axis}: jog stopped before reaching the home limit — "
                         f"check the axis is energised (SH {axis})")
@@ -465,9 +529,17 @@ class MultiAxisHomeRoutine:
             return False, "Timeout coming to rest on the home limits"
         return True, ""
 
-    def _at_home_limit(self, axis: str) -> bool:
+    def _arrival(self, axis: str) -> str:
+        """"home", "reverse" (reverse limit without the home switch) or ""."""
         sw = self.galil.get_switch_states(axis)
-        return bool(sw["home_switch"] or sw["reverse_switch"])
+        if sw["home_switch"]:
+            return "home"
+        if sw["reverse_switch"]:
+            return "reverse"
+        return ""
+
+    def _at_home_limit(self, axis: str) -> bool:
+        return self._arrival(axis) == "home"
 
     # ---- Phase 2: the three HM passes, all axes at once ----------------------
 
@@ -507,6 +579,15 @@ class MultiAxisHomeRoutine:
                 g.stop(axes)
                 time.sleep(0.3)
                 return False, f"Homing timed out on pass {pass_num+1}/{n}"
+
+            bad = []
+            for axis in axes:
+                code = g.get_stop_code(axis)
+                if code != SC.HOME_STOP_CODE:
+                    bad.append(f"{axis} (stop code {code})")
+            if bad:
+                return False, ("Homing stopped off the home switch on "
+                               + ", ".join(bad) + " — no zero set")
 
             self._progress(f"{axes}: pass {pass_num+1}/{n} complete")
 

@@ -472,6 +472,8 @@ class TestHomingWorker:
             "reverse_switch": False,
         }
         g.is_moving.return_value = False     # _wait_idle returns immediately
+        # A fixture for a SUCCESSFUL home: every pass stops on the home switch.
+        g.get_stop_code.return_value = 10
         return g
 
     def test_three_passes_then_define_zero(self, qapp, monkeypatch):

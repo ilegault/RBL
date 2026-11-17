@@ -130,6 +130,10 @@ class GalilController:
         """Current reference position of axis, in counts (MG _RPx)."""
         return int(round(float(self.cmd(f"MG _RP{axis}"))))
 
+    def get_stop_code(self, axis: str) -> int:
+        """Why the axis last stopped (MG _SCx). 10 = stopped after HM/FI."""
+        return int(round(float(self.cmd(f"MG _SC{axis}"))))
+
     def is_moving(self, axis: str) -> bool:
         return float(self.cmd(f"MG _BG{axis}")) > 0.5
 
