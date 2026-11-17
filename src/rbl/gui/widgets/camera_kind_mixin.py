@@ -19,6 +19,13 @@ caption under the view says the display stretch is not intensity.
 
 Older stand-in recorders without the ZWO API are treated as ``"usb"`` so the
 USB path is unchanged (ADR 0008 decision 7).
+
+Camera message line (ticket 103, spec D15): ``lbl_camera_message`` sits on the
+row with Open in both views, rendering ``state()["camera_message"]`` in its
+role's theme colour (hidden when empty) under both USB and ZWO.  Under ZWO,
+Open is disabled while ``state()["zwo_opening"]`` is true so a second click
+cannot start a second open while the Capture Process or camera is still
+opening (spec D13).
 """
 from __future__ import annotations
 
@@ -49,6 +56,7 @@ class CameraKindMixin:
         combo_camera_kind: NoScrollComboBox
         zwo_controls: ZwoControls
         lbl_preview_caption: QLabel
+        lbl_camera_message: QLabel
         usb_only_widgets: list[QWidget]
 
         def _render(self) -> None: ...
@@ -79,6 +87,12 @@ class CameraKindMixin:
         self.lbl_preview_caption.setStyleSheet(
             f"color: {theme.NEUTRAL}; font-size: {theme.FS_CAPTION}px;")
         return self.lbl_preview_caption
+
+    def _make_camera_message_label(self) -> QLabel:
+        self.lbl_camera_message = QLabel("")
+        self.lbl_camera_message.setWordWrap(True)
+        self.lbl_camera_message.setVisible(False)
+        return self.lbl_camera_message
 
     def _connect_zwo_preview(self) -> None:
         sig = getattr(self._recorder, "zwo_preview", None)
@@ -154,4 +168,18 @@ class CameraKindMixin:
             self._lbl_res.setText("")
             self._btn_open.setText("Close" if self._camera.is_open() else "Open")
         self._shown_kind = "zwo" if zwo else "usb"
+
+        text = st.get("camera_message", "")
+        role = st.get("camera_message_level", "neutral")
+        colour = {
+            "neutral": theme.NEUTRAL,
+            "ok": theme.OK,
+            "warn": theme.WARN,
+            "fault": theme.FAULT,
+        }.get(role, theme.NEUTRAL)
+        self.lbl_camera_message.setStyleSheet(
+            f"color: {colour}; font-size: {theme.FS_CAPTION}px;")
+        self.lbl_camera_message.setText(text)
+        self.lbl_camera_message.setVisible(bool(text))
+        self._btn_open.setEnabled(not (zwo and st.get("zwo_opening", False)))
         return zwo

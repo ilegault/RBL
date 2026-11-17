@@ -1,6 +1,6 @@
 # 103: Both camera views: a camera message line by Open, and Open held while opening
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -43,12 +43,12 @@ near line 391 does. **No new private-attribute access** in this Qt test module: 
 `tests/test_layering.py::test_private_access_ratchet_does_not_exceed_stored_figure` is at its
 limit. Use a real `CaptureClient` and fake child; shorten nothing but the fake open delay.
 
-- [ ] `test_camera_message_sits_on_the_open_row`: `lbl_camera_message` and the Open button are in the same `QHBoxLayout` (walk the view's layouts; `layout.indexOf(widget) != -1` for both).
-- [ ] `test_missing_dll_message_in_fault_colour`: a fresh `CaptureClient` not started, `RBL_ZWO_SDK_DLL` set to a missing path, kind `"zwo"`, view shown; clicking Open leaves `lbl_camera_message` visible to the view with the D4 text and `theme.FAULT` in its stylesheet, and Open enabled.
-- [ ] `test_open_is_held_while_opening`: a client started with `["--fake-open-delay-s", "1.5"]` and its hello received, kind `"zwo"`; just after clicking Open the button is disabled and the line reads `Opening camera…`; once `rec.state()["zwo_open"]` is True the button is enabled, reads `Close`, and the line reads `f"Opened {FAKE_MODEL} {FAKE_SERIAL}"` with `theme.OK` in its stylesheet.
-- [ ] `test_camera_message_under_usb`: kind `"usb"`; `rec.start_video()` with no session makes the line visible with `Cannot start video: session is not recording` and `theme.WARN`; Open stays enabled.
-- [ ] `test_close_clears_the_camera_message`: after an opened ZWO camera, clicking Close leaves `lbl_camera_message` not visible to the view and its text empty.
-- [ ] `test_camera_message_survives_compact_mode` (panel only): with `btn_compact` checked and the USB warning above shown, the line is visible to the view; after `rec.state_changed.emit()` it is still visible.
+- [x] `test_camera_message_sits_on_the_open_row`: `lbl_camera_message` and the Open button are in the same `QHBoxLayout` (walk the view's layouts; `layout.indexOf(widget) != -1` for both).
+- [x] `test_missing_dll_message_in_fault_colour`: a fresh `CaptureClient` not started, `RBL_ZWO_SDK_DLL` set to a missing path, kind `"zwo"`, view shown; clicking Open leaves `lbl_camera_message` visible to the view with the D4 text and `theme.FAULT` in its stylesheet, and Open enabled.
+- [x] `test_open_is_held_while_opening`: a client started with `["--fake-open-delay-s", "1.5"]` and its hello received, kind `"zwo"`; just after clicking Open the button is disabled and the line reads `Opening camera…`; once `rec.state()["zwo_open"]` is True the button is enabled, reads `Close`, and the line reads `f"Opened {FAKE_MODEL} {FAKE_SERIAL}"` with `theme.OK` in its stylesheet.
+- [x] `test_camera_message_under_usb`: kind `"usb"`; `rec.start_video()` with no session makes the line visible with `Cannot start video: session is not recording` and `theme.WARN`; Open stays enabled.
+- [x] `test_close_clears_the_camera_message`: after an opened ZWO camera, clicking Close leaves `lbl_camera_message` not visible to the view and its text empty.
+- [x] `test_camera_message_survives_compact_mode` (panel only): with `btn_compact` checked and the USB warning above shown, the line is visible to the view; after `rec.state_changed.emit()` it is still visible.
 
 ## Gate
 
@@ -62,3 +62,5 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+- **2026-11-17:** Added `CameraKindMixin._make_camera_message_label` and updated `_render_kind` in `src/rbl/gui/widgets/camera_kind_mixin.py` to render `camera_message` in its theme role colour (`neutral`/`ok`/`warn`/`fault`, hidden when empty) and hold `_btn_open` disabled while `zwo and zwo_opening`. Inserted `lbl_camera_message` (stretch 1) after `_lbl_res` on the Open row in `RecordingPanel._build_ui` (`src/rbl/gui/widgets/recording_panel.py`, omitted from `compact_hidden_widgets`) and `CameraTab._build_ui` (`src/rbl/gui/camera_tab.py`). All six named criteria are covered in `tests/test_recording_panel.py` (35/35 passed, plus `tests/test_layering.py` 7/7 passed). Bench verification with the real ZWO camera remains on ticket 104.

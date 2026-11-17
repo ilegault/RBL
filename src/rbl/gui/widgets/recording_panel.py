@@ -120,6 +120,7 @@ class RecordingPanel(CameraKindMixin, QGroupBox):
         self._lbl_res.setStyleSheet(
             f"color: {theme.NEUTRAL}; font-size: {theme.FS_CAPTION}px;")
         kind_row.addWidget(self._lbl_res)
+        kind_row.addWidget(self._make_camera_message_label(), stretch=1)
         kind_row.addStretch(1)
 
         self.btn_compact = QPushButton("Compact")
