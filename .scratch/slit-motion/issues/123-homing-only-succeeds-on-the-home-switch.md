@@ -1,6 +1,6 @@
 # 123: Homing only succeeds when a pass stopped on the home switch
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
