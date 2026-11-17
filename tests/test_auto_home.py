@@ -23,7 +23,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from unittest.mock import MagicMock
 
 import pytest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from rbl.config import hardware_config as SC
 from rbl.hardware import galil_workers
@@ -580,7 +580,10 @@ class TestMotorTabAutoHome:
         mock_worker_cls = MagicMock()
         monkeypatch.setattr("rbl.gui.motor_tab.AutoHomeAllWorker", mock_worker_cls)
 
-        tab._start_auto_home()
+        monkeypatch.setattr(
+            "rbl.gui.motor_tab.QMessageBox.question",
+            lambda *a, **k: QMessageBox.StandardButton.Yes)
+        tab.btn_auto_home_seq.click()
 
         mock_worker_cls.assert_called_once()
         assert mock_worker_cls.call_args.kwargs["speeds"] == (300, 120, 40)
@@ -604,31 +607,34 @@ class TestMotorTabAutoHome:
         mock_worker_cls = MagicMock()
         monkeypatch.setattr("rbl.gui.motor_tab.MultiAxisHomeWorker", mock_worker_cls)
 
-        tab._start_auto_home_parallel()
+        monkeypatch.setattr(
+            "rbl.gui.motor_tab.QMessageBox.question",
+            lambda *a, **k: QMessageBox.StandardButton.Yes)
+        tab.btn_auto_home_par.click()
 
         mock_worker_cls.assert_called_once()
         assert mock_worker_cls.call_args.kwargs["speeds"] == (300, 120, 40)
 
     def test_pass_speed_boxes_disabled_while_homing(self, tab, monkeypatch):
-        for box in (tab.spn_pass1, tab.spn_pass2, tab.spn_pass3):
-            assert box.isEnabled()
+        boxes = (tab.spn_pass1, tab.spn_pass2, tab.spn_pass3)
+        monkeypatch.setattr(
+            "rbl.gui.motor_tab.QMessageBox.question",
+            lambda *a, **k: QMessageBox.StandardButton.Yes)
+        started = []
+        for cls in (AutoHomeAllWorker, HomingWorker):
+            monkeypatch.setattr(cls, "start", lambda self: started.append(self))
+            monkeypatch.setattr(cls, "isRunning", lambda self: True)
+        assert all(b.isEnabled() for b in boxes)
 
-        tab._lock_axes_for_auto_home(True, "Queued for auto-home")
-        for box in (tab.spn_pass1, tab.spn_pass2, tab.spn_pass3):
-            assert not box.isEnabled()
-        tab._lock_axes_for_auto_home(False)
-        for box in (tab.spn_pass1, tab.spn_pass2, tab.spn_pass3):
-            assert box.isEnabled()
+        tab.btn_auto_home_seq.click()
+        assert not any(b.isEnabled() for b in boxes)
+        started.pop().done.emit(True, "all homed")
+        assert all(b.isEnabled() for b in boxes)
 
-        monkeypatch.setattr(HomingWorker, "start", lambda self: None)
-        monkeypatch.setattr(HomingWorker, "isRunning", lambda self: True)
-        panel = tab.axes["A"]
-        panel._start_homing(seek_first=False)
-        for box in (tab.spn_pass1, tab.spn_pass2, tab.spn_pass3):
-            assert not box.isEnabled()
-        panel._on_homing_done(True, "A: homed")
-        for box in (tab.spn_pass1, tab.spn_pass2, tab.spn_pass3):
-            assert box.isEnabled()
+        tab.axes["A"].btn_home.click()
+        assert not any(b.isEnabled() for b in boxes)
+        started.pop().done.emit(True, "A: homed")
+        assert all(b.isEnabled() for b in boxes)
 
 
 class TestSeekAndHomeButton:
@@ -744,7 +750,7 @@ class TestMultiAxisHomeRoutine:
 
     def test_together_uses_the_speeds_it_is_given(self):
         g = _galil()
-        ok, msg = self._routine(g, "ABCD", speeds=(400, 150, 30)).home_passes()
+        ok, msg = _multi_routine(g, "ABCD", speeds=(400, 150, 30)).home_passes()
         assert ok, msg
         passes = [(c.args[1], c.kwargs["fine_speed"])
                   for c in g.begin_home_multi.call_args_list]
