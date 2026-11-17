@@ -23,10 +23,13 @@ capped at PREVIEW_MAX_HEIGHT_PER_WIDTH (16:9), with vertical size policy
 Preferred. This stops the Overview Preview from absorbing excess panel height.
 The Camera tab leaves it disabled (default).
 
-Ticket 93 addition: a Draft ROI outline (set_draft_fraction). The Camera tab holds
-the Draft in sensor pixels and hands this widget only a fraction of the frame being
-shown; the outline is mapped into painted_rect() at PAINT time, so a window resize
-needs no callback.  It is a screen-only overlay, never burned into frames.
+Ticket 93/94 addition: a Draft ROI outline (set_draft_fraction) and pointer-grab
+routing.  The Camera tab holds the Draft in sensor pixels and hands this widget
+only a fraction of the frame being shown; the outline is mapped into painted_rect()
+at PAINT time, so a window resize needs no callback.  When rect drawing is on and a
+Draft is shown, a press on the Draft's interior or corners emits draft_grabbed /
+draft_dragged / draft_released instead of starting a rubber-band draw.  It is a
+screen-only overlay, never burned into frames.
 """
 from PySide6.QtCore import QPoint, QRect, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QImage, QPainter, QPen
@@ -34,6 +37,7 @@ from PySide6.QtWidgets import QRubberBand, QSizePolicy, QWidget
 
 from rbl.config.recording_config import PREVIEW_MAX_HEIGHT_PER_WIDTH
 from rbl.hardware.preview_stretch import preview_height_for_width
+from rbl.hardware.roi_geometry import hit_test
 
 
 class VideoView(QWidget):
@@ -47,9 +51,15 @@ class VideoView(QWidget):
     double_clicked = Signal()
     # View coordinates (x, y, width, height) of a finished drag; ticket 75.
     rect_drawn = Signal(int, int, int, int)
+    # Draft ROI grab/drag/release in fractions of painted_rect(); ticket 94.
+    draft_grabbed = Signal(str, float, float)
+    draft_dragged = Signal(float, float)
+    draft_released = Signal()
 
     # Smaller drags are accidental clicks, not a request for an ROI.
     _MIN_DRAG_PX = 4
+    # Corner hit-test radius in view pixels for grabbing a Draft ROI.
+    _DRAFT_GRIP_PX = 8
 
     # Constant hints — see module docstring for why these must not grow.
     _HINT_SIZE = QSize(320, 240)
@@ -65,6 +75,7 @@ class VideoView(QWidget):
         self._rect_drawing = False
         self._drag_origin: "QPoint | None" = None
         self._band: "QRubberBand | None" = None
+        self._draft_dragging = False
         self._height_follows_width = False
         self._draft_fraction: "tuple[float, float, float, float] | None" = None
 
@@ -224,17 +235,13 @@ class VideoView(QWidget):
             img_to_draw = self._frame
         p.drawImage(target.topLeft(), img_to_draw)
 
-        if self._draft_fraction is not None:
-            fx, fy, fw, fh = self._draft_fraction
+        draft_px = self._draft_rect_px()
+        if draft_px is not None:
             pen = QPen(QColor(255, 200, 0), 2)
             pen.setStyle(Qt.PenStyle.DashLine)
             p.setPen(pen)
             p.setBrush(Qt.BrushStyle.NoBrush)
-            p.drawRect(QRect(
-                round(target.x() + fx * target.width()),
-                round(target.y() + fy * target.height()),
-                round(fw * target.width()),
-                round(fh * target.height())))
+            p.drawRect(QRect(*draft_px))
 
         if self._crosshair:
             self._draw_crosshair(p)
@@ -257,8 +264,28 @@ class VideoView(QWidget):
     def mouseDoubleClickEvent(self, event) -> None:
         self.double_clicked.emit()
 
+    def _draft_rect_px(self) -> "tuple[int, int, int, int] | None":
+        target = self._painted_rect_last
+        if self._draft_fraction is None or target.isEmpty():
+            return None
+        fx, fy, fw, fh = self._draft_fraction
+        return (
+            round(target.x() + fx * target.width()),
+            round(target.y() + fy * target.height()),
+            round(fw * target.width()),
+            round(fh * target.height()),
+        )
+
+    def _painted_fraction(self, pos: QPoint) -> "tuple[float, float]":
+        target = self._painted_rect_last
+        return (
+            (pos.x() - target.x()) / target.width(),
+            (pos.y() - target.y()) / target.height(),
+        )
+
     def _cancel_drag(self) -> None:
         self._drag_origin = None
+        self._draft_dragging = False
         if self._band is not None:
             self._band.hide()
 
@@ -272,7 +299,15 @@ class VideoView(QWidget):
     def mousePressEvent(self, event) -> None:
         if (self._rect_drawing
                 and event.button() == Qt.MouseButton.LeftButton):
-            self._drag_origin = event.position().toPoint()
+            pos = event.position().toPoint()
+            draft_px = self._draft_rect_px()
+            if draft_px is not None:
+                hit = hit_test(draft_px, (pos.x(), pos.y()), self._DRAFT_GRIP_PX)
+                if hit is not None:
+                    self._draft_dragging = True
+                    self.draft_grabbed.emit(hit, *self._painted_fraction(pos))
+                    return
+            self._drag_origin = pos
             if self._band is None:
                 self._band = QRubberBand(QRubberBand.Shape.Rectangle, self)
             self._band.setGeometry(QRect(self._drag_origin, QSize()))
@@ -281,6 +316,11 @@ class VideoView(QWidget):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:
+        if self._draft_dragging and not self._painted_rect_last.isEmpty():
+            self.draft_dragged.emit(
+                *self._painted_fraction(event.position().toPoint())
+            )
+            return
         if self._drag_origin is not None and self._band is not None:
             self._band.setGeometry(
                 self._span(self._drag_origin, event.position().toPoint()))
@@ -288,6 +328,11 @@ class VideoView(QWidget):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
+        if (self._draft_dragging
+                and event.button() == Qt.MouseButton.LeftButton):
+            self._draft_dragging = False
+            self.draft_released.emit()
+            return
         if (self._drag_origin is not None
                 and event.button() == Qt.MouseButton.LeftButton):
             rect = self._span(self._drag_origin, event.position().toPoint())

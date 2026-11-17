@@ -460,3 +460,71 @@ def test_fullscreen_button_in_same_layout_as_crosshair(setup):
         "Full screen (Esc to exit). Double-click the picture also works."
     )
 
+
+def test_dragging_inside_moves_the_draft(zwo_tab):
+    tab, rec = zwo_tab
+    _open_full_sensor(tab, rec)
+
+    pr = tab.video_view.painted_rect()
+    tab.video_view.rect_drawn.emit(
+        pr.x() + round(400 / 1920 * pr.width()),
+        pr.y() + round(200 / 1080 * pr.height()),
+        round(640 / 1920 * pr.width()),
+        round(360 / 1080 * pr.height()),
+    )
+    sx, sy, sw, sh = tab.draft()
+    assert abs(sx - 400) <= 1 and abs(sy - 200) <= 1
+    assert abs(sw - 640) <= 1 and abs(sh - 360) <= 1
+
+    f0_x, f0_y = 0.3, 0.3
+    tab.video_view.draft_grabbed.emit("inside", f0_x, f0_y)
+    tab.video_view.draft_dragged.emit(f0_x + 0.1, f0_y)
+    nx, ny, nw, nh = tab.draft()
+    assert abs(nx - 592) <= 1 and abs(ny - 200) <= 1
+    assert (nw, nh) == (sw, sh)
+
+    # Dragging far past the right edge clamps at 1920 and preserves size.
+    tab.video_view.draft_dragged.emit(f0_x + 2.0, f0_y)
+    cx, cy, cw, ch = tab.draft()
+    assert cx + cw == 1920
+    assert (cw, ch) == (sw, sh)
+    tab.video_view.draft_released.emit()
+
+
+def test_dragging_a_corner_resizes_with_the_preset(zwo_tab):
+    tab, rec = zwo_tab
+    _open_full_sensor(tab, rec)
+
+    tab.combo_aspect.setCurrentIndex(tab.combo_aspect.findText("16:9"))
+    _draw_half(tab)
+    x0, y0, w0, h0 = tab.draft()
+
+    tab.video_view.draft_grabbed.emit("br", (x0 + w0) / 1920, (y0 + h0) / 1080)
+    tab.video_view.draft_dragged.emit((x0 + w0) / 1920 + 0.15, (y0 + h0) / 1080 + 0.15)
+    x, y, w, h = tab.draft()
+    assert (x, y) == (x0, y0)
+    assert w > w0 and h > h0
+    assert abs(w - h * 16 / 9) <= 1
+    tab.video_view.draft_released.emit()
+
+
+def test_dragging_sends_nothing_until_apply(zwo_tab):
+    from rbl.hardware.capture_protocol import snap_roi
+    from tests.qt_wait import wait_until
+
+    tab, rec = zwo_tab
+    _open_full_sensor(tab, rec)
+    before = _confirmed_roi(rec)
+    _draw_half(tab)
+
+    tab.video_view.draft_grabbed.emit("inside", 0.3, 0.3)
+    tab.video_view.draft_dragged.emit(0.4, 0.4)
+    tab.video_view.draft_released.emit()
+
+    wait_until(lambda: False, 0.5)
+    assert _confirmed_roi(rec) == before
+
+    expected = snap_roi(*tab.draft(), 1920, 1080)
+    tab.btn_apply_roi.click()
+    assert wait_until(lambda: _confirmed_roi(rec) == expected)
+

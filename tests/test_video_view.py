@@ -66,3 +66,69 @@ def test_height_follows_width_is_opt_in(qapp):
     assert view.heightForWidth(800) == 200
     assert view.minimumSizeHint() == QSize(64, 48)
 
+
+def test_press_on_draft_grabs_instead_of_drawing(qapp):
+    from PySide6.QtGui import QImage
+
+    view = VideoView()
+    view.resize(640, 360)
+    view.show()
+    view.set_frame(QImage(1920, 1080, QImage.Format.Format_RGB888))
+    view.grab()
+    pr = view.painted_rect()
+    assert not pr.isEmpty()
+
+    view.set_rect_drawing(True)
+    view.set_draft_fraction((0.25, 0.25, 0.5, 0.5))
+
+    grabbed = []
+    dragged = []
+    released = []
+    drawn = []
+    view.draft_grabbed.connect(lambda *args: grabbed.append(args))
+    view.draft_dragged.connect(lambda *args: dragged.append(args))
+    view.draft_released.connect(lambda: released.append(True))
+    view.rect_drawn.connect(lambda *args: drawn.append(args))
+
+    # Drag starting at the painted centre -> inside grab, no rect_drawn
+    centre = pr.center()
+    QTest.mousePress(view, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, centre)
+    QTest.mouseMove(view, centre + QPoint(30, 15))
+    QTest.mouseRelease(
+        view, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, centre + QPoint(30, 15)
+    )
+    assert len(grabbed) == 1
+    assert grabbed[0][0] == "inside"
+    assert abs(grabbed[0][1] - 0.5) < 0.02
+    assert abs(grabbed[0][2] - 0.5) < 0.02
+    assert len(dragged) == 1
+    assert released == [True]
+    assert drawn == []
+
+    # Drag starting 2 px from the draft's top-left corner -> tl grab
+    grabbed.clear()
+    dragged.clear()
+    released.clear()
+    tl = QPoint(pr.x() + round(0.25 * pr.width()) + 2, pr.y() + round(0.25 * pr.height()) + 2)
+    QTest.mousePress(view, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, tl)
+    QTest.mouseMove(view, tl + QPoint(-10, -10))
+    QTest.mouseRelease(
+        view, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, tl + QPoint(-10, -10)
+    )
+    assert len(grabbed) == 1
+    assert grabbed[0][0] == "tl"
+    assert len(dragged) == 1
+    assert released == [True]
+    assert drawn == []
+
+    # Drag starting outside the draft -> rect_drawn as before, no draft_grabbed
+    grabbed.clear()
+    outside = QPoint(pr.x() + 5, pr.y() + 5)
+    QTest.mousePress(view, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, outside)
+    QTest.mouseMove(view, outside + QPoint(40, 30))
+    QTest.mouseRelease(
+        view, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, outside + QPoint(40, 30)
+    )
+    assert grabbed == []
+    assert drawn == [(outside.x(), outside.y(), 40, 30)]
+
