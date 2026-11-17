@@ -4,7 +4,9 @@ PySide6 widget for the "Stepper Motors" outer tab.
 
 Features:
   - Per-axis jog/move/stop/zero controls.
-  - Jog speed and target position in cps OR mm/s / mm (unit toggle).
+  - Per-axis slit speed (the Speed box sets Beamline's slit speed for Jog,
+    Move, Overview, and Raster Planner) and target position in cps OR mm/s / mm
+    (unit toggle).
   - Per-axis Enable (SH) / Disable (MO) buttons; also single-axis and all-axis.
   - Automated homing with progressive speed retry (225 → 112 → 58 cps), per
     axis and for the whole set.
@@ -131,19 +133,24 @@ class AxisControls(QGroupBox):
         jog_row.addWidget(self.btn_jog_pos)
         full_form.addRow("Jog:", jog_row)
 
-        # Jog speed with unit toggle
+        # Slit speed with unit toggle
         speed_row = QHBoxLayout()
         self.spn_speed = QuietDoubleSpinBox()
         self.spn_speed.setDecimals(2)
         self.spn_speed.setMaximumWidth(100)
+        self.spn_speed.setToolTip(
+            "Speed for Jog and Move on this axis, and for moves to this slit "
+            "from the Overview and the Raster Planner. Applies to the next command."
+        )
         self.cbo_speed_unit = NoScrollComboBox()
         self.cbo_speed_unit.addItems(["cps", "mm/s"])
         self.cbo_speed_unit.currentIndexChanged.connect(self._on_speed_unit_changed)
         speed_row.addWidget(self.spn_speed, stretch=1)
         speed_row.addWidget(self.cbo_speed_unit)
-        full_form.addRow("Speed:", speed_row)
+        full_form.addRow("Slit speed:", speed_row)
         self._set_speed_unit_range("cps")
-        self.spn_speed.setValue(SC.DEFAULT_JOG_SPEED)
+        self.spn_speed.setValue(self.beamline.slit_speed_cps(self.axis))
+        self.spn_speed.valueChanged.connect(self._on_speed_edited)
 
         # Stop / Zero row
         ctrl_row1 = QHBoxLayout()
@@ -266,16 +273,25 @@ class AxisControls(QGroupBox):
             self.spn_target.setRange(-max_mm, max_mm)
             self.spn_target.setSingleStep(0.1)
 
+    def _on_speed_edited(self, _value):
+        self.beamline.set_slit_speed_cps(self.axis, self._speed_in_cps())
+
     def _on_speed_unit_changed(self, idx: int):
         unit = self.cbo_speed_unit.itemText(idx)
         old  = self.spn_speed.value()
-        self._set_speed_unit_range(unit)
-        if unit == "mm/s":
-            # convert old cps value to mm/s
-            self.spn_speed.setValue(SC.cps_to_mm_per_sec(self.axis, old))
-        else:
-            # convert old mm/s value to cps
-            self.spn_speed.setValue(float(SC.mm_per_sec_to_cps(self.axis, old)))
+        # Re-expressing the same speed in another unit must not transiently
+        # clamp or alter Beamline's slit speed while the range updates.
+        self.spn_speed.blockSignals(True)
+        try:
+            self._set_speed_unit_range(unit)
+            if unit == "mm/s":
+                # convert old cps value to mm/s
+                self.spn_speed.setValue(SC.cps_to_mm_per_sec(self.axis, old))
+            else:
+                # convert old mm/s value to cps
+                self.spn_speed.setValue(float(SC.mm_per_sec_to_cps(self.axis, old)))
+        finally:
+            self.spn_speed.blockSignals(False)
 
     def _on_target_unit_changed(self, idx: int):
         unit = self.cbo_target_unit.itemText(idx)
@@ -373,7 +389,7 @@ class AxisControls(QGroupBox):
         if g is None or not g.connected:
             return
         try:
-            speed = self._speed_in_cps() * (1 if direction > 0 else -1)
+            speed = self.beamline.slit_speed_cps(self.axis) * (1 if direction > 0 else -1)
             prefix = "," * "ABCD".index(self.axis)
             self.log(f"> JG {prefix}{speed} ; BG {self.axis}")
             g.jog_start(self.axis, speed)
@@ -396,16 +412,17 @@ class AxisControls(QGroupBox):
             return
         target = self._target_in_counts()
         target_mm = SC.counts_to_mm(self.axis, target)
-        # The driver call stays here — this panel owns the counts/mm unit
-        # toggle and the soft-limit dialog below, neither of which the
-        # Overview has. Only the log line and the commanded target go through
-        # Beamline, which is what puts them on both screens.
+        speed = self.beamline.slit_speed_cps(self.axis)
+        # The move goes through Beamline.move_axis_counts so every move
+        # carries its slit speed (SP before PA); this panel still owns the
+        # counts/mm unit toggle and the soft-limit dialog below, neither of
+        # which the Overview has.
         self.beamline.log_motor(
-            f"> PA {self.axis}={target} ({target_mm:+.3f} mm) ; "
+            f"> SP {self.axis}={speed} ; PA {self.axis}={target} ({target_mm:+.3f} mm) ; "
             f"BG {self.axis}   [{self.slit}]")
         self.beamline.note_slit_target(self.slit, target_mm)
         try:
-            g.move_absolute(self.axis, target)
+            self.beamline.move_axis_counts(self.axis, target)
         except GalilError as e:
             self.log(f"! {e}")
             if e.code == 22:

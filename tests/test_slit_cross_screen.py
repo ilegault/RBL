@@ -42,6 +42,7 @@ class _FakeGalil:
         self.connected = True
         self.moves = []
         self.speeds = []
+        self.jogs = []
 
     def move_absolute(self, axis, counts):
         self.moves.append((axis, counts))
@@ -49,6 +50,9 @@ class _FakeGalil:
     def move_absolute_at(self, axis, counts, speed):
         self.moves.append((axis, counts))
         self.speeds.append(speed)
+
+    def jog_start(self, axis, signed_speed):
+        self.jogs.append((axis, signed_speed))
 
 
 @pytest.fixture
@@ -170,3 +174,29 @@ def test_the_overview_accepts_a_target_the_other_tab_would_accept(screens):
     overview.slits["X-"].spn_target.setValue(22.0)
     assert overview.slits["X-"].spn_target.value() == pytest.approx(22.0)
     assert SC.SLIT_DISPLAY_MAX_MM == 25.0
+
+
+# ---- Slit speed --------------------------------------------------------------
+
+def test_speed_box_edit_changes_the_next_move_speed(screens):
+    motors, overview, beamline = screens
+    motors.axes["A"].spn_speed.setValue(450)
+    motors.axes["A"].cbo_target_unit.setCurrentText("mm")
+    motors.axes["A"].spn_target.setValue(1.5)
+    motors.axes["A"].btn_move.click()
+    assert beamline.slit_speed_cps("A") == 450
+    assert beamline.galil.speeds == [450]
+
+
+def test_speed_box_edit_reaches_overview_moves(screens):
+    motors, overview, beamline = screens
+    motors.axes["B"].spn_speed.setValue(220)
+    beamline.move_slit("X-", 2.0)
+    assert beamline.galil.speeds == [220]
+
+
+def test_jog_uses_the_slit_speed(screens):
+    motors, overview, beamline = screens
+    beamline.set_slit_speed_cps("C", 333)
+    motors.axes["C"].btn_jog_neg.pressed.emit()
+    assert beamline.galil.jogs == [("C", -333)]

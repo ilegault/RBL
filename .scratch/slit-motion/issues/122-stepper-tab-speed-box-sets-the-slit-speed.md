@@ -1,6 +1,6 @@
 # 122: The Stepper Motors tab's Speed box sets the slit speed
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -45,22 +45,22 @@ that axis, and of moves to that slit from the Overview and the Raster Planner.
 
 ## Acceptance criteria
 
-- [ ] Test `test_speed_box_edit_changes_the_next_move_speed` in `tests/test_slit_cross_screen.py`:
+- [x] Test `test_speed_box_edit_changes_the_next_move_speed` in `tests/test_slit_cross_screen.py`:
       on the `screens` fixture, set `motors.axes["A"].spn_speed` to 450 (cps), set the target to
       1.5 mm, click `btn_move`; `beamline.slit_speed_cps("A") == 450` and
       `beamline.galil.speeds == [450]`. No jog is pressed anywhere in the test.
-- [ ] Test `test_speed_box_edit_reaches_overview_moves` in `tests/test_slit_cross_screen.py`: set
+- [x] Test `test_speed_box_edit_reaches_overview_moves` in `tests/test_slit_cross_screen.py`: set
       `motors.axes["B"].spn_speed` to 220, then `beamline.move_slit("X-", 2.0)`;
       `beamline.galil.speeds == [220]`.
-- [ ] Test `test_jog_uses_the_slit_speed` in `tests/test_slit_cross_screen.py`: give `_FakeGalil`
+- [x] Test `test_jog_uses_the_slit_speed` in `tests/test_slit_cross_screen.py`: give `_FakeGalil`
       a `jog_start(axis, signed_speed)` that records `(axis, signed_speed)` in a `jogs` list
       (helper change); `beamline.set_slit_speed_cps("C", 333)`; call `motors.axes["C"]._jog(-1)`;
       `beamline.galil.jogs == [("C", -333)]`.
-- [ ] Test `test_switching_speed_unit_keeps_the_slit_speed` in `tests/test_gui_hardware.py`
+- [x] Test `test_switching_speed_unit_keeps_the_slit_speed` in `tests/test_gui_hardware.py`
       (class `TestMotorTabUnits`): set panel A's speed to 1260 cps, switch `cbo_speed_unit` to
       `"mm/s"`, then back to `"cps"`; after each switch `abs(beamline.slit_speed_cps("A") - 1260) <= 1`.
       Build the `MotorTab` on a `Beamline` you keep a reference to.
-- [ ] The existing test `test_default_speed_is_cps` in `tests/test_gui_hardware.py` is rewritten in
+- [x] The existing test `test_default_speed_is_cps` in `tests/test_gui_hardware.py` is rewritten in
       place (same name) to assert `panel._speed_in_cps() == SC.DEFAULT_SPEED_COUNTS_PER_SEC`.
       `grep -rn DEFAULT_JOG_SPEED src tests` returns nothing. (by hand for the grep)
 
