@@ -113,6 +113,11 @@ DEFAULT_HOME_VELOCITY_COUNTS_PER_SEC = 256
 HOME_START_BACKOFF_COUNTS = 1000
 HOME_START_BACKOFF_TRIES = 3
 
+# Edge-return repeatability test: move out away from home, run one HM pass back
+# to the switch, read _RP without redefining zero, and repeat. 2000 counts ≈ 3.2 mm.
+EDGE_RETURN_DEFAULT_CYCLES = 10
+EDGE_RETURN_DEFAULT_OUT_COUNTS = 2000
+
 # --- Amplifier / motor configuration (2HA075520 amplifier) -------------------
 MOTOR_TYPE      = -2.5  # MT: step motor, active-high step pulse
 STEP_RESOLUTION = 2     # YA: 1=full, 2=half, 4=quarter, 8=eighth
