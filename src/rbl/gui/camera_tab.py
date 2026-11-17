@@ -178,6 +178,7 @@ class CameraTab(CameraKindMixin, QWidget):
         self._lbl_res.setStyleSheet(
             f"color: {theme.NEUTRAL}; font-size: {theme.FS_CAPTION}px;")
         top.addWidget(self._lbl_res)
+        top.addWidget(self._make_camera_message_label(), stretch=1)
 
         top.addStretch(1)
 

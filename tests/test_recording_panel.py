@@ -567,3 +567,136 @@ def test_compact_buttons_still_act(zwo_rig):
     rec.disconnect_zwo()
 
 
+# ---- Camera message line & Open held while opening (ticket 103) ------------
+
+
+def _open_button(view):
+    return [b for b in view.findChildren(QPushButton) if b.text() in ("Open", "Close")][0]
+
+
+@pytest.mark.parametrize("which", ["panel", "tab"])
+def test_camera_message_sits_on_the_open_row(zwo_rig, which):
+    rec, cam, _ = zwo_rig
+    view = _make_view(which, rec, cam)
+    open_btn = _open_button(view)
+    _same_row(view.lbl_camera_message, open_btn)
+
+
+@pytest.mark.parametrize("which", ["panel", "tab"])
+def test_missing_dll_message_in_fault_colour(tmp_path, monkeypatch, qapp, which):
+    from rbl.gui import theme
+
+    monkeypatch.setattr("rbl.services.session_recorder._logs_dir",
+                        lambda: str(tmp_path / "logs"))
+    monkeypatch.setattr(paths, "ZWO_DARKS_DIR", tmp_path / "zwo_darks")
+    missing_dll = tmp_path / "missing_ASICamera2.dll"
+    monkeypatch.setenv("RBL_ZWO_SDK_DLL", str(missing_dll))
+
+    client = CaptureClient()
+    cam = CameraSource()
+    rec = SessionRecorder(lambda: {"beamline_v": 1.0}, cam, capture=client)
+    try:
+        view = _make_view(which, rec, cam)
+        view.show()
+        view.combo_camera_kind.setCurrentIndex(1)
+        open_btn = _open_button(view)
+        open_btn.click()
+
+        expected = (
+            f"ZWO SDK library not found: {missing_dll}. "
+            "Copy ASICamera2.dll there or set RBL_ZWO_SDK_DLL."
+        )
+        assert wait_until(lambda: view.lbl_camera_message.isVisibleTo(view), 5.0)
+        assert view.lbl_camera_message.text() == expected
+        assert theme.FAULT in view.lbl_camera_message.styleSheet()
+        assert open_btn.isEnabled()
+    finally:
+        client.shutdown()
+
+
+@pytest.mark.parametrize("which", ["panel", "tab"])
+def test_open_is_held_while_opening(tmp_path, monkeypatch, qapp, which):
+    from rbl.capture.camera import FAKE_MODEL, FAKE_SERIAL
+    from rbl.gui import theme
+
+    monkeypatch.setattr("rbl.services.session_recorder._logs_dir",
+                        lambda: str(tmp_path / "logs"))
+    monkeypatch.setattr(paths, "ZWO_DARKS_DIR", tmp_path / "zwo_darks")
+
+    client = CaptureClient()
+    hellos: list[dict] = []
+    client.hello.connect(hellos.append)
+    cam = CameraSource()
+    client.start("fake", extra_args=["--fake-open-delay-s", "1.5"])
+    rec = SessionRecorder(lambda: {"beamline_v": 1.0}, cam, capture=client)
+    try:
+        assert wait_until(lambda: bool(hellos), 10.0)
+        view = _make_view(which, rec, cam)
+        view.show()
+        view.combo_camera_kind.setCurrentIndex(1)
+        open_btn = _open_button(view)
+
+        open_btn.click()
+        assert not open_btn.isEnabled()
+        assert view.lbl_camera_message.text() == "Opening camera…"
+
+        assert wait_until(lambda: rec.state()["zwo_open"], 10.0)
+        assert open_btn.isEnabled()
+        assert open_btn.text() == "Close"
+        assert view.lbl_camera_message.text() == f"Opened {FAKE_MODEL} {FAKE_SERIAL}"
+        assert theme.OK in view.lbl_camera_message.styleSheet()
+    finally:
+        client.shutdown()
+
+
+@pytest.mark.parametrize("which", ["panel", "tab"])
+def test_camera_message_under_usb(zwo_rig, which):
+    from rbl.gui import theme
+
+    rec, cam, _ = zwo_rig
+    view = _make_view(which, rec, cam)
+    view.show()
+    open_btn = _open_button(view)
+
+    assert rec.camera_kind() == "usb"
+    rec.start_video()
+
+    assert view.lbl_camera_message.isVisibleTo(view)
+    assert view.lbl_camera_message.text() == "Cannot start video: session is not recording"
+    assert theme.WARN in view.lbl_camera_message.styleSheet()
+    assert open_btn.isEnabled()
+
+
+@pytest.mark.parametrize("which", ["panel", "tab"])
+def test_close_clears_the_camera_message(zwo_rig, which):
+    rec, cam, _ = zwo_rig
+    view = _make_view(which, rec, cam)
+    view.show()
+    view.combo_camera_kind.setCurrentIndex(1)
+
+    rec.connect_zwo()
+    assert wait_until(lambda: rec.state()["zwo_open"], 10.0)
+
+    open_btn = _open_button(view)
+    assert open_btn.text() == "Close"
+    open_btn.click()
+
+    assert wait_until(lambda: not rec.state()["zwo_open"], 10.0)
+    assert not view.lbl_camera_message.isVisibleTo(view)
+    assert view.lbl_camera_message.text() == ""
+
+
+def test_camera_message_survives_compact_mode(zwo_rig):
+    rec, cam, _ = zwo_rig
+    view = _make_view("panel", rec, cam)
+    view.show()
+    view.btn_compact.setChecked(True)
+
+    rec.start_video()
+    assert view.lbl_camera_message.isVisibleTo(view)
+
+    rec.state_changed.emit()
+    assert view.lbl_camera_message.isVisibleTo(view)
+
+
+
