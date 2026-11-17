@@ -198,7 +198,7 @@ class TestRoutineEndToEnd:
     def test_seek_then_three_passes_then_zero(self):
         g = _galil(moving=False)
         g.get_switch_states.side_effect = (
-            [_switches(), _switches(home=True)] + [_switches()] * 20)
+            [_switches(), _switches(), _switches(home=True)] + [_switches()] * 20)
         ok, msg = AxisHomeRoutine(g, "A").run(seek_first=True)
         assert ok, msg
         assert g.jog_start.called                   # the seek happened
@@ -268,6 +268,40 @@ class TestRoutineEndToEnd:
         assert g.begin_home.call_count == 3
 
 
+class TestBackOutOfHome:
+    def test_homing_backs_out_before_anything_else(self):
+        g = _galil(moving=False)
+        g.get_switch_states.side_effect = (
+            [_switches(home=True)] + [_switches()] * 20
+        )
+        ok, msg = AxisHomeRoutine(g, "A").run()
+        assert ok, msg
+        motion = [c for c in g.method_calls
+                  if c[0] in ("move_relative", "jog_start", "begin_home")]
+        assert motion[0][0] == "move_relative"
+        assert motion[0][1] == ("A", SC.HOME_START_BACKOFF_COUNTS)
+
+    def test_back_out_gives_up_after_the_last_try(self):
+        g = _galil(home=True, moving=False)
+        ok, msg = AxisHomeRoutine(g, "A").run()
+        assert not ok
+        assert "still on the home switch after backing out 3" in msg
+        assert g.move_relative.call_count == SC.HOME_START_BACKOFF_TRIES
+        assert all(
+            c.args == ("A", SC.HOME_START_BACKOFF_COUNTS)
+            for c in g.move_relative.call_args_list
+        )
+        g.begin_home.assert_not_called()
+        g.define_zero.assert_not_called()
+
+    def test_no_back_out_on_the_forward_limit(self):
+        g = _galil(moving=False)
+        g.get_switch_states.return_value = _switches(forward=True)
+        ok, msg = AxisHomeRoutine(g, "A").back_out_of_home()
+        assert (ok, msg) == (True, "")
+        g.move_relative.assert_not_called()
+
+
 def _multi_routine(g, axes="ABCD", **kw):
     from rbl.hardware.galil_workers import MultiAxisHomeRoutine
     return MultiAxisHomeRoutine(g, axes, **kw)
@@ -296,7 +330,7 @@ class TestHomingWorkerSeekFlag:
     def test_seek_first_adds_the_jog(self, qapp):
         g = _galil(moving=False)
         g.get_switch_states.side_effect = (
-            [_switches(), _switches(home=True)] + [_switches()] * 20)
+            [_switches(), _switches(), _switches(home=True)] + [_switches()] * 20)
         hw = HomingWorker(g, "A", seek_first=True)
         hw.done.connect(lambda ok, msg: None)
         hw.run()
@@ -340,8 +374,12 @@ class TestAutoHomeAllWorker:
 
     def test_a_failure_stops_the_run_and_names_what_was_skipped(self, qapp):
         g = _galil(moving=False)
+        looks: dict[str, int] = {}
         # B never reaches its limit, so its seek fails.
         def switches(axis):
+            looks[axis] = looks.get(axis, 0) + 1
+            if looks[axis] == 1:
+                return _switches()
             return _switches(home=(axis != "B"))
         g.get_switch_states.side_effect = switches
 
@@ -590,6 +628,21 @@ class TestSeekAndHomeButton:
         panel._start_homing(seek_first=False)
         assert seen["seek"] is False
 
+    def test_seek_and_home_button_backs_out_first(self, tab, monkeypatch):
+        g = tab.beamline.galil
+        g.get_switch_states.side_effect = (
+            [_switches(home=True), _switches(), _switches(), _switches(home=True)]
+            + [_switches()] * 20
+        )
+        monkeypatch.setattr(HomingWorker, "start", lambda self: self.run())
+
+        tab.axes["A"].btn_seek_home.click()
+
+        motion = [c for c in g.method_calls
+                  if c[0] in ("move_relative", "jog_start", "begin_home")]
+        assert motion[0][0] == "move_relative"
+        assert motion[0][1] == ("A", SC.HOME_START_BACKOFF_COUNTS)
+
 
 # ---- All four axes under ONE command -----------------------------------------
 
@@ -659,7 +712,15 @@ class TestMultiAxisHomeRoutine:
         its limit would be homed from the wrong place, and HM ABCD cannot
         leave that one out once it is issued."""
         g = _galil(moving=False)
-        g.get_switch_states.side_effect = lambda a: _switches(home=(a != "C"))
+        looks: dict[str, int] = {}
+
+        def switches(axis):
+            looks[axis] = looks.get(axis, 0) + 1
+            if looks[axis] == 1:
+                return _switches()
+            return _switches(home=(axis != "C"))
+
+        g.get_switch_states.side_effect = switches
         seen = []
         ok, summary = self._routine(g, axis_done=lambda a, o, m: seen.append((a, o))
                                     ).run(seek_first=True)
@@ -679,8 +740,15 @@ class TestMultiAxisHomeRoutine:
 
     def test_together_fails_a_seek_on_the_reverse_limit(self):
         g = _galil(moving=False)
-        g.get_switch_states.side_effect = lambda a: _switches(
-            home=(a != "C"), reverse=(a == "C"))
+        looks: dict[str, int] = {}
+
+        def switches(axis):
+            looks[axis] = looks.get(axis, 0) + 1
+            if looks[axis] == 1:
+                return _switches()
+            return _switches(home=(axis != "C"), reverse=(axis == "C"))
+
+        g.get_switch_states.side_effect = switches
         seen = []
         ok, _ = _multi_routine(
             g, axis_done=lambda a, o, m: seen.append((a, o, m))
@@ -715,3 +783,20 @@ class TestMultiAxisHomeRoutine:
         assert "cancelled" in msg.lower()
         g.begin_home_multi.assert_not_called()
         g.define_zero_multi.assert_not_called()
+
+    def test_together_backs_out_only_the_axes_on_home(self):
+        from rbl.hardware.galil_workers import MultiAxisHomeRoutine
+
+        g = _galil(moving=False)
+        looks: dict[str, int] = {}
+
+        def switches(axis):
+            looks[axis] = looks.get(axis, 0) + 1
+            return _switches(home=(axis in "BD" and looks[axis] == 1))
+
+        g.get_switch_states.side_effect = switches
+        ok, msg = MultiAxisHomeRoutine(g).run(seek_first=False)
+        assert ok, msg
+        assert g.move_relative_multi.call_args_list[0].args == (
+            "BD", SC.HOME_START_BACKOFF_COUNTS
+        )
