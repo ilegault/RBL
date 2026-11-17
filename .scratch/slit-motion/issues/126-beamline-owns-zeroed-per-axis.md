@@ -1,6 +1,6 @@
 # 126: Beamline owns "zeroed", per axis, and it can turn off
 
-**Status:** in-progress
+**Status:** blocked
 
 **Runner:** any
 
@@ -107,3 +107,26 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+### 2026-11-17 - blocked (implementer)
+
+Implemented per the ticket: Beamline owns zeroed (mark/clear/is/all), AxisSnapshot.zeroed,
+ingest_motor_poll(snapshot) with no zeroed parameter, raw_state_changed Signal(dict), connect and
+E-stop clear it, console DP marks it, docstrings updated, rebased over 125 and 130. Ruff, tests-first
+and type gate pass locally.
+
+What fails: 6 tests in `tests/test_screenshot_overview.py` (test_scene_round_trips_through_the_real_conversion,
+test_scene_reaches_the_overview_screen, test_feed_stops_when_real_data_arrives,
+test_feed_stops_when_an_instrument_connects, test_feed_survives_its_own_pushes,
+test_screenshot_mode_arranges_titles_and_unhooks_connect_all), all with
+`TypeError: MotorControlMixin.ingest_motor_poll() takes 2 positional arguments but 3 were given`
+at `scripts/screenshot_overview.py:157` (`beamline.ingest_motor_poll(scene.motor_poll, scene.zeroed)`).
+
+Cause: the ticket drops the `zeroed` parameter, but the screenshot-mode script (ticket 61) still calls the
+old signature. The tests are right; the fix belongs in `scripts/screenshot_overview.py`
+(call `mark_zeroed` per axis when `scene.zeroed`, then `ingest_motor_poll(scene.motor_poll)`), and
+implementers may not edit `scripts/`. I did not add a compatibility parameter, since that contradicts the ticket.
+
+Decision needed: a human (or a ticket permitting it) updates `scripts/screenshot_overview.py` as above, then this branch
+should go green. One further failure seen once under -n auto, `test_capture_client.py::test_hello_in_time_cancels_the_hello_timeout`,
+passed on rerun (timing flake, unrelated).
