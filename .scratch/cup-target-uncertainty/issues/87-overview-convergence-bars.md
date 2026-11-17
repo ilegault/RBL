@@ -1,6 +1,6 @@
 # 87: Overview cup panel: uncertainty and insertion bars
 
-**Status:** done
+**Status:** blocked
 
 **Runner:** any
 
@@ -72,6 +72,16 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+## Escalation — 2026-11-17
+Repo: RBL   Ticket: 87 Overview cup panel: uncertainty and insertion bars   Branch: ticket/cup-target-uncertainty-87-overview-convergence-bars
+Goal: Show two thin stacked bars (uncertainty and elapsed time) on the Overview cup panel while an insertion is open, and a one-line summary while out.
+Attempt 1: Implemented CupView, FaradayCupTab._emit_cup_view, CupPanel bars, and 5 new tests in tests/test_cup_panel.py (all 15 pass; ruff/tests-first/type_gate pass; full pytest had 2901 passed + 3 pre-existing parallel/Python-3.14 GC/resource-contention failures that pass when run individually except test_screenshot_overview.py's Python 3.14 matplotlib GC crash). -> Local integrity gate Check 7 passed (all 5 new tests failed on base code), but Check 9 failed because criterion 5 cites an existing prior-art test in backticks.
+Failing output (exact, trimmed to the relevant lines):
+Verdict: fail
+- Check 7 pass: All 5 new test(s) failed on base code (runtime 18.20s)
+- Check 9 fail: `test_charge_text_matches_the_faraday_tab_after_an_insertion_closes` (criterion "A rig test (prior art: `test_charge_text_matches_the_faraday") did not fail on the base code, so it does not prove the criterion
+Decision needed: On master, un-backtick or rephrase `(prior art: test_charge_text_matches_the_faraday_tab_after_an_insertion_closes)` in criterion 5 so the integrity gate does not require an existing test to fail on base code, or merge as-is.
 
 Summary (2026-11-17):
 - `src/rbl/services/cup_log.py`: extended `CupView` with defaulted bar/uncertainty/elapsed/last-insertion fields.
