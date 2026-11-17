@@ -104,6 +104,11 @@ DEFAULT_HOME_VELOCITY_COUNTS_PER_SEC = 256
 # --- Amplifier / motor configuration (2HA075520 amplifier) -------------------
 MOTOR_TYPE      = -2.5  # MT: step motor, active-high step pulse
 STEP_RESOLUTION = 2     # YA: 1=full, 2=half, 4=quarter, 8=eighth
+# A stalled two-phase stepper slips by whole electrical cycles: four full steps
+# (8 counts at half-stepping).  Edge-return analysis looks for jumps of this size.
+LOST_STEP_GROUP_COUNTS = 4 * STEP_RESOLUTION
+# How far from a multiple of the group a jump may be and still count as a lost step.
+LOST_STEP_TOLERANCE_COUNTS = 2
 LOW_CURRENT_ON  = 1     # LC: reduced holding current (0=off, 1=on)
 AMP_GAIN        = 3     # AG: amplifier gain setting
 MOTOR_SMOOTHING = 2.0   # YB

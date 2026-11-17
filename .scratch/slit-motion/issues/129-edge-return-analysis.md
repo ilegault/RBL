@@ -1,6 +1,6 @@
 # 129: Edge-return analysis
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -45,18 +45,18 @@ This ticket is the pure math that turns those readings into an answer. No Galil,
 
 ## Acceptance criteria
 
-- [ ] Test `test_lost_step_jump_rule` in `tests/test_edge_return.py` (new file): `is_lost_step_jump`
+- [x] Test `test_lost_step_jump_rule` in `tests/test_edge_return.py` (new file): `is_lost_step_jump`
       is `True` for 8, -8, 6, 10, 16, -15 and `False` for 0, 1, 3, 5, 12, -4.
-- [ ] Test `test_analysis_of_a_steady_edge` in `tests/test_edge_return.py`: readings
+- [x] Test `test_analysis_of_a_steady_edge` in `tests/test_edge_return.py`: readings
       `[1000, 1001, 999, 1000, 1001]` give `n == 5`, `deltas_counts == (1, -2, 1, 1)`,
       `total_drift_counts == 1`, `spread_counts == 2`, `lost_step_jumps == ()`, and
       `std_counts == pytest.approx(0.748, abs=1e-3)`.
-- [ ] Test `test_analysis_finds_a_lost_step_jump` in `tests/test_edge_return.py`: readings
+- [x] Test `test_analysis_finds_a_lost_step_jump` in `tests/test_edge_return.py`: readings
       `[1000, 1000, 1008, 1008, 1009]` give `lost_step_jumps == (1,)` and `total_drift_counts == 9`.
-- [ ] Test `test_summary_line_text` in `tests/test_edge_return.py`: for readings
+- [x] Test `test_summary_line_text` in `tests/test_edge_return.py`: for readings
       `[1000, 1001, 999, 1000, 1001]`, axis `"A"`, speed 58, the line equals
       `"A [X+] @ 58 cps: n=5, spread 2 cts (3.2 µm), drift +1 cts, σ 0.75 cts, lost-step jumps: 0"`.
-- [ ] Test `test_analysis_needs_two_readings` in `tests/test_edge_return.py`: `[]` and `[5]` each raise
+- [x] Test `test_analysis_needs_two_readings` in `tests/test_edge_return.py`: `[]` and `[5]` each raise
       `ValueError`.
 
 **What tests may fake:** nothing. This is pure math on plain integers.
