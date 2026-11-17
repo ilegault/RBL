@@ -1,6 +1,6 @@
 # 86: Manual insertions can retract on convergence, optionally with no time limit
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
