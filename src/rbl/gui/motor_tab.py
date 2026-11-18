@@ -36,6 +36,18 @@ Three buttons now cover that — seek the limit, three HM passes, DP=0:
     the idiom the HM reference itself gives ("HM Set Homing Mode for all axes /
     BG Home all axes"). (MultiAxisHomeWorker.)
 
+EDGE-RETURN TEST
+----------------
+"Edge-Return Test — Homing Repeatability" runs EdgeReturnWorker on one axis at
+each of the three home pass speeds, one after another, so the operator can tell
+switch jitter (a few counts) from lost steps (jumps of about 8 counts) without
+guessing. It NEVER defines zero (no DP, no mark_zeroed) and the below-home floor
+does not apply to it: it is a measurement, not a homing. It refuses to start
+unless the Galil is connected and nothing is homing, and while it runs it locks
+that axis's motion controls, both auto-home buttons and the pass-speed boxes.
+One CSV for the whole run is written at the end, even after a failure or cancel,
+when at least one speed produced two or more readings.
+
 Any homing run locks its axis's jog/move/zero controls (a second command on a
 homing axis is the thing to prevent) but never its Stop, its Home buttons —
 which read Cancel while running — or the EMERGENCY STOP, which additionally
@@ -61,13 +73,16 @@ from rbl.config import hardware_config as SC
 from rbl.gui import theme
 from rbl.gui.widgets.command_console import HistoryLineEdit, LogPane
 from rbl.gui.widgets.inputs import NoScrollComboBox, QuietDoubleSpinBox
+from rbl.hardware.edge_return import analyse_edge_returns, summary_line
 from rbl.hardware.galil_driver import GalilController, GalilError
 from rbl.hardware.galil_workers import (
     AutoHomeAllWorker,
+    EdgeReturnWorker,
     GalilPollWorker,
     HomingWorker,
     MultiAxisHomeWorker,
 )
+from rbl.services.edge_return_writer import write_edge_return_csv
 
 
 def dp_axes(command: str) -> str:
@@ -783,6 +798,7 @@ class MotorTab(QWidget):
 
         # ── Automatic homing (all four axes) ────────────────────────────────
         left_layout.addWidget(self._build_auto_home_box())
+        left_layout.addWidget(self._build_edge_return_box())
 
         # ── 4 axis panels in 2×2 grid ────────────────────────────────────────
         grid = QGridLayout()
@@ -925,6 +941,138 @@ class MotorTab(QWidget):
             theme.status_label(theme.NEUTRAL, bold=False) + "font-size: 12px;")
         lay.addWidget(self.lbl_auto_home)
         return box
+
+    _EDGE_NOTE_STANDING = (
+        "Moves the axis out and back to the home switch, cycle after cycle, "
+        "at each home pass speed. Never sets zero. A spread of a few counts "
+        "is switch jitter; jumps of about 8 counts are lost steps."
+    )
+    _EDGE_NOTE_REFUSED = (
+        "Edge-return test needs a connected Galil and no homing in progress."
+    )
+
+    def _build_edge_return_box(self) -> QGroupBox:
+        """The edge-return test: homing repeatability without touching zero."""
+        box = QGroupBox("Edge-Return Test — Homing Repeatability")
+        lay = QVBoxLayout(box)
+        lay.setSpacing(4)
+        row = QHBoxLayout()
+        row.setSpacing(6)
+
+        self.cbo_edge_axis = NoScrollComboBox()
+        for letter in SC.AXIS_LETTERS:
+            self.cbo_edge_axis.addItem(f"{letter} — {SC.AXIS_NAMES[letter]}", letter)
+        row.addWidget(QLabel("Axis"))
+        row.addWidget(self.cbo_edge_axis)
+
+        self.spn_edge_cycles = QuietDoubleSpinBox()
+        self.spn_edge_cycles.setDecimals(0)
+        self.spn_edge_cycles.setRange(2.0, 100.0)
+        self.spn_edge_cycles.setValue(float(SC.EDGE_RETURN_DEFAULT_CYCLES))
+        row.addWidget(QLabel("Cycles"))
+        row.addWidget(self.spn_edge_cycles)
+
+        self.spn_edge_out = QuietDoubleSpinBox()
+        self.spn_edge_out.setDecimals(0)
+        self.spn_edge_out.setRange(500.0, 20000.0)
+        self.spn_edge_out.setValue(float(SC.EDGE_RETURN_DEFAULT_OUT_COUNTS))
+        row.addWidget(QLabel("Out (counts)"))
+        row.addWidget(self.spn_edge_out)
+
+        self.btn_edge_run = QPushButton("Run edge-return test")
+        self.btn_edge_run.clicked.connect(self._on_edge_run_clicked)
+        row.addWidget(self.btn_edge_run, stretch=1)
+        lay.addLayout(row)
+
+        self.lbl_edge_note = QLabel(self._EDGE_NOTE_STANDING)
+        self.lbl_edge_note.setWordWrap(True)
+        self.lbl_edge_note.setStyleSheet(
+            theme.status_label(theme.NEUTRAL, bold=False) + "font-size: 12px;")
+        lay.addWidget(self.lbl_edge_note)
+
+        self._edge_worker = None
+        self._edge_axis = ""
+        self._edge_speeds: list[int] = []
+        self._edge_runs: list[tuple[int, list[int]]] = []
+        self._edge_locked_axis = ""
+        return box
+
+    def _set_edge_note(self, text: str, role: str = theme.NEUTRAL):
+        self.lbl_edge_note.setText(text)
+        self.lbl_edge_note.setStyleSheet(
+            theme.status_label(role, bold=False) + "font-size: 12px;")
+
+    def _any_homing_active(self) -> bool:
+        return (self._auto_worker_running() or self._parallel_worker_running()
+                or any(p.homing_active() for p in self.axes.values()))
+
+    def _on_edge_run_clicked(self):
+        if self._edge_worker is not None:
+            self._edge_worker.cancel()
+            self._set_edge_note("Cancelling after the current cycle…", theme.WARN)
+            return
+        if not self.galil.connected or self._any_homing_active():
+            self._set_edge_note(self._EDGE_NOTE_REFUSED, theme.WARN)
+            return
+        axis = self.cbo_edge_axis.currentData()
+        self._edge_axis = axis
+        self._edge_speeds = list(self.beamline.home_pass_speeds())
+        self._edge_runs = []
+        self._edge_locked_axis = axis
+        self.axes[axis].set_motion_controls_enabled(False)
+        self.btn_auto_home_seq.setEnabled(False)
+        self.btn_auto_home_par.setEnabled(False)
+        for spn in (self.spn_pass1, self.spn_pass2, self.spn_pass3):
+            spn.setEnabled(False)
+        self.btn_edge_run.setText("Cancel edge-return test")
+        self._set_edge_note(f"Edge-return test running on axis {axis}…", theme.WARN)
+        p1, p2, p3 = self._edge_speeds
+        self._log_line(f"# Edge-return test on {axis} at {p1}, {p2}, {p3} cps")
+        self._start_next_edge_speed()
+
+    def _start_next_edge_speed(self):
+        speed = self._edge_speeds[len(self._edge_runs)]
+        worker = EdgeReturnWorker(
+            self.galil, self._edge_axis, speed,
+            int(round(self.spn_edge_cycles.value())),
+            int(round(self.spn_edge_out.value())), self)
+        self._edge_worker = worker
+        worker.progress.connect(self._log_line)
+        worker.done.connect(self._on_edge_speed_done)
+        worker.start()
+
+    def _on_edge_speed_done(self, ok: bool, msg: str, readings: list):
+        # A cancelled routine reports ok=False with its partial readings, so
+        # cancel takes the failure path and ends the chain.
+        speed = self._edge_speeds[len(self._edge_runs)]
+        self._edge_runs.append((speed, list(readings)))
+        if not ok:
+            self._log_line("✗ " + msg)
+            self._finish_edge_return(False, msg)
+            return
+        self._log_line(summary_line(
+            analyse_edge_returns(list(readings)), self._edge_axis, speed))
+        if len(self._edge_runs) >= len(self._edge_speeds):
+            self._finish_edge_return(True, msg)
+        else:
+            self._start_next_edge_speed()
+
+    def _finish_edge_return(self, ok: bool, msg: str):
+        runs = [(s, r) for s, r in self._edge_runs if len(r) >= 2]
+        if runs:
+            path = write_edge_return_csv(self._edge_axis, runs)
+            self._log_line(f"# Edge-return CSV: {path}")
+        self._edge_worker = None
+        axis = self._edge_locked_axis
+        if axis:
+            self.axes[axis].set_motion_controls_enabled(True)
+        self._edge_locked_axis = ""
+        self.btn_auto_home_seq.setEnabled(self.galil.connected)
+        self.btn_auto_home_par.setEnabled(self.galil.connected)
+        self._update_pass_speeds_enabled()
+        self.btn_edge_run.setText("Run edge-return test")
+        self._set_edge_note(msg if not ok else self._EDGE_NOTE_STANDING,
+                            theme.FAULT if not ok else theme.NEUTRAL)
 
     def _set_auto_home_note(self, text: str, role: str = theme.NEUTRAL):
         self.lbl_auto_home.setText(text)

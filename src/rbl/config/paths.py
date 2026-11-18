@@ -61,6 +61,9 @@ AMPLIFIER_ASSIGNMENTS_STORE: Path = CONFIG_DIR / "amplifier_assignments.jsonl"
 # One file per load-characterization result, never overwritten.
 CHARACTERIZATION_DIR: Path = DATA_DIR / "load_characterization"
 
+# One CSV per edge-return test (homing repeatability), never overwritten.
+HOMING_DIR: Path = DATA_DIR / "homing"
+
 
 def zwo_sdk_dll_path(frozen: bool, bundle_dir: Path | None,
                      repo_root: Path, env: Mapping[str, str]) -> Path:
