@@ -25,6 +25,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from rbl.build_info import build_info
 from rbl.config import calibration_config, hardware_config
 
 log = logging.getLogger(__name__)
@@ -114,6 +115,9 @@ class CalibrationWriter:
         self.metadata: dict = dict(metadata or {})
         self.metadata.setdefault("run_id", self.run_id)
         self.metadata.setdefault("start_timestamp_iso", now_iso())
+        # git_commit_hash() is "" in a frozen build (no git on the control
+        # PC); the build stamp still says exactly which code wrote this run.
+        self.metadata.setdefault("rbl_build", build_info().as_dict())
 
         self._file = open(self.csv_path, "w", newline="", encoding="utf-8")
         self._csv  = csv.DictWriter(self._file, fieldnames=CSV_COLUMNS)

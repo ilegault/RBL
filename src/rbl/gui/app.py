@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from rbl import driver as ljm_driver
+from rbl.build_info import build_info
 from rbl.gui import theme
 from rbl.gui.amp_tab import AmpTab
 from rbl.gui.calibration_tab import CalibrationTab
@@ -62,6 +63,11 @@ from rbl.services.session_regulation_watch import SessionRegulationWatch
 from rbl.services.spike_recorder import SpikeRecorder
 from rbl.state.beamline import Beamline
 from rbl.util import best_effort
+
+
+def window_title() -> str:
+    return f"Right Beam Line DAQ — {build_info().label()}"
+
 
 # ─── Split-aware tab bar ──────────────────────────────────────────────────────
 
@@ -204,7 +210,9 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Right Beam Line DAQ")
+        # The build stamp (rbl/build_info.py) is in the title so the operator
+        # can tell which copy of the one-folder build is running.
+        self.setWindowTitle(window_title())
         self.resize(1440, 920)
         # Keep the floor low so the whole app stays compressible in the
         # horizontal direction; each tab is wrapped in a scroll area (see
@@ -976,6 +984,9 @@ def main():
         format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
         handlers=[logging.StreamHandler(sys.stderr), _file_handler],
     )
+    _info = build_info()
+    log.info("RBL %s  built=%s frozen=%s", _info.label(),
+             _info.built_at or "-", _info.frozen)
     app = make_application(sys.argv)
 
     win = MainWindow()

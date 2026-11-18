@@ -17,7 +17,7 @@ if "!VERSION!"=="" (
 )
 
 echo Updating version_info.txt to version !VERSION!...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "& { param($ver) $v=$ver.Split('.'); while($v.Count -lt 4){$v+='0'}; $t='('+($v[0..3]-join', ')+')'; $d=$v[0..3]-join'.'; $q=[char]39; $c=[IO.File]::ReadAllText('version_info.txt'); $c=$c-replace'filevers=\([0-9, ]+\)','filevers='+$t; $c=$c-replace'prodvers=\([0-9, ]+\)','prodvers='+$t; $svr='${1}'+$d+$q; $p1='([(]'+$q+'FileVersion'+$q+',\s*'+$q+')[^'+$q+']+'+$q; $c=$c-replace$p1,$svr; $p2='([(]'+$q+'ProductVersion'+$q+',\s*'+$q+')[^'+$q+']+'+$q; $c=$c-replace$p2,$svr; [IO.File]::WriteAllText('version_info.txt',$c,[Text.Encoding]::ASCII); Write-Host '  -> version_info.txt updated to '+$d } '!VERSION!'"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& { param($ver) $ErrorActionPreference='Stop'; $v=$ver.Split('.'); while($v.Count -lt 4){$v+='0'}; $t='('+($v[0..3]-join', ')+')'; $d=$v[0..3]-join'.'; $q=[char]39; $c=[IO.File]::ReadAllText('version_info.txt'); $c=$c-replace'filevers=\([0-9, ]+\)',('filevers='+$t); $c=$c-replace'prodvers=\([0-9, ]+\)',('prodvers='+$t); $svr='${1}'+$d+$q; $p1='([(]'+$q+'FileVersion'+$q+',\s*'+$q+')[^'+$q+']+'+$q; $c=$c-replace$p1,$svr; $p2='([(]'+$q+'ProductVersion'+$q+',\s*'+$q+')[^'+$q+']+'+$q; $c=$c-replace$p2,$svr; [IO.File]::WriteAllText('version_info.txt',$c,[Text.Encoding]::ASCII); Write-Host ('  -> version_info.txt updated to '+$d) } '!VERSION!'"
 if !ERRORLEVEL! NEQ 0 (
     echo   ERROR: Failed to update version_info.txt
     exit /b 1
@@ -125,6 +125,19 @@ if exist "!USB_DRIVE!\RBL" (
     rmdir /S /Q "!USB_DRIVE!\RBL"
 )
 
+:: --- Build stamp ---
+:: build_info.json (repo root, gitignored) is bundled by rbl.spec and read by
+:: src\rbl\build_info.py: window title, rbl.log, session/calibration sidecars.
+:: The deploy folder stays named RBL; the version lives inside it instead.
+echo.
+echo Writing build stamp...
+if exist build_info.json del /Q build_info.json
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& { param($ver) $c=(git rev-parse --short HEAD 2>$null); if(-not $c){$c=''}; $d=[bool](git status --porcelain --untracked-files=no 2>$null); $o=[ordered]@{version=$ver; commit=[string]$c; dirty=$d; built_at=(Get-Date -Format s)}; [IO.File]::WriteAllText('build_info.json',($o|ConvertTo-Json),(New-Object Text.UTF8Encoding $false)); Write-Host ('  -> v'+$ver+'  commit '+$c+$(if($d){' (uncommitted changes)'}else{''})) } '!VERSION!'"
+if not exist build_info.json (
+    echo   ERROR: Failed to write build_info.json
+    exit /b 1
+)
+
 :: --- Build ---
 echo.
 echo Running PyInstaller...
@@ -132,6 +145,13 @@ pyinstaller rbl.spec
 if !ERRORLEVEL! NEQ 0 (
     echo.
     echo BUILD FAILED - nothing was deployed.
+    exit /b 1
+)
+
+:: --- VERSION.txt beside RBL.exe, readable from Explorer without launching ---
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& { $j=Get-Content build_info.json -Raw | ConvertFrom-Json; $dirty=$(if($j.dirty){' (built with uncommitted changes)'}else{''}); $t=@(('RBL version '+$j.version), ('Commit      '+$j.commit+$dirty), ('Built       '+$j.built_at)); [IO.File]::WriteAllLines('dist\RBL\VERSION.txt',[string[]]$t) }"
+if not exist dist\RBL\VERSION.txt (
+    echo   ERROR: Failed to write dist\RBL\VERSION.txt
     exit /b 1
 )
 

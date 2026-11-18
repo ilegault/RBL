@@ -10,15 +10,17 @@
 # now the properties tab is empty and the only clue is the filename.
 #
 # Every field here is TRUE. This declares what the app is; it does not
-# disguise anything. Keep filevers/prodvers in step with the deploy folder
-# name (RBL3.86 -> 3.86.0.0) so a blocked binary can be traced to a build.
+# disguise anything. build.bat rewrites filevers/prodvers from the version
+# typed at its prompt -- the same number stamped into build_info.json and
+# VERSION.txt (src/rbl/build_info.py) -- so a blocked binary can be traced
+# to a build. The deploy folder itself stays named RBL.
 #
 # Wired in by rbl.spec:  EXE(..., version='version_info.txt', ...)
 
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(3, 86, 0, 0),
-    prodvers=(3, 86, 0, 0),
+    filevers=(4, 0, 1, 0),
+    prodvers=(4, 0, 1, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,

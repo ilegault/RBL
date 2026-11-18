@@ -72,6 +72,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QApplication, QProgressDialog
 
+from rbl.build_info import build_info
 from rbl.config import paths, zwo_settings_store
 from rbl.config.recording_config import (
     CSV_INTERVAL_DEFAULT_S,
@@ -1211,6 +1212,8 @@ class SessionRecorder(QObject):
             "stopped_utc":  stopped_utc,
             "duration_s":   t_rel if not self._recording else None,
             "t0_mono":      self._t0_mono,
+            # Which build recorded this session (rbl/build_info.py).
+            "rbl_build":    build_info().as_dict(),
             "csv": {
                 "interval_s": self._csv_interval_s,
                 "rows":       self._csv_writer.row_count if self._csv_writer else 0,
