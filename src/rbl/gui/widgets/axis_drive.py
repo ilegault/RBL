@@ -1,6 +1,6 @@
 """
 axis_drive.py
-One steering AXIS's raster drive: amplitude, frequency, and output enable.
+One steering AXIS's raster drive: amplitude, offset, frequency, and output enable.
 
 The Function Generators tab is organised per channel because that is how the
 instruments are organised. This widget is organised per axis because that is
@@ -19,9 +19,14 @@ what the shared model exists to prevent. One unit from the box to the
 instrument means no conversion exists anywhere in the path. What the operator
 needs to stay inside the +/-5 V interlock is shown separately, as the INPUT
 PEAK line under the boxes (see CONTEXT.md "Raster drive"), computed by
-peak_status so it classifies exactly as the FG tab does.
+peak_status so it classifies exactly as the FG tab does, using the larger of
+the axis's two channels' input peaks from each channel's real shape and offset.
 
-Offset is not offered yet: the raster runs centred, so offset is 0 V.
+Offset is controlled with a Link ± toggle (owned by FuncGenSetpoints). When
+linked, one Offset box sets the + plate to +offset and the - plate to -offset.
+When unlinked, two per-plate boxes edit each channel independently. Offset boxes
+never clamp against amplitude so the operator can type freely and see the input
+peak line turn FAULT when over the ±5 V limit.
 
 Commands nothing. It edits a shared FuncGenSetpoints entry through its owner
 (signals out) and renders whatever readback it is handed — every path to a
@@ -29,6 +34,7 @@ generator still goes through Beamline.
 """
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -41,17 +47,20 @@ from PySide6.QtWidgets import (
 from rbl.gui import theme
 from rbl.gui.widgets.inputs import QuietDoubleSpinBox, unit_row
 from rbl.gui.widgets.mini import VMiniBar
-from rbl.hardware.funcgen_driver import MAX_AMP_VPP
+from rbl.hardware.funcgen_driver import MAX_AMP_VPP, MAX_GEN_VOLTS
 from rbl.hardware.funcgen_safety import PEAK_WARN_VOLTS, peak_status
 from rbl.state.setpoints import AXIS_CHANNELS, AXIS_GENERATOR
 
 
 class AxisDriveControl(QGroupBox):
-    """Amplitude / frequency / output for one steering axis (both its channels)."""
+    """Amplitude / offset / frequency / output for one steering axis (both its channels)."""
 
     # axis label, amplitude Vpp (native units), frequency Hz
-    params_edited  = Signal(str, float, float)
-    output_toggled = Signal(str, bool)
+    params_edited         = Signal(str, float, float)
+    offset_edited         = Signal(str, float)
+    channel_offset_edited = Signal(str, float)
+    link_toggled          = Signal(str, bool)
+    output_toggled        = Signal(str, bool)
 
     def __init__(self, axis: str, parent=None):
         self.axis     = axis
@@ -65,6 +74,10 @@ class AxisDriveControl(QGroupBox):
         # writing INTO this widget, so a sync from the other tab is not
         # mistaken for the operator typing here.
         self._syncing = False
+        self._plus_shape = "Triangle"
+        self._minus_shape = "Triangle"
+        self._plus_amp_vpp = 0.0
+        self._minus_amp_vpp = 0.0
 
         self.setSizePolicy(QSizePolicy.Policy.Preferred,
                            QSizePolicy.Policy.Maximum)
@@ -123,6 +136,46 @@ class AxisDriveControl(QGroupBox):
         self.spn_freq.valueChanged.connect(self._on_edited)
         form.addRow(self._form_label("Frequency:"),
                     unit_row(self.spn_freq, "Hz", font_size=theme.FS_LABEL))
+
+        self.chk_link = QCheckBox("Link ±")
+        self.chk_link.setChecked(True)
+        self.chk_link.setStyleSheet(f"font-size: {theme.FS_LABEL}px;")
+        self.chk_link.setToolTip(
+            f"Hold {self.slits[0]} and {self.slits[1]} offsets equal and opposite "
+            "(+offset on +, −offset on −).\n"
+            "Untick to set each plate's DC offset independently."
+        )
+        self.chk_link.toggled.connect(self._on_link_toggled)
+        form.addRow("", self.chk_link)
+
+        self.spn_offset = self._make_offset_spinbox(
+            f"Differential offset (V): {self.slits[0]} gets +offset, "
+            f"{self.slits[1]} gets −offset."
+        )
+        self.spn_offset.valueChanged.connect(self._on_offset_edited)
+        self._linked_offset_row = unit_row(self.spn_offset, "V", font_size=theme.FS_LABEL)
+        form.addRow(self._form_label("Offset:"), self._linked_offset_row)
+
+        self.spn_offset_plus = self._make_offset_spinbox(
+            f"DC offset (V) on {self.slits[0]} ({self.channels[0]})."
+        )
+        self.spn_offset_plus.valueChanged.connect(
+            lambda v: self._on_channel_offset_edited(self.channels[0], v)
+        )
+        self._plus_offset_row = unit_row(self.spn_offset_plus, "V", font_size=theme.FS_LABEL)
+        form.addRow(self._form_label(f"{self.slits[0]} offset:"), self._plus_offset_row)
+
+        self.spn_offset_minus = self._make_offset_spinbox(
+            f"DC offset (V) on {self.slits[1]} ({self.channels[1]})."
+        )
+        self.spn_offset_minus.valueChanged.connect(
+            lambda v: self._on_channel_offset_edited(self.channels[1], v)
+        )
+        self._minus_offset_row = unit_row(self.spn_offset_minus, "V", font_size=theme.FS_LABEL)
+        form.addRow(self._form_label(f"{axis}− offset:"), self._minus_offset_row)
+
+        self._form = form
+        self._apply_link_visibility(True)
 
         row.addLayout(form, stretch=1)
 
@@ -184,10 +237,41 @@ class AxisDriveControl(QGroupBox):
         lbl.setStyleSheet(f"font-size: {theme.FS_LABEL}px;")
         return lbl
 
+    @staticmethod
+    def _make_offset_spinbox(tooltip: str) -> QuietDoubleSpinBox:
+        spn = QuietDoubleSpinBox()
+        spn.setRange(-MAX_GEN_VOLTS, MAX_GEN_VOLTS)
+        spn.setDecimals(4)
+        spn.setSingleStep(0.1)
+        spn.setMinimumWidth(20)
+        spn.setMaximumWidth(120)
+        spn.setMinimumHeight(22)
+        spn.setStyleSheet(f"font-size: {theme.FS_LABEL}px;")
+        spn.setToolTip(tooltip)
+        return spn
+
+    def _apply_link_visibility(self, linked: bool) -> None:
+        self._form.setRowVisible(self._linked_offset_row, linked)
+        self._form.setRowVisible(self._plus_offset_row, not linked)
+        self._form.setRowVisible(self._minus_offset_row, not linked)
+
     # ---- Setpoint in / out -----------------------------------------------------
 
-    def set_setpoint(self, amp_vpp: float, freq_hz: float, output_on: bool,
-                     matched: bool = True):
+    def set_setpoint(
+        self,
+        amp_vpp: float,
+        freq_hz: float,
+        output_on: bool,
+        matched: bool = True,
+        *,
+        linked: bool = True,
+        plus_offset_v: float = 0.0,
+        minus_offset_v: float = 0.0,
+        plus_shape: str = "Triangle",
+        minus_shape: str = "Triangle",
+        plus_amp_vpp: float | None = None,
+        minus_amp_vpp: float | None = None,
+    ):
         """Render the shared setpoint. Never emits — this is a sync, not an edit.
 
         Written through sync_value() rather than setValue(): this is the path a
@@ -198,9 +282,18 @@ class AxisDriveControl(QGroupBox):
         try:
             self.spn_amp.sync_value(amp_vpp)
             self.spn_freq.sync_value(freq_hz)
+            self.spn_offset.sync_value(plus_offset_v)
+            self.spn_offset_plus.sync_value(plus_offset_v)
+            self.spn_offset_minus.sync_value(minus_offset_v)
+            self.chk_link.setChecked(linked)
             self.btn_output.setChecked(output_on)
         finally:
             self._syncing = False
+        self._plus_shape = plus_shape
+        self._minus_shape = minus_shape
+        self._plus_amp_vpp = amp_vpp if plus_amp_vpp is None else plus_amp_vpp
+        self._minus_amp_vpp = amp_vpp if minus_amp_vpp is None else minus_amp_vpp
+        self._apply_link_visibility(linked)
         self.btn_output.setText("Output ON" if output_on else "Output OFF")
         self.bar.set_target(amp_vpp)
         self._update_hv_label(matched)
@@ -208,10 +301,30 @@ class AxisDriveControl(QGroupBox):
     def _on_edited(self, *_):
         if self._syncing:
             return
+        self._plus_amp_vpp = self._minus_amp_vpp = self.spn_amp.value()
         self._update_hv_label()
         self.bar.set_target(self.spn_amp.value())
         self.params_edited.emit(self.axis, self.spn_amp.value(),
                                 self.spn_freq.value())
+
+    def _on_offset_edited(self, value: float):
+        if self._syncing:
+            return
+        self._update_hv_label()
+        self.offset_edited.emit(self.axis, value)
+
+    def _on_channel_offset_edited(self, key: str, value: float):
+        if self._syncing:
+            return
+        self._update_hv_label()
+        self.channel_offset_edited.emit(key, value)
+
+    def _on_link_toggled(self, checked: bool):
+        self._apply_link_visibility(checked)
+        if self._syncing:
+            return
+        self._update_hv_label()
+        self.link_toggled.emit(self.axis, checked)
 
     def _on_output_toggled(self, checked: bool):
         self.btn_output.setText("Output ON" if checked else "Output OFF")
@@ -242,8 +355,8 @@ class AxisDriveControl(QGroupBox):
         out = "ON" if (plus.output_on and minus.output_on) else \
               ("OFF" if not (plus.output_on or minus.output_on) else "SPLIT")
         self.lbl_readback.setText(
-            f"{self.slits[0]} {plus.amp_vpp:.2f} Vpp · "
-            f"{self.slits[1]} {minus.amp_vpp:.2f} Vpp"
+            f"{self.slits[0]} {plus.amp_vpp:.2f} Vpp {plus.offset_v:+.3f} V · "
+            f"{self.slits[1]} {minus.amp_vpp:.2f} Vpp {minus.offset_v:+.3f} V"
             f" @ {plus.freq_hz:.4g} Hz out={out}"
         )
         # A pair that disagrees is not driving a differential raster, whatever
@@ -256,20 +369,42 @@ class AxisDriveControl(QGroupBox):
             style.format(theme.WARN if split else theme.NEUTRAL))
 
     def set_connected(self, on: bool):
-        for w in (self.spn_amp, self.spn_freq, self.btn_output):
+        for w in (
+            self.spn_amp,
+            self.spn_freq,
+            self.spn_offset,
+            self.spn_offset_plus,
+            self.spn_offset_minus,
+            self.chk_link,
+            self.btn_output,
+        ):
             w.setEnabled(on)
 
     # ---- Consequence label -----------------------------------------------------
 
     def _update_hv_label(self, matched: bool = True):
-        """The input peak the typed amplitude puts on the amplifier input.
+        """The larger input peak across this axis's two channels.
 
-        Offset is fixed at 0 V here, so the peak is half the Vpp. Evaluated by
-        peak_status, the same function the Function Generators tab uses, so the
-        two screens can never classify a peak differently. No kV figure is
-        shown beside an input: the operator types Vpp and checks volts.
+        Evaluated by peak_status using each channel's real shape and offset,
+        the same function the Function Generators tab uses, so the two screens
+        can never classify a peak differently. No kV figure is shown beside an
+        input: the operator types Vpp and V and checks volts.
         """
-        status, peak = peak_status("Triangle", self.spn_amp.value(), 0.0)
+        if self.chk_link.isChecked():
+            plus_off = self.spn_offset.value()
+            minus_off = -plus_off
+        else:
+            plus_off = self.spn_offset_plus.value()
+            minus_off = self.spn_offset_minus.value()
+
+        plus_status, plus_peak = peak_status(
+            self._plus_shape, self._plus_amp_vpp, plus_off)
+        minus_status, minus_peak = peak_status(
+            self._minus_shape, self._minus_amp_vpp, minus_off)
+        if minus_peak > plus_peak:
+            status, peak = minus_status, minus_peak
+        else:
+            status, peak = plus_status, plus_peak
 
         text = f"input peak {peak:.2f} V"
         if not matched:
