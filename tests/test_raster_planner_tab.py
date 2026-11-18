@@ -191,12 +191,96 @@ class TestBladePositions:
                 moved[label] = mm
                 return True
 
+            def is_zeroed(self, axis):
+                return True
+
+            def axis_letter_for(self, label):
+                return {"X+": "A", "X-": "B", "Y+": "C", "Y-": "D"}[label]
+
         wired = RasterPlannerTab(beamline=FakeBeamline())
         wired.recompute()
         assert wired.btn_apply_slits.isEnabled()
         # Enabling the button is not the same as pressing it. Nothing about a
         # recompute may reach the hardware.
         assert moved == {}
+
+
+class TestApplyToUnzeroedSlits:
+    """Apply to slits asks first when any blade is not zeroed."""
+
+    LETTERS = {"X+": "A", "X-": "B", "Y+": "C", "Y-": "D"}
+
+    def build_wired(self, monkeypatch, zeroed_letters):
+        from PySide6.QtWidgets import QMessageBox
+        moved = []
+        letters = self.LETTERS
+
+        class FakeBeamline:
+            def move_slit(self, label, mm):
+                moved.append(label)
+                return True
+
+            def is_zeroed(self, axis):
+                return axis in zeroed_letters
+
+            def axis_letter_for(self, label):
+                return letters[label]
+
+        monkeypatch.setattr(QMessageBox, "question",
+                            lambda *a, **k: QMessageBox.StandardButton.Yes)
+        return RasterPlannerTab(beamline=FakeBeamline()), moved
+
+    def test_apply_to_unzeroed_slits_asks_and_can_be_declined(self, qapp, monkeypatch):
+        wired, moved = self.build_wired(monkeypatch, {"A", "B", "D"})
+        asked = []
+
+        def decline(self_, slits):
+            asked.append(slits)
+            return False
+
+        monkeypatch.setattr(RasterPlannerTab, "_confirm_unzeroed_apply", decline)
+        wired.btn_apply_slits.click()
+        assert asked == [["Y+"]]
+        assert moved == []
+
+    def test_apply_to_unzeroed_slits_moves_when_accepted(self, qapp, monkeypatch):
+        wired, moved = self.build_wired(monkeypatch, {"A", "B", "D"})
+        monkeypatch.setattr(RasterPlannerTab, "_confirm_unzeroed_apply",
+                            lambda self_, slits: True)
+        wired.btn_apply_slits.click()
+        assert sorted(moved) == sorted(AMP_LABELS)
+
+    def test_apply_to_zeroed_slits_does_not_ask(self, qapp, monkeypatch):
+        wired, moved = self.build_wired(monkeypatch, {"A", "B", "C", "D"})
+
+        def boom(self_, slits):
+            raise AssertionError("must not ask when every slit is zeroed")
+
+        monkeypatch.setattr(RasterPlannerTab, "_confirm_unzeroed_apply", boom)
+        wired.btn_apply_slits.click()
+        assert sorted(moved) == sorted(AMP_LABELS)
+
+    def test_apply_reads_zeroed_from_a_real_beamline(self, qapp, monkeypatch):
+        from PySide6.QtWidgets import QMessageBox
+        bl = Beamline()
+        moved = []
+        monkeypatch.setattr(bl, "move_slit",
+                            lambda label, mm: moved.append(label) or True)
+        for letter in ("A", "B", "D"):
+            bl.mark_zeroed(letter)
+        monkeypatch.setattr(QMessageBox, "question",
+                            lambda *a, **k: QMessageBox.StandardButton.Yes)
+        asked = []
+
+        def decline(self_, slits):
+            asked.append(slits)
+            return False
+
+        monkeypatch.setattr(RasterPlannerTab, "_confirm_unzeroed_apply", decline)
+        wired = RasterPlannerTab(beamline=bl)
+        wired.btn_apply_slits.click()
+        assert asked == [["Y+"]]
+        assert moved == []
 
 
 class TestTheOverscanIsAtTheJaw:
@@ -761,6 +845,12 @@ class TestTheBeamFrameIsNotTheSlitFrame:
             def move_slit(self, label, mm):
                 moved[label] = mm
                 return True
+
+            def is_zeroed(self, axis):
+                return True
+
+            def axis_letter_for(self, label):
+                return {"X+": "A", "X-": "B", "Y+": "C", "Y-": "D"}[label]
 
         from PySide6.QtWidgets import QMessageBox
         monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)

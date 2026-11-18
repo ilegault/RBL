@@ -1207,11 +1207,25 @@ class RasterPlannerTab(QWidget):
             self.sb_fwhm_mm.setValue(x_mm)
 
     def _apply_slits(self):
-        """Command all four blades. Asks first, and names every number."""
+        """Command all four blades. Asks first, and names every number.
+
+        WHY A SECOND QUESTION: blades that are not zeroed (Beamline.is_zeroed)
+        have mm figures that are offsets from the controller's power-up
+        position, so the targets below would be moves of unknown size. The
+        Overview asks the same thing for one slit.
+        """
         if self._beamline is None or not self._solution:
             return
         # The Galil's frame, not the beam's -- see `_mechanical_blades`.
         targets = self._mechanical_blades(self._solution)
+        # Slits that were never zeroed (or were cleared by a reconnect) have
+        # mm figures that are offsets from wherever the controller started,
+        # not distances from beam centre. Ask before moving all four on that.
+        unzeroed = [
+            label for label in AMP_LABELS
+            if not self._beamline.is_zeroed(self._beamline.axis_letter_for(label))]
+        if unzeroed and not self._confirm_unzeroed_apply(unzeroed):
+            return
         listing = "\n".join(f"    {lbl}   {targets[lbl]:.3f} mm" for lbl in AMP_LABELS)
         answer = QMessageBox.question(
             self, "Move the slits?",
@@ -1223,6 +1237,22 @@ class RasterPlannerTab(QWidget):
         for label in AMP_LABELS:
             self._beamline.move_slit(label, targets[label])
         self.slit_targets_ready.emit(targets)
+
+    def _confirm_unzeroed_apply(self, slits: list[str]) -> bool:
+        """Ask before moving blades whose mm figures are not referenced.
+
+        Its own method so tests can drive both answers without a live dialog,
+        like the Overview's _confirm_unzeroed_move.
+        """
+        answer = QMessageBox.warning(
+            self, "Slits not zeroed",
+            f"{', '.join(slits)} not zeroed since the Galil was last "
+            f"connected, so their positions in mm are not referenced to beam "
+            f"centre.\n\nMove all four blades anyway?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return answer == QMessageBox.StandardButton.Yes
 
     # ------------------------------------------------------------------
     # Down the beamline
