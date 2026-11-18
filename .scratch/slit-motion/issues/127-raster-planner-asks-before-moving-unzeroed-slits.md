@@ -1,6 +1,6 @@
 # 127: The Raster Planner asks before moving slits that are not zeroed
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -41,18 +41,18 @@ zeroed beamline. No existing assertion changes.
 
 ## Acceptance criteria
 
-- [ ] Test `test_apply_to_unzeroed_slits_asks_and_can_be_declined` in
+- [x] Test `test_apply_to_unzeroed_slits_asks_and_can_be_declined` in
       `tests/test_raster_planner_tab.py`: a `FakeBeamline` whose `is_zeroed` returns `False` for
       `"C"` and `True` otherwise, recording `move_slit` calls; patch
       `RasterPlannerTab._confirm_unzeroed_apply` to record its argument and return `False`; patch
       `QMessageBox.question` to Yes; click `btn_apply_slits`; the recorded argument is `["Y+"]`
       and no `move_slit` call was made.
-- [ ] Test `test_apply_to_unzeroed_slits_moves_when_accepted` in `tests/test_raster_planner_tab.py`:
+- [x] Test `test_apply_to_unzeroed_slits_moves_when_accepted` in `tests/test_raster_planner_tab.py`:
       the same, with the confirmation returning `True`; `move_slit` was called for all four labels.
-- [ ] Test `test_apply_to_zeroed_slits_does_not_ask` in `tests/test_raster_planner_tab.py`: every
+- [x] Test `test_apply_to_zeroed_slits_does_not_ask` in `tests/test_raster_planner_tab.py`: every
       axis zeroed; `_confirm_unzeroed_apply` patched to raise `AssertionError` if called; clicking
       `btn_apply_slits` (question patched to Yes) moves all four.
-- [ ] Test `test_apply_reads_zeroed_from_a_real_beamline` in `tests/test_raster_planner_tab.py`: a real
+- [x] Test `test_apply_reads_zeroed_from_a_real_beamline` in `tests/test_raster_planner_tab.py`: a real
       `Beamline` with `move_slit` monkeypatched to record calls and `mark_zeroed` called for A, B, D
       only; with the confirmation patched to return `False`, nothing is recorded and the
       confirmation received `["Y+"]`.
@@ -72,3 +72,5 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+2026-11-17: Implemented _confirm_unzeroed_apply and the unzeroed check in _apply_slits; four tests added; FakeBeamline doubles gained is_zeroed/axis_letter_for. CI green on PR 193.
