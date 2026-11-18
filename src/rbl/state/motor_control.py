@@ -34,6 +34,19 @@ when a `DP` command succeeds in the Command Console. Reconnecting the Galil and
 emergency stop clear zeroed for every axis. Limit trips and Motor Off (`MO`) do
 not clear it: the controller decelerates and keeps counting on a limit, and a
 de-energised stepper re-energises to the same position.
+
+THE FLOOR
+---------
+The homed position is 0 counts. Once an axis is zeroed, no target below 0
+counts is sent from any screen: `floor_refusal()` is checked by `move_slit`
+and `move_axis_counts` (the Stepper Motors tab's Move and Jog - go through
+the latter). The Overview could previously accept targets from 0.0 mm, up to
+126 counts past home, and nothing refused them. The floor applies only to
+zeroed axes because before zeroing an axis's counts mean nothing yet (the
+controller's power-on zero is arbitrary). Homing and the edge-return test talk
+to the driver directly and are exempt: homing must be free to seek past
+where a stale zero used to be, and the edge-return test drives to a slit edge
+without redefining zero.
 """
 from rbl.config import hardware_config as SC
 from rbl.hardware.galil_driver import GalilController
@@ -98,9 +111,28 @@ class MotorControlMixin:
             )
         self._home_pass_speeds = (parsed[0], parsed[1], parsed[2])
 
+    def floor_refusal(self, axis_letter: str, counts: int):
+        """Refusal message when `counts` is below the homed position of a
+        zeroed axis, else None. Un-zeroed axes have no floor."""
+        if self.is_zeroed(axis_letter) and counts < 0:
+            return (f"{SC.AXIS_NAMES[axis_letter]}: {counts} counts is below the "
+                    f"homed position (0 counts) — refused")
+        return None
+
+    def _refuse_below_floor(self, axis_letter, counts):
+        msg = self.floor_refusal(axis_letter, counts)
+        if msg is None:
+            return False
+        self.log_motor("! " + msg)
+        self.command_failed.emit("motors", msg)
+        return True
+
     def move_axis_counts(self, axis_letter: str, counts: int) -> bool:
         """Send one absolute move at the axis's slit speed. Driver exceptions
-        propagate: callers handle them."""
+        propagate: callers handle them. Returns False, without touching the
+        driver, when the move is below the floor of a zeroed axis."""
+        if self._refuse_below_floor(axis_letter, counts):
+            return False
         self.galil.move_absolute_at(axis_letter, counts,
                                     self.slit_speed_cps(axis_letter))
         return True
@@ -186,6 +218,8 @@ class MotorControlMixin:
         # eventually arrives under it, and would disagree with the Stepper
         # Motors tab, which has always worked in counts.
         counts = SC.mm_to_counts(axis_letter, mm)
+        if self._refuse_below_floor(axis_letter, counts):
+            return False
         reachable_mm = SC.counts_to_mm(axis_letter, counts)
         speed = self.slit_speed_cps(axis_letter)
         self.log_motor(f"> SP {axis_letter}={speed} ; PA {axis_letter}={counts} "

@@ -101,3 +101,12 @@ def test_sync_target_is_a_noop_without_a_position(ctrl):
     ctrl.set_position(None, stale=True)
     ctrl.sync_target_to_position()
     assert ctrl.spn_target.value() == pytest.approx(1.0)
+
+
+def test_overview_target_floor_follows_zeroed(ctrl):
+    ctrl.set_floor_mm(0.2)
+    assert ctrl.spn_target.minimum() == pytest.approx(0.2)
+    ctrl.spn_target.setValue(0.05)
+    assert ctrl.spn_target.value() == pytest.approx(0.2)
+    ctrl.set_floor_mm(None)
+    assert ctrl.spn_target.minimum() == pytest.approx(SC.SLIT_DISPLAY_MIN_MM)

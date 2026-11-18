@@ -131,6 +131,11 @@ class SlitControl(QWidget):
             self.lbl_state.setStyleSheet(
                 theme.status_label(theme.OK) + f"font-size: {theme.FS_CAPTION}px;")
 
+    def set_floor_mm(self, mm):
+        """Lowest allowed target: the homed position once zeroed, else the
+        display minimum."""
+        self.spn_target.setMinimum(SC.SLIT_DISPLAY_MIN_MM if mm is None else mm)
+
     def set_target_mm(self, mm: float):
         """Show a target commanded from anywhere — here, or the Stepper Motors
         tab. Deferred while this box has focus so it cannot eat live typing."""
