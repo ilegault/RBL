@@ -234,14 +234,14 @@ def test_stepper_tab_move_below_home_is_refused(screens):
 def test_jog_minus_on_a_zeroed_axis_moves_to_home(screens):
     motors, overview, beamline = screens
     beamline.mark_zeroed("C")
-    motors.axes["C"]._jog(-1)
+    motors.axes["C"].btn_jog_neg.pressed.emit()
     assert beamline.galil.jogs == []
     assert beamline.galil.moves == [("C", 0)]
 
 
 def test_jog_minus_on_an_unzeroed_axis_still_jogs(screens):
     motors, overview, beamline = screens
-    motors.axes["C"]._jog(-1)
+    motors.axes["C"].btn_jog_neg.pressed.emit()
     assert len(beamline.galil.jogs) == 1
     assert beamline.galil.jogs[0][1] < 0
     assert beamline.galil.moves == []
