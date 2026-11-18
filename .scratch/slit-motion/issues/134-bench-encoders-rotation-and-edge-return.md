@@ -43,3 +43,16 @@ a 40:1 gearbox on a 1 in/rev screw is 16,000 counts per screw turn; a direct 40-
       `HOME_PASS_SPEEDS_COUNTS_PER_SEC` comes from this.
 
 ## Comments
+
+**2026-11-18 (planning):** The Edge-return test and Pass speed decision items cannot be
+done as written. On these slits the home switch and the reverse limit trip at the same
+point, so every home pass ends on stop code 3 (see `docs/adr/0009-slits-homed-on-the-release-edge.md`).
+Homing moves to the release edge and the three pass speeds are replaced by one approach
+speed, so the pass speed decision no longer exists. The edge-return run moves to the
+bench ticket of `.scratch/slit-homing-release-edge/`. The Encoders, dial and
+painted-mark items do not need homing and can be done now.
+
+**2026-11-18 (planning):** The Encoders item is answered by NEC (support e-mail 5-12496,
+2026-05-29): the slit drives are not equipped with encoders, so `MG _TPx` reading 0 is expected
+and lost steps can only be caught by comparing repeated homes (ticket 135's two-pass agreement
+check and the edge-return test). The dial and painted-mark items still stand.
