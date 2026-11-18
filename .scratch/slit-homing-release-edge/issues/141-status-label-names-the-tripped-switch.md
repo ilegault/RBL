@@ -1,6 +1,6 @@
 # 141: The axis status says exactly which switch is tripped
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -29,13 +29,13 @@ all with the existing orange bold style.
 
 ## Acceptance criteria
 
-- [ ] Test `test_status_names_both_switches_when_both_trip` in
+- [x] Test `test_status_names_both_switches_when_both_trip` in
       `tests/test_motor_tab_switch_status.py` (new file): a real `MotorTab(Beamline())`; calling
       `tab.axes["B"].update_state({"pos": -6537, "moving": False, "enabled": True, "switches": {"forward_switch": False, "reverse_switch": True, "home_switch": True}})`
       leaves `lbl_status.text() == "HOME + REV LIMIT"`.
-- [ ] Test `test_status_names_the_reverse_limit_alone` in the same file: reverse only →
+- [x] Test `test_status_names_the_reverse_limit_alone` in the same file: reverse only →
       `"REV LIMIT"`.
-- [ ] Test `test_status_names_the_home_switch_alone` in the same file: home only → `"HOME"`; and
+- [x] Test `test_status_names_the_home_switch_alone` in the same file: home only → `"HOME"`; and
       with all three clear the text is `"Idle  [enabled]"` as before.
 
 **What tests may fake:** nothing beyond the offscreen Qt platform; `MotorTab`, `AxisControls` and
@@ -53,3 +53,8 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+Done (2026-11-18):
+- Updated `AxisControls.update_state` in `src/rbl/gui/motor_tab.py` to distinguish `"HOME + REV LIMIT"`, `"REV LIMIT"`, and `"HOME"` instead of `"REV/HOME LIMIT active"`, keeping the orange bold style and all other status branches unchanged.
+- Added `tests/test_motor_tab_switch_status.py` with `test_status_names_both_switches_when_both_trip`, `test_status_names_the_reverse_limit_alone`, and `test_status_names_the_home_switch_alone` (all three observed failing before the change and passing after).
+- Full gate green: `ruff check .`, `check_tests_first.py`, `type_gate.py` (0 hard-layer, 139 soft-layer), `pytest` (3019 passed).
