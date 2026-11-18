@@ -200,3 +200,48 @@ def test_jog_uses_the_slit_speed(screens):
     beamline.set_slit_speed_cps("C", 333)
     motors.axes["C"].btn_jog_neg.pressed.emit()
     assert beamline.galil.jogs == [("C", -333)]
+
+
+# ---- The floor: nothing below the homed position once zeroed ----------------
+
+def test_move_below_home_on_a_zeroed_axis_is_refused(screens):
+    motors, overview, beamline = screens
+    beamline.mark_zeroed("A")
+    assert beamline.move_slit("X+", 0.1) is False
+    assert beamline.galil.moves == []
+    assert "below the homed position (0 counts) \u2014 refused" in motors.console.toPlainText()
+    assert overview.slits["X+"].spn_target.value() != pytest.approx(0.1)
+
+
+def test_move_below_home_on_an_unzeroed_axis_is_sent(screens):
+    motors, overview, beamline = screens
+    assert beamline.move_slit("X+", 0.1) is True
+    assert len(beamline.galil.moves) == 1
+    assert beamline.galil.moves[0][1] < 0
+
+
+def test_stepper_tab_move_below_home_is_refused(screens):
+    motors, overview, beamline = screens
+    beamline.mark_zeroed("B")
+    panel = motors.axes["B"]
+    panel.cbo_target_unit.setCurrentText("counts")
+    panel.spn_target.setValue(-50)
+    panel.btn_move.click()
+    assert beamline.galil.moves == []
+    assert "-50 counts is below the homed position" in motors.console.toPlainText()
+
+
+def test_jog_minus_on_a_zeroed_axis_moves_to_home(screens):
+    motors, overview, beamline = screens
+    beamline.mark_zeroed("C")
+    motors.axes["C"].btn_jog_neg.pressed.emit()
+    assert beamline.galil.jogs == []
+    assert beamline.galil.moves == [("C", 0)]
+
+
+def test_jog_minus_on_an_unzeroed_axis_still_jogs(screens):
+    motors, overview, beamline = screens
+    motors.axes["C"].btn_jog_neg.pressed.emit()
+    assert len(beamline.galil.jogs) == 1
+    assert beamline.galil.jogs[0][1] < 0
+    assert beamline.galil.moves == []

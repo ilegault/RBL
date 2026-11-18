@@ -1,6 +1,6 @@
 # 128: Nothing goes below the homed position once an axis is zeroed
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -51,21 +51,21 @@ applies once zeroed, and that homing is exempt.
 
 ## Acceptance criteria
 
-- [ ] Test `test_move_below_home_on_a_zeroed_axis_is_refused` in `tests/test_slit_cross_screen.py`:
+- [x] Test `test_move_below_home_on_a_zeroed_axis_is_refused` in `tests/test_slit_cross_screen.py`:
       on the `screens` fixture, `beamline.mark_zeroed("A")`, then `beamline.move_slit("X+", 0.1)`
       returns `False`; `beamline.galil.moves == []`; the console contains
       `"below the homed position (0 counts) — refused"`; the Overview's X+ target box value is not 0.1.
-- [ ] Test `test_move_below_home_on_an_unzeroed_axis_is_sent` in `tests/test_slit_cross_screen.py`:
+- [x] Test `test_move_below_home_on_an_unzeroed_axis_is_sent` in `tests/test_slit_cross_screen.py`:
       no axis zeroed; `beamline.move_slit("X+", 0.1)` returns `True` and `beamline.galil.moves` has
       one entry with negative counts.
-- [ ] Test `test_stepper_tab_move_below_home_is_refused` in `tests/test_slit_cross_screen.py`:
+- [x] Test `test_stepper_tab_move_below_home_is_refused` in `tests/test_slit_cross_screen.py`:
       `mark_zeroed("B")`; on panel B set the unit to counts, target `-50`, click `btn_move`;
       `beamline.galil.moves == []` and the console contains `"-50 counts is below the homed position"`.
-- [ ] Test `test_jog_minus_on_a_zeroed_axis_moves_to_home` in `tests/test_slit_cross_screen.py`:
+- [x] Test `test_jog_minus_on_a_zeroed_axis_moves_to_home` in `tests/test_slit_cross_screen.py`:
       `_FakeGalil` records jogs (helper from ticket 122); `mark_zeroed("C")`;
       `motors.axes["C"]._jog(-1)`; `beamline.galil.jogs == []` and `beamline.galil.moves == [("C", 0)]`.
       With C not zeroed, the same call records one jog with a negative speed and no move.
-- [ ] Test `test_overview_target_floor_follows_zeroed` in `tests/test_slit_control.py`:
+- [x] Test `test_overview_target_floor_follows_zeroed` in `tests/test_slit_control.py`:
       `SlitControl("X+")`; `set_floor_mm(0.2)` makes `spn_target.minimum() == 0.2` and setting the
       value to 0.05 leaves it at 0.2; `set_floor_mm(None)` restores `SC.SLIT_DISPLAY_MIN_MM`.
 
@@ -85,3 +85,5 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+2026-11-17: Implemented floor_refusal in motor_control (move_slit, move_axis_counts), Stepper tab Move and Jog -, SlitControl.set_floor_mm driven from the Overview redraw. Criteria tests are in tests/test_slit_cross_screen.py and tests/test_slit_control.py; the jog tests drive the button signal instead of the private method, to stay under the private-access ratchet. Gate green locally and in CI.

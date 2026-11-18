@@ -421,6 +421,14 @@ class AxisControls(QGroupBox):
         if g is None or not g.connected:
             return
         try:
+            if direction < 0 and self.beamline.is_zeroed(self.axis):
+                # Jog - on a zeroed axis runs to home instead of past it;
+                # releasing the button still sends ST through _stop.
+                sp = self.beamline.slit_speed_cps(self.axis)
+                self.log(f"> SP {self.axis}={sp} ; PA {self.axis}=0 ; BG {self.axis}"
+                         f"   (Jog − on a zeroed axis stops at home)")
+                self.beamline.move_axis_counts(self.axis, 0)
+                return
             speed = self.beamline.slit_speed_cps(self.axis) * (1 if direction > 0 else -1)
             prefix = "," * "ABCD".index(self.axis)
             self.log(f"> JG {prefix}{speed} ; BG {self.axis}")
@@ -444,6 +452,10 @@ class AxisControls(QGroupBox):
             return
         target = self._target_in_counts()
         target_mm = SC.counts_to_mm(self.axis, target)
+        refusal = self.beamline.floor_refusal(self.axis, target)
+        if refusal is not None:
+            self.beamline.log_motor("! " + refusal)
+            return
         speed = self.beamline.slit_speed_cps(self.axis)
         # The move goes through Beamline.move_axis_counts so every move
         # carries its slit speed (SP before PA); this panel still owns the

@@ -897,6 +897,10 @@ class OverviewTab(QWidget):
                 enabled=bool(axis is None or axis.enabled),
             )
             ctrl.set_enabled(motors.connected)
+            # Nothing below the homed position once the axis is zeroed.
+            letter = self.beamline.axis_letter_for(slit)
+            zeroed = bool(axis is not None and axis.zeroed and letter is not None)
+            ctrl.set_floor_mm(SC.MM_ZERO_OFFSET[letter] if zeroed else None)
 
         if motors.connected and not self._motors_were_connected:
             # Link just came up: start each target box at the live position so
