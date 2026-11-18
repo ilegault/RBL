@@ -100,6 +100,12 @@ HOME_SEEK_TIMEOUT_S = 180.0
 # must not be defined there.
 HOME_STOP_CODE = 10
 
+# How many poll cycles in a row may fail before the Galil is treated as gone.
+# One slow reply while a homing run keeps the controller busy is routine; the
+# poll used to give up on the first, which disconnected the Galil and cancelled
+# the homing run. Three in a row (about 0.6 s at 5 Hz) is a real fault.
+GALIL_POLL_MAX_CONSECUTIVE_ERRORS = 3
+
 # What HV is put back to once homing is done. HM's second stage — the slow
 # re-approach that fixes where the zero lands — runs at HV, and the homing
 # routine turns it down to 58 cps for the final pass. Restoring it matters for
