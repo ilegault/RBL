@@ -1,6 +1,6 @@
 # 87: Overview cup panel: uncertainty and insertion bars
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -45,20 +45,20 @@ arithmetic.
 
 All tests in `tests/test_cup_panel.py`.
 
-- [ ] Test `test_uncertainty_bar_fills_to_drain_fraction_and_shows_target_mark_in_target_mode`:
+- [x] Test `test_uncertainty_bar_fills_to_drain_fraction_and_shows_target_mark_in_target_mode`:
       given a `CupView` with `drain_fraction=0.5`, `uncertainty=0.10`, `target=0.05`,
       target mode, the uncertainty bar's value is 50 % of its range, the target mark is
       visible, and the text contains `"10.0 %"` and `"5 %"`.
-- [ ] Test `test_uncertainty_bar_colours_reason_and_fixed_mode_target_mark`: given
+- [x] Test `test_uncertainty_bar_colours_reason_and_fixed_mode_target_mark`: given
       `converged=True` the bar uses the OK colour; given `reason_text="no valid
       samples"` it shows that text and the grey colour; in fixed mode the target mark is
       hidden.
-- [ ] Test `test_insertion_bar_with_no_dwell_limit_shows_elapsed_only`: given
+- [x] Test `test_insertion_bar_with_no_dwell_limit_shows_elapsed_only`: given
       `dwell_limit_s=None` and `elapsed_s=12.3` the insertion bar text is `"12.3 s"`.
-- [ ] Test `test_closed_insertion_hides_bars_and_shows_last_insertion_text`: given
+- [x] Test `test_closed_insertion_hides_bars_and_shows_last_insertion_text`: given
       `insertion_open=False` and `last_insertion_text="last: 4.2 % · converged ·
       n = 23 · 1.8 s"`, both bars are hidden and that text is shown.
-- [ ] Test `test_rig_converging_insertion_matches_tabs_uncertainty_percentage`: a rig
+- [x] Test `test_rig_converging_insertion_matches_tabs_uncertainty_percentage`: a rig
       test, built like the existing rig test for the charge text after an insertion
       closes, feeds a converging insertion through the real tab and asserts the panel's
       uncertainty text matches the tab's `lbl_uncertainty` percentage.
@@ -78,8 +78,9 @@ pytest --tb=short -q -n auto --dist loadfile
 
 ## Comments
 
-Summary (2026-11-17):
+Summary (2026-11-18):
+- Rebased onto `origin/master` (picking up the updated ticket criteria with explicit test names) and dropped the earlier blocked escalation commit.
 - `src/rbl/services/cup_log.py`: extended `CupView` with defaulted bar/uncertainty/elapsed/last-insertion fields.
 - `src/rbl/gui/faraday_cup_tab.py`: populated `CupView` from `compute_convergence_bars`, `_live_uncertainty`, elapsed sample time, dwell limit, and `lbl_last_insertion.text()` in `_emit_cup_view`.
 - `src/rbl/gui/widgets/cup_panel.py`: added stacked uncertainty bar (with 25 % target mark in target mode, WARN/OK/MUTED colours) and insertion bar, plus `lbl_last_insertion` when `insertion_open` is False.
-- `tests/test_cup_panel.py`: added 5 tests covering all acceptance criteria (unit `CupView` rendering + real tab/panel rig test).
+- `tests/test_cup_panel.py`: 5 new tests matching all 5 named acceptance criteria (`test_uncertainty_bar_fills_to_drain_fraction_and_shows_target_mark_in_target_mode`, `test_uncertainty_bar_colours_reason_and_fixed_mode_target_mark`, `test_insertion_bar_with_no_dwell_limit_shows_elapsed_only`, `test_closed_insertion_hides_bars_and_shows_last_insertion_text`, `test_rig_converging_insertion_matches_tabs_uncertainty_percentage`); all 15 tests in `tests/test_cup_panel.py` pass.
