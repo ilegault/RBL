@@ -406,12 +406,23 @@ to every motion of that axis: a jog, and a move commanded from any screen. There
 no separate jog speed or move speed.
 
 **Home switch** — the optical sensor on each slit axis that marks its reference
-point. It trips when the jaw is fully in, at beam centre.
+point. It trips when the jaw is fully in, at beam centre. On these slits it trips at
+the same point as the reverse limit.
 
-**Home pass** — one run of the controller's homing sequence: a search toward the
-home switch, then a slow re-approach that stops on the switch's transition. Homing
-is several home passes, each at its own speed, followed by defining that point as
-zero.
+**Home pass** — drive the axis in until it stops on the home switch, then step it back
+out one count at a time, reading the switch with the axis at rest after every step,
+until the home switch releases. That release point is the pass's **edge**. Homing is two
+home passes whose edges agree, followed by defining the second edge as zero.
+
+**Approach speed** — the speed homing drives an axis in onto the home switch at. The
+edge is read on the way back out with the axis at rest, so the approach speed does not
+decide where zero lands.
+
+**Reverse limit** — the switch that stops an axis moving further in, toward zero and
+beam centre. It is not the home switch: a home pass that ends on the reverse limit has
+failed and sets no zero.
+
+**Forward limit** — the switch that stops an axis moving further out, toward the wall.
 
 **Zeroed** — an axis whose zero has been defined (by homing, or by the operator) since the
 Galil was last connected. Reconnecting the Galil or an emergency stop makes every
@@ -426,6 +437,12 @@ not. A stalled stepper loses steps in whole groups of four full steps.
 the home switch's transition again with one home pass, read the commanded position
 there without redefining zero, and repeat. How the readings spread, and whether
 they jump in lost-step-sized groups, separates switch jitter from lost steps.
+
+**Switch map** — a measurement of where an axis's switches change state: step the
+axis slowly in through the home switch and the reverse limit, then back out, reading
+every switch at each step, without redefining zero. It shows where each switch's edge
+is, which one trips first, the gap between them, and how far apart the trip and
+release points are.
 
 ---
 
