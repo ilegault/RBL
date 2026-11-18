@@ -227,6 +227,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QCheckBox,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -384,6 +385,9 @@ class FaradayCupTab(QWidget):
         self._last_target_uncertainty: float = loaded_settings.target_uncertainty
         self._active_target_uncertainty: float = loaded_settings.target_uncertainty
         self._pending_target_uncertainty: float | None = None
+        self._last_manual_retract: bool = loaded_settings.manual_retract_on_converge
+        self._last_manual_no_limit: bool = loaded_settings.manual_no_time_limit
+        self._manual_retract_sent: bool = False
 
         # Dose & displacement damage tracking (ADR 0003)
         self._patch_width_x_mm: float = 0.0
@@ -818,6 +822,29 @@ class FaradayCupTab(QWidget):
         _target_col.addWidget(self.lbl_target_help)
         _dwell_lay.addLayout(_target_col)
         _dwell_lay.addStretch()
+
+        _manual_lay = QHBoxLayout()
+        _manual_lay.setSpacing(12)
+        _cycle_vlay.addLayout(_manual_lay)
+
+        self.chk_manual_retract = QCheckBox("Retract manual insertions when converged")
+        self.chk_manual_retract.setChecked(self._settings.manual_retract_on_converge)
+        self.chk_manual_retract.setToolTip(
+            "In Target uncertainty mode, automatically command cup OUT when a manual "
+            "or forced insertion converges (or hits max dwell)"
+        )
+        self.chk_manual_retract.toggled.connect(self._on_manual_retract_changed)
+        _manual_lay.addWidget(self.chk_manual_retract)
+
+        self.chk_manual_no_limit = QCheckBox("No time limit on manual insertions")
+        self.chk_manual_no_limit.setChecked(self._settings.manual_no_time_limit)
+        self.chk_manual_no_limit.setToolTip(
+            "Do not stop a manual insertion at Max dwell; wait until it converges "
+            "or is retracted by hand"
+        )
+        self.chk_manual_no_limit.toggled.connect(self._on_manual_no_limit_changed)
+        _manual_lay.addWidget(self.chk_manual_no_limit)
+        _manual_lay.addStretch()
 
         self._update_dwell_mode_enabled()
 
@@ -1275,6 +1302,7 @@ class FaradayCupTab(QWidget):
         self._live_uncertainty = None
         self._converged_after_s = None
         self._end_reason_hint = None
+        self._manual_retract_sent = False
 
     def _resolve_end_reason(self) -> str:
         """Why the insertion that just ended ended (fixed set; ticket 83 knows three)."""
@@ -1325,13 +1353,26 @@ class FaradayCupTab(QWidget):
             f"last: {self._uncertainty_percent_or_reason(unc)} · {end_reason}"
             f" · n = {unc.n} · {dwell:.1f} s"
         )
-        mode = self.cycle.dwell_mode if counted else self._settings.dwell_mode
+        mode = self.cycle.dwell_mode if counted else self._last_dwell_mode
         target_mode = mode == "target_uncertainty"
         converged_after_s = self._converged_after_s if target_mode else None
+        if not target_mode:
+            max_dwell_for_row: float | None = None
+        elif counted:
+            max_dwell_for_row = self.cycle.max_dwell_s
+        elif (
+            origin in ("manual", "forced")
+            and self.chk_manual_retract.isChecked()
+            and not self.chk_manual_no_limit.isChecked()
+        ):
+            max_dwell_for_row = self._last_max_dwell
+        else:
+            max_dwell_for_row = None
         self._insertion_samples = []
         self._live_uncertainty = None
         self._converged_after_s = None
         self._end_reason_hint = None
+        self._manual_retract_sent = False
         writer = self.cup_log.writer
         if writer is not None:
             writer.write_insertion_summary(
@@ -1357,7 +1398,7 @@ class FaradayCupTab(QWidget):
                 dwell_mode=mode,
                 target_uncertainty=self._active_target_uncertainty if target_mode else None,
                 min_converge_samples=self._settings.min_converge_samples,
-                max_dwell_s=self.cycle.max_dwell_s if target_mode else None,
+                max_dwell_s=max_dwell_for_row,
                 insertion_uncertainty=unc.uncertainty,
                 uncertainty_reason=unc.reason.value if unc.reason is not None else "",
                 end_reason=end_reason,
@@ -1378,6 +1419,7 @@ class FaradayCupTab(QWidget):
         transition = self.acquisition.force_start(t=t_now)
         if transition is not None:
             self._run_forced = True
+            self._current_run_start_t = transition.t
             self._begin_insertion_samples()
             writer = self.cup_log.writer
             if writer is not None:
@@ -1653,6 +1695,7 @@ class FaradayCupTab(QWidget):
                 self._converged_after_s = unc.post_settle_elapsed_s
                 if self._resolve_insertion_origin() == "automatic":
                     self.cycle.notify_converged(t_sample)
+            self._maybe_retract_manual_insertion(t_sample)
             run_id = self.acquisition.current_run_id or 1
             writer = self.cup_log.writer
             if writer is not None:
@@ -2111,11 +2154,15 @@ class FaradayCupTab(QWidget):
         return "target_uncertainty" if self.rad_dwell_target.isChecked() else "fixed"
 
     def _update_dwell_mode_enabled(self) -> None:
-        """Enable only the active mode's dwell and target controls."""
+        """Enable only the active mode's dwell, target, and manual-retract controls."""
         target_mode = self._selected_dwell_mode() == "target_uncertainty"
         self.spn_cycle_dwell.setEnabled(not target_mode)
         self.spn_max_dwell.setEnabled(target_mode)
         self.spn_target_uncertainty.setEnabled(target_mode)
+        self.chk_manual_retract.setEnabled(target_mode)
+        self.chk_manual_no_limit.setEnabled(
+            target_mode and self.chk_manual_retract.isChecked()
+        )
 
     def _current_raw_settings(self, **overrides: object) -> dict[str, object]:
         """Build a raw settings dict from the current tab controls for validate_settings."""
@@ -2131,6 +2178,8 @@ class FaradayCupTab(QWidget):
             "max_dwell_s": self.spn_max_dwell.value(),
             "target_uncertainty": self.spn_target_uncertainty.value() / 100.0,
             "min_converge_samples": self._settings.min_converge_samples,
+            "manual_retract_on_converge": self.chk_manual_retract.isChecked(),
+            "manual_no_time_limit": self.chk_manual_no_limit.isChecked(),
         }
         raw.update(overrides)
         return raw
@@ -2271,6 +2320,74 @@ class FaradayCupTab(QWidget):
         self._save_current_settings()
         self._update_cycle_view(time.time())
 
+    def _on_manual_retract_changed(self, checked: bool) -> None:
+        """Apply manual-retract checkbox immediately, save, and log a settings marker."""
+        new_val = bool(checked)
+        self._update_dwell_mode_enabled()
+        if new_val == self._last_manual_retract:
+            return
+        old_val = self._last_manual_retract
+        self._last_manual_retract = new_val
+        writer = self.cup_log.writer
+        if writer is not None:
+            writer.write_settings_changed(
+                time.time(), "manual_retract_on_converge", old_val, new_val
+            )
+        self._save_current_settings()
+        self._update_cycle_view(time.time())
+
+    def _on_manual_no_limit_changed(self, checked: bool) -> None:
+        """Apply manual no-time-limit checkbox immediately, save, and log a marker."""
+        new_val = bool(checked)
+        if new_val == self._last_manual_no_limit:
+            return
+        old_val = self._last_manual_no_limit
+        self._last_manual_no_limit = new_val
+        writer = self.cup_log.writer
+        if writer is not None:
+            writer.write_settings_changed(
+                time.time(), "manual_no_time_limit", old_val, new_val
+            )
+        self._save_current_settings()
+        self._update_cycle_view(time.time())
+
+    def _maybe_retract_manual_insertion(self, t_now: float) -> None:
+        """Command cup OUT for a manual/forced insertion on convergence or max dwell.
+
+        Display-only when actuation is disconnected, the controller is in LOCAL, or the
+        insertion was uncommanded (hand insertion at the controller).
+        """
+        if not self.acquisition.is_acquiring:
+            return
+        if self._manual_retract_sent or self._move_in_flight:
+            return
+        if self._resolve_insertion_origin() not in ("manual", "forced"):
+            return
+        if self._last_dwell_mode != "target_uncertainty":
+            return
+        if not self.chk_manual_retract.isChecked():
+            return
+        if not (self._actuation_connected and self._auto_mode):
+            return
+
+        reason: str | None = None
+        if self._converged_after_s is not None:
+            reason = "converged"
+        elif not self.chk_manual_no_limit.isChecked():
+            run_start = self._current_run_start_t
+            if not math.isnan(run_start) and (t_now - run_start) >= self._last_max_dwell:
+                reason = "max_dwell"
+        if reason is None:
+            return
+
+        self._manual_retract_sent = True
+        self._end_reason_hint = reason
+        self.cycle.notify_manual_retract(t_now)
+        self._start_move(CupPosition.OUT)
+        if self.beamline is not None:
+            self.beamline.command_cup_out()
+        self._update_cycle_view(t_now)
+
     def _save_current_settings(self) -> bool:
         """Construct CupSettings from current tab state and save to disk."""
         settings = CupSettings(
@@ -2305,6 +2422,8 @@ class FaradayCupTab(QWidget):
                 if self.cycle.pending_max_dwell_s is not None
                 else self.cycle.max_dwell_s
             ),
+            manual_retract_on_converge=self.chk_manual_retract.isChecked(),
+            manual_no_time_limit=self.chk_manual_no_limit.isChecked(),
         )
         ok = cup_settings_store.save_settings(settings)
         if not ok:
@@ -2597,6 +2716,7 @@ class FaradayCupTab(QWidget):
         self._confirmed = state.confirmed
         self._auto_mode = state.auto_mode
         self._stale = state.stale
+        self._maybe_retract_manual_insertion(t_now)
 
         # Disarm cycle when FIO_STATE goes stale (profile changed away from FULL).
         # Ticket 10 / ADR 0003: the inference thresholds cannot bound a 3-second insertion

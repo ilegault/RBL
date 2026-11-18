@@ -38,6 +38,8 @@ def test_cup_settings_frozen_dataclass_fields():
         "min_converge_samples",
         "dwell_mode",
         "max_dwell_s",
+        "manual_retract_on_converge",
+        "manual_no_time_limit",
     }
     field_names = {f.name for f in dataclasses.fields(CupSettings)}
     assert field_names == expected_fields
@@ -46,6 +48,7 @@ def test_cup_settings_frozen_dataclass_fields():
         expected_type = (
             int if f.name == "min_converge_samples"
             else str if f.name == "dwell_mode"
+            else bool if f.name in ("manual_retract_on_converge", "manual_no_time_limit")
             else float
         )
         assert f.type is expected_type
@@ -527,4 +530,31 @@ def test_period_rule_uses_active_modes_dwell():
     ))
     assert w_fixed == []
     assert s_fixed.max_dwell_s == pytest.approx(20.0)
+
+
+# ---------------------------------------------------------------------------
+# Ticket 86: manual_retract_on_converge and manual_no_time_limit
+# ---------------------------------------------------------------------------
+def test_manual_converge_settings_defaults_and_valid():
+    s = CupSettings.defaults()
+    assert s.manual_retract_on_converge is False
+    assert s.manual_no_time_limit is False
+
+    settings, warnings = validate_settings(
+        _valid(manual_retract_on_converge=True, manual_no_time_limit=True)
+    )
+    assert warnings == []
+    assert settings.manual_retract_on_converge is True
+    assert settings.manual_no_time_limit is True
+
+
+@pytest.mark.parametrize("bad_val", [1, 0, "true", "false", None, 1.0])
+def test_bad_manual_converge_booleans_fall_back_with_warning(bad_val):
+    settings, warnings = validate_settings(
+        _valid(manual_retract_on_converge=bad_val, manual_no_time_limit=bad_val)
+    )
+    assert {w.key for w in warnings} == {"manual_retract_on_converge", "manual_no_time_limit"}
+    assert settings.manual_retract_on_converge is False
+    assert settings.manual_no_time_limit is False
+
 
