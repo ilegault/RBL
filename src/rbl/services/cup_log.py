@@ -79,6 +79,19 @@ class CupView:
     charge_c: float
     fluence: float | None
     dpa: float | None
+    insertion_open: bool = False
+    dwell_mode: str = "fixed"
+    drain_fraction: float | None = None
+    uncertainty: float | None = None
+    target: float | None = None
+    reason_text: str | None = None
+    n: int = 0
+    n_needed: int | None = None
+    time_left_s: float | None = None
+    converged: bool = False
+    elapsed_s: float = 0.0
+    dwell_limit_s: float | None = None
+    last_insertion_text: str | None = None
 
 
 class CupLog(QObject):
