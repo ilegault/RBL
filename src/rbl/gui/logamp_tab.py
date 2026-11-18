@@ -258,7 +258,7 @@ class CurrentTab(QWidget):
     # ---- Slots ---------------------------------------------------------------
 
     def set_slit_state(self, state: dict):
-        """Slit geometry pushed over from the motor tab (see MotorTab.slit_state)."""
+        """Slit geometry; it arrives via Beamline.motors_changed -> on_motor_state."""
         self.beam_indicator.set_slit_state(state)
 
     def on_motor_state(self, state):

@@ -20,9 +20,8 @@ instrument isn't hooked up" apart from "no data yet" — before this, a widget
 had to infer liveness from whether a label happened to still read the
 placeholder text.
 
-Modelled on MotorTab.slit_state (motor_tab.py), which was already this pattern
-in miniature: a snapshot dict emitted at poll rate and consumed by a widget in
-a different tab. These are that idea generalised, not something new.
+These generalise the earlier per-tab slit-geometry dict (since removed): a snapshot
+emitted at poll rate and consumed by widgets in other tabs.
 """
 from dataclasses import dataclass, field
 

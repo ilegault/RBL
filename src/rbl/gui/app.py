@@ -426,8 +426,8 @@ class MainWindow(QMainWindow):
             lambda running: self.amp_tab.set_profile_controls_enabled(not running)
         )
 
-        # Motor poll data feeds Beamline, which derives MotorState (typed,
-        # richer than slit_state) and republishes it. The beam-position
+        # Motor poll data feeds Beamline, which derives MotorState (typed)
+        # and republishes it. The beam-position
         # indicator renders from that: the log-amp currents only become
         # millimetres once you know where the slits are.
         self.motor_tab.raw_state_changed.connect(self.beamline.ingest_motor_poll)

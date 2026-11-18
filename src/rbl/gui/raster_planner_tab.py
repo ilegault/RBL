@@ -210,7 +210,6 @@ class RasterPlannerTab(QWidget):
     anything until someone presses a button and confirms.
     """
 
-    slit_targets_ready = Signal(dict)   # {"X+": mm, "X-": mm, "Y+": mm, "Y-": mm}
     patch_dimensions_changed = Signal(float, float)   # (patch_width_x_mm, patch_height_y_mm)
     species_changed = Signal(str, float, int)   # (species_name, energy_ev, charge_state)
 
@@ -1236,7 +1235,6 @@ class RasterPlannerTab(QWidget):
             return
         for label in AMP_LABELS:
             self._beamline.move_slit(label, targets[label])
-        self.slit_targets_ready.emit(targets)
 
     def _confirm_unzeroed_apply(self, slits: list[str]) -> bool:
         """Ask before moving blades whose mm figures are not referenced.
