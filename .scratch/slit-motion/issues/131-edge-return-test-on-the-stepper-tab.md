@@ -1,6 +1,6 @@
 # 131: Edge-return test on the Stepper Motors tab
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -55,25 +55,25 @@ each of the three home pass speeds and gets the answer in the console and in a C
 
 ## Acceptance criteria
 
-- [ ] Test `test_edge_return_csv_rows` in `tests/test_edge_return_writer.py` (new file):
+- [x] Test `test_edge_return_csv_rows` in `tests/test_edge_return_writer.py` (new file):
       `write_edge_return_csv("C", [(225, [100, 102]), (58, [101])], directory=tmp_path, now=datetime(2026, 11, 17, 9, 5, 7))`
       writes `edge_return_C_20261117_090507.csv` whose rows after the header are
       `C,Y+,225,1,100,0` / `C,Y+,225,2,102,2` / `C,Y+,58,1,101,0`.
-- [ ] Test `test_edge_return_runs_every_pass_speed_in_order` in `tests/test_edge_return_tab.py`
+- [x] Test `test_edge_return_runs_every_pass_speed_in_order` in `tests/test_edge_return_tab.py`
       (new file): a real `Beamline` and `MotorTab` with `beamline.galil = MagicMock(connected=True)`,
       `set_home_pass_speeds((300, 120, 40))`; patch `rbl.gui.motor_tab.EdgeReturnWorker` with a fake
       class whose `start()` immediately emits `done(True, "ok", [1000, 1001, 1000])`; choose axis B and
       press Run; the fake was constructed three times with speeds `300, 120, 40` in that order and
       axis `"B"`; the console contains `"B [X-] @ 300 cps:"` and `"B [X-] @ 40 cps:"`.
-- [ ] Test `test_edge_return_writes_one_csv_for_the_whole_run` in `tests/test_edge_return_tab.py`:
+- [x] Test `test_edge_return_writes_one_csv_for_the_whole_run` in `tests/test_edge_return_tab.py`:
       the same run with `rbl.config.paths.HOMING_DIR` monkeypatched to `tmp_path`; exactly one
       `edge_return_B_*.csv` exists in `tmp_path` with 9 data rows, and the console contains
       `"# Edge-return CSV:"`.
-- [ ] Test `test_a_failed_speed_ends_the_edge_return_run` in `tests/test_edge_return_tab.py`: the
+- [x] Test `test_a_failed_speed_ends_the_edge_return_run` in `tests/test_edge_return_tab.py`: the
       fake's second construction emits `done(False, "B: cycle 2/10 did not stop on the home switch (stop code 3)", [1000])`;
       only two constructions happen, the console contains that message after `"✗ "`, and afterwards
       `btn_edge_run.text() == "Run edge-return test"` and axis B's Move button is enabled again.
-- [ ] Test `test_edge_return_refuses_while_homing` in `tests/test_edge_return_tab.py`: with axis A's
+- [x] Test `test_edge_return_refuses_while_homing` in `tests/test_edge_return_tab.py`: with axis A's
       panel reporting `homing_active()` (set its external status), pressing Run constructs no worker
       and `lbl_edge_note.text()` is the refusal sentence above.
 
@@ -94,3 +94,5 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+2026-11-17: Implemented. HOMING_DIR in paths.py, services/edge_return_writer.py, Edge-Return Test box on MotorTab (never defines zero; cancel ends the chain via the routine ok=False). Added refusal-without-Galil and never-defines-zero tests. Local gate green; CI green on PR 195 (head 5fd79e1). Bench ticket 134 is for the developer.
