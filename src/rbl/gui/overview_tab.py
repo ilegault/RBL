@@ -221,6 +221,7 @@ class OverviewTab(QWidget):
         # Setpoint edits are applied immediately, not on the redraw timer: they
         # are the operator's own keystrokes and must never lag behind them.
         self._setpoints.changed.connect(self._on_setpoint_changed)
+        self._setpoints.link_changed.connect(self._on_link_changed)
         self._refresh_apply_all()
         for axis in self.drives:
             self._sync_axis_from_setpoints(axis)
@@ -396,6 +397,9 @@ class OverviewTab(QWidget):
         for axis in AXIS_CHANNELS:
             ctrl = AxisDriveControl(axis)
             ctrl.params_edited.connect(self._on_axis_params_edited)
+            ctrl.offset_edited.connect(self._on_axis_offset_edited)
+            ctrl.channel_offset_edited.connect(self._on_channel_offset_edited)
+            ctrl.link_toggled.connect(self._on_axis_link_toggled)
             ctrl.output_toggled.connect(self._on_axis_output_toggled)
             self.drives[axis] = ctrl
             axes_row.addWidget(ctrl, stretch=1)
@@ -716,6 +720,15 @@ class OverviewTab(QWidget):
     def _on_axis_params_edited(self, axis: str, amp_vpp: float, freq_hz: float):
         self._setpoints.update_axis(axis, amp_vpp=amp_vpp, freq_hz=freq_hz)
 
+    def _on_axis_offset_edited(self, axis: str, offset_v: float):
+        self._setpoints.set_axis_offset(axis, offset_v)
+
+    def _on_channel_offset_edited(self, key: str, offset_v: float):
+        self._setpoints.update(key, offset_v=offset_v)
+
+    def _on_axis_link_toggled(self, axis: str, linked: bool):
+        self._setpoints.set_linked(axis, linked)
+
     def _on_axis_output_toggled(self, axis: str, on: bool):
         self._setpoints.update_axis(axis, output_on=on)
 
@@ -725,6 +738,10 @@ class OverviewTab(QWidget):
             if key in keys:
                 self._sync_axis_from_setpoints(axis)
         self._refresh_apply_all()
+
+    def _on_link_changed(self, axis: str, _linked: bool):
+        """Offset link state changed — here, on the FG tab, or from the planner."""
+        self._sync_axis_from_setpoints(axis)
 
     def _refresh_apply_all(self):
         """Enable Apply All only when it could succeed, and say why if not.
@@ -746,10 +763,21 @@ class OverviewTab(QWidget):
             over_limit_tooltip(offenders) if offenders else self._apply_all_tip)
 
     def _sync_axis_from_setpoints(self, axis: str):
-        params = self._setpoints.axis_params(axis)
+        plus_key, minus_key = AXIS_CHANNELS[axis]
+        plus = self._setpoints.get(plus_key)
+        minus = self._setpoints.get(minus_key)
         self.drives[axis].set_setpoint(
-            params.amp_vpp, params.freq_hz, params.output_on,
+            plus.amp_vpp,
+            plus.freq_hz,
+            plus.output_on,
             matched=self._setpoints.axis_matched(axis),
+            linked=self._setpoints.axis_linked(axis),
+            plus_offset_v=plus.offset_v,
+            minus_offset_v=minus.offset_v,
+            plus_shape=plus.shape,
+            minus_shape=minus.shape,
+            plus_amp_vpp=plus.amp_vpp,
+            minus_amp_vpp=minus.amp_vpp,
         )
 
     # ---- Cross-unit timebase ---------------------------------------------------

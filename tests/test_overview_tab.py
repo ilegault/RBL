@@ -219,7 +219,7 @@ def test_funcgen_readback_feeds_the_axis_amplitude_bar(tab):
     # MiniBar range is 0..MAX_AMP_VPP; 1.5 Vpp should read as a non-zero bar.
     assert tab.drives["X"].bar.fraction() > 0
     text = tab.drives["X"].lbl_readback.text()
-    assert text.startswith("X+ 1.50 Vpp · X- 1.50 Vpp @ 10 Hz out=ON")
+    assert text.startswith("X+ 1.50 Vpp +0.000 V · X- 1.50 Vpp +0.000 V @ 10 Hz out=ON")
 
 
 def test_axis_bar_blank_when_generator_not_connected(tab):
@@ -884,3 +884,97 @@ def test_high_peak_confirmation_still_asked_above_4_v(tab, monkeypatch):
     assert tab.btn_apply_all.isEnabled()
     tab.btn_apply_all.click()
     assert len(asked) == 1 and sent == []
+
+
+# ---- Overview Offset box and Link ± (ticket 110) -----------------------------
+
+def test_linked_offset_box_writes_both_plates(tab):
+    setpoints = tab.beamline.funcgen_setpoints
+    tab.drives["X"].spn_offset.setValue(0.4)
+    assert setpoints.get("A1").offset_v == pytest.approx(0.4)
+    assert setpoints.get("A2").offset_v == pytest.approx(-0.4)
+
+
+def test_unlinking_shows_two_offset_boxes(tab, qapp):
+    setpoints = tab.beamline.funcgen_setpoints
+    d = tab.drives["X"]
+    tab.show()
+    qapp.processEvents()
+    try:
+        assert d.chk_link.isChecked()
+        assert d.spn_offset.isVisible()
+        assert not d.spn_offset_plus.isVisible()
+        assert not d.spn_offset_minus.isVisible()
+
+        d.chk_link.setChecked(False)
+        qapp.processEvents()
+        assert not d.spn_offset.isVisible()
+        assert d.spn_offset_plus.isVisible()
+        assert d.spn_offset_minus.isVisible()
+
+        d.spn_offset_minus.setValue(-0.2)
+        assert setpoints.get("A2").offset_v == pytest.approx(-0.2)
+        assert setpoints.get("A1").offset_v == pytest.approx(0.0)
+
+        d.chk_link.setChecked(True)
+        qapp.processEvents()
+        assert d.chk_link.isChecked()
+        assert d.spn_offset.isVisible()
+
+        setpoints.update("A1", offset_v=0.7)
+        qapp.processEvents()
+        assert not d.chk_link.isChecked()
+        assert not d.spn_offset.isVisible()
+        assert d.spn_offset_plus.isVisible()
+        assert d.spn_offset_minus.isVisible()
+        assert d.spn_offset_plus.value() == pytest.approx(0.7)
+    finally:
+        tab.hide()
+
+
+def test_offset_box_does_not_clamp_against_amplitude(tab):
+    from PySide6.QtWidgets import QLabel
+
+    from rbl.gui import theme
+    from rbl.gui.widgets.inputs import QuietDoubleSpinBox
+    from rbl.hardware.funcgen_driver import MAX_GEN_VOLTS
+
+    d = tab.drives["X"]
+    for box in (d.spn_offset, d.spn_offset_plus, d.spn_offset_minus):
+        assert isinstance(box, QuietDoubleSpinBox)
+        assert box.minimum() == pytest.approx(-MAX_GEN_VOLTS)
+        assert box.maximum() == pytest.approx(MAX_GEN_VOLTS)
+        assert box.decimals() == 4
+        labels = [lbl.text() for lbl in box.parent().findChildren(QLabel)]
+        assert "V" in labels
+
+    d.spn_amp.setValue(4.0)
+    d.spn_offset.setValue(4.0)
+    assert d.spn_offset.value() == pytest.approx(4.0)
+    assert theme.FAULT in d.lbl_hv.styleSheet()
+
+
+def test_axis_input_peak_uses_the_larger_channel(tab):
+    setpoints = tab.beamline.funcgen_setpoints
+    setpoints.update_axis("X", amp_vpp=4.0)
+    setpoints.set_linked("X", False)
+    setpoints.update("A1", offset_v=0.5)
+    setpoints.update("A2", offset_v=-0.3)
+    assert tab.drives["X"].lbl_hv.text() == "input peak 2.50 V"
+
+    setpoints.update("A1", shape="DC", amp_vpp=1.0, offset_v=1.0)
+    setpoints.update("A2", amp_vpp=1.0, offset_v=0.0)
+    assert tab.drives["X"].lbl_hv.text() == "input peak 1.00 V"
+
+
+def test_axis_readback_shows_signed_offsets(tab):
+    tab.beamline.funcgens_changed.emit(FuncGenState(
+        connected={"A": True, "B": False}, timebase={},
+        channels=_funcgen_pair(
+            amp=4.0, freq=517.0, output=True,
+            A1={"offset_v": 0.4}, A2={"offset_v": -0.4},
+        ),
+    ))
+    tab.redraw()
+    assert (tab.drives["X"].lbl_readback.text()
+            == "X+ 4.00 Vpp +0.400 V · X- 4.00 Vpp -0.400 V @ 517 Hz out=ON")
