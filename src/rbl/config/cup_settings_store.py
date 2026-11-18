@@ -98,6 +98,8 @@ class CupSettings:
     min_converge_samples: int = CUP_MIN_CONVERGE_SAMPLES
     dwell_mode: str = "fixed"
     max_dwell_s: float = CUP_MAX_DWELL_S
+    manual_retract_on_converge: bool = False
+    manual_no_time_limit: bool = False
 
     @classmethod
     def defaults(cls) -> "CupSettings":
@@ -114,6 +116,8 @@ class CupSettings:
             min_converge_samples=CUP_MIN_CONVERGE_SAMPLES,
             dwell_mode="fixed",
             max_dwell_s=CUP_MAX_DWELL_S,
+            manual_retract_on_converge=False,
+            manual_no_time_limit=False,
         )
 
 
@@ -234,6 +238,27 @@ def validate_settings(raw: dict) -> tuple[CupSettings, list[SettingsLoadWarning]
           else "must be between 0.005 and 0.5 (0.5 % to 50 %)")
     judge("min_converge_samples", lambda v: None if v == int(v) and v >= 2
           else "must be a whole number of at least 2")
+
+    def judge_bool(key: str) -> None:
+        if key not in raw:
+            accepted[key] = getattr(defaults, key)
+            return
+        value = raw[key]
+        if isinstance(value, bool):
+            accepted[key] = value
+            return
+        fallback = getattr(defaults, key)
+        accepted[key] = fallback
+        try:
+            found = repr(value)
+        except Exception:
+            found = "<unprintable>"
+        warnings.append(
+            SettingsLoadWarning(key, found, "must be a boolean (true or false)", fallback)
+        )
+
+    judge_bool("manual_retract_on_converge")
+    judge_bool("manual_no_time_limit")
 
     accepted["min_converge_samples"] = int(accepted["min_converge_samples"])
     return CupSettings(**accepted), warnings

@@ -3659,3 +3659,349 @@ class TestDwellModeTabControls:
         tab.close()
 
 
+class TestManualInsertionsConverge:
+    """Ticket 86 — manual insertions retract on convergence, optionally with no time limit."""
+
+    STEADY = [1.0e-6] * 12
+    NOISY = [
+        0.3e-6, 1.9e-6, 0.3e-6, 1.9e-6, 0.3e-6, 1.9e-6,
+        0.3e-6, 1.9e-6, 0.3e-6, 1.9e-6, 0.3e-6, 1.9e-6,
+    ]
+
+    def setup_tab(
+        self,
+        qapp,
+        tmp_path,
+        monkeypatch,
+        *,
+        manual_retract_on_converge: bool = False,
+        manual_no_time_limit: bool = False,
+        dwell_mode: str = "target_uncertainty",
+        max_dwell_s: float = 5.0,
+    ):
+        import rbl.config.cup_settings_store as store
+        from rbl.config.cup_settings_store import CupSettings, save_settings
+
+        store_file = tmp_path / "cup_settings.json"
+        monkeypatch.setattr(store, "STORE_PATH", store_file)
+        assert save_settings(CupSettings(
+            arm_threshold_a=0.5e-6,
+            release_threshold_a=0.25e-6,
+            settle_window_s=1.0,
+            cycle_period_s=300.0,
+            cycle_dwell_s=3.0,
+            arm_debounce_s=1.0,
+            release_interval_s=3.0,
+            target_uncertainty=0.05,
+            min_converge_samples=10,
+            dwell_mode=dwell_mode,
+            max_dwell_s=max_dwell_s,
+            manual_retract_on_converge=manual_retract_on_converge,
+            manual_no_time_limit=manual_no_time_limit,
+        )) is True
+
+        beamline = Beamline()
+        beamline.lj.handle = 1
+        commands: list[tuple[str, float]] = []
+        current_t = [0.0]
+        monkeypatch.setattr(
+            beamline, "command_cup_in", lambda: commands.append(("IN", current_t[0]))
+        )
+        monkeypatch.setattr(
+            beamline, "command_cup_out", lambda: commands.append(("OUT", current_t[0]))
+        )
+
+        cup_log = CupLog(test_root=tmp_path)
+        tab = FaradayCupTab(beamline=beamline, cup_log=cup_log)
+        feed = CupFeed(tab, beamline=beamline)
+        act_feed = CupActuationFeed(tab, beamline=beamline)
+        sw = cup_log.open_test(datetime(2026, 10, 8, 9, 0, 0))
+        tab.show()
+        qapp.processEvents()
+        return tab, feed, act_feed, sw, commands, current_t
+
+    def run_manual_insert(
+        self,
+        qapp,
+        tab,
+        feed,
+        act_feed,
+        commands,
+        current_t,
+        currents,
+        *,
+        t_start: float = 10.0,
+        end_at_t: float | None = None,
+        local_mode: bool = False,
+    ):
+        from rbl.hardware.cup_status import CupPosition
+        from rbl.snapshots import CupActuationState
+
+        def act_auto(confirmed, commanded, t):
+            current_t[0] = t
+            tab.on_cup_actuation_state(CupActuationState(
+                connected=True,
+                commanded=commanded,
+                confirmed=confirmed,
+                auto_mode=not local_mode,
+                stale=False,
+                last_transition_t=t,
+                t=t,
+            ))
+            qapp.processEvents()
+
+        # Start OUT
+        act_auto(CupPosition.OUT, CupPosition.OUT, t_start - 1.0)
+        current_t[0] = t_start
+        tab.btn_insert.click()
+        qapp.processEvents()
+        assert ("IN", t_start) in commands
+
+        # Cup confirms IN -> opens run
+        t_in = t_start + 0.2
+        act_auto(CupPosition.IN, CupPosition.IN, t_in)
+        feed.send_reading(1.0e-6, timestamp=t_in, t_host=t_in)
+        qapp.processEvents()
+        assert tab.acquisition.is_acquiring
+
+        # Post-settle samples starting at t_in + 1.1 (settle_window_s = 1.0)
+        for i, val in enumerate(currents):
+            t_s = t_in + 1.1 + 0.1 * i
+            feed.send_reading(val, timestamp=t_s, t_host=t_s)
+            qapp.processEvents()
+            act_auto(CupPosition.IN, CupPosition.IN, t_s)
+            if any(cmd == "OUT" for cmd, _ in commands):
+                break
+
+        if end_at_t is not None and not any(cmd == "OUT" for cmd, _ in commands):
+            act_auto(CupPosition.IN, CupPosition.IN, end_at_t)
+
+        return t_in, act_auto
+
+    def read_summaries(self, sw):
+        path = sw.csv_path
+        sw.close()
+        with open(path, encoding="utf-8") as f:
+            rows = list(csv.DictReader(
+                line for line in f.read().splitlines() if not line.startswith("#")
+            ))
+        return [r for r in rows if r["record_type"] == "insertion_summary"]
+
+    def test_manual_insertion_is_not_retracted_with_the_converge_box_off(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        tab, feed, act_feed, sw, commands, current_t = self.setup_tab(
+            qapp, tmp_path, monkeypatch, manual_retract_on_converge=False
+        )
+        self.run_manual_insert(
+            qapp, tab, feed, act_feed, commands, current_t, self.STEADY
+        )
+        assert not any(cmd == "OUT" for cmd, _ in commands)
+        assert "%" in tab.lbl_uncertainty.text()
+        sw.close()
+        tab.close()
+
+    def test_manual_insertion_retracts_on_convergence_with_the_box_on(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        from rbl.hardware.cup_status import CupPosition
+
+        tab, feed, act_feed, sw, commands, current_t = self.setup_tab(
+            qapp, tmp_path, monkeypatch, manual_retract_on_converge=True
+        )
+        _, act_auto = self.run_manual_insert(
+            qapp, tab, feed, act_feed, commands, current_t, self.STEADY
+        )
+        out_cmds = [t for cmd, t in commands if cmd == "OUT"]
+        assert len(out_cmds) == 1
+
+        t_out = out_cmds[0] + 0.2
+        act_auto(CupPosition.OUT, CupPosition.OUT, t_out)
+        feed.send_reading(0.0, timestamp=t_out, t_host=t_out)
+        qapp.processEvents()
+
+        summaries = self.read_summaries(sw)
+        tab.close()
+        assert len(summaries) == 1
+        assert summaries[0]["end_reason"] == "converged"
+        assert summaries[0]["counted_in_dose"] == "false"
+        assert summaries[0]["converged_after_s"] != ""
+
+    def test_manual_insertion_max_dwell_and_no_time_limit(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        from rbl.hardware.cup_status import CupPosition
+
+        # Case 1: box on, no limit off, noisy feed -> commanded OUT at max_dwell_s
+        tab, feed, act_feed, sw, commands, current_t = self.setup_tab(
+            qapp, tmp_path, monkeypatch,
+            manual_retract_on_converge=True,
+            manual_no_time_limit=False,
+            max_dwell_s=5.0,
+        )
+        t_in, act_auto = self.run_manual_insert(
+            qapp, tab, feed, act_feed, commands, current_t, self.NOISY,
+            end_at_t=10.2 + 5.0,
+        )
+        out_cmds = [t for cmd, t in commands if cmd == "OUT"]
+        assert len(out_cmds) == 1
+        assert out_cmds[0] == pytest.approx(t_in + 5.0)
+        act_auto(CupPosition.OUT, CupPosition.OUT, out_cmds[0] + 0.2)
+        feed.send_reading(0.0, timestamp=out_cmds[0] + 0.2, t_host=out_cmds[0] + 0.2)
+        qapp.processEvents()
+        summaries = self.read_summaries(sw)
+        tab.close()
+        assert summaries[0]["end_reason"] == "max_dwell"
+        assert summaries[0]["counted_in_dose"] == "false"
+
+        # Case 2: no limit on -> still in after 3 * max_dwell_s, then retracts on converge
+        tab2, feed2, act_feed2, sw2, commands2, current_t2 = self.setup_tab(
+            qapp, tmp_path / "nolimit", monkeypatch,
+            manual_retract_on_converge=True,
+            manual_no_time_limit=True,
+            max_dwell_s=5.0,
+        )
+        t_in2, act_auto2 = self.run_manual_insert(
+            qapp, tab2, feed2, act_feed2, commands2, current_t2, self.NOISY,
+            t_start=100.0,
+            end_at_t=100.2 + 3.0 * 5.0,
+        )
+        assert not any(cmd == "OUT" for cmd, _ in commands2)
+        assert tab2.acquisition.is_acquiring
+
+        # Now feed steady converging samples past 3 * max_dwell_s
+        for i in range(100):
+            t_s = t_in2 + 16.0 + 0.1 * i
+            feed2.send_reading(1.0e-6, timestamp=t_s, t_host=t_s)
+            qapp.processEvents()
+            act_auto2(CupPosition.IN, CupPosition.IN, t_s)
+            if any(cmd == "OUT" for cmd, _ in commands2):
+                break
+        out_cmds2 = [t for cmd, t in commands2 if cmd == "OUT"]
+        assert len(out_cmds2) == 1
+        act_auto2(CupPosition.OUT, CupPosition.OUT, out_cmds2[0] + 0.2)
+        feed2.send_reading(0.0, timestamp=out_cmds2[0] + 0.2, t_host=out_cmds2[0] + 0.2)
+        qapp.processEvents()
+        summaries2 = self.read_summaries(sw2)
+        tab2.close()
+        assert summaries2[0]["end_reason"] == "converged"
+        assert summaries2[0]["counted_in_dose"] == "false"
+        assert summaries2[0]["max_dwell_s"] == ""
+
+    def test_manual_insertion_in_local_mode_issues_no_out_command(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        tab, feed, act_feed, sw, commands, current_t = self.setup_tab(
+            qapp, tmp_path, monkeypatch, manual_retract_on_converge=True
+        )
+        # Establish OUT in AUTO via CupActuationFeed (24 = FIO3 | FIO4), click Insert,
+        # then controller switches to LOCAL with cup IN (4 = FIO2, FIO4=0).
+        current_t[0] = 9.0
+        act_feed.send_fio_state(24, t=9.0)
+        qapp.processEvents()
+        current_t[0] = 10.0
+        tab.btn_insert.click()
+        qapp.processEvents()
+        assert ("IN", 10.0) in commands
+
+        # Controller switched to LOCAL (bit 4 cleared) and cup is IN (4 = FIO2)
+        act_feed.send_fio_state(4, t=10.2)
+        qapp.processEvents()
+        feed.send_reading(1.0e-6, timestamp=10.2, t_host=10.2)
+        qapp.processEvents()
+        # With LOCAL mode, AuthorityDetector uses current inference -> wait for arm debounce
+        feed.send_reading(1.0e-6, timestamp=11.3, t_host=11.3)
+        qapp.processEvents()
+        assert tab.acquisition.is_acquiring
+
+        for i, val in enumerate(self.STEADY):
+            t_s = 12.5 + 0.1 * i
+            feed.send_reading(val, timestamp=t_s, t_host=t_s)
+            qapp.processEvents()
+
+        assert not any(cmd == "OUT" for cmd, _ in commands)
+        sw.close()
+        tab.close()
+
+    def test_manual_converge_checkboxes_enable_rules(self, qapp, tmp_path, monkeypatch):
+        import rbl.config.cup_settings_store as store
+
+        monkeypatch.setattr(store, "STORE_PATH", tmp_path / "cup_settings.json")
+        tab, _ = make_connected_cup_tab(qapp, tmp_path)
+
+        # Default is fixed-dwell mode: first checkbox disabled, second disabled
+        assert tab.chk_manual_retract.text() == "Retract manual insertions when converged"
+        assert tab.chk_manual_no_limit.text() == "No time limit on manual insertions"
+        assert tab.chk_manual_retract.isChecked() is False
+        assert tab.chk_manual_no_limit.isChecked() is False
+        assert tab.chk_manual_retract.isEnabled() is False
+        assert tab.chk_manual_no_limit.isEnabled() is False
+
+        # Switch to target-uncertainty mode: first enabled, second disabled while first unchecked
+        tab.rad_dwell_target.click()
+        qapp.processEvents()
+        assert tab.chk_manual_retract.isEnabled() is True
+        assert tab.chk_manual_no_limit.isEnabled() is False
+
+        # Check first: second becomes enabled
+        tab.chk_manual_retract.click()
+        qapp.processEvents()
+        assert tab.chk_manual_retract.isChecked() is True
+        assert tab.chk_manual_no_limit.isEnabled() is True
+
+        # Uncheck first: second becomes disabled again
+        tab.chk_manual_retract.click()
+        qapp.processEvents()
+        assert tab.chk_manual_retract.isChecked() is False
+        assert tab.chk_manual_no_limit.isEnabled() is False
+
+        # Check first, then switch back to fixed-dwell mode: both disabled
+        tab.chk_manual_retract.click()
+        qapp.processEvents()
+        tab.rad_dwell_fixed.click()
+        qapp.processEvents()
+        assert tab.chk_manual_retract.isEnabled() is False
+        assert tab.chk_manual_no_limit.isEnabled() is False
+
+        tab.close()
+
+    def test_manual_converge_checkboxes_persist_and_write_settings_changed(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        import rbl.config.cup_settings_store as store
+
+        store_file = tmp_path / "cup_settings.json"
+        monkeypatch.setattr(store, "STORE_PATH", store_file)
+        beamline = Beamline()
+        cup_log = CupLog(test_root=tmp_path)
+        tab = FaradayCupTab(beamline=beamline, cup_log=cup_log)
+        sw = cup_log.open_test(datetime(2026, 10, 8, 9, 0, 0))
+        tab.show()
+        qapp.processEvents()
+
+        tab.rad_dwell_target.click()
+        qapp.processEvents()
+        tab.chk_manual_retract.click()
+        qapp.processEvents()
+        tab.chk_manual_no_limit.click()
+        qapp.processEvents()
+
+        path = sw.csv_path
+        sw.close()
+        tab.close()
+
+        loaded, warnings = store.load_settings(store_file)
+        assert warnings == []
+        assert loaded.manual_retract_on_converge is True
+        assert loaded.manual_no_time_limit is True
+
+        with open(path, encoding="utf-8") as f:
+            rows = list(csv.DictReader(
+                line for line in f.read().splitlines() if not line.startswith("#")
+            ))
+        details = [r["details"] for r in rows if r["record_type"] == "settings_changed"]
+        assert any("key=manual_retract_on_converge" in d for d in details)
+        assert any("key=manual_no_time_limit" in d for d in details)
+
+
+

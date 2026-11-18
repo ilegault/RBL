@@ -1,6 +1,6 @@
 # 86: Manual insertions can retract on convergence, optionally with no time limit
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -40,16 +40,16 @@ themselves, for bench testing.
 
 All tests in `tests/test_faraday_cup_tab.py`.
 
-- [ ] Test `test_manual_insertion_is_not_retracted_with_the_converge_box_off`: checkbox off: an Insert-button insertion fed a converging current is never
+- [x] Test `test_manual_insertion_is_not_retracted_with_the_converge_box_off`: checkbox off: an Insert-button insertion fed a converging current is never
       commanded OUT by the tab; the readout still reaches a percentage.
-- [ ] Test `test_manual_insertion_retracts_on_convergence_with_the_box_on`: checkbox on: the same insertion is commanded OUT on convergence; its row has
+- [x] Test `test_manual_insertion_retracts_on_convergence_with_the_box_on`: checkbox on: the same insertion is commanded OUT on convergence; its row has
       `end_reason == "converged"`, `counted_in_dose == False`.
-- [ ] Test `test_manual_insertion_max_dwell_and_no_time_limit`: checkbox on, no limit off, noisy feed: commanded OUT at `max_dwell_s`,
+- [x] Test `test_manual_insertion_max_dwell_and_no_time_limit`: checkbox on, no limit off, noisy feed: commanded OUT at `max_dwell_s`,
       `end_reason == "max_dwell"`. No limit on: still in after `3 * max_dwell_s`, then
       commanded OUT when the feed converges, with `max_dwell_s` blank in the row.
-- [ ] Test `test_manual_insertion_in_local_mode_issues_no_out_command`: checkbox on but controller reported in LOCAL (via `CupActuationFeed`): no OUT
+- [x] Test `test_manual_insertion_in_local_mode_issues_no_out_command`: checkbox on but controller reported in LOCAL (via `CupActuationFeed`): no OUT
       command is issued on convergence.
-- [ ] Test `test_manual_converge_checkboxes_enable_rules`: the second checkbox is disabled while the first is unchecked, and the first is
+- [x] Test `test_manual_converge_checkboxes_enable_rules`: the second checkbox is disabled while the first is unchecked, and the first is
       disabled in fixed-dwell mode.
 
 May fake: instrument and actuation feeds, modal dialogs, the clock. Must be real: the tab,
@@ -67,3 +67,11 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+### Summary (2026-11-18)
+
+- **Settings (`src/rbl/config/cup_settings_store.py`)**: Added `manual_retract_on_converge` and `manual_no_time_limit` (bool, default `False`), validated in `validate_settings` and persisted with `CupSettings`. Covered by `tests/test_cup_settings_store.py`.
+- **Session writer (`src/rbl/services/cup_session_writer.py`)**: Added both keys to `ALLOWED_SETTINGS_CHANGE_KEYS` and formatted boolean values as `"true"` / `"false"` in `write_settings_changed`.
+- **Faraday Cup tab (`src/rbl/gui/faraday_cup_tab.py`)**: Added `"Retract manual insertions when converged"` and `"No time limit on manual insertions"` checkboxes under the dwell mode toggle, enabled rules in `_update_dwell_mode_enabled`, immediate persistence + `settings_changed` markers, and `_maybe_retract_manual_insertion` for `manual`/`forced` insertions in target-uncertainty mode when actuation is connected and in AUTO (retracting on convergence or `max_dwell_s` unless no-limit is checked, keeping `counted_in_dose == False`, and leaving `max_dwell_s` blank in the summary row when no limit applies).
+- **Tests (`tests/test_faraday_cup_tab.py`)**: All five named acceptance tests (`test_manual_insertion_is_not_retracted_with_the_converge_box_off`, `test_manual_insertion_retracts_on_convergence_with_the_box_on`, `test_manual_insertion_max_dwell_and_no_time_limit`, `test_manual_insertion_in_local_mode_issues_no_out_command`, `test_manual_converge_checkboxes_enable_rules`) plus `test_manual_converge_checkboxes_persist_and_write_settings_changed` pass.
+- **Bench verification**: Covered by bench ticket 88.
