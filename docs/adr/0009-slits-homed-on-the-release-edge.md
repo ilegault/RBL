@@ -8,7 +8,9 @@
 Each slit drive's optical switch box (NEC 2HA062601, part of the BDS18 slit drive
 assembly) feeds the Galil's home input and its reverse limit input, and the two trip at
 the same point: jaw fully in, 0.2 mm from beam centre. The box is a packaged unit and is
-not to be opened. Measured on 2026-11-18: after a failed edge-return pass, axis B at
+not to be opened. NEC confirms (support e-mail 5-12496, 2026-05-29) that their standard
+slits have the home switch wired to the beam-centre position and that the slit drives have no
+encoders. Measured on 2026-11-18: after a failed edge-return pass, axis B at
 rest read reverse limit and home switch both tripped (`R● H●`), and BL/FL read
 -2,147,483,648 / 2,147,483,647 on all four axes, so no soft limit is involved.
 
@@ -69,4 +71,11 @@ the faster the axis arrived.
 - **Rewire the switch box** so the reverse limit trips past home. Needs the packaged
   box opened.
 - **`FE` with CN's home direction flipped.** Changes a controller setting that `HM` and
-  `FE` share, and `FE` searched the wrong way when tried in May 2026.
+  `FE` share, and `FE` was seen searching the wrong way in May 2026 tests, so its direction on
+  this setup is unproven.
+- **NEC's own procedure** (e-mail 5-12496): move off the switch (`PR 2000`), `SP 900`, then
+  `FE` (their software) or `HM` (their example), `BG`, and `DP 0` wherever the axis came to
+  rest, checking `TS`/`TE` but never the stop code. On these slits that is homing on the stop:
+  zero lands wherever the axis decelerates to rest past the trip point at 900 steps/s, so it
+  moves with speed and deceleration. The release-edge pass keeps NEC's back-off and approach
+  and adds the slow step back out, which is what removes the speed from the answer.
