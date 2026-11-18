@@ -107,9 +107,10 @@ def load_build_info(path: Path | None = None) -> BuildInfo:
     With no stamp to read, this is a dev run: version ``dev`` and the commit
     git reports for the source tree.
     """
-    frozen = _bundle_dir() is not None
-    if path is None and frozen:
-        path = _bundle_dir() / BUILD_INFO_FILENAME
+    bundle = _bundle_dir()
+    frozen = bundle is not None
+    if path is None and bundle is not None:
+        path = bundle / BUILD_INFO_FILENAME
     if path is not None:
         try:
             data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
