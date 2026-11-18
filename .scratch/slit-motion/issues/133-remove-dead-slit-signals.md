@@ -1,6 +1,6 @@
 # 133: Remove the dead slit signals and the second counts-to-mm conversion
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -36,10 +36,10 @@ already reaches every consumer through `Beamline.motors_changed`. Remove the dea
 
 ## Acceptance criteria
 
-- [ ] Test `test_motor_tab_has_no_private_slit_geometry_signal` in `tests/test_slit_cross_screen.py`:
+- [x] Test `test_motor_tab_has_no_private_slit_geometry_signal` in `tests/test_slit_cross_screen.py`:
       `not hasattr(MotorTab, "slit_state")` and `not hasattr(RasterPlannerTab, "slit_targets_ready")`.
-- [ ] The grep in step 4 matches nothing else. (by hand)
-- [ ] Every existing test passes unedited. (no test: this ticket only removes code)
+- [x] The grep in step 4 matches nothing else. (by hand)
+- [x] Every existing test passes unedited. (no test: this ticket only removes code)
 
 **What tests may fake:** the Galil (`_FakeGalil`). `MotorTab`, `RasterPlannerTab` and `Beamline` are real.
 
@@ -56,3 +56,5 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+2026-11-17: Removed MotorTab.slit_state and RasterPlannerTab.slit_targets_ready (confirmed unused by grep before removal), fixed the app.py, logamp_tab and snapshots.py references. New test added; no tests deleted. Local gate and CI green.

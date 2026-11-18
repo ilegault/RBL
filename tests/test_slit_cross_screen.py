@@ -245,3 +245,17 @@ def test_jog_minus_on_an_unzeroed_axis_still_jogs(screens):
     assert len(beamline.galil.jogs) == 1
     assert beamline.galil.jogs[0][1] < 0
     assert beamline.galil.moves == []
+
+
+def test_motor_tab_has_no_private_slit_geometry_signal():
+    """Slit geometry reaches consumers only through Beamline.motors_changed.
+
+    MotorTab.slit_state converted counts to mm inside a widget (a second
+    conversion beside Beamline.ingest_motor_poll) and nothing listened to it;
+    RasterPlannerTab.slit_targets_ready was likewise connected to nothing.
+    """
+    from rbl.gui.motor_tab import MotorTab
+    from rbl.gui.raster_planner_tab import RasterPlannerTab
+
+    assert not hasattr(MotorTab, "slit_state")
+    assert not hasattr(RasterPlannerTab, "slit_targets_ready")

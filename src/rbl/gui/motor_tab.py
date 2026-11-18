@@ -667,14 +667,6 @@ class AxisControls(QGroupBox):
 class MotorTab(QWidget):
     """The "Stepper Motors" outer tab."""
 
-    # Slit geometry for anything that needs to know where the slits are.  The
-    # beam-position indicator on the log-amp tab reconstructs the beam from
-    # slit positions plus currents, so it needs this at poll rate.
-    #   {"connected": bool,
-    #    "zeroed":    bool,                      # all four axes referenced
-    #    "positions": {"X+": mm, ...}}           # UNSIGNED distance from centre
-    slit_state = Signal(dict)
-
     # Raw per-axis poll snapshot (axis letter -> {pos, moving, switches,
     # enabled}, exactly GalilPollWorker.state's shape). Feeds
     # Beamline.ingest_motor_poll, which fills in per-axis zeroed from
@@ -1320,9 +1312,6 @@ class MotorTab(QWidget):
         self._set_buttons_connected(False)
         self.lbl_model.setText("")
         self._log_line("# Disconnected.")
-        # Positions go stale the moment the link drops; say so rather than
-        # letting consumers keep drawing the last known geometry as if live.
-        self.slit_state.emit({"connected": False, "zeroed": False, "positions": {}})
         self.motors_disconnected.emit()
 
     def _set_buttons_connected(self, on: bool):
@@ -1398,13 +1387,6 @@ class MotorTab(QWidget):
         for axis, axis_state in snapshot.items():
             self.axes[axis].update_state(axis_state)
 
-        positions = {SC.AXIS_NAMES[axis]: SC.counts_to_mm(axis, st["pos"])
-                     for axis, st in snapshot.items()}
-        self.slit_state.emit({
-            "connected": True,
-            "zeroed":    self.beamline.all_zeroed(),
-            "positions": positions,
-        })
         self.raw_state_changed.emit(snapshot)
 
     def wire_poll_worker(self, worker: GalilPollWorker) -> None:
