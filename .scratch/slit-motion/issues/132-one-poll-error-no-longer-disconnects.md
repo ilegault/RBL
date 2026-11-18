@@ -1,6 +1,6 @@
 # 132: One poll error no longer disconnects the Galil
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
