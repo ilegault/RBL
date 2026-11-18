@@ -586,3 +586,21 @@ def test_usb_status_becomes_the_camera_message(tmp_path, qapp):
                     and isinstance(node.func.value, ast.Attribute)
                     and node.func.value.attr == "status"):
                 assert func.name == "_announce", f"status.emit in {func.name}"
+
+
+def test_session_json_records_the_build(tmp_path, qapp, monkeypatch):
+    """session.json says which RBL build recorded it (rbl/build_info.py)."""
+    import rbl.services.session_recorder as sr_mod
+    from rbl.build_info import build_info
+    monkeypatch.setattr(sr_mod, "_logs_dir", lambda: str(tmp_path))
+
+    rec, _ = _make_recorder(tmp_path)
+    assert rec.start()
+    rec.stop()
+
+    sessions = [d for d in os.listdir(tmp_path) if d.startswith("session_")]
+    sess_dir = os.path.join(tmp_path, sessions[-1])
+    with open(os.path.join(sess_dir, "session.json"), encoding="utf-8") as f:
+        manifest = json.load(f)
+    assert manifest["rbl_build"] == build_info().as_dict()
+    assert manifest["rbl_build"]["version"] == "dev"

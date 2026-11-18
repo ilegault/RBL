@@ -85,6 +85,21 @@ else:
           "open the ZWO camera. See vendor/zwo/README.md ***")
 
 # ---------------------------------------------------------------------------
+# build_info.json — the build stamp (version, commit, build time).
+#
+# Written by build.bat at the repo root just before PyInstaller runs, gitignored,
+# and read at runtime by rbl/build_info.py for the window title, rbl.log and the
+# data-file sidecars. A plain JSON data file: no code, no new binary. Missing is
+# a WARNING: the app then reports its version as "unknown".
+# ---------------------------------------------------------------------------
+_build_info = os.path.join(ROOT, "build_info.json")
+if os.path.isfile(_build_info):
+    all_datas = all_datas + [(_build_info, ".")]
+else:
+    print("*** WARNING: build_info.json not found — this build will report its "
+          "version as 'unknown'. Build with build.bat to stamp it. ***")
+
+# ---------------------------------------------------------------------------
 # Hidden imports — ONLY what's actually used in this codebase:
 #   main.py        → numpy, yaml, json, csv, matplotlib.use("Agg")
 #   current_tab.py → matplotlib.use("QtAgg"), FigureCanvasQTAgg

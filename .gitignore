@@ -265,3 +265,6 @@ bash.exe.stackdump
 
 # ZWO's ASICamera2.dll is not committed; the developer copies it in (vendor/zwo/README.md).
 vendor/zwo/*.dll
+
+# Build stamp written by build.bat, bundled by rbl.spec (src/rbl/build_info.py)
+build_info.json
