@@ -210,7 +210,7 @@ class TestApplyToUnzeroedSlits:
 
     LETTERS = {"X+": "A", "X-": "B", "Y+": "C", "Y-": "D"}
 
-    def _wired(self, monkeypatch, zeroed_letters):
+    def build_wired(self, monkeypatch, zeroed_letters):
         from PySide6.QtWidgets import QMessageBox
         moved = []
         letters = self.LETTERS
@@ -231,7 +231,7 @@ class TestApplyToUnzeroedSlits:
         return RasterPlannerTab(beamline=FakeBeamline()), moved
 
     def test_apply_to_unzeroed_slits_asks_and_can_be_declined(self, qapp, monkeypatch):
-        wired, moved = self._wired(monkeypatch, {"A", "B", "D"})
+        wired, moved = self.build_wired(monkeypatch, {"A", "B", "D"})
         asked = []
 
         def decline(self_, slits):
@@ -244,14 +244,14 @@ class TestApplyToUnzeroedSlits:
         assert moved == []
 
     def test_apply_to_unzeroed_slits_moves_when_accepted(self, qapp, monkeypatch):
-        wired, moved = self._wired(monkeypatch, {"A", "B", "D"})
+        wired, moved = self.build_wired(monkeypatch, {"A", "B", "D"})
         monkeypatch.setattr(RasterPlannerTab, "_confirm_unzeroed_apply",
                             lambda self_, slits: True)
         wired.btn_apply_slits.click()
         assert sorted(moved) == sorted(AMP_LABELS)
 
     def test_apply_to_zeroed_slits_does_not_ask(self, qapp, monkeypatch):
-        wired, moved = self._wired(monkeypatch, {"A", "B", "C", "D"})
+        wired, moved = self.build_wired(monkeypatch, {"A", "B", "C", "D"})
 
         def boom(self_, slits):
             raise AssertionError("must not ask when every slit is zeroed")
