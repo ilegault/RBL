@@ -1300,8 +1300,7 @@ class MotorTab(QWidget):
                 except Exception as e:
                     self._log_line(f"! Soft limits for {axis}: {e}")
             self.worker = GalilPollWorker(self.galil, period_s=0.2)
-            self.worker.state.connect(self._on_state)
-            self.worker.error.connect(self._on_poll_error)
+            self.wire_poll_worker(self.worker)
             self.worker.start()
             self._set_buttons_connected(True)
         except Exception as e:
@@ -1407,6 +1406,14 @@ class MotorTab(QWidget):
             "positions": positions,
         })
         self.raw_state_changed.emit(snapshot)
+
+    def wire_poll_worker(self, worker: GalilPollWorker) -> None:
+        worker.state.connect(self._on_state)
+        worker.warning.connect(self._on_poll_warning)
+        worker.error.connect(self._on_poll_error)
+
+    def _on_poll_warning(self, msg: str):
+        self._log_line("! " + msg)
 
     def _on_poll_error(self, msg: str):
         self._log_line(f"! Poll thread error: {msg}")

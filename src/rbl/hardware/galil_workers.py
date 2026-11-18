@@ -75,7 +75,17 @@ from rbl.hardware.galil_driver import GalilController
 # ─── Background poll thread ───────────────────────────────────────────────────
 
 class GalilPollWorker(QThread):
+    """5 Hz state poll that tolerates isolated failures.
+
+    WHY THIS EXISTS: the poll used to give up on its first exception. During a
+    homing run the controller is busy and one slow reply is routine; that single
+    exception disconnected the Galil and cancelled the run. Now an exception
+    below SC.GALIL_POLL_MAX_CONSECUTIVE_ERRORS emits `warning` and carries on;
+    only that many failures in a row emit `error` and stop. A good poll resets
+    the count, so two scattered hiccups never add up to a disconnect.
+    """
     state = Signal(dict)
+    warning = Signal(str)
     error = Signal(str)
 
     def __init__(self, galil: GalilController, period_s: float = 0.2):
@@ -88,6 +98,7 @@ class GalilPollWorker(QThread):
         self._running = False
 
     def run(self):
+        failures = 0
         while self._running and self.galil.connected:
             t0 = time.time()
             try:
@@ -99,10 +110,15 @@ class GalilPollWorker(QThread):
                         "switches": self.galil.get_switch_states(axis),
                         "enabled":  not self.galil.is_motor_off(axis),
                     }
+                failures = 0
                 self.state.emit(snapshot)
             except Exception as e:
-                self.error.emit(str(e))
-                break
+                failures += 1
+                if failures >= SC.GALIL_POLL_MAX_CONSECUTIVE_ERRORS:
+                    self.error.emit(str(e))
+                    break
+                self.warning.emit(
+                    f"Poll error {failures}/{SC.GALIL_POLL_MAX_CONSECUTIVE_ERRORS}: {e}")
             elapsed   = time.time() - t0
             remaining = max(0.0, self.period - elapsed)
             self.msleep(int(remaining * 1000))
