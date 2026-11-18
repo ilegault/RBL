@@ -1,6 +1,6 @@
 # 135: Homing finds the release edge (one axis and Auto-Home All)
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
