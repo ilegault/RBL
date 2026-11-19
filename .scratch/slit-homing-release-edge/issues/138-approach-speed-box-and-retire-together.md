@@ -1,6 +1,6 @@
 # 138: One Approach speed box; the Together homing and the HM code retired
 
-**Status:** done
+**Status:** blocked
 
 **Runner:** any
 
@@ -101,4 +101,15 @@ pytest --tb=short -q -n auto --dist loadfile
 
 ## Comments
 
-2026-11-19: Replaced the three Pass N spin boxes on `MotorTab` with `spn_approach_speed` wired to `Beamline.home_approach_speed()`/`set_home_approach_speed()`, retired `btn_auto_home_par`/`MultiAxisHomeRoutine`/`MultiAxisHomeWorker`, removed `HM` driver methods (`begin_home`, `begin_home_multi`, `set_home_velocity`, `set_home_velocity_multi`), removed `HOME_STOP_CODE`/`DEFAULT_HOME_VELOCITY_COUNTS_PER_SEC`/`HOME_PASS_SPEEDS_COUNTS_PER_SEC`/`HOME_PASS_SPEED_MAX_COUNTS_PER_SEC` and `home_pass_speeds`/`set_home_pass_speeds`, and updated all homing tooltips, confirmation text, and docstrings for release-edge homing (ADR 0009). Covered by `test_approach_speed_box_edits_the_beamline`, `test_approach_speed_box_is_locked_while_homing`, `test_the_together_path_is_gone`, and `test_no_homing_text_mentions_the_old_passes` in `tests/test_auto_home.py`; full gate passed (3003 tests). Bench verification remains in ticket 142.
+## Escalation — 2026-11-19
+Repo: RBL   Ticket: 138 One Approach speed box; the Together homing and the HM code retired   Branch: ticket/slit-homing-release-edge-138-approach-speed-box-and-retire-together
+Goal: Replace the three Pass N spin boxes with `spn_approach_speed`, retire Together homing (`btn_auto_home_par`, `MultiAxisHomeRoutine`, `MultiAxisHomeWorker`), and remove the `HM` driver methods and old pass-speed/stop-code constants.
+Attempt 1: Implemented all changes and ran all four repo gates (`ruff check .`, `check_tests_first.py`, `type_gate.py`, `pytest --tb=short -q -n auto --dist loadfile` -> 3003 passed). Ran `ticket_engine.integrity_runner --local --repo-path . --base-ref origin/master` -> Check 7 passed (`All 4 new test(s) failed on base code`), but Check 2 failed on all 28 deleted tests and the resulting assertion-count drops because `integrity.py` qualifies class methods as `<file>.py::<Class>::<func>` whereas `origin/master`'s `Deletes tests:` line lists `<file>.py::<func>` without the class name.
+Failing output (exact, trimmed to the relevant lines):
+Check 2 fail: Deleted test function 'test_together_sends_one_command_not_four_workers' in tests/test_auto_home.py
+... (all 28 tests listed on `Deletes tests:` in `origin/master`)
+Check 2 fail: Test file 'tests/test_auto_home.py' has fewer assertions than on base (lost 40 assertion(s): 143 < 183)
+Check 2 fail: Test file 'tests/test_beamline.py' has fewer assertions than on base (lost 8 assertion(s): 154 < 162)
+Check 2 fail: Test file 'tests/test_galil_protocol.py' has fewer assertions than on base (lost 6 assertion(s): 61 < 67)
+Check 7 pass: All 4 new test(s) failed on base code (runtime 60.10s)
+Decision needed: Update `Deletes tests:` on `master` for ticket 138 to include the enclosing class names (`tests/test_auto_home.py::TestMotorTabAutoHome::...`, `TestMultiAxisHomeRoutine::...`, `tests/test_galil_protocol.py::TestSingleAxisMotion::...`, `TestMultiAxisMotion::...`, `tests/test_beamline.py::TestBeamline::...`), or merge this draft PR as-is after reviewing the 3003-test green gate.
