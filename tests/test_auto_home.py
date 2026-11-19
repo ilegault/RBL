@@ -539,6 +539,31 @@ class TestMotorTabAutoHome:
         mock_worker_cls.assert_called_once()
         assert mock_worker_cls.call_args.kwargs["speeds"] == (300, 120, 40)
 
+    def test_approach_speed_reaches_the_next_auto_home(self, tab, monkeypatch):
+        tab.beamline.set_home_approach_speed(40)
+        mock_worker_cls = MagicMock()
+        monkeypatch.setattr("rbl.gui.motor_tab.AutoHomeAllWorker", mock_worker_cls)
+        monkeypatch.setattr(
+            "rbl.gui.motor_tab.QMessageBox.question",
+            lambda *a, **k: QMessageBox.StandardButton.Yes)
+
+        tab.btn_auto_home_seq.click()
+
+        mock_worker_cls.assert_called_once()
+        assert mock_worker_cls.call_args.kwargs["approach_speed"] == 40
+
+    def test_approach_speed_reaches_a_per_axis_home(self, tab, monkeypatch):
+        tab.beamline.set_home_approach_speed(40)
+        mock_worker_cls = MagicMock()
+        monkeypatch.setattr("rbl.gui.motor_tab.HomingWorker", mock_worker_cls)
+
+        tab.axes["A"].btn_home.click()
+        tab.axes["B"].btn_seek_home.click()
+
+        assert mock_worker_cls.call_count == 2
+        assert mock_worker_cls.call_args_list[0].kwargs["approach_speed"] == 40
+        assert mock_worker_cls.call_args_list[1].kwargs["approach_speed"] == 40
+
     def test_pass_speed_boxes_disabled_while_homing(self, tab, monkeypatch):
         boxes = (tab.spn_pass1, tab.spn_pass2, tab.spn_pass3)
         monkeypatch.setattr(

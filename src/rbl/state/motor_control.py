@@ -74,6 +74,9 @@ class MotorControlMixin:
         self._home_pass_speeds: tuple[int, int, int] = (
             SC.HOME_PASS_SPEEDS_COUNTS_PER_SEC
         )
+        # Shared release-edge homing approach speed (counts/s), not saved
+        # between runs.
+        self._home_approach_speed_cps: int = SC.HOME_APPROACH_SPEED_COUNTS_PER_SEC
         # Axes whose zero has been defined since the last connect / E-stop.
         self._zeroed_axes: set[str] = set()
 
@@ -110,6 +113,18 @@ class MotorControlMixin:
                 f"got {speeds!r}"
             )
         self._home_pass_speeds = (parsed[0], parsed[1], parsed[2])
+
+    def home_approach_speed(self) -> int:
+        return self._home_approach_speed_cps
+
+    def set_home_approach_speed(self, cps) -> None:
+        val = int(cps)
+        if not (1 <= val <= SC.HOME_APPROACH_SPEED_MAX_COUNTS_PER_SEC):
+            raise ValueError(
+                f"approach speed must be in 1..{SC.HOME_APPROACH_SPEED_MAX_COUNTS_PER_SEC} "
+                f"counts/s, got {cps!r}"
+            )
+        self._home_approach_speed_cps = val
 
     def floor_refusal(self, axis_letter: str, counts: int):
         """Refusal message when `counts` is below the homed position of a
