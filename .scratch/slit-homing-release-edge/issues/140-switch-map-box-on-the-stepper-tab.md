@@ -1,6 +1,6 @@
 # 140: Switch Map box on the Stepper Motors tab
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
