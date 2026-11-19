@@ -127,6 +127,9 @@ EDGE_RETURN_DEFAULT_OUT_COUNTS = 2000
 # Release-edge homing (ADR 0009): drive onto the switch, then step back out
 # one count at a time at rest until the home switch releases.
 HOME_APPROACH_SPEED_COUNTS_PER_SEC = 58   # ADR 0009: default approach speed (cps)
+# The approach does not decide where zero lands, but a fast approach drives
+# deeper past the switch and makes each creep longer.
+HOME_APPROACH_SPEED_MAX_COUNTS_PER_SEC = 500
 HOME_CREEP_STEP_COUNTS             = 1    # ADR 0009: single-count step out to read release at rest
 HOME_CREEP_MAX_COUNTS              = 400  # ADR 0009: fail with "check the sensor" if unreleased
 HOME_PASS2_BACKOFF_COUNTS          = 300  # ADR 0009: back-off distance before pass 2

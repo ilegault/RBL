@@ -1,6 +1,6 @@
 # 136: The operator's approach speed reaches Home and Auto-Home All
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -42,15 +42,15 @@ started from the Stepper Motors tab uses to drive onto the home switch.
 
 ## Acceptance criteria
 
-- [ ] Test `test_home_approach_speed_defaults_and_is_validated` in `tests/test_beamline.py`: a
+- [x] Test `test_home_approach_speed_defaults_and_is_validated` in `tests/test_beamline.py`: a
       new `Beamline` reports `58`; after `set_home_approach_speed(40)` it reports `40`;
       `set_home_approach_speed(0)` and `set_home_approach_speed(501)` each raise `ValueError` with
       `"approach speed must be in 1..500"` in the message, and it still reports `40`.
-- [ ] Test `test_approach_speed_reaches_the_next_auto_home` in `tests/test_auto_home.py`:
+- [x] Test `test_approach_speed_reaches_the_next_auto_home` in `tests/test_auto_home.py`:
       `tab.beamline.set_home_approach_speed(40)`, `rbl.gui.motor_tab.AutoHomeAllWorker` patched
       with a `MagicMock`, the confirmation patched to Yes; clicking `btn_auto_home_seq` constructs
       the worker once with `approach_speed == 40` in its keyword arguments.
-- [ ] Test `test_approach_speed_reaches_a_per_axis_home` in `tests/test_auto_home.py`: with
+- [x] Test `test_approach_speed_reaches_a_per_axis_home` in `tests/test_auto_home.py`: with
       `rbl.gui.motor_tab.HomingWorker` patched and the approach speed set to 40, clicking axis A's
       `btn_home` and then axis B's `btn_seek_home` each construct the worker with
       `approach_speed == 40`.
@@ -71,3 +71,5 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+2026-11-18: Implemented shared `home_approach_speed` on `Beamline` (`MotorControlMixin`) with `HOME_APPROACH_SPEED_MAX_COUNTS_PER_SEC = 500` in `hardware_config.py`, and wired `beamline.home_approach_speed()` into `AxisControls._start_homing` (`HomingWorker`) and `MotorTab._start_auto_home` (`AutoHomeAllWorker`) in `motor_tab.py`. Covered by `test_home_approach_speed_defaults_and_is_validated` (`tests/test_beamline.py`), `test_approach_speed_reaches_the_next_auto_home`, and `test_approach_speed_reaches_a_per_axis_home` (`tests/test_auto_home.py`). Bench verification is deferred to ticket 142.
