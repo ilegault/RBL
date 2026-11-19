@@ -1,6 +1,6 @@
 # 139: Switch map measurement (routine, analysis, CSV)
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -85,23 +85,23 @@ Stepper Motors tab box is ticket 140.
 
 ## Acceptance criteria
 
-- [ ] Test `test_find_switch_edges_from_rows` in `tests/test_switch_map.py` (new file): hand-built
+- [x] Test `test_find_switch_edges_from_rows` in `tests/test_switch_map.py` (new file): hand-built
       rows where home and reverse trip on the in row at -3 and release on the out row at 6 give
       `SwitchEdges(-3, -3, 6, 6)`; rows where the reverse limit never reads tripped give
       `reverse_trip is None` and `reverse_release is None`.
-- [ ] Test `test_switch_map_summary_line` in `tests/test_switch_map.py`:
+- [x] Test `test_switch_map_summary_line` in `tests/test_switch_map.py`:
       `switch_map_summary("A", SwitchEdges(-3, None, 6, None), "100-count cap")` is exactly
       `"A: in — home trips at -3, reverse trips at never (gap —); out — home releases at 6, reverse releases at never; inward stop: 100-count cap"`.
-- [ ] Test `test_switch_map_finds_a_shared_switch` in `tests/test_switch_map_routine.py` (new
+- [x] Test `test_switch_map_finds_a_shared_switch` in `tests/test_switch_map_routine.py` (new
       file): `SimGalil(trip_at=-3, release_at=6, start_at=2000)`; `SwitchMapRoutine(sim, "A", progress=lines.append).run()`
       returns `(True, msg, rows)`; `find_switch_edges(rows) == SwitchEdges(-3, -3, 6, 6)`; the
       last `"in"` row has `reverse` True; `lines` contains `"A: in — home trips at -3 cts"` and
       `msg` contains `"inward stop: reverse limit"`; `sim.slits["A"].zeroed_at == []`.
-- [ ] Test `test_switch_map_stops_at_the_cap_without_a_reverse_limit` in
+- [x] Test `test_switch_map_stops_at_the_cap_without_a_reverse_limit` in
       `tests/test_switch_map_routine.py`: `SimGalil(trip_at=-3, release_at=6, reverse_trip_at=-1000, reverse_release_at=-990)`;
       the run succeeds, the last `"in"` row is at position -103, and `msg` contains
       `"reverse trips at never"` and `"inward stop: 100-count cap"`.
-- [ ] Test `test_switch_map_csv_rows` in `tests/test_switch_map_writer.py` (new file): two rows
+- [x] Test `test_switch_map_csv_rows` in `tests/test_switch_map_writer.py` (new file): two rows
       written with `directory=tmp_path, now=datetime(2026, 11, 18, 9, 5, 7)` for axis `"B"` produce
       `switch_map_B_20261118_090507.csv` whose lines are the `# axis=B slit=X- step_counts=1 step_speed_cps=25`
       comment, the header, and the two rows with `1`/`0` switch values.
@@ -123,3 +123,11 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+Summary (2026-11-18):
+- Added switch-map constants in `src/rbl/config/hardware_config.py`.
+- Added pure analysis/formatting module `src/rbl/hardware/switch_map.py` (`SwitchMapRow`, `SwitchEdges`, `find_switch_edges`, `switch_change_line`, `switch_map_summary`).
+- Added `SwitchMapRoutine` and `SwitchMapWorker` to `src/rbl/hardware/galil_workers.py`.
+- Added `src/rbl/services/switch_map_writer.py` (`write_switch_map_csv`).
+- Covered by `tests/test_switch_map.py` (`test_find_switch_edges_from_rows`, `test_switch_map_summary_line`), `tests/test_switch_map_routine.py` (`test_switch_map_finds_a_shared_switch`, `test_switch_map_stops_at_the_cap_without_a_reverse_limit`), and `tests/test_switch_map_writer.py` (`test_switch_map_csv_rows`).
+- Bench verification on real hardware deferred to ticket 142 (UI box in ticket 140).
