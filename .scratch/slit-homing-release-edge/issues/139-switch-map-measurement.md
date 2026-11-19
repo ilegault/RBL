@@ -1,6 +1,6 @@
 # 139: Switch map measurement (routine, analysis, CSV)
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
