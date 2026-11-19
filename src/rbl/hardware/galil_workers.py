@@ -41,12 +41,12 @@ limit is active, unless the axis is already on its forward limit.
 
 EDGE-RETURN TEST
 ----------------
-`EdgeReturnRoutine` measures homing repeatability on one axis at one pass
-speed: it backs out of the switch, then repeats N cycles of moving out
-`out_counts` (+counts) and running a single HM pass back onto the home switch
-at `pass_speed_cps`, recording `_RP` after each stop-code-10 arrival. Every
-cycle approaches the edge from the same side (out, then one home pass back) so
-backlash and switch hysteresis stay constant across readings. It never calls
+`EdgeReturnRoutine` measures homing repeatability on one axis at `approach_speed`:
+it backs out of the switch, then repeats N cycles of moving out `out_counts`
+(+counts), approaching the home switch at `approach_speed`, and creeping out
+one count at a time to the release edge, recording that edge. Every cycle
+approaches the edge from the same side (out, then one release-edge home pass)
+so backlash and switch hysteresis stay constant across readings. It never calls
 `define_zero` or `define_zero_multi` because the measurement must not alter
 where the slits think home is.
 """
@@ -907,21 +907,21 @@ class AutoHomeAllWorker(QThread):
         return f"{head} — " + "; ".join(parts)
 
 
-# ─── Edge-return repeatability test (one axis, one pass speed) ────────────────
+# ─── Edge-return repeatability test (one axis, approach speed) ────────────────
 
 class EdgeReturnRoutine:
-    """Collect edge-return readings on one axis at one pass speed.
+    """Collect edge-return readings on one axis at the approach speed.
 
     Not a QThread for the same reasons as `AxisHomeRoutine`: callers can run
-    it on a worker thread (`EdgeReturnWorker`), sequentially across speeds, or
-    directly in tests. Never calls `define_zero` or `define_zero_multi`.
+    it on a worker thread (`EdgeReturnWorker`) or directly in tests. Never
+    calls `define_zero` or `define_zero_multi`.
     """
 
     def __init__(
         self,
         galil: GalilController,
         axis: str,
-        pass_speed_cps: int,
+        approach_speed: int,
         cycles: int,
         out_counts: int,
         progress=None,
@@ -929,7 +929,7 @@ class EdgeReturnRoutine:
     ):
         self.galil = galil
         self.axis = axis
-        self.pass_speed_cps = pass_speed_cps
+        self.approach_speed = approach_speed
         self.cycles = cycles
         self.out_counts = out_counts
         self._progress = progress or (lambda _msg: None)
@@ -939,7 +939,10 @@ class EdgeReturnRoutine:
         """Run all cycles and return (success, message, readings). Never raises."""
         g, axis = self.galil, self.axis
         readings: list[int] = []
-        home = AxisHomeRoutine(g, axis, self._progress, self._cancelled)
+        home = AxisHomeRoutine(
+            g, axis, self._progress, self._cancelled,
+            approach_speed=self.approach_speed,
+        )
         try:
             ok, msg = home.back_out_of_home()
             if not ok:
@@ -958,26 +961,20 @@ class EdgeReturnRoutine:
                 if not home.wait_idle(timeout=60.0):
                     return False, f"{axis}: timeout on cycle {k}/{self.cycles}", readings
 
-                g.begin_home(axis, self.pass_speed_cps, fine_speed=self.pass_speed_cps)
-                if not home.wait_idle(timeout=120.0):
-                    return False, f"{axis}: timeout on cycle {k}/{self.cycles}", readings
+                ok, msg = home.approach(self.approach_speed)
+                if not ok:
+                    return False, msg, readings
 
-                code = g.get_stop_code(axis)
-                if code != SC.HOME_STOP_CODE:
-                    return (
-                        False,
-                        f"{axis}: cycle {k}/{self.cycles} did not stop on the "
-                        f"home switch (stop code {code})",
-                        readings,
-                    )
+                ok, msg, edge = home.creep_to_release()
+                if not ok or edge is None:
+                    return False, msg, readings
 
-                pos = g.get_position(axis)
-                readings.append(pos)
-                self._progress(f"{axis}: cycle {k}/{self.cycles} — edge at {pos} cts")
+                readings.append(edge)
+                self._progress(f"{axis}: cycle {k}/{self.cycles} — edge at {edge} cts")
 
             return (
                 True,
-                f"{axis}: {self.cycles} edge returns at {self.pass_speed_cps} cps",
+                f"{axis}: {self.cycles} edge returns at {self.approach_speed} cps",
                 readings,
             )
         except Exception as e:
@@ -987,7 +984,7 @@ class EdgeReturnRoutine:
 
 
 class EdgeReturnWorker(QThread):
-    """`EdgeReturnRoutine` for one axis at one pass speed, on its own thread."""
+    """`EdgeReturnRoutine` for one axis at the approach speed, on its own thread."""
 
     progress = Signal(str)
     done = Signal(bool, str, list)
@@ -996,7 +993,7 @@ class EdgeReturnWorker(QThread):
         self,
         galil: GalilController,
         axis: str,
-        pass_speed_cps: int,
+        approach_speed: int,
         cycles: int = SC.EDGE_RETURN_DEFAULT_CYCLES,
         out_counts: int = SC.EDGE_RETURN_DEFAULT_OUT_COUNTS,
         parent=None,
@@ -1004,7 +1001,7 @@ class EdgeReturnWorker(QThread):
         super().__init__(parent)
         self.galil = galil
         self.axis = axis
-        self.pass_speed_cps = pass_speed_cps
+        self.approach_speed = approach_speed
         self.cycles = cycles
         self.out_counts = out_counts
         self._cancelled = False
@@ -1016,7 +1013,7 @@ class EdgeReturnWorker(QThread):
         routine = EdgeReturnRoutine(
             self.galil,
             self.axis,
-            self.pass_speed_cps,
+            self.approach_speed,
             self.cycles,
             self.out_counts,
             progress=self.progress.emit,
