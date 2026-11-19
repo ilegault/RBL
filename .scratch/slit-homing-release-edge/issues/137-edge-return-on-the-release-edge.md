@@ -1,6 +1,6 @@
 # 137: The edge-return test measures the release-edge pass
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -57,16 +57,16 @@ tests expect one worker and one run). The `tab` fixture in `tests/test_edge_retu
 
 ## Acceptance criteria
 
-- [ ] Test `test_edge_return_records_release_edges` in `tests/test_edge_return_routine.py`:
+- [x] Test `test_edge_return_records_release_edges` in `tests/test_edge_return_routine.py`:
       `SimGalil(trip_at=-3, release_at=6, start_at=2000)`;
       `EdgeReturnRoutine(sim, "A", 58, cycles=3, out_counts=2000).run()` returns
       `(True, msg, [6, 6, 6])` and `sim.slits["A"].zeroed_at == []`.
-- [ ] Test `test_edge_return_shows_a_lost_step` in `tests/test_edge_return_routine.py`: the same
+- [x] Test `test_edge_return_shows_a_lost_step` in `tests/test_edge_return_routine.py`: the same
       with `slip_on_jog={2: 8}` returns readings `[6, -2, -2]`.
-- [ ] Test `test_edge_return_fails_when_the_switch_never_releases` in
+- [x] Test `test_edge_return_fails_when_the_switch_never_releases` in
       `tests/test_edge_return_routine.py`: `SimGalil(trip_at=-3, release_at=1000)`; `run()` returns
       `(False, msg, [])` with `"did not release within 400 counts"` in `msg`.
-- [ ] Test `test_edge_return_runs_once_at_the_approach_speed` in `tests/test_edge_return_tab.py`:
+- [x] Test `test_edge_return_runs_once_at_the_approach_speed` in `tests/test_edge_return_tab.py`:
       with the approach speed at 40 and the fake worker emitting `done(True, "ok", [1000, 1001, 1000])`,
       choosing axis B and pressing Run constructs the worker exactly once, with axis `"B"` and speed
       `40`; the console contains `"B [X-] @ 40 cps:"`; exactly one `edge_return_B_*.csv` with 3 data
@@ -90,3 +90,17 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+### 2026-11-19 — Summary
+
+- Updated `EdgeReturnRoutine` and `EdgeReturnWorker` in `src/rbl/hardware/galil_workers.py`
+  to run `AxisHomeRoutine.approach(approach_speed)` + `creep_to_release()` each cycle
+  instead of `begin_home` / stop-code 10, never calling `define_zero`, and updated the
+  module docstring's `EDGE-RETURN TEST` section.
+- Updated `MotorTab` in `src/rbl/gui/motor_tab.py` to launch a single `EdgeReturnWorker`
+  at `self.beamline.home_approach_speed()`, log the summary and write the CSV on completion,
+  remove the per-speed chain, and update `_EDGE_NOTE_STANDING`.
+- Rewrote `tests/test_edge_return_routine.py` against `SimGalil` and
+  `tests/test_edge_return_tab.py` for single-speed runs, deleting the two tests listed on
+  `Deletes tests:` and adding all four acceptance-criterion tests.
+- Bench verification: covered by bench ticket 142 (10-cycle edge-return run on each axis).

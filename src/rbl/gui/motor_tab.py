@@ -941,9 +941,10 @@ class MotorTab(QWidget):
         return box
 
     _EDGE_NOTE_STANDING = (
-        "Moves the axis out and back to the home switch, cycle after cycle, "
-        "at each home pass speed. Never sets zero. A spread of a few counts "
-        "is switch jitter; jumps of about 8 counts are lost steps."
+        "Moves the axis out and back onto the home switch, cycle after cycle, "
+        "and finds the release edge each time at the approach speed. Never sets "
+        "zero. A spread of a few counts is switch jitter; jumps of about 8 counts "
+        "are lost steps."
     )
     _EDGE_NOTE_REFUSED = (
         "Edge-return test needs a connected Galil and no homing in progress."
@@ -990,8 +991,7 @@ class MotorTab(QWidget):
 
         self._edge_worker = None
         self._edge_axis = ""
-        self._edge_speeds: list[int] = []
-        self._edge_runs: list[tuple[int, list[int]]] = []
+        self._edge_speed = 0
         self._edge_locked_axis = ""
         return box
 
@@ -1013,9 +1013,9 @@ class MotorTab(QWidget):
             self._set_edge_note(self._EDGE_NOTE_REFUSED, theme.WARN)
             return
         axis = self.cbo_edge_axis.currentData()
+        speed = self.beamline.home_approach_speed()
         self._edge_axis = axis
-        self._edge_speeds = list(self.beamline.home_pass_speeds())
-        self._edge_runs = []
+        self._edge_speed = speed
         self._edge_locked_axis = axis
         self.axes[axis].set_motion_controls_enabled(False)
         self.btn_auto_home_seq.setEnabled(False)
@@ -1024,42 +1024,30 @@ class MotorTab(QWidget):
             spn.setEnabled(False)
         self.btn_edge_run.setText("Cancel edge-return test")
         self._set_edge_note(f"Edge-return test running on axis {axis}…", theme.WARN)
-        p1, p2, p3 = self._edge_speeds
-        self._log_line(f"# Edge-return test on {axis} at {p1}, {p2}, {p3} cps")
-        self._start_next_edge_speed()
-
-    def _start_next_edge_speed(self):
-        speed = self._edge_speeds[len(self._edge_runs)]
+        self._log_line(f"# Edge-return test on {axis} at {speed} cps")
         worker = EdgeReturnWorker(
-            self.galil, self._edge_axis, speed,
+            self.galil, axis, speed,
             int(round(self.spn_edge_cycles.value())),
             int(round(self.spn_edge_out.value())), self)
         self._edge_worker = worker
         worker.progress.connect(self._log_line)
-        worker.done.connect(self._on_edge_speed_done)
+        worker.done.connect(self._on_edge_return_done)
         worker.start()
 
-    def _on_edge_speed_done(self, ok: bool, msg: str, readings: list):
-        # A cancelled routine reports ok=False with its partial readings, so
-        # cancel takes the failure path and ends the chain.
-        speed = self._edge_speeds[len(self._edge_runs)]
-        self._edge_runs.append((speed, list(readings)))
-        if not ok:
-            self._log_line("✗ " + msg)
-            self._finish_edge_return(False, msg)
-            return
-        self._log_line(summary_line(
-            analyse_edge_returns(list(readings)), self._edge_axis, speed))
-        if len(self._edge_runs) >= len(self._edge_speeds):
-            self._finish_edge_return(True, msg)
+    def _on_edge_return_done(self, ok: bool, msg: str, readings: list):
+        readings = list(readings)
+        if ok:
+            self._log_line(summary_line(
+                analyse_edge_returns(readings), self._edge_axis, self._edge_speed))
         else:
-            self._start_next_edge_speed()
+            self._log_line("✗ " + msg)
+        if len(readings) >= 2:
+            path = write_edge_return_csv(
+                self._edge_axis, [(self._edge_speed, readings)])
+            self._log_line(f"# Edge-return CSV: {path}")
+        self._finish_edge_return(ok, msg)
 
     def _finish_edge_return(self, ok: bool, msg: str):
-        runs = [(s, r) for s, r in self._edge_runs if len(r) >= 2]
-        if runs:
-            path = write_edge_return_csv(self._edge_axis, runs)
-            self._log_line(f"# Edge-return CSV: {path}")
         self._edge_worker = None
         axis = self._edge_locked_axis
         if axis:

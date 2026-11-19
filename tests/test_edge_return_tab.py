@@ -59,7 +59,7 @@ def tab(qapp, monkeypatch, tmp_path):
     monkeypatch.setattr(paths, "HOMING_DIR", tmp_path)
     beamline = Beamline()
     beamline.galil = MagicMock(connected=True)
-    beamline.set_home_pass_speeds((300, 120, 40))
+    beamline.set_home_approach_speed(40)
     t = MotorTab(beamline)
     return t
 
@@ -73,35 +73,38 @@ def _choose_axis(tab, letter):
     tab.cbo_edge_axis.setCurrentIndex(tab.cbo_edge_axis.findText(label))
 
 
-def test_edge_return_runs_every_pass_speed_in_order(tab, monkeypatch):
-    fake, made = _fake_worker([(True, "ok", [1000, 1001, 1000])] * 3)
+def test_edge_return_runs_once_at_the_approach_speed(tab, monkeypatch, tmp_path):
+    fake, made = _fake_worker([(True, "ok", [1000, 1001, 1000])])
     monkeypatch.setattr("rbl.gui.motor_tab.EdgeReturnWorker", fake)
     _choose_axis(tab, "B")
     tab.btn_edge_run.click()
-    assert [m.speed for m in made] == [300, 120, 40]
-    assert {m.axis for m in made} == {"B"}
-    assert "B [X-] @ 300 cps:" in _console(tab)
+    assert len(made) == 1
+    assert made[0].axis == "B"
+    assert made[0].speed == 40
     assert "B [X-] @ 40 cps:" in _console(tab)
+    files = list(tmp_path.glob("edge_return_B_*.csv"))
+    assert len(files) == 1
+    assert len(files[0].read_text(encoding="utf-8").splitlines()) - 1 == 3
 
 
 def test_edge_return_writes_one_csv_for_the_whole_run(tab, monkeypatch, tmp_path):
-    fake, _ = _fake_worker([(True, "ok", [1000, 1001, 1000])] * 3)
+    fake, _ = _fake_worker([(True, "ok", [1000, 1001, 1000])])
     monkeypatch.setattr("rbl.gui.motor_tab.EdgeReturnWorker", fake)
     _choose_axis(tab, "B")
     tab.btn_edge_run.click()
     files = list(tmp_path.glob("edge_return_B_*.csv"))
     assert len(files) == 1
-    assert len(files[0].read_text(encoding="utf-8").splitlines()) - 1 == 9
+    assert len(files[0].read_text(encoding="utf-8").splitlines()) - 1 == 3
     assert "# Edge-return CSV:" in _console(tab)
 
 
 def test_a_failed_speed_ends_the_edge_return_run(tab, monkeypatch):
-    msg = "B: cycle 2/10 did not stop on the home switch (stop code 3)"
-    fake, made = _fake_worker([(True, "ok", [1000, 1001]), (False, msg, [1000])])
+    msg = "B: home switch did not release within 400 counts — check the sensor"
+    fake, made = _fake_worker([(False, msg, [1000, 1001])])
     monkeypatch.setattr("rbl.gui.motor_tab.EdgeReturnWorker", fake)
     _choose_axis(tab, "B")
     tab.btn_edge_run.click()
-    assert len(made) == 2
+    assert len(made) == 1
     assert "✗ " + msg in _console(tab)
     assert tab.btn_edge_run.text() == "Run edge-return test"
     assert tab.axes["B"].btn_move.isEnabled()
@@ -110,7 +113,7 @@ def test_a_failed_speed_ends_the_edge_return_run(tab, monkeypatch):
 
 
 def test_edge_return_refuses_while_homing(tab, monkeypatch):
-    fake, made = _fake_worker([(True, "ok", [1, 2])] * 3)
+    fake, made = _fake_worker([(True, "ok", [1, 2])])
     monkeypatch.setattr("rbl.gui.motor_tab.EdgeReturnWorker", fake)
     tab.axes["A"].set_external_status("Auto-homing…")
     tab.btn_edge_run.click()
@@ -120,7 +123,7 @@ def test_edge_return_refuses_while_homing(tab, monkeypatch):
 
 
 def test_edge_return_refuses_without_a_galil(tab, monkeypatch):
-    fake, made = _fake_worker([(True, "ok", [1, 2])] * 3)
+    fake, made = _fake_worker([(True, "ok", [1, 2])])
     monkeypatch.setattr("rbl.gui.motor_tab.EdgeReturnWorker", fake)
     tab.galil.connected = False
     tab.btn_edge_run.click()
@@ -129,7 +132,7 @@ def test_edge_return_refuses_without_a_galil(tab, monkeypatch):
 
 
 def test_edge_return_never_defines_zero(tab, monkeypatch):
-    fake, _ = _fake_worker([(True, "ok", [1000, 1001, 1000])] * 3)
+    fake, _ = _fake_worker([(True, "ok", [1000, 1001, 1000])])
     monkeypatch.setattr("rbl.gui.motor_tab.EdgeReturnWorker", fake)
     tab.btn_edge_run.click()
     assert not tab.galil.define_zero.called

@@ -2,23 +2,20 @@
 Edge-return routine: repeatability measurement for slit homing without
 redefining zero.
 
-Each cycle backs out away from home, runs one HM pass back onto the home
-switch at a single pass speed, checks stop code 10, and records the commanded
-position (_RP) without calling DP=0.
+Each cycle backs out away from home, drives onto the home switch at the
+approach speed, creeps out one count at a time to the release edge, and
+records that edge without calling DP=0.
 """
 import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from unittest.mock import MagicMock, call
-
 import pytest
 from PySide6.QtWidgets import QApplication
 
-from rbl.config import hardware_config as SC
 from rbl.hardware import galil_workers
-from rbl.hardware.galil_driver import GalilController
 from rbl.hardware.galil_workers import EdgeReturnRoutine, EdgeReturnWorker
+from tests.sim_slit import SimGalil
 
 
 @pytest.fixture(scope="module")
@@ -31,86 +28,56 @@ def no_sleep(monkeypatch):
     monkeypatch.setattr(galil_workers.time, "sleep", lambda *a, **k: None)
 
 
-def _galil(home=False, reverse=False, moving=False):
-    g = MagicMock(spec=GalilController)
-    g.connected = True
-    g.get_switch_states.return_value = {
-        "home_switch": home,
-        "reverse_switch": reverse,
-        "forward_switch": False,
-    }
-    g.is_moving.return_value = moving
-    g.get_stop_code.return_value = SC.HOME_STOP_CODE
-    return g
-
-
 def test_edge_return_collects_one_reading_per_cycle():
-    g = _galil()
-    g.get_position.side_effect = [1000, 1002, 999]
+    sim = SimGalil(trip_at=-3, release_at=6, start_at=2000)
 
     ok, msg, readings = EdgeReturnRoutine(
-        g, "A", 58, cycles=3, out_counts=2000
+        sim, "A", 58, cycles=3, out_counts=2000
     ).run()
 
     assert ok is True
     assert msg == "A: 3 edge returns at 58 cps"
-    assert readings == [1000, 1002, 999]
+    assert readings == [6, 6, 6]
 
 
 def test_edge_return_never_defines_zero():
-    g = _galil()
-    g.get_position.side_effect = [1000, 1002, 999]
+    sim = SimGalil(trip_at=-3, release_at=6, start_at=2000)
 
-    ok, _, _ = EdgeReturnRoutine(g, "A", 58, cycles=3, out_counts=2000).run()
+    ok, _, _ = EdgeReturnRoutine(sim, "A", 58, cycles=3, out_counts=2000).run()
 
     assert ok is True
-    g.define_zero.assert_not_called()
-    g.define_zero_multi.assert_not_called()
-    assert g.move_relative.call_args_list == [call("A", 2000)] * 3
-    assert g.begin_home.call_args_list == [call("A", 58, fine_speed=58)] * 3
-
-
-def test_edge_return_stops_on_a_bad_stop_code():
-    g = _galil()
-    g.get_stop_code.side_effect = [10, 3]
-    g.get_position.side_effect = [1000, 1002]
-
-    ok, msg, readings = EdgeReturnRoutine(
-        g, "A", 58, cycles=3, out_counts=2000
-    ).run()
-
-    assert ok is False
-    assert "cycle 2/3 did not stop on the home switch (stop code 3)" in msg
-    assert len(readings) == 1
-    assert readings == [1000]
+    assert sim.slits["A"].zeroed_at == []
+    assert not any(
+        name in ("define_zero", "define_zero_multi", "begin_home")
+        for name, _ in sim.calls
+    )
 
 
 def test_edge_return_cancel_keeps_the_readings_so_far():
-    g = _galil()
-    readings_read = 0
+    sim = SimGalil(trip_at=-3, release_at=6, start_at=2000)
+    edges_seen = 0
 
-    def get_pos(_axis):
-        nonlocal readings_read
-        readings_read += 1
-        return 1000 + readings_read
-
-    g.get_position.side_effect = get_pos
+    def on_progress(text: str) -> None:
+        nonlocal edges_seen
+        if "edge at" in text:
+            edges_seen += 1
 
     ok, msg, readings = EdgeReturnRoutine(
-        g, "A", 58, cycles=3, out_counts=2000,
-        cancelled=lambda: readings_read >= 1,
+        sim, "A", 58, cycles=3, out_counts=2000,
+        progress=on_progress,
+        cancelled=lambda: edges_seen >= 1,
     ).run()
 
     assert ok is False
     assert "cancelled after 1 cycles" in msg
     assert len(readings) == 1
+    assert readings == [6]
 
 
 def test_edge_return_worker_emits_done_with_readings(qapp):
-    g = _galil()
-    g.get_position.side_effect = [1000, 1002, 999]
+    sim = SimGalil(trip_at=-3, release_at=6, start_at=2000)
 
-    worker = EdgeReturnWorker(g, "A", 58, cycles=3, out_counts=2000)
+    worker = EdgeReturnWorker(sim, "A", 58, cycles=3, out_counts=2000)
     emissions = []
     worker.done.connect(lambda ok, msg, readings: emissions.append((ok, msg, readings)))
 
@@ -120,4 +87,39 @@ def test_edge_return_worker_emits_done_with_readings(qapp):
     ok, msg, readings = emissions[0]
     assert ok is True
     assert msg == "A: 3 edge returns at 58 cps"
-    assert readings == [1000, 1002, 999]
+    assert readings == [6, 6, 6]
+
+
+def test_edge_return_records_release_edges():
+    sim = SimGalil(trip_at=-3, release_at=6, start_at=2000)
+
+    ok, msg, readings = EdgeReturnRoutine(
+        sim, "A", 58, cycles=3, out_counts=2000
+    ).run()
+
+    assert ok is True
+    assert readings == [6, 6, 6]
+    assert sim.slits["A"].zeroed_at == []
+
+
+def test_edge_return_shows_a_lost_step():
+    sim = SimGalil(trip_at=-3, release_at=6, start_at=2000, slip_on_jog={2: 8})
+
+    ok, _, readings = EdgeReturnRoutine(
+        sim, "A", 58, cycles=3, out_counts=2000
+    ).run()
+
+    assert ok is True
+    assert readings == [6, -2, -2]
+
+
+def test_edge_return_fails_when_the_switch_never_releases():
+    sim = SimGalil(trip_at=-3, release_at=1000, start_at=2000)
+
+    ok, msg, readings = EdgeReturnRoutine(
+        sim, "A", 58, cycles=3, out_counts=2000
+    ).run()
+
+    assert ok is False
+    assert "did not release within 400 counts" in msg
+    assert readings == []
