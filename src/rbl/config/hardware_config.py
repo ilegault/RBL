@@ -138,6 +138,17 @@ HOME_EDGE_AGREEMENT_COUNTS         = 4    # ADR 0009: half of an 8-count lost-st
 HOME_PASS_SPEEDS_COUNTS_PER_SEC: tuple[int, int, int] = (225, 112, 58)
 HOME_PASS_SPEED_MAX_COUNTS_PER_SEC = 5000
 
+# Switch map measurement (ADR 0009): step slowly in through the home switch and
+# reverse limit one count at a time, then back out, reading all switches at rest.
+SWITCH_MAP_STEP_COUNTS = 1                # single-count step for switch-edge resolution
+SWITCH_MAP_STEP_SPEED_COUNTS_PER_SEC = 25 # slow step speed so each step settles cleanly
+SWITCH_MAP_BACKOFF_COUNTS = 300           # back-off from initial switch trip before stepping in
+# Less than the 0.2 mm (~126 counts) from home to beam centre, so the map
+# cannot reach an opposing jaw parked at home if no reverse limit trips first.
+SWITCH_MAP_MAX_PAST_FIRST_TRIP_COUNTS = 100
+SWITCH_MAP_CLEAR_MARGIN_COUNTS = 50       # extra outward steps after both switches clear
+SWITCH_MAP_MAX_OUT_COUNTS = 400           # fail with "check the sensor" if switches stay tripped
+
 # --- Amplifier / motor configuration (2HA075520 amplifier) -------------------
 MOTOR_TYPE      = -2.5  # MT: step motor, active-high step pulse
 STEP_RESOLUTION = 2     # YA: 1=full, 2=half, 4=quarter, 8=eighth
