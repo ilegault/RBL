@@ -1,6 +1,6 @@
 # 140: Switch Map box on the Stepper Motors tab
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -53,22 +53,22 @@ folder.
 
 ## Acceptance criteria
 
-- [ ] Test `test_switch_map_box_shows_each_step_live` in `tests/test_switch_map_tab.py` (new
+- [x] Test `test_switch_map_box_shows_each_step_live` in `tests/test_switch_map_tab.py` (new
       file): with `rbl.gui.motor_tab.SwitchMapWorker` patched with a fake whose `start()` emits one
       `row` of `SwitchMapRow(3, "in", -3, True, True, False)`, choosing axis B and pressing Run
       leaves `lbl_switch_live.text() == "step 3 — -3 cts — F○ R● H●"`.
-- [ ] Test `test_switch_map_writes_its_csv_and_logs_it` in `tests/test_switch_map_tab.py`: the fake
+- [x] Test `test_switch_map_writes_its_csv_and_logs_it` in `tests/test_switch_map_tab.py`: the fake
       emits `progress("B: in — home trips at -3 cts")` then `done(True, "B: in — home trips at -3, ...", rows)`
       with two rows; exactly one `switch_map_B_*.csv` exists in the homing folder (monkeypatched to
       `tmp_path`), and the console contains `"B: in — home trips at -3 cts"` and `"# Switch map CSV:"`.
-- [ ] Test `test_switch_map_refuses_while_homing` in `tests/test_switch_map_tab.py`: with axis A's
+- [x] Test `test_switch_map_refuses_while_homing` in `tests/test_switch_map_tab.py`: with axis A's
       panel reporting `homing_active()`, pressing Run constructs no worker and `lbl_switch_note`
       shows the refusal sentence.
-- [ ] Test `test_homing_refuses_while_a_switch_map_runs` in `tests/test_switch_map_tab.py`: with a
+- [x] Test `test_homing_refuses_while_a_switch_map_runs` in `tests/test_switch_map_tab.py`: with a
       fake worker that never emits `done` and reports `isRunning()` True, after pressing Run,
       clicking `btn_auto_home_seq` constructs no `AutoHomeAllWorker` (patched) and pressing
       `btn_edge_run` constructs no `EdgeReturnWorker` (patched).
-- [ ] Test `test_switch_map_unlocks_after_a_failure` in `tests/test_switch_map_tab.py`: the fake
+- [x] Test `test_switch_map_unlocks_after_a_failure` in `tests/test_switch_map_tab.py`: the fake
       emits `done(False, "B: switch map cancelled", [])`; the console contains
       `"✗ B: switch map cancelled"`, `btn_switch_run.text() == "Run switch map"`, axis B's Move
       button and `btn_auto_home_seq` are enabled, and no CSV was written.
@@ -89,3 +89,9 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+- **2026-11-19:** Added the "Switch Map — Where the Switches Change" group box to `MotorTab`
+  (`src/rbl/gui/motor_tab.py`) below the Edge-Return Test box, wired `SwitchMapWorker`, live step
+  status (`lbl_switch_live`), console logging, `write_switch_map_csv`, and mutual exclusion/locking
+  with homing, auto-home, edge-return, and `spn_approach_speed`. Covered by all 5 tests in
+  `tests/test_switch_map_tab.py`. Bench verification on the real slits remains in ticket 142.

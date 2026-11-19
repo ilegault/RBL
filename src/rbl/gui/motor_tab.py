@@ -49,6 +49,15 @@ homing axis is the thing to prevent) but never its Stop, its Home buttons —
 which read Cancel while running — or the EMERGENCY STOP, which additionally
 cancels every run in progress, because an abort that the next pass undoes a
 second later is not a stop.
+
+SWITCH MAP
+----------
+"Switch Map — Where the Switches Change" runs SwitchMapWorker on one axis,
+stepping slowly in through the home switch and reverse limit and back out to
+measure trip/release positions and hysteresis. It NEVER defines zero. While it
+runs it locks that axis's motion controls, the auto-home button, the
+edge-return button, and the Approach speed box, and refuses to start alongside
+any homing or edge-return run.
 """
 from PySide6.QtCore import Signal
 from PySide6.QtGui import QFont
@@ -76,8 +85,11 @@ from rbl.hardware.galil_workers import (
     EdgeReturnWorker,
     GalilPollWorker,
     HomingWorker,
+    SwitchMapWorker,
 )
+from rbl.hardware.switch_map import SwitchMapRow
 from rbl.services.edge_return_writer import write_edge_return_csv
+from rbl.services.switch_map_writer import write_switch_map_csv
 
 
 def dp_axes(command: str) -> str:
@@ -116,7 +128,7 @@ class AxisControls(QGroupBox):
     homing_state_changed = Signal(bool)
 
     def __init__(self, axis_letter: str, get_galil_fn, log_fn, beamline,
-                 parent=None):
+                 parent=None, busy_fn=None):
         super().__init__(f"{SC.AXIS_NAMES[axis_letter]}  (axis {axis_letter})", parent)
         self.axis      = axis_letter
         self.slit      = SC.AXIS_NAMES[axis_letter]
@@ -126,6 +138,7 @@ class AxisControls(QGroupBox):
         # to this tab's console, so a move made here also reaches the Overview
         # — and one made there also reaches this panel. See Beamline.move_slit.
         self.beamline  = beamline
+        self._busy_fn  = busy_fn
         self._homing_worker: HomingWorker | None = None
         self._homing_in_progress = False
         # A status line held by something outside this panel — the all-axes
@@ -556,6 +569,8 @@ class AxisControls(QGroupBox):
             return
         if self._external_status is not None:
             return   # the tab's sequencer owns this axis right now
+        if self._busy_fn is not None and self._busy_fn():
+            return
 
         what = "seek + home" if seek_first else "home"
         self.log(f"# Starting auto-{what} for axis {self.axis}…")
@@ -790,14 +805,19 @@ class MotorTab(QWidget):
         # ── Automatic homing (all four axes) ────────────────────────────────
         left_layout.addWidget(self._build_auto_home_box())
         left_layout.addWidget(self._build_edge_return_box())
+        left_layout.addWidget(self._build_switch_map_box())
 
         # ── 4 axis panels in 2×2 grid ────────────────────────────────────────
         grid = QGridLayout()
         grid.setSpacing(6)
         self.axes: dict[str, AxisControls] = {}
         for i, axis in enumerate(SC.AXIS_LETTERS):
-            panel = AxisControls(axis, lambda: self.galil, self._log_line,
-                                 beamline, self)
+            panel = AxisControls(
+                axis, lambda: self.galil, self._log_line, beamline, self,
+                busy_fn=lambda: (
+                    self._edge_worker is not None or self._switch_worker is not None
+                ),
+            )
             panel.homing_state_changed.connect(self._update_approach_speed_enabled)
             self.axes[axis] = panel
             grid.addWidget(panel, i // 2, i % 2)
@@ -972,7 +992,110 @@ class MotorTab(QWidget):
 
     def _any_homing_active(self) -> bool:
         return (self._auto_worker_running()
+                or self._edge_worker is not None
+                or self._switch_worker is not None
                 or any(p.homing_active() for p in self.axes.values()))
+
+    _SWITCH_NOTE_STANDING = (
+        "Steps one axis in through the home switch and the reverse limit, "
+        "one count at a time, then back out, and records where each switch "
+        "trips and releases. Never sets zero."
+    )
+    _SWITCH_NOTE_REFUSED = (
+        "Switch map needs a connected Galil and no homing or edge-return "
+        "test in progress."
+    )
+
+    def _build_switch_map_box(self) -> QGroupBox:
+        """The switch map: step slowly through home and reverse limit without DP."""
+        box = QGroupBox("Switch Map — Where the Switches Change")
+        lay = QVBoxLayout(box)
+        lay.setSpacing(4)
+        row = QHBoxLayout()
+        row.setSpacing(6)
+
+        self.cbo_switch_axis = NoScrollComboBox()
+        for letter in SC.AXIS_LETTERS:
+            self.cbo_switch_axis.addItem(f"{letter} — {SC.AXIS_NAMES[letter]}", letter)
+        row.addWidget(QLabel("Axis"))
+        row.addWidget(self.cbo_switch_axis)
+
+        self.btn_switch_run = QPushButton("Run switch map")
+        self.btn_switch_run.clicked.connect(self._on_switch_run_clicked)
+        row.addWidget(self.btn_switch_run, stretch=1)
+        lay.addLayout(row)
+
+        self.lbl_switch_live = QLabel("")
+        self.lbl_switch_live.setStyleSheet("font-family: monospace; font-size: 12px;")
+        lay.addWidget(self.lbl_switch_live)
+
+        self.lbl_switch_note = QLabel(self._SWITCH_NOTE_STANDING)
+        self.lbl_switch_note.setWordWrap(True)
+        self.lbl_switch_note.setStyleSheet(
+            theme.status_label(theme.NEUTRAL, bold=False) + "font-size: 12px;")
+        lay.addWidget(self.lbl_switch_note)
+
+        self._switch_worker = None
+        self._switch_axis = ""
+        self._switch_locked_axis = ""
+        return box
+
+    def _set_switch_note(self, text: str, role: str = theme.NEUTRAL):
+        self.lbl_switch_note.setText(text)
+        self.lbl_switch_note.setStyleSheet(
+            theme.status_label(role, bold=False) + "font-size: 12px;")
+
+    def _on_switch_run_clicked(self):
+        if self._switch_worker is not None:
+            self._switch_worker.cancel()
+            self._set_switch_note("Cancelling after the current step…", theme.WARN)
+            return
+        if not self.galil.connected or self._any_homing_active():
+            self._set_switch_note(self._SWITCH_NOTE_REFUSED, theme.WARN)
+            return
+        axis = self.cbo_switch_axis.currentData()
+        self._switch_axis = axis
+        self._switch_locked_axis = axis
+        self.axes[axis].set_motion_controls_enabled(False)
+        self.btn_auto_home_seq.setEnabled(False)
+        self.btn_edge_run.setEnabled(False)
+        self.btn_switch_run.setText("Cancel switch map")
+        self.lbl_switch_live.setText("")
+        self._set_switch_note(f"Switch map running on axis {axis}…", theme.WARN)
+        self._log_line(f"# Switch map on {axis}")
+        worker = SwitchMapWorker(self.galil, axis, self)
+        self._switch_worker = worker
+        self._update_approach_speed_enabled()
+        worker.progress.connect(self._log_line)
+        worker.row.connect(self._on_switch_row)
+        worker.done.connect(self._on_switch_done)
+        worker.start()
+
+    def _on_switch_row(self, row: SwitchMapRow):
+        f = "●" if row.forward else "○"
+        r = "●" if row.reverse else "○"
+        h = "●" if row.home else "○"
+        self.lbl_switch_live.setText(
+            f"step {row.step} — {row.position_counts} cts — F{f} R{r} H{h}"
+        )
+
+    def _on_switch_done(self, ok: bool, msg: str, rows: list):
+        rows = list(rows)
+        if not ok:
+            self._log_line("✗ " + msg)
+        if rows:
+            path = write_switch_map_csv(self._switch_axis, rows)
+            self._log_line(f"# Switch map CSV: {path}")
+        self._switch_worker = None
+        axis = self._switch_locked_axis
+        if axis:
+            self.axes[axis].set_motion_controls_enabled(True)
+        self._switch_locked_axis = ""
+        self.btn_auto_home_seq.setEnabled(self.galil.connected)
+        self.btn_edge_run.setEnabled(True)
+        self._update_approach_speed_enabled()
+        self.btn_switch_run.setText("Run switch map")
+        self._set_switch_note(msg, theme.FAULT if not ok else theme.NEUTRAL)
 
     def _on_edge_run_clicked(self):
         if self._edge_worker is not None:
@@ -1053,7 +1176,7 @@ class MotorTab(QWidget):
             self._set_auto_home_note("Cancelling after the current step…",
                                      theme.WARN)
             return
-        if not self.galil.connected:
+        if not self.galil.connected or self._any_homing_active():
             return
         if not self._confirm_auto_home(
                 "Auto-home all four slits",
@@ -1114,6 +1237,7 @@ class MotorTab(QWidget):
         enabled = (
             not self._auto_homing_locked
             and self._edge_worker is None
+            and self._switch_worker is None
             and not any(p._homing_in_progress for p in self.axes.values())
         )
         self.spn_approach_speed.setEnabled(enabled)
@@ -1265,6 +1389,10 @@ class MotorTab(QWidget):
         """
         if self._auto_worker is not None and self._auto_worker.isRunning():
             self._auto_worker.cancel()
+        if self._edge_worker is not None:
+            self._edge_worker.cancel()
+        if self._switch_worker is not None:
+            self._switch_worker.cancel()
         for panel in self.axes.values():
             panel.cancel_homing()
 
