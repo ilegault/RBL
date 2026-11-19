@@ -261,34 +261,6 @@ class TestMotionCommands:
         g.set_accel("A", 25600)
         assert g.sock.sent == ["AC 25600", "DC 25600"]
 
-    def test_begin_home_sequence(self):
-        g = make_galil()
-        g.begin_home("A", 900)
-        # SP (stage 1), HV (stage 2), JG, HM, BG — in that order.
-        assert g.sock.sent == ["SP 900", "HV 900", "JG -900", "HM A", "BG A"]
-
-    def test_begin_home_sets_the_two_stages_separately(self):
-        """HM's stage 1 searches at SP; stage 2 re-approaches at HV and is what
-        fixes where the zero lands. A homing routine turns HV down for
-        repeatability while leaving SP fast enough to cover the distance."""
-        g = make_galil()
-        g.begin_home("B", 900, fine_speed=58)
-        assert g.sock.sent[:2] == ["SP ,900", "HV ,58"]
-
-    def test_home_velocity_is_positional_per_axis(self):
-        g = make_galil()
-        g.set_home_velocity("C", 58)
-        assert g.sock.sent == ["HV ,,58"]
-
-    def test_begin_home_jog_is_negative(self):
-        """The JG does not steer the search — HM picks its stage-1 direction
-        from the initial state of the home input. It is here to leave the axis
-        in a known jog mode before HM replaces the profile."""
-        g = make_galil()
-        g.begin_home("B", 450)
-        jg = [c for c in g.sock.sent if c.startswith("JG")][0]
-        assert "-450" in jg
-
 
 class TestAbort:
     def test_abort_sends_ab(self):
@@ -421,25 +393,6 @@ class TestAxisVector:
 
 
 class TestMultiAxisMotion:
-    def test_begin_home_multi_is_one_hm_and_one_bg(self):
-        """The HM reference's own idiom: set homing mode for the axes, then
-        one BG starts them all. Four axes under the CONTROLLER's sequencer
-        rather than four host threads on one socket."""
-        g = make_galil()
-        g.begin_home_multi("ABCD", 225, fine_speed=58)
-        assert g.sock.sent == [
-            "SP 225,225,225,225",
-            "HV 58,58,58,58",
-            "JG -225,-225,-225,-225",
-            "HM ABCD",
-            "BG ABCD",
-        ]
-
-    def test_begin_home_multi_defaults_hv_to_the_search_speed(self):
-        g = make_galil()
-        g.begin_home_multi("AB", 225)
-        assert g.sock.sent[:2] == ["SP 225,225", "HV 225,225"]
-
     def test_jog_start_multi(self):
         g = make_galil()
         g.jog_start_multi("ABCD", -500)
@@ -458,8 +411,7 @@ class TestMultiAxisMotion:
     def test_speed_restores_are_vectors_too(self):
         g = make_galil()
         g.set_speed_multi("ABCD", 1000)
-        g.set_home_velocity_multi("ABCD", 256)
-        assert g.sock.sent == ["SP 1000,1000,1000,1000", "HV 256,256,256,256"]
+        assert g.sock.sent == ["SP 1000,1000,1000,1000"]
 
     def test_stop_takes_an_axis_mask(self):
         """One ST for several axes — how the multi-axis seek stops whatever is

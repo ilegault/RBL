@@ -1,6 +1,6 @@
 # 138: One Approach speed box; the Together homing and the HM code retired
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -65,20 +65,20 @@ test that fails only because it referenced a removed name is rewritten in place 
 
 ## Acceptance criteria
 
-- [ ] Test `test_approach_speed_box_edits_the_beamline` in `tests/test_auto_home.py`: on a new
+- [x] Test `test_approach_speed_box_edits_the_beamline` in `tests/test_auto_home.py`: on a new
       tab, `spn_approach_speed.value() == 58`; after `spn_approach_speed.setValue(40)`,
       `tab.beamline.home_approach_speed() == 40`; the spin box's maximum is 500.
-- [ ] Test `test_approach_speed_box_is_locked_while_homing` in `tests/test_auto_home.py`: with
+- [x] Test `test_approach_speed_box_is_locked_while_homing` in `tests/test_auto_home.py`: with
       `AutoHomeAllWorker`, `HomingWorker` and `EdgeReturnWorker` `start` patched to record and
       `isRunning` patched True, the box is disabled after clicking `btn_auto_home_seq`, after
       clicking axis A's `btn_home`, and after pressing `btn_edge_run`, and enabled again after each
       run's `done` is emitted.
-- [ ] Test `test_the_together_path_is_gone` in `tests/test_auto_home.py`: a `MotorTab` has no
+- [x] Test `test_the_together_path_is_gone` in `tests/test_auto_home.py`: a `MotorTab` has no
       attribute `btn_auto_home_par`; `rbl.hardware.galil_workers` has no `MultiAxisHomeRoutine` or
       `MultiAxisHomeWorker`; `GalilController` has no `begin_home`, `begin_home_multi` or
       `set_home_velocity`; `hardware_config` has no `HOME_STOP_CODE` or
       `HOME_PASS_SPEEDS_COUNTS_PER_SEC`.
-- [ ] Test `test_no_homing_text_mentions_the_old_passes` in `tests/test_auto_home.py`: collecting
+- [x] Test `test_no_homing_text_mentions_the_old_passes` in `tests/test_auto_home.py`: collecting
       `text()` and `toolTip()` from every `QLabel`, `QPushButton` and `QAbstractSpinBox` under a
       `MotorTab`, plus `_AUTO_HOME_STANDING`, none contains `"three-pass"`, `"HM "`, `"Together"`,
       `"Pass 1"` or `"pass speed"`.
@@ -100,3 +100,5 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+2026-11-19: Replaced the three Pass N spin boxes on `MotorTab` with `spn_approach_speed` wired to `Beamline.home_approach_speed()`/`set_home_approach_speed()`, retired `btn_auto_home_par`/`MultiAxisHomeRoutine`/`MultiAxisHomeWorker`, removed `HM` driver methods (`begin_home`, `begin_home_multi`, `set_home_velocity`, `set_home_velocity_multi`), removed `HOME_STOP_CODE`/`DEFAULT_HOME_VELOCITY_COUNTS_PER_SEC`/`HOME_PASS_SPEEDS_COUNTS_PER_SEC`/`HOME_PASS_SPEED_MAX_COUNTS_PER_SEC` and `home_pass_speeds`/`set_home_pass_speeds`, and updated all homing tooltips, confirmation text, and docstrings for release-edge homing (ADR 0009). Covered by `test_approach_speed_box_edits_the_beamline`, `test_approach_speed_box_is_locked_while_homing`, `test_the_together_path_is_gone`, and `test_no_homing_text_mentions_the_old_passes` in `tests/test_auto_home.py`; full gate passed (3003 tests). Bench verification remains in ticket 142.

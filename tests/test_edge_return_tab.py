@@ -108,7 +108,7 @@ def test_a_failed_speed_ends_the_edge_return_run(tab, monkeypatch):
     assert "✗ " + msg in _console(tab)
     assert tab.btn_edge_run.text() == "Run edge-return test"
     assert tab.axes["B"].btn_move.isEnabled()
-    assert tab.spn_pass1.isEnabled()
+    assert tab.spn_approach_speed.isEnabled()
     assert tab.btn_auto_home_seq.isEnabled()
 
 

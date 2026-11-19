@@ -104,9 +104,6 @@ class SimGalil:
         self._record("set_speed", axis, speed_counts_per_sec)
         self.slits[axis].speed = speed_counts_per_sec
 
-    def set_home_velocity(self, axis: str, speed_counts_per_sec: int) -> None:
-        self._record("set_home_velocity", axis, speed_counts_per_sec)
-
     def stop(self, axis: str) -> None:
         self._record("stop", axis)
 
