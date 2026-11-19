@@ -276,8 +276,9 @@ the project before re-deriving a number.
 
 - Read the module docstring before editing the module. It usually already answers
   "why is it like this".
-- Run `pytest` before and after. 1 414 tests exist precisely so a refactor can be
-  proved harmless.
+- Run the tests your change touches while you work, and every gate command before
+  the PR, with `pytest` limited to those tests. CI runs all 1 414 tests on the PR,
+  merged with the latest `master`; that run is what proves a refactor harmless.
 - When you change behaviour, update the docstring's reasoning — a stale *why* is
   worse than none.
 - New tunable number → `rbl/config/`. New instrument protocol → `rbl/hardware/`.
@@ -345,8 +346,10 @@ only the tool that has that command.
    when it lands. Use exactly those two words. Three spellings of "finished" were
    used across the last ticket set and the frontier stopped being machine-readable.
 4. One ticket per branch. One pull request per ticket. Never commit to `master`.
-5. Run `pytest` before you start and before you open the PR. A refactor that cannot
-   be proved harmless is not finished.
+5. Before you open the PR, run every gate command, with `pytest` limited to the
+   tests your change touches. CI runs the full suite on the PR, merged with the
+   latest `master`, and watching it is part of the ticket (rule 10). A refactor
+   that cannot be proved harmless is not finished.
 6. **A failing test is fixed or escalated, never muted.** No `xfail`, no deleted or
    weakened assertions, no loosened tolerances, no narrowed inputs until it passes.
    These are all the same move. `docs/adr/0001-tests-first-and-no-muted-failures.md`

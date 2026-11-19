@@ -640,7 +640,13 @@ class AxisControls(QGroupBox):
                 self.lbl_status.setText("FWD LIMIT active")
                 self.lbl_status.setStyleSheet(theme.status_label(theme.FAULT))
             elif sw["reverse_switch"] or sw["home_switch"]:
-                self.lbl_status.setText("REV/HOME LIMIT active")
+                if sw["reverse_switch"] and sw["home_switch"]:
+                    label = "HOME + REV LIMIT"
+                elif sw["reverse_switch"]:
+                    label = "REV LIMIT"
+                else:
+                    label = "HOME"
+                self.lbl_status.setText(label)
                 self.lbl_status.setStyleSheet("color: #cc6600; font-weight: bold;")
             else:
                 self.lbl_status.setText("Idle  [enabled]")
