@@ -101,6 +101,8 @@ pytest --tb=short -q -n auto --dist loadfile
 
 ## Comments
 
+## Escalation was solved by ticket 90 
+
 ## Escalation — 2026-11-19
 Repo: RBL   Ticket: 138 One Approach speed box; the Together homing and the HM code retired   Branch: ticket/slit-homing-release-edge-138-approach-speed-box-and-retire-together
 Goal: Replace the three Pass N spin boxes with `spn_approach_speed`, retire Together homing (`btn_auto_home_par`, `MultiAxisHomeRoutine`, `MultiAxisHomeWorker`), and remove the `HM` driver methods and old pass-speed/stop-code constants.
