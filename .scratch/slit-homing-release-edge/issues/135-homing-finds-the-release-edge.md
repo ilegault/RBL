@@ -11,7 +11,7 @@
 **Spec:** `.scratch/slit-homing-release-edge/spec.md`
 **Binding:** `docs/adr/0009-slits-homed-on-the-release-edge.md`, `docs/adr/0001-tests-first-and-no-muted-failures.md`
 
-**Deletes tests:** tests/test_auto_home.py::test_seek_then_three_passes_then_zero, tests/test_auto_home.py::test_each_pass_turns_down_both_of_hm_s_stages, tests/test_auto_home.py::test_it_puts_both_speeds_back, tests/test_auto_home.py::test_zero_is_defined_because_hm_does_not_do_it_on_a_stepper, tests/test_auto_home.py::test_routine_uses_the_speeds_it_is_given, tests/test_auto_home.py::test_a_pass_that_stops_on_a_limit_sets_no_zero, tests/test_auto_home.py::test_edited_pass_speeds_reach_the_next_auto_home, tests/test_auto_home.py::test_edited_pass_speeds_reach_a_per_axis_home
+**Deletes tests:** tests/test_auto_home.py::TestRoutineEndToEnd::test_seek_then_three_passes_then_zero, tests/test_auto_home.py::TestRoutineEndToEnd::test_each_pass_turns_down_both_of_hm_s_stages, tests/test_auto_home.py::TestRoutineEndToEnd::test_it_puts_both_speeds_back, tests/test_auto_home.py::TestRoutineEndToEnd::test_zero_is_defined_because_hm_does_not_do_it_on_a_stepper, tests/test_auto_home.py::TestRoutineEndToEnd::test_routine_uses_the_speeds_it_is_given, tests/test_auto_home.py::TestStopCodeGate::test_a_pass_that_stops_on_a_limit_sets_no_zero, tests/test_auto_home.py::TestMotorTabAutoHome::test_edited_pass_speeds_reach_the_next_auto_home, tests/test_auto_home.py::TestMotorTabAutoHome::test_edited_pass_speeds_reach_a_per_axis_home
 
 **Read first:** `docs/adr/0009-slits-homed-on-the-release-edge.md` (the whole decision),
 `src/rbl/hardware/galil_workers.py` (`AxisHomeRoutine.run`, `back_out_of_home`,
