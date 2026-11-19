@@ -56,6 +56,12 @@ from PySide6.QtCore import QThread, Signal
 
 from rbl.config import hardware_config as SC
 from rbl.hardware.galil_driver import GalilController
+from rbl.hardware.switch_map import (
+    SwitchMapRow,
+    find_switch_edges,
+    switch_change_line,
+    switch_map_summary,
+)
 
 # ─── Background poll thread ───────────────────────────────────────────────────
 
@@ -1018,3 +1024,205 @@ class EdgeReturnWorker(QThread):
         )
         ok, msg, readings = routine.run()
         self.done.emit(ok, msg, readings)
+
+
+# ─── Switch map measurement ──────────────────────────────────────────────────
+
+class SwitchMapRoutine:
+    """Step an axis slowly in through home and reverse switches, then back out.
+
+    Records every switch state at rest after each single-count step, without
+    ever calling `define_zero`. Never raises; returns `(ok, message, rows)`.
+    """
+
+    def __init__(
+        self,
+        galil: GalilController,
+        axis: str,
+        progress=None,
+        cancelled=None,
+        on_row=None,
+    ):
+        self.galil = galil
+        self.axis = axis
+        self._progress = progress or (lambda _msg: None)
+        self._cancelled = cancelled or (lambda: False)
+        self._on_row = on_row or (lambda _row: None)
+
+    def _record_row(
+        self,
+        rows: list[SwitchMapRow],
+        step: int,
+        direction: str,
+        prev_row: SwitchMapRow | None,
+    ) -> SwitchMapRow:
+        pos = self.galil.get_position(self.axis)
+        sw = self.galil.get_switch_states(self.axis)
+        row = SwitchMapRow(
+            step=step,
+            direction=direction,
+            position_counts=pos,
+            home=bool(sw["home_switch"]),
+            reverse=bool(sw["reverse_switch"]),
+            forward=bool(sw["forward_switch"]),
+        )
+        rows.append(row)
+        self._on_row(row)
+        if prev_row is not None:
+            for attr, name in (("home", "home"), ("reverse", "reverse"), ("forward", "forward")):
+                cur = getattr(row, attr)
+                if cur != getattr(prev_row, attr):
+                    self._progress(switch_change_line(self.axis, direction, name, cur, pos))
+        return row
+
+    def _seek_any_switch(self, home: AxisHomeRoutine) -> tuple[bool, str]:
+        """Jog inward at seek speed until home or reverse switch trips."""
+        g, axis = self.galil, self.axis
+        speed = SC.HOME_SEEK_SPEED_COUNTS_PER_SEC
+        g.set_speed(axis, speed)
+        g.jog_start(axis, -speed)
+        time.sleep(AxisHomeRoutine._SEEK_SETTLE_S)
+
+        deadline = time.time() + SC.HOME_SEEK_TIMEOUT_S
+        while time.time() < deadline:
+            if self._cancelled():
+                g.stop(axis)
+                return False, f"{axis}: switch map cancelled"
+            sw = g.get_switch_states(axis)
+            if sw["home_switch"] or sw["reverse_switch"]:
+                g.stop(axis)
+                if not home.wait_idle(timeout=15.0):
+                    if self._cancelled():
+                        return False, f"{axis}: switch map cancelled"
+                    return False, f"{axis}: timeout coming to rest on switch"
+                return True, ""
+            if not g.is_moving(axis):
+                sw = g.get_switch_states(axis)
+                if sw["home_switch"] or sw["reverse_switch"]:
+                    return True, ""
+                return False, f"{axis}: jog stopped before reaching home or reverse switch"
+            time.sleep(AxisHomeRoutine._SEEK_POLL_S)
+
+        g.stop(axis)
+        return False, f"{axis}: timed out after {SC.HOME_SEEK_TIMEOUT_S:.0f} s seeking switch"
+
+    def run(self) -> tuple[bool, str, list[SwitchMapRow]]:
+        """Run the switch map on one axis and return (ok, message, rows)."""
+        g, axis = self.galil, self.axis
+        rows: list[SwitchMapRow] = []
+        home = AxisHomeRoutine(g, axis, self._progress, self._cancelled)
+        try:
+            ok, msg = home.back_out_of_home()
+            if not ok:
+                return False, msg, rows
+
+            ok, msg = self._seek_any_switch(home)
+            if not ok:
+                return False, msg, rows
+
+            g.set_speed(axis, SC.HOME_SEEK_SPEED_COUNTS_PER_SEC)
+            g.move_relative(axis, SC.SWITCH_MAP_BACKOFF_COUNTS)
+            if not home.wait_idle(timeout=30.0):
+                if self._cancelled():
+                    return False, f"{axis}: switch map cancelled", rows
+                return False, f"{axis}: timeout backing off for switch map", rows
+
+            g.set_speed(axis, SC.SWITCH_MAP_STEP_SPEED_COUNTS_PER_SEC)
+            step = 0
+            prev_row: SwitchMapRow | None = None
+            first_trip_pos: int | None = None
+            inward_stop = ""
+
+            # Inward pass: step -1 until reverse limit trips or 100-count cap
+            while True:
+                if self._cancelled():
+                    return False, f"{axis}: switch map cancelled", rows
+                if g.get_switch_states(axis)["reverse_switch"]:
+                    inward_stop = "reverse limit"
+                    break
+                g.move_relative(axis, -SC.SWITCH_MAP_STEP_COUNTS)
+                if not home.wait_idle(timeout=15.0):
+                    if self._cancelled():
+                        return False, f"{axis}: switch map cancelled", rows
+                    return False, f"{axis}: timeout stepping inward", rows
+                step += 1
+                prev_row = self._record_row(rows, step, "in", prev_row)
+                if first_trip_pos is None and (prev_row.home or prev_row.reverse):
+                    first_trip_pos = prev_row.position_counts
+                if prev_row.reverse:
+                    inward_stop = "reverse limit"
+                    break
+                if (
+                    first_trip_pos is not None
+                    and prev_row.position_counts
+                    <= first_trip_pos - SC.SWITCH_MAP_MAX_PAST_FIRST_TRIP_COUNTS
+                ):
+                    inward_stop = f"{SC.SWITCH_MAP_MAX_PAST_FIRST_TRIP_COUNTS}-count cap"
+                    break
+
+            # Outward pass: step +1 until both switches clear, then margin steps
+            out_steps = 0
+            margin_remaining: int | None = None
+            while True:
+                if self._cancelled():
+                    return False, f"{axis}: switch map cancelled", rows
+                if margin_remaining is None:
+                    if out_steps >= SC.SWITCH_MAP_MAX_OUT_COUNTS:
+                        return (
+                            False,
+                            f"{axis}: switches did not clear within "
+                            f"{SC.SWITCH_MAP_MAX_OUT_COUNTS} counts — check the sensor",
+                            rows,
+                        )
+                elif margin_remaining <= 0:
+                    break
+
+                g.move_relative(axis, SC.SWITCH_MAP_STEP_COUNTS)
+                if not home.wait_idle(timeout=15.0):
+                    if self._cancelled():
+                        return False, f"{axis}: switch map cancelled", rows
+                    return False, f"{axis}: timeout stepping outward", rows
+                step += 1
+                out_steps += 1
+                prev_row = self._record_row(rows, step, "out", prev_row)
+                if margin_remaining is None:
+                    if not prev_row.home and not prev_row.reverse:
+                        margin_remaining = SC.SWITCH_MAP_CLEAR_MARGIN_COUNTS
+                else:
+                    margin_remaining -= 1
+
+            summary = switch_map_summary(axis, find_switch_edges(rows), inward_stop)
+            self._progress(summary)
+            return True, summary, rows
+        except Exception as e:
+            return False, f"{axis}: switch map error — {e}", rows
+        finally:
+            home._restore_speeds()
+
+
+class SwitchMapWorker(QThread):
+    """`SwitchMapRoutine` for one axis on its own thread."""
+
+    progress = Signal(str)
+    row = Signal(object)
+    done = Signal(bool, str, list)
+
+    def __init__(self, galil: GalilController, axis: str, parent=None):
+        super().__init__(parent)
+        self.galil = galil
+        self.axis = axis
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
+
+    def run(self):
+        routine = SwitchMapRoutine(
+            self.galil,
+            self.axis,
+            progress=self.progress.emit,
+            cancelled=lambda: self._cancelled,
+            on_row=self.row.emit,
+        )
+        ok, msg, rows = routine.run()
+        self.done.emit(ok, msg, rows)
