@@ -1,6 +1,6 @@
 # 135: Homing finds the release edge (one axis and Auto-Home All)
 
-**Status:** blocked
+**Status:** done
 
 **Runner:** any
 
@@ -192,3 +192,10 @@ Failing output (exact, trimmed to the relevant lines):
 - Check 2 fail: Deleted test function 'test_edited_pass_speeds_reach_a_per_axis_home' in tests/test_auto_home.py
 - Check 7 pass: All 6 new test(s) failed on base code (runtime 41.95s)
 Decision needed: `ticket-engine/src/ticket_engine/integrity.py:497` qualifies class-scoped test methods as `tests/test_auto_home.py::<Class>::<method>` while `origin/master`'s `Deletes tests:` (and `ticket_lint.py`) uses `tests/test_auto_home.py::<method>`. Since RBL's CI (`tests.yml`) does not run the integrity gate, either accept this draft PR as-is (all 4 CI gate commands pass) or fix `integrity.py` / `origin/master`'s `Deletes tests:` format.
+
+## Resolved — 2026-11-18
+The escalation needed no engine change. The base copy's `Deletes tests:` line now gives
+each entry its test class (PR #206), which is how integrity check 2 names a test method.
+With that line, check 2 authorises all eight deletions and no file loses assertions; the
+other gates and check 7 had already passed. The work landed in PR #205. Status set to done.
+(Engine follow-up: ticket-engine ticket 90 accepts the short form when it is unambiguous.)
