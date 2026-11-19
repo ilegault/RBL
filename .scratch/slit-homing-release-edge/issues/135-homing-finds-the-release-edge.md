@@ -1,6 +1,6 @@
 # 135: Homing finds the release edge (one axis and Auto-Home All)
 
-**Status:** ready-for-agent
+**Status:** blocked
 
 **Runner:** any
 
@@ -126,26 +126,26 @@ drive `SimGalil`. Every test not listed at the top of this ticket stays.
 
 ## Acceptance criteria
 
-- [ ] Test `test_homing_zeroes_on_the_release_edge` in `tests/test_auto_home.py`:
+- [x] Test `test_homing_zeroes_on_the_release_edge` in `tests/test_auto_home.py`:
       `SimGalil(trip_at=-3, release_at=6, start_at=2000)`; `AxisHomeRoutine(sim, "A").run(seek_first=True)`
       returns `(True, msg)` with `"edges 6, 6 cts"` in `msg`, and `sim.slits["A"].zeroed_at == [6]`.
-- [ ] Test `test_approach_speed_does_not_move_the_edge` in `tests/test_auto_home.py`: two fresh
+- [x] Test `test_approach_speed_does_not_move_the_edge` in `tests/test_auto_home.py`: two fresh
       `SimGalil(trip_at=-3, release_at=6)`, one homed with `approach_speed=58` and one with
       `approach_speed=500` (both `run(seek_first=False)`); their `deepest` values differ, and both
       `zeroed_at` lists are `[6]`.
-- [ ] Test `test_a_lost_step_between_passes_sets_no_zero` in `tests/test_auto_home.py`:
+- [x] Test `test_a_lost_step_between_passes_sets_no_zero` in `tests/test_auto_home.py`:
       `SimGalil(trip_at=-3, release_at=6, slip_on_jog={2: 8})`; `run(seek_first=True)` returns
       `(False, msg)` with `"home edges disagree — pass 1 at 6 cts, pass 2 at -2 cts (limit 4)"` in
       `msg`, and `zeroed_at == []`.
-- [ ] Test `test_a_switch_that_never_releases_sets_no_zero` in `tests/test_auto_home.py`:
+- [x] Test `test_a_switch_that_never_releases_sets_no_zero` in `tests/test_auto_home.py`:
       `SimGalil(trip_at=-3, release_at=1000)`; `run(seek_first=True)` returns `(False, msg)` with
       `"home switch did not release within 400 counts — check the sensor"` in `msg`, and
       `zeroed_at == []`.
-- [ ] Test `test_an_approach_stopped_by_the_limit_off_home_fails` in `tests/test_auto_home.py`:
+- [x] Test `test_an_approach_stopped_by_the_limit_off_home_fails` in `tests/test_auto_home.py`:
       `SimGalil(trip_at=-50, release_at=-40, reverse_trip_at=-3, reverse_release_at=6)`;
       `run(seek_first=False)` returns `(False, msg)` with
       `"reached the reverse limit before the home switch"` in `msg`, and `zeroed_at == []`.
-- [ ] Test `test_auto_home_all_zeroes_every_axis_on_its_release_edge` in `tests/test_auto_home.py`:
+- [x] Test `test_auto_home_all_zeroes_every_axis_on_its_release_edge` in `tests/test_auto_home.py`:
       a `SimGalil` whose four slits have release points 6, 7, 5 and 6 (A–D); `AutoHomeAllWorker(sim)`
       with `done` connected to a list, called via `.run()` (not `.start()`); each slit's `zeroed_at`
       is `[its release point]` and `done` carried `True`.
@@ -170,3 +170,25 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+## Escalation — 2026-11-18
+Repo: RBL   Ticket: 135 Homing finds the release edge (one axis and Auto-Home All)   Branch: ticket/slit-homing-release-edge-135-homing-finds-the-release-edge
+Goal: Replace HM homing with two-pass release-edge homing (`AxisHomeRoutine`, `HomingWorker`, `AutoHomeAllWorker`, `tests/sim_slit.py`, ADR 0009 constants).
+Attempt 1: Implemented release-edge homing, rewrote `SimGalil`-backed tests, and deleted the 8 tests listed on `Deletes tests:`. `ruff check .`, `check_tests_first.py`, `type_gate.py`, and `pytest tests/test_auto_home.py tests/test_gui_hardware.py` (112 passed) are green. Local `ticket_engine.integrity_runner` passed Check 7 (all 6 new tests failed on `origin/master`), but exited 1 on Check 2.
+Failing output (exact, trimmed to the relevant lines):
+<!-- ticket-engine-integrity-gate -->
+## Integrity Gate Verdict: FAIL
+
+**Verdict:** `fail`
+
+### Reasons:
+- Check 2 fail: Deleted test function 'test_seek_then_three_passes_then_zero' in tests/test_auto_home.py
+- Check 2 fail: Deleted test function 'test_each_pass_turns_down_both_of_hm_s_stages' in tests/test_auto_home.py
+- Check 2 fail: Deleted test function 'test_it_puts_both_speeds_back' in tests/test_auto_home.py
+- Check 2 fail: Deleted test function 'test_zero_is_defined_because_hm_does_not_do_it_on_a_stepper' in tests/test_auto_home.py
+- Check 2 fail: Deleted test function 'test_routine_uses_the_speeds_it_is_given' in tests/test_auto_home.py
+- Check 2 fail: Deleted test function 'test_a_pass_that_stops_on_a_limit_sets_no_zero' in tests/test_auto_home.py
+- Check 2 fail: Deleted test function 'test_edited_pass_speeds_reach_the_next_auto_home' in tests/test_auto_home.py
+- Check 2 fail: Deleted test function 'test_edited_pass_speeds_reach_a_per_axis_home' in tests/test_auto_home.py
+- Check 7 pass: All 6 new test(s) failed on base code (runtime 41.95s)
+Decision needed: `ticket-engine/src/ticket_engine/integrity.py:497` qualifies class-scoped test methods as `tests/test_auto_home.py::<Class>::<method>` while `origin/master`'s `Deletes tests:` (and `ticket_lint.py`) uses `tests/test_auto_home.py::<method>`. Since RBL's CI (`tests.yml`) does not run the integrity gate, either accept this draft PR as-is (all 4 CI gate commands pass) or fix `integrity.py` / `origin/master`'s `Deletes tests:` format.

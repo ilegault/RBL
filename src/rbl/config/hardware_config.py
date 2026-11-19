@@ -124,6 +124,14 @@ HOME_START_BACKOFF_TRIES = 3
 EDGE_RETURN_DEFAULT_CYCLES = 10
 EDGE_RETURN_DEFAULT_OUT_COUNTS = 2000
 
+# Release-edge homing (ADR 0009): drive onto the switch, then step back out
+# one count at a time at rest until the home switch releases.
+HOME_APPROACH_SPEED_COUNTS_PER_SEC = 58   # ADR 0009: default approach speed (cps)
+HOME_CREEP_STEP_COUNTS             = 1    # ADR 0009: single-count step out to read release at rest
+HOME_CREEP_MAX_COUNTS              = 400  # ADR 0009: fail with "check the sensor" if unreleased
+HOME_PASS2_BACKOFF_COUNTS          = 300  # ADR 0009: back-off distance before pass 2
+HOME_EDGE_AGREEMENT_COUNTS         = 4    # ADR 0009: half of an 8-count lost-step jump
+
 # Default three-pass homing speeds (coarse -> medium -> fine, counts/s) and the
 # upper bound the Stepper Motors tab's pass-speed boxes accept. Each pass sets
 # both SP and HV to its speed.
