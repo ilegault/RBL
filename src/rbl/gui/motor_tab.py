@@ -8,45 +8,41 @@ Features:
     Move, Overview, and Raster Planner) and target position in cps OR mm/s / mm
     (unit toggle).
   - Per-axis Enable (SH) / Disable (MO) buttons; also single-axis and all-axis.
-  - Automated homing with three passes at the Pass 1 / 2 / 3 speeds, per
-    axis and for the whole set.
+  - Automated homing on the home switch's release edge (ADR 0009): two passes
+    at the Approach speed, stepping out one count at a time to read the
+    release edge, and defining zero only if the two edges agree within
+    4 counts.
   - Big red EMERGENCY STOP always visible.
 
-HOMING, AND THE EIGHT CLICKS IT USED TO TAKE
---------------------------------------------
-On a stepper HM is a two-stage search — a fast pass at SP until the home input
-changes state, then a slow re-approach at HV that is what actually fixes the
-zero. The routine runs it three times at the Pass 1 / 2 / 3 speeds for repeatability,
-but from the far end of the travel that last pass would take minutes and time
-out, so the working procedure was always to jog the axis down onto its limit by
-hand FIRST, then press Home. Two gestures per axis, eight before the slits were
-usable, at the start of every session.
+HOMING ON THE RELEASE EDGE (ADR 0009)
+------------------------------------
+Each slit's home switch and reverse limit trip at the same point, so
+controller HM always ends on the reverse limit. Instead, each home pass drives
+in at the Approach speed until the home switch trips, then steps back out one
+count at a time at rest until the switch releases. Homing runs two passes and
+defines DP=0 on pass 2's edge only if the two edges agree within 4 counts.
 
-Three buttons now cover that — seek the limit, three HM passes, DP=0:
+Two buttons per axis cover the two starting assumptions:
 
-  - "Seek + Home {axis}" on each panel: that axis's two gestures, one click.
-    (AxisHomeRoutine, HM A / BG A.)
+  - "Home {axis}" on each panel: two release-edge passes from wherever the
+    axis already is.
+  - "Seek + Home {axis}" on each panel: jogs in at the seek speed until the
+    home switch trips, then runs the two release-edge passes and DP=0.
   - "Auto-Home All — One at a Time": all four, sequentially, on one thread.
     One axis in motion and one command on the wire at any moment; a failure
-    stops the run with the untried axes untouched. This is the one to press.
-    (AutoHomeAllWorker.)
-  - "Auto-Home All — Together": one HM ABCD and one BG ABCD, every argument a
-    positional vector, so the CONTROLLER sequences the four axes rather than
-    four host threads interleaving their command setups on one socket. This is
-    the idiom the HM reference itself gives ("HM Set Homing Mode for all axes /
-    BG Home all axes"). (MultiAxisHomeWorker.)
+    stops the run with the untried axes untouched. (AutoHomeAllWorker.)
 
 EDGE-RETURN TEST
 ----------------
 "Edge-Return Test — Homing Repeatability" runs EdgeReturnWorker on one axis at
-each of the three home pass speeds, one after another, so the operator can tell
-switch jitter (a few counts) from lost steps (jumps of about 8 counts) without
-guessing. It NEVER defines zero (no DP, no mark_zeroed) and the below-home floor
-does not apply to it: it is a measurement, not a homing. It refuses to start
-unless the Galil is connected and nothing is homing, and while it runs it locks
-that axis's motion controls, both auto-home buttons and the pass-speed boxes.
-One CSV for the whole run is written at the end, even after a failure or cancel,
-when at least one speed produced two or more readings.
+the Approach speed so the operator can tell switch jitter (a few counts) from
+lost steps (jumps of about 8 counts) without guessing. It NEVER defines zero
+(no DP, no mark_zeroed) and the below-home floor does not apply to it: it is a
+measurement, not a homing. It refuses to start unless the Galil is connected
+and nothing is homing, and while it runs it locks that axis's motion controls,
+the auto-home button and the Approach speed box. One CSV for the whole run is
+written at the end, even after a failure or cancel, when at least two readings
+were collected.
 
 Any homing run locks its axis's jog/move/zero controls (a second command on a
 homing axis is the thing to prevent) but never its Stop, its Home buttons —
@@ -80,7 +76,6 @@ from rbl.hardware.galil_workers import (
     EdgeReturnWorker,
     GalilPollWorker,
     HomingWorker,
-    MultiAxisHomeWorker,
 )
 from rbl.services.edge_return_writer import write_edge_return_csv
 
@@ -257,11 +252,9 @@ class AxisControls(QGroupBox):
         # --- Home buttons (always visible) -------------------------------
         #
         # Two, because they are two different starting assumptions, not two
-        # levels of a setting. "Home" is HM from wherever the axis already is,
-        # which is right when it is already near the switch. "Seek + Home"
-        # jogs it down onto the limit first, which is the pair of gestures the
-        # procedure has always required from cold — and doing it in one click
-        # is the whole reason this panel grew a second button.
+        # levels of a setting. "Home" approaches from wherever the axis already
+        # is, which is right when it is already near the switch. "Seek + Home"
+        # jogs it down onto the switch first, which is what to press from cold.
         home_row = QHBoxLayout()
         home_row.setSpacing(4)
 
@@ -272,10 +265,11 @@ class AxisControls(QGroupBox):
             "QPushButton:disabled { background:#c0c0c0; color:#888; }"
         )
         self.btn_home.setToolTip(
-            f"HM from wherever axis {axis_letter} is now: three passes at "
-            "the Pass 1 / 2 / 3 speeds, then DP=0.\n"
-            "Use this when the axis is already near its home switch — from "
-            "the far end of the travel a slow final pass will time out."
+            f"Home axis {axis_letter} from wherever it is now: two release-edge "
+            "passes at the Approach speed, stepping out one count at a time "
+            "until the home switch releases, then DP=0 if the two edges agree "
+            f"within {SC.HOME_EDGE_AGREEMENT_COUNTS} counts.\n"
+            "Use this when the axis is already near its home switch."
         )
         self.btn_home.clicked.connect(lambda: self._start_homing(seek_first=False))
         home_row.addWidget(self.btn_home)
@@ -287,9 +281,10 @@ class AxisControls(QGroupBox):
             "QPushButton:disabled { background:#c0c0c0; color:#888; }"
         )
         self.btn_seek_home.setToolTip(
-            f"The two-step procedure in one click: jog {axis_letter} negative "
-            f"at {SC.HOME_SEEK_SPEED_COUNTS_PER_SEC} cps until the home limit "
-            "trips, then the same three-pass HM and DP=0 as Home.\n"
+            f"Jog {axis_letter} negative at {SC.HOME_SEEK_SPEED_COUNTS_PER_SEC} cps "
+            "until the home switch trips, then run the two release-edge passes "
+            f"and set DP=0 if the two edges agree within "
+            f"{SC.HOME_EDGE_AGREEMENT_COUNTS} counts.\n"
             "This is what to press from cold. One command at a time, and the "
             "button becomes Cancel while it runs."
         )
@@ -694,10 +689,8 @@ class MotorTab(QWidget):
         self.beamline = beamline
         self.worker = None
 
-        # The two all-axes workers, while one is running. Only ever one at a
-        # time — each start path refuses while the other is going.
+        # The all-axes homing worker, while running.
         self._auto_worker: AutoHomeAllWorker | None = None          # sequential
-        self._parallel_worker: MultiAxisHomeWorker | None = None    # together
         self._auto_homing_locked = False
 
         outer_layout = QHBoxLayout(self)
@@ -805,7 +798,7 @@ class MotorTab(QWidget):
         for i, axis in enumerate(SC.AXIS_LETTERS):
             panel = AxisControls(axis, lambda: self.galil, self._log_line,
                                  beamline, self)
-            panel.homing_state_changed.connect(self._update_pass_speeds_enabled)
+            panel.homing_state_changed.connect(self._update_approach_speed_enabled)
             self.axes[axis] = panel
             grid.addWidget(panel, i // 2, i % 2)
         left_layout.addLayout(grid, stretch=1)
@@ -845,13 +838,13 @@ class MotorTab(QWidget):
     #
     # Bringing the slits up used to be eight deliberate gestures — jog each
     # axis onto its limit, then press its Home button — before any other
-    # calibration could start. Both buttons here do that whole set from one
-    # click; they differ only in whether the axes take turns.
+    # calibration could start. This button does that whole set from one click.
 
     _AUTO_HOME_STANDING = (
-        "Homes all four slits from cold: jog each axis onto its home limit, "
-        "then the three-pass HM and DP=0. Sequential is the one to use — start "
-        "it and work on another tab."
+        "Homes all four slits, one at a time: each is driven onto its home "
+        "switch, stepped back out to where the switch releases, twice, and "
+        "zeroed there if the two agree within 4 counts. Start it and work on "
+        "another tab."
     )
 
     def _build_auto_home_box(self) -> QGroupBox:
@@ -871,10 +864,11 @@ class MotorTab(QWidget):
             "QPushButton:disabled { background:#c0c0c0; color:#888; }"
         )
         self.btn_auto_home_seq.setToolTip(
-            "A, B, C, D in order. Each axis is jogged onto its home limit, "
-            "homed in three passes and zeroed before the next one is touched, "
-            "so only one axis is ever moving and only one command is ever on "
-            "the wire.\n\n"
+            "A, B, C, D in order. Each axis is driven onto its home switch, "
+            "stepped back out to the release edge twice, and zeroed there if "
+            f"the two edges agree within {SC.HOME_EDGE_AGREEMENT_COUNTS} counts "
+            "before the next one is touched, so only one axis is ever moving "
+            "and only one command is ever on the wire.\n\n"
             "If an axis fails, the sequence stops there and the remaining axes "
             "are left untouched — you get one clear failure instead of four "
             "half-homed slits.\n\n"
@@ -882,55 +876,31 @@ class MotorTab(QWidget):
             "to cancel."
         )
         self.btn_auto_home_seq.clicked.connect(self._start_auto_home)
-        row.addWidget(self.btn_auto_home_seq, stretch=2)
-
-        self.btn_auto_home_par = QPushButton("Auto-Home All — Together")
-        self.btn_auto_home_par.setMinimumHeight(40)
-        self.btn_auto_home_par.setStyleSheet(
-            "QPushButton { background:#7a4a00; color:white; font-weight:bold;"
-            " font-size:14px; }"
-            "QPushButton:hover { background:#8f5800; }"
-            "QPushButton:disabled { background:#c0c0c0; color:#888; }"
-        )
-        self.btn_auto_home_par.setToolTip(
-            "The same routine on all four axes AT ONCE, sent the way the HM "
-            "reference describes it: one HM ABCD and one BG ABCD, with every "
-            "argument a positional vector. The CONTROLLER sequences the four "
-            "axes — this program issues one command, not four.\n\n"
-            "Faster, but all four slits move together, so there is more in "
-            "motion at once to watch. If anything looks wrong, EMERGENCY STOP "
-            "and use the sequential button.\n\n"
-            "Press again to cancel."
-        )
-        self.btn_auto_home_par.clicked.connect(self._start_auto_home_parallel)
-        row.addWidget(self.btn_auto_home_par, stretch=1)
+        row.addWidget(self.btn_auto_home_seq, stretch=1)
         lay.addLayout(row)
 
         speeds_row = QHBoxLayout()
         speeds_row.setSpacing(6)
-        speeds_tip = (
-            "Speed of each home pass, for both its search and its slow "
-            "re-approach. Shared by all four axes. Used by the next homing run."
+        approach_tip = (
+            "Speed each slit is driven onto its home switch. Zero is found on "
+            "the way back out, one count at a time, so this does not decide "
+            "where zero lands. Shared by all four axes; used by the next "
+            "homing run and the edge-return test."
         )
-        initial_speeds = self.beamline.home_pass_speeds()
-        pass_boxes = []
-        for label_text, val in zip(
-            ("Pass 1 (cps)", "Pass 2 (cps)", "Pass 3 (cps)"), initial_speeds
-        ):
-            lbl = QLabel(label_text)
-            spn = QuietDoubleSpinBox()
-            spn.setDecimals(0)
-            spn.setRange(1.0, float(SC.HOME_PASS_SPEED_MAX_COUNTS_PER_SEC))
-            spn.setSingleStep(10.0)
-            spn.setValue(float(val))
-            spn.setToolTip(speeds_tip)
-            lbl.setToolTip(speeds_tip)
-            speeds_row.addWidget(lbl)
-            speeds_row.addWidget(spn)
-            pass_boxes.append(spn)
-        self.spn_pass1, self.spn_pass2, self.spn_pass3 = pass_boxes
-        for spn in pass_boxes:
-            spn.valueChanged.connect(self._on_pass_speeds_changed)
+        lbl = QLabel("Approach speed (cps)")
+        self.spn_approach_speed = QuietDoubleSpinBox()
+        self.spn_approach_speed.setDecimals(0)
+        self.spn_approach_speed.setRange(
+            1.0, float(SC.HOME_APPROACH_SPEED_MAX_COUNTS_PER_SEC))
+        self.spn_approach_speed.setSingleStep(10.0)
+        self.spn_approach_speed.setValue(float(self.beamline.home_approach_speed()))
+        self.spn_approach_speed.setToolTip(approach_tip)
+        lbl.setToolTip(approach_tip)
+        self.spn_approach_speed.valueChanged.connect(
+            self._on_approach_speed_changed)
+        speeds_row.addWidget(lbl)
+        speeds_row.addWidget(self.spn_approach_speed)
+        speeds_row.addStretch(1)
         lay.addLayout(speeds_row)
 
         self.lbl_auto_home = QLabel(self._AUTO_HOME_STANDING)
@@ -1001,7 +971,7 @@ class MotorTab(QWidget):
             theme.status_label(role, bold=False) + "font-size: 12px;")
 
     def _any_homing_active(self) -> bool:
-        return (self._auto_worker_running() or self._parallel_worker_running()
+        return (self._auto_worker_running()
                 or any(p.homing_active() for p in self.axes.values()))
 
     def _on_edge_run_clicked(self):
@@ -1019,9 +989,7 @@ class MotorTab(QWidget):
         self._edge_locked_axis = axis
         self.axes[axis].set_motion_controls_enabled(False)
         self.btn_auto_home_seq.setEnabled(False)
-        self.btn_auto_home_par.setEnabled(False)
-        for spn in (self.spn_pass1, self.spn_pass2, self.spn_pass3):
-            spn.setEnabled(False)
+        self.spn_approach_speed.setEnabled(False)
         self.btn_edge_run.setText("Cancel edge-return test")
         self._set_edge_note(f"Edge-return test running on axis {axis}…", theme.WARN)
         self._log_line(f"# Edge-return test on {axis} at {speed} cps")
@@ -1054,8 +1022,7 @@ class MotorTab(QWidget):
             self.axes[axis].set_motion_controls_enabled(True)
         self._edge_locked_axis = ""
         self.btn_auto_home_seq.setEnabled(self.galil.connected)
-        self.btn_auto_home_par.setEnabled(self.galil.connected)
-        self._update_pass_speeds_enabled()
+        self._update_approach_speed_enabled()
         self.btn_edge_run.setText("Run edge-return test")
         self._set_edge_note(msg if not ok else self._EDGE_NOTE_STANDING,
                             theme.FAULT if not ok else theme.NEUTRAL)
@@ -1066,7 +1033,7 @@ class MotorTab(QWidget):
             theme.status_label(role, bold=False) + "font-size: 12px;")
 
     def _confirm_auto_home(self, title: str, body: str) -> bool:
-        """One overridable confirmation for both buttons.
+        """One overridable confirmation for auto-home.
 
         Homing drives every slit into its limit switch, so it is not something
         to start by brushing a button — but it is also the routine an operator
@@ -1086,19 +1053,20 @@ class MotorTab(QWidget):
             self._set_auto_home_note("Cancelling after the current step…",
                                      theme.WARN)
             return
-        if not self.galil.connected or self._parallel_worker_running():
+        if not self.galil.connected:
             return
         if not self._confirm_auto_home(
                 "Auto-home all four slits",
-                "Each axis will be jogged onto its home limit, homed in three "
-                "passes and zeroed — A, then B, then C, then D.\n\n"
+                "Each axis will be driven onto its home switch, stepped back "
+                "out to where the switch releases, twice, and zeroed if the "
+                f"two edges agree within {SC.HOME_EDGE_AGREEMENT_COUNTS} counts "
+                "— A, then B, then C, then D.\n\n"
                 "Only one axis moves at a time. Make sure the slits are clear "
                 "to travel.\n\nStart?"):
             return
 
         self._lock_axes_for_auto_home(True, "Queued for auto-home")
         self.btn_auto_home_seq.setText("Cancel Auto-Home")
-        self.btn_auto_home_par.setEnabled(False)
         self._set_auto_home_note("Auto-homing all four axes, one at a time…",
                                  theme.WARN)
         self._log_line("# Auto-home ALL — sequential, one command at a time.")
@@ -1134,26 +1102,21 @@ class MotorTab(QWidget):
     def _on_auto_home_done(self, ok: bool, summary: str):
         self._lock_axes_for_auto_home(False)
         self.btn_auto_home_seq.setText("Auto-Home All — One at a Time")
-        self.btn_auto_home_par.setEnabled(self.galil.connected)
         self._log_line(f"{'✓' if ok else '✗'} {summary}")
         self._set_auto_home_note(summary, theme.OK if ok else theme.FAULT)
         if not ok:
             QMessageBox.warning(self, "Auto-home did not complete", summary)
 
-    def _on_pass_speeds_changed(self, _value=None):
-        self.beamline.set_home_pass_speeds((
-            int(round(self.spn_pass1.value())),
-            int(round(self.spn_pass2.value())),
-            int(round(self.spn_pass3.value())),
-        ))
+    def _on_approach_speed_changed(self, value: float):
+        self.beamline.set_home_approach_speed(int(round(value)))
 
-    def _update_pass_speeds_enabled(self, _active=None):
+    def _update_approach_speed_enabled(self, _active=None):
         enabled = (
             not self._auto_homing_locked
+            and self._edge_worker is None
             and not any(p._homing_in_progress for p in self.axes.values())
         )
-        for spn in (self.spn_pass1, self.spn_pass2, self.spn_pass3):
-            spn.setEnabled(enabled)
+        self.spn_approach_speed.setEnabled(enabled)
 
     def _lock_axes_for_auto_home(self, locked: bool, status: str = None):
         """Take the per-axis controls out of reach while the sequencer runs.
@@ -1164,67 +1127,13 @@ class MotorTab(QWidget):
         does the Cancel on the button that started this.
         """
         self._auto_homing_locked = locked
-        self._update_pass_speeds_enabled()
+        self._update_approach_speed_enabled()
         for panel in self.axes.values():
             panel.set_enabled(not locked and self.galil.connected)
             panel.set_external_status(status if locked else None)
 
-    def _start_auto_home_parallel(self):
-        """Simultaneous: HM ABCD / BG ABCD — one command, every axis.
-
-        Not four workers. The HM reference's own idiom is one HM and one BG
-        for the whole set, which puts the four axes under the CONTROLLER's
-        sequencer instead of four host threads interleaving five-command HM
-        setups on a single socket.
-        """
-        if self._parallel_worker_running():
-            self._parallel_worker.cancel()
-            self._set_auto_home_note("Cancelling after the current step…",
-                                     theme.WARN)
-            return
-        if not self.galil.connected or self._auto_worker_running():
-            return
-        if not self._confirm_auto_home(
-                "Auto-home all four slits TOGETHER",
-                "All four axes will jog onto their home limits and home AT "
-                "THE SAME TIME, under one HM ABCD / BG ABCD — the controller "
-                "sequences them, not this program.\n\n"
-                "All four slits move at once. Make sure they are clear to "
-                "travel, and if anything looks wrong hit EMERGENCY STOP.\n\n"
-                "Start all four?"):
-            return
-
-        axes = "".join(SC.AXIS_LETTERS)
-        self._lock_axes_for_auto_home(True, "Homing together…")
-        self.btn_auto_home_par.setText("Cancel All Homing")
-        self.btn_auto_home_seq.setEnabled(False)
-        self._set_auto_home_note("Homing all four axes together…", theme.WARN)
-        self._log_line(f"# Auto-home ALL — together. HM {axes} ; BG {axes}.")
-
-        self._parallel_worker = MultiAxisHomeWorker(
-            self.galil, axes, self,
-            speeds=self.beamline.home_pass_speeds(),
-        )
-        self._parallel_worker.progress.connect(self._log_line)
-        self._parallel_worker.axis_finished.connect(self._on_auto_axis_finished)
-        self._parallel_worker.done.connect(self._on_parallel_home_done)
-        self._parallel_worker.start()
-
     def _auto_worker_running(self) -> bool:
         return self._auto_worker is not None and self._auto_worker.isRunning()
-
-    def _parallel_worker_running(self) -> bool:
-        return (self._parallel_worker is not None
-                and self._parallel_worker.isRunning())
-
-    def _on_parallel_home_done(self, ok: bool, summary: str):
-        self._lock_axes_for_auto_home(False)
-        self.btn_auto_home_par.setText("Auto-Home All — Together")
-        self.btn_auto_home_seq.setEnabled(self.galil.connected)
-        self._log_line(f"{'✓' if ok else '✗'} {summary}")
-        self._set_auto_home_note(summary, theme.OK if ok else theme.FAULT)
-        if not ok:
-            QMessageBox.warning(self, "Auto-home did not complete", summary)
 
     def _on_slit_target_changed(self, slit: str, mm: float):
         """Some screen commanded *slit* to *mm* — show it on that axis panel."""
@@ -1318,7 +1227,6 @@ class MotorTab(QWidget):
         self.btn_send.setEnabled(on)
         self.manual_cmd.setEnabled(on)
         self.btn_auto_home_seq.setEnabled(on)
-        self.btn_auto_home_par.setEnabled(on)
         for panel in self.axes.values():
             panel.set_enabled(on)
 
@@ -1355,9 +1263,8 @@ class MotorTab(QWidget):
         this does not itself stop motion. It is what stops the NEXT command,
         and it is why the abort above is worth anything.
         """
-        for worker in (self._auto_worker, self._parallel_worker):
-            if worker is not None and worker.isRunning():
-                worker.cancel()
+        if self._auto_worker is not None and self._auto_worker.isRunning():
+            self._auto_worker.cancel()
         for panel in self.axes.values():
             panel.cancel_homing()
 
@@ -1417,7 +1324,7 @@ class MotorTab(QWidget):
         with it. The cancel has already gone in — this is the join, and it is
         bounded so a wedged socket read cannot hang the close.
         """
-        threads = ([self._auto_worker, self._parallel_worker]
+        threads = ([self._auto_worker]
                    + [p._homing_worker for p in self.axes.values()])
         for thread in threads:
             if thread is not None and thread.isRunning():

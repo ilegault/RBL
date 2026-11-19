@@ -54,8 +54,6 @@ def _galil(home=False, reverse=False, moving=False):
         "home_switch": home, "reverse_switch": reverse, "forward_switch": False,
     }
     g.is_moving.return_value = moving
-    # A fixture for a SUCCESSFUL run: every pass stops on the home switch.
-    g.get_stop_code.return_value = SC.HOME_STOP_CODE
     return g
 
 
@@ -249,7 +247,7 @@ class TestBackOutOfHome:
             c.args == ("A", SC.HOME_START_BACKOFF_COUNTS)
             for c in g.move_relative.call_args_list
         )
-        g.begin_home.assert_not_called()
+        g.jog_start.assert_not_called()
         g.define_zero.assert_not_called()
 
     def test_no_back_out_on_the_forward_limit(self):
@@ -364,7 +362,7 @@ class TestAutoHomeAllWorker:
         w.cancel()
         w.run()
 
-        g.begin_home.assert_not_called()
+        g.jog_start.assert_not_called()
         g.define_zero.assert_not_called()
         assert results[0][0] is False
         assert "cancelled" in results[0][1]
@@ -398,10 +396,8 @@ class TestMotorTabAutoHome:
 
         t = MotorTab(Beamline())
         assert not t.btn_auto_home_seq.isEnabled()   # nothing to home yet
-        assert not t.btn_auto_home_par.isEnabled()
         t._set_buttons_connected(True)
         assert t.btn_auto_home_seq.isEnabled()
-        assert t.btn_auto_home_par.isEnabled()
 
     def test_a_declined_confirmation_starts_nothing(self, tab):
         tab._confirm_auto_home = lambda *a, **k: False
@@ -462,83 +458,6 @@ class TestMotorTabAutoHome:
         tab._do_disconnect()
         assert tab._auto_worker._cancelled is True
 
-    def test_together_sends_one_command_not_four_workers(self, tab, monkeypatch):
-        """The whole point of the change: one HM ABCD under one worker, rather
-        than four HomingWorkers interleaving their setups on one socket."""
-        from rbl.hardware.galil_workers import MultiAxisHomeWorker
-        monkeypatch.setattr(MultiAxisHomeWorker, "start", lambda self: None)
-        monkeypatch.setattr(MultiAxisHomeWorker, "isRunning", lambda self: True)
-
-        tab._start_auto_home_parallel()
-
-        assert tab._parallel_worker is not None
-        assert tab._parallel_worker.axes == "ABCD"
-        assert all(p._homing_worker is None for p in tab.axes.values())
-        assert not tab.btn_auto_home_seq.isEnabled()   # one mode at a time
-        assert tab.btn_auto_home_par.text() == "Cancel All Homing"
-
-    def test_together_locks_the_per_axis_controls(self, tab, monkeypatch):
-        from rbl.hardware.galil_workers import MultiAxisHomeWorker
-        monkeypatch.setattr(MultiAxisHomeWorker, "start", lambda self: None)
-        monkeypatch.setattr(MultiAxisHomeWorker, "isRunning", lambda self: True)
-
-        tab._start_auto_home_parallel()
-        for panel in tab.axes.values():
-            assert not panel.btn_jog_neg.isEnabled()
-        assert tab.btn_estop.isEnabled()
-
-    def test_together_marks_each_axis_referenced_as_it_reports(self, tab):
-        """Started together, but they reach their switches at different
-        moments — so outcomes still arrive one axis at a time."""
-        for axis in "ABCD":
-            tab._on_auto_axis_finished(axis, True, f"{axis}: homed")
-        assert tab.beamline.all_zeroed()
-
-    def test_together_releases_everything_when_it_finishes(self, tab):
-        tab._lock_axes_for_auto_home(True, "Homing together…")
-        tab.btn_auto_home_par.setText("Cancel All Homing")
-        tab.btn_auto_home_seq.setEnabled(False)
-
-        tab._on_parallel_home_done(True, "ABCD: homed together")
-
-        assert tab.btn_auto_home_par.text() == "Auto-Home All — Together"
-        assert tab.btn_auto_home_seq.isEnabled()
-        assert tab.axes["A"].btn_jog_neg.isEnabled()
-        assert "homed together" in tab.lbl_auto_home.text()
-
-    def test_the_two_all_axes_modes_refuse_to_overlap(self, tab, monkeypatch):
-        from rbl.hardware.galil_workers import MultiAxisHomeWorker
-        monkeypatch.setattr(MultiAxisHomeWorker, "start", lambda self: None)
-        monkeypatch.setattr(MultiAxisHomeWorker, "isRunning", lambda self: True)
-        tab._start_auto_home_parallel()
-
-        tab._start_auto_home()                    # sequential, while together runs
-        assert tab._auto_worker is None
-
-    def test_emergency_stop_cancels_the_together_run(self, tab, monkeypatch):
-        from rbl.hardware.galil_workers import MultiAxisHomeWorker
-        monkeypatch.setattr(MultiAxisHomeWorker, "start", lambda self: None)
-        monkeypatch.setattr(MultiAxisHomeWorker, "isRunning", lambda self: True)
-        tab._start_auto_home_parallel()
-
-        tab._emergency_stop()
-        assert tab._parallel_worker._cancelled is True
-
-    def test_edited_pass_speeds_reach_the_next_together_home(self, tab, monkeypatch):
-        tab.spn_pass1.setValue(300)
-        tab.spn_pass2.setValue(120)
-        tab.spn_pass3.setValue(40)
-        mock_worker_cls = MagicMock()
-        monkeypatch.setattr("rbl.gui.motor_tab.MultiAxisHomeWorker", mock_worker_cls)
-
-        monkeypatch.setattr(
-            "rbl.gui.motor_tab.QMessageBox.question",
-            lambda *a, **k: QMessageBox.StandardButton.Yes)
-        tab.btn_auto_home_par.click()
-
-        mock_worker_cls.assert_called_once()
-        assert mock_worker_cls.call_args.kwargs["speeds"] == (300, 120, 40)
-
     def test_approach_speed_reaches_the_next_auto_home(self, tab, monkeypatch):
         tab.beamline.set_home_approach_speed(40)
         mock_worker_cls = MagicMock()
@@ -564,26 +483,73 @@ class TestMotorTabAutoHome:
         assert mock_worker_cls.call_args_list[0].kwargs["approach_speed"] == 40
         assert mock_worker_cls.call_args_list[1].kwargs["approach_speed"] == 40
 
-    def test_pass_speed_boxes_disabled_while_homing(self, tab, monkeypatch):
-        boxes = (tab.spn_pass1, tab.spn_pass2, tab.spn_pass3)
+    def test_approach_speed_box_edits_the_beamline(self, tab):
+        assert tab.spn_approach_speed.value() == 58
+        assert tab.spn_approach_speed.maximum() == 500
+        tab.spn_approach_speed.setValue(40)
+        assert tab.beamline.home_approach_speed() == 40
+
+    def test_approach_speed_box_is_locked_while_homing(self, tab, monkeypatch):
+        from rbl.hardware.galil_workers import EdgeReturnWorker
         monkeypatch.setattr(
             "rbl.gui.motor_tab.QMessageBox.question",
             lambda *a, **k: QMessageBox.StandardButton.Yes)
         started = []
-        for cls in (AutoHomeAllWorker, HomingWorker):
-            monkeypatch.setattr(cls, "start", lambda self: started.append(self))
-            monkeypatch.setattr(cls, "isRunning", lambda self: True)
-        assert all(b.isEnabled() for b in boxes)
+        running = set()
+        for cls in (AutoHomeAllWorker, HomingWorker, EdgeReturnWorker):
+            monkeypatch.setattr(
+                cls, "start",
+                lambda self: (started.append(self), running.add(self)),
+            )
+            monkeypatch.setattr(cls, "isRunning", lambda self: self in running)
+        assert tab.spn_approach_speed.isEnabled()
 
         tab.btn_auto_home_seq.click()
-        assert not any(b.isEnabled() for b in boxes)
-        started.pop().done.emit(True, "all homed")
-        assert all(b.isEnabled() for b in boxes)
+        assert not tab.spn_approach_speed.isEnabled()
+        w = started.pop()
+        running.discard(w)
+        w.done.emit(True, "all homed")
+        assert tab.spn_approach_speed.isEnabled()
 
         tab.axes["A"].btn_home.click()
-        assert not any(b.isEnabled() for b in boxes)
-        started.pop().done.emit(True, "A: homed")
-        assert all(b.isEnabled() for b in boxes)
+        assert not tab.spn_approach_speed.isEnabled()
+        w = started.pop()
+        running.discard(w)
+        w.done.emit(True, "A: homed")
+        assert tab.spn_approach_speed.isEnabled()
+
+        tab.btn_edge_run.click()
+        assert not tab.spn_approach_speed.isEnabled()
+        w = started.pop()
+        running.discard(w)
+        w.done.emit(False, "cancelled", [])
+        assert tab.spn_approach_speed.isEnabled()
+
+    def test_the_together_path_is_gone(self, tab):
+        assert not hasattr(tab, "btn_auto_home_par")
+        assert not hasattr(galil_workers, "MultiAxisHomeRoutine")
+        assert not hasattr(galil_workers, "MultiAxisHomeWorker")
+        assert not hasattr(GalilController, "begin_home")
+        assert not hasattr(GalilController, "begin_home_multi")
+        assert not hasattr(GalilController, "set_home_velocity")
+        assert not hasattr(SC, "HOME_STOP_CODE")
+        assert not hasattr(SC, "HOME_PASS_SPEEDS_COUNTS_PER_SEC")
+
+    def test_no_homing_text_mentions_the_old_passes(self, tab):
+        from PySide6.QtWidgets import QAbstractSpinBox, QLabel, QPushButton
+
+        from rbl.gui.motor_tab import MotorTab
+
+        texts = [MotorTab._AUTO_HOME_STANDING]
+        for cls in (QLabel, QPushButton, QAbstractSpinBox):
+            for widget in tab.findChildren(cls):
+                if hasattr(widget, "text"):
+                    texts.append(widget.text())
+                texts.append(widget.toolTip())
+        banned = ("three-pass", "HM ", "Together", "Pass 1", "pass speed")
+        for text in texts:
+            for phrase in banned:
+                assert phrase not in text, f"Found {phrase!r} in {text!r}"
 
 
 class TestSeekAndHomeButton:
@@ -659,172 +625,6 @@ class TestSeekAndHomeButton:
 
         motion = [c for c in sim.calls if c[0] in ("move_relative", "jog_start")]
         assert motion[0] == ("move_relative", ("A", SC.HOME_START_BACKOFF_COUNTS))
-
-
-# ---- All four axes under ONE command -----------------------------------------
-
-class TestMultiAxisHomeRoutine:
-    """The HM reference's own idiom — "HM Set Homing Mode for all axes / BG
-    Home all axes" — instead of four host threads each sending their own
-    five-command HM setup down one socket."""
-
-    def _routine(self, g, axes="ABCD", **kw):
-        from rbl.hardware.galil_workers import MultiAxisHomeRoutine
-        return MultiAxisHomeRoutine(g, axes, **kw)
-
-    def test_one_hm_and_one_bg_for_the_whole_set(self):
-        g = _galil(moving=False)
-        ok, msg = self._routine(g).run(seek_first=False)
-        assert ok, msg
-        # Three passes total, not three per axis — every call names all four.
-        assert g.begin_home_multi.call_count == 3
-        assert all(c.args[0] == "ABCD" for c in g.begin_home_multi.call_args_list)
-        g.begin_home.assert_not_called()          # never the per-axis form
-
-    def test_zero_is_defined_for_every_axis_in_one_command(self):
-        g = _galil(moving=False)
-        self._routine(g).run(seek_first=False)
-        g.define_zero_multi.assert_called_once_with("ABCD")
-        g.define_zero.assert_not_called()
-
-    def test_each_pass_turns_down_both_stages(self):
-        g = _galil(moving=False)
-        self._routine(g).run(seek_first=False)
-        passes = [(c.args[1], c.kwargs["fine_speed"])
-                  for c in g.begin_home_multi.call_args_list]
-        assert passes == [(225, 225), (112, 112), (58, 58)]
-
-    def test_together_uses_the_speeds_it_is_given(self):
-        g = _galil()
-        ok, msg = _multi_routine(g, "ABCD", speeds=(400, 150, 30)).home_passes()
-        assert ok, msg
-        passes = [(c.args[1], c.kwargs["fine_speed"])
-                  for c in g.begin_home_multi.call_args_list]
-        assert passes == [(400, 400), (150, 150), (30, 30)]
-
-    def test_the_seek_starts_every_axis_with_one_jog(self):
-        # Every axis clear on the first look, every axis arrived on the next —
-        # tracked per axis, since the routine asks each one separately.
-        g = _galil(moving=True)
-        looks: dict[str, int] = {}
-
-        def switches(axis):
-            looks[axis] = looks.get(axis, 0) + 1
-            return _switches(home=looks[axis] > 1)
-
-        g.get_switch_states.side_effect = switches
-        g.is_moving.side_effect = lambda _a: False
-
-        ok, msg = self._routine(g).seek_home_limits()
-        assert ok, msg
-        axes, speed = g.jog_start_multi.call_args.args
-        assert axes == "ABCD"                    # one jog, not four
-        assert speed == -SC.HOME_SEEK_SPEED_COUNTS_PER_SEC
-        # Each axis is stopped on its OWN switch — they start together but do
-        # not arrive together.
-        assert {c.args[0] for c in g.stop.call_args_list} == set("ABCD")
-
-    def test_axes_already_on_the_limit_are_left_out_of_the_jog(self):
-        """No point commanding motion on an axis that has arrived — and
-        jogging it further would drive it into the limit it is sitting on."""
-        g = _galil(moving=True)
-        g.get_switch_states.side_effect = lambda a: _switches(home=(a in "AB"))
-        self._routine(g).seek_home_limits(timeout=0.0)
-        assert g.jog_start_multi.call_args.args[0] == "CD"
-
-    def test_nothing_is_homed_when_an_axis_fails_its_seek(self):
-        """Started together means failing together: an axis that never reached
-        its limit would be homed from the wrong place, and HM ABCD cannot
-        leave that one out once it is issued."""
-        g = _galil(moving=False)
-        looks: dict[str, int] = {}
-
-        def switches(axis):
-            looks[axis] = looks.get(axis, 0) + 1
-            if looks[axis] == 1:
-                return _switches()
-            return _switches(home=(axis != "C"))
-
-        g.get_switch_states.side_effect = switches
-        seen = []
-        ok, summary = self._routine(g, axis_done=lambda a, o, m: seen.append((a, o))
-                                    ).run(seek_first=True)
-        assert not ok
-        assert "C" in summary
-        g.begin_home_multi.assert_not_called()
-        g.define_zero_multi.assert_not_called()
-        assert ("C", False) in seen
-
-    def test_together_sets_no_zero_when_one_axis_stops_off_home(self):
-        g = _galil(moving=False)
-        g.get_stop_code.side_effect = lambda a: 3 if a == "C" else 10
-        ok, msg = _multi_routine(g).run(seek_first=False)
-        assert not ok
-        assert "C (stop code 3)" in msg
-        g.define_zero_multi.assert_not_called()
-
-    def test_together_fails_a_seek_on_the_reverse_limit(self):
-        g = _galil(moving=False)
-        looks: dict[str, int] = {}
-
-        def switches(axis):
-            looks[axis] = looks.get(axis, 0) + 1
-            if looks[axis] == 1:
-                return _switches()
-            return _switches(home=(axis != "C"), reverse=(axis == "C"))
-
-        g.get_switch_states.side_effect = switches
-        seen = []
-        ok, _ = _multi_routine(
-            g, axis_done=lambda a, o, m: seen.append((a, o, m))
-        ).run(seek_first=True)
-        assert not ok
-        g.begin_home_multi.assert_not_called()
-        g.define_zero_multi.assert_not_called()
-        assert any(a == "C" and not o
-                   and "reached the reverse limit before the home switch" in m
-                   for a, o, m in seen)
-
-    def test_every_axis_is_reported_when_the_run_succeeds(self):
-        g = _galil(moving=False)
-        seen = []
-        ok, _ = self._routine(g, axis_done=lambda a, o, m: seen.append((a, o))
-                              ).run(seek_first=False)
-        assert ok
-        assert seen == [("A", True), ("B", True), ("C", True), ("D", True)]
-
-    def test_it_puts_both_speeds_back_for_every_axis(self):
-        g = _galil(moving=False)
-        self._routine(g).run(seek_first=False)
-        g.set_speed_multi.assert_called_with(
-            "ABCD", SC.DEFAULT_SPEED_COUNTS_PER_SEC)
-        g.set_home_velocity_multi.assert_called_with(
-            "ABCD", SC.DEFAULT_HOME_VELOCITY_COUNTS_PER_SEC)
-
-    def test_cancel_before_the_passes_homes_nothing(self):
-        g = _galil(moving=False)
-        ok, msg = self._routine(g, cancelled=lambda: True).run(seek_first=False)
-        assert not ok
-        assert "cancelled" in msg.lower()
-        g.begin_home_multi.assert_not_called()
-        g.define_zero_multi.assert_not_called()
-
-    def test_together_backs_out_only_the_axes_on_home(self):
-        from rbl.hardware.galil_workers import MultiAxisHomeRoutine
-
-        g = _galil(moving=False)
-        looks: dict[str, int] = {}
-
-        def switches(axis):
-            looks[axis] = looks.get(axis, 0) + 1
-            return _switches(home=(axis in "BD" and looks[axis] == 1))
-
-        g.get_switch_states.side_effect = switches
-        ok, msg = MultiAxisHomeRoutine(g).run(seek_first=False)
-        assert ok, msg
-        assert g.move_relative_multi.call_args_list[0].args == (
-            "BD", SC.HOME_START_BACKOFF_COUNTS
-        )
 
 
 # ---- Release-edge homing (ADR 0009) ------------------------------------------

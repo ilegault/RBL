@@ -1,6 +1,6 @@
 # 138: One Approach speed box; the Together homing and the HM code retired
 
-**Status:** ready-for-agent
+**Status:** blocked
 
 **Runner:** any
 
@@ -65,20 +65,20 @@ test that fails only because it referenced a removed name is rewritten in place 
 
 ## Acceptance criteria
 
-- [ ] Test `test_approach_speed_box_edits_the_beamline` in `tests/test_auto_home.py`: on a new
+- [x] Test `test_approach_speed_box_edits_the_beamline` in `tests/test_auto_home.py`: on a new
       tab, `spn_approach_speed.value() == 58`; after `spn_approach_speed.setValue(40)`,
       `tab.beamline.home_approach_speed() == 40`; the spin box's maximum is 500.
-- [ ] Test `test_approach_speed_box_is_locked_while_homing` in `tests/test_auto_home.py`: with
+- [x] Test `test_approach_speed_box_is_locked_while_homing` in `tests/test_auto_home.py`: with
       `AutoHomeAllWorker`, `HomingWorker` and `EdgeReturnWorker` `start` patched to record and
       `isRunning` patched True, the box is disabled after clicking `btn_auto_home_seq`, after
       clicking axis A's `btn_home`, and after pressing `btn_edge_run`, and enabled again after each
       run's `done` is emitted.
-- [ ] Test `test_the_together_path_is_gone` in `tests/test_auto_home.py`: a `MotorTab` has no
+- [x] Test `test_the_together_path_is_gone` in `tests/test_auto_home.py`: a `MotorTab` has no
       attribute `btn_auto_home_par`; `rbl.hardware.galil_workers` has no `MultiAxisHomeRoutine` or
       `MultiAxisHomeWorker`; `GalilController` has no `begin_home`, `begin_home_multi` or
       `set_home_velocity`; `hardware_config` has no `HOME_STOP_CODE` or
       `HOME_PASS_SPEEDS_COUNTS_PER_SEC`.
-- [ ] Test `test_no_homing_text_mentions_the_old_passes` in `tests/test_auto_home.py`: collecting
+- [x] Test `test_no_homing_text_mentions_the_old_passes` in `tests/test_auto_home.py`: collecting
       `text()` and `toolTip()` from every `QLabel`, `QPushButton` and `QAbstractSpinBox` under a
       `MotorTab`, plus `_AUTO_HOME_STANDING`, none contains `"three-pass"`, `"HM "`, `"Together"`,
       `"Pass 1"` or `"pass speed"`.
@@ -100,3 +100,16 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+## Escalation — 2026-11-19
+Repo: RBL   Ticket: 138 One Approach speed box; the Together homing and the HM code retired   Branch: ticket/slit-homing-release-edge-138-approach-speed-box-and-retire-together
+Goal: Replace the three Pass N spin boxes with `spn_approach_speed`, retire Together homing (`btn_auto_home_par`, `MultiAxisHomeRoutine`, `MultiAxisHomeWorker`), and remove the `HM` driver methods and old pass-speed/stop-code constants.
+Attempt 1: Implemented all changes and ran all four repo gates (`ruff check .`, `check_tests_first.py`, `type_gate.py`, `pytest --tb=short -q -n auto --dist loadfile` -> 3003 passed). Ran `ticket_engine.integrity_runner --local --repo-path . --base-ref origin/master` -> Check 7 passed (`All 4 new test(s) failed on base code`), but Check 2 failed on all 28 deleted tests and the resulting assertion-count drops because `integrity.py` qualifies class methods as `<file>.py::<Class>::<func>` whereas `origin/master`'s `Deletes tests:` line lists `<file>.py::<func>` without the class name.
+Failing output (exact, trimmed to the relevant lines):
+Check 2 fail: Deleted test function 'test_together_sends_one_command_not_four_workers' in tests/test_auto_home.py
+... (all 28 tests listed on `Deletes tests:` in `origin/master`)
+Check 2 fail: Test file 'tests/test_auto_home.py' has fewer assertions than on base (lost 40 assertion(s): 143 < 183)
+Check 2 fail: Test file 'tests/test_beamline.py' has fewer assertions than on base (lost 8 assertion(s): 154 < 162)
+Check 2 fail: Test file 'tests/test_galil_protocol.py' has fewer assertions than on base (lost 6 assertion(s): 61 < 67)
+Check 7 pass: All 4 new test(s) failed on base code (runtime 60.10s)
+Decision needed: Update `Deletes tests:` on `master` for ticket 138 to include the enclosing class names (`tests/test_auto_home.py::TestMotorTabAutoHome::...`, `TestMultiAxisHomeRoutine::...`, `tests/test_galil_protocol.py::TestSingleAxisMotion::...`, `TestMultiAxisMotion::...`, `tests/test_beamline.py::TestBeamline::...`), or merge this draft PR as-is after reviewing the 3003-test green gate.

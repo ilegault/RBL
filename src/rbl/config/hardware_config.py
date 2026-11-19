@@ -93,29 +93,15 @@ HOME_SEEK_SPEED_COUNTS_PER_SEC = 500
 # detector ("the switch never tripped"), not a schedule.
 HOME_SEEK_TIMEOUT_S = 180.0
 
-# The only Galil stop code (SC) a home pass may end on. Code 10 is "stopped
-# after homing (HM) or find index (FI)"; 2/3 are the forward/reverse limit or
-# soft limit, 4 is ST, 7 is AB (DMC-40x0/41x3 command reference, SC). Any other
-# code means the pass ended somewhere that is not the home switch, and zero
-# must not be defined there.
-HOME_STOP_CODE = 10
-
 # How many poll cycles in a row may fail before the Galil is treated as gone.
 # One slow reply while a homing run keeps the controller busy is routine; the
 # poll used to give up on the first, which disconnected the Galil and cancelled
 # the homing run. Three in a row (about 0.6 s at 5 Hz) is a real fault.
 GALIL_POLL_MAX_CONSECUTIVE_ERRORS = 3
 
-# What HV is put back to once homing is done. HM's second stage — the slow
-# re-approach that fixes where the zero lands — runs at HV, and the homing
-# routine turns it down to 58 cps for the final pass. Restoring it matters for
-# the same reason restoring SP does: the next home should start from a known
-# value rather than inherit the last run's fine-approach speed.
-DEFAULT_HOME_VELOCITY_COUNTS_PER_SEC = 256
-
 # Start-of-home back-out: an axis left on its home switch when its motor was
 # turned off (MO) gives homing a confusing start, so every homing run backs out
-# away from home (+counts) before seeking or running HM. 1000 counts ≈ 1.6 mm.
+# away from home (+counts) before seeking or approaching. 1000 counts ≈ 1.6 mm.
 HOME_START_BACKOFF_COUNTS = 1000
 HOME_START_BACKOFF_TRIES = 3
 
@@ -134,12 +120,6 @@ HOME_CREEP_STEP_COUNTS             = 1    # ADR 0009: single-count step out to r
 HOME_CREEP_MAX_COUNTS              = 400  # ADR 0009: fail with "check the sensor" if unreleased
 HOME_PASS2_BACKOFF_COUNTS          = 300  # ADR 0009: back-off distance before pass 2
 HOME_EDGE_AGREEMENT_COUNTS         = 4    # ADR 0009: half of an 8-count lost-step jump
-
-# Default three-pass homing speeds (coarse -> medium -> fine, counts/s) and the
-# upper bound the Stepper Motors tab's pass-speed boxes accept. Each pass sets
-# both SP and HV to its speed.
-HOME_PASS_SPEEDS_COUNTS_PER_SEC: tuple[int, int, int] = (225, 112, 58)
-HOME_PASS_SPEED_MAX_COUNTS_PER_SEC = 5000
 
 # Switch map measurement (ADR 0009): step slowly in through the home switch and
 # reverse limit one count at a time, then back out, reading all switches at rest.

@@ -262,69 +262,7 @@ class GalilController:
         self.cmd(f"AC {prefix}{accel_counts_per_sec2}")
         self.cmd(f"DC {prefix}{accel_counts_per_sec2}")
 
-    def begin_home(self, axis: str, speed: int, fine_speed: int = None):
-        """Issue the Galil HM (home) sequence, then BG to run it.
-
-        Returns immediately — motion runs asynchronously. Call is_moving() to
-        poll completion, then define_zero(): on a STEPPER, HM does not set
-        position 0 itself. Per the HM reference, the third stage — the one that
-        latches an encoder index pulse and defines it as zero — is servo-only,
-        and "for stepper mode operation, the sequence consists of the first two
-        stages". So the zero is ours to define, and DP is how.
-
-        TWO SPEEDS, because HM's two stages use two different ones:
-          SP  sets stage 1, the fast search that runs until the home input
-              CHANGES STATE, then decelerates to a stop.
-          HV  sets stage 2, where the motor reverses and re-approaches that
-              same transition slowly, stopping instantaneously on it.
-        Stage 2 is the one that fixes where "home" ends up, so HV — not SP —
-        is what a homing routine has to turn down for repeatability. It
-        defaults to `speed` here only so a caller that does not care still gets
-        a defined value rather than whatever HV was left at.
-
-        DIRECTION IS NOT OURS TO CHOOSE. The reference is explicit: "the
-        direction for this first stage is determined by the initial state of
-        the homing input", i.e. HM works out for itself which way home is from
-        whether the axis is currently on the switch. The JG below therefore
-        does NOT steer the search — it is left in only because it puts the axis
-        in a known jog mode before HM replaces the profile, which is the idiom
-        the rest of this driver was written against.
-        """
-        prefix = "," * "ABCD".index(axis)
-        fine = speed if fine_speed is None else fine_speed
-        self.cmd(f"SP {prefix}{speed}")   # stage 1: fast search
-        self.cmd(f"HV {prefix}{fine}")    # stage 2: slow re-approach — sets the zero
-        self.cmd(f"JG {prefix}{-speed}")
-        self.cmd(f"HM {axis}")
-        self.cmd(f"BG {axis}")
-
-    def set_home_velocity(self, axis: str, speed_counts_per_sec: int):
-        """HV — the speed of HM's second stage (the slow re-approach)."""
-        prefix = "," * "ABCD".index(axis)
-        self.cmd(f"HV {prefix}{speed_counts_per_sec}")
-
     # ---- Multi-axis motion -------------------------------------------------
-    #
-    # The HM reference's own idiom: "HM Set Homing Mode for all axes / BG Home
-    # all axes". One HM and one BG start every axis together, sequenced by the
-    # CONTROLLER, instead of four host threads interleaving their own HM/BG
-    # pairs on a single socket and hoping the ordering survives the trip.
-
-    def begin_home_multi(self, axes: str, speed: int, fine_speed: int = None):
-        """HM + BG across `axes` — every axis homing under one command.
-
-        Same five commands as begin_home, with every argument a positional
-        vector instead of a single slot, so the axes are configured and then
-        released together rather than one after another. See begin_home for
-        what SP and HV each do to HM's two stages, and why direction is not
-        ours to pick.
-        """
-        fine = speed if fine_speed is None else fine_speed
-        self.cmd(f"SP {self.axis_vector(axes, speed)}")
-        self.cmd(f"HV {self.axis_vector(axes, fine)}")
-        self.cmd(f"JG {self.axis_vector(axes, -speed)}")
-        self.cmd(f"HM {axes}")
-        self.cmd(f"BG {axes}")
 
     def jog_start_multi(self, axes: str, signed_speed: int):
         """Begin a jog on every axis in `axes` at one signed speed."""
@@ -340,9 +278,6 @@ class GalilController:
 
     def set_speed_multi(self, axes: str, speed_counts_per_sec: int):
         self.cmd(f"SP {self.axis_vector(axes, speed_counts_per_sec)}")
-
-    def set_home_velocity_multi(self, axes: str, speed_counts_per_sec: int):
-        self.cmd(f"HV {self.axis_vector(axes, speed_counts_per_sec)}")
 
 
 # --- Self-test (no hardware) -------------------------------------------------

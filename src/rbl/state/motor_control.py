@@ -69,11 +69,6 @@ class MotorControlMixin:
         # module docstring, WHY EVERY MOVE SENDS ITS SPEED.
         self._slit_speed_cps: dict[str, int] = {
             a: SC.DEFAULT_SPEED_COUNTS_PER_SEC for a in SC.AXIS_LETTERS}
-        # Shared three-pass homing speeds (counts/s), editable on the Stepper
-        # Motors tab and passed into every homing run started after they change.
-        self._home_pass_speeds: tuple[int, int, int] = (
-            SC.HOME_PASS_SPEEDS_COUNTS_PER_SEC
-        )
         # Shared release-edge homing approach speed (counts/s), not saved
         # between runs.
         self._home_approach_speed_cps: int = SC.HOME_APPROACH_SPEED_COUNTS_PER_SEC
@@ -99,20 +94,6 @@ class MotorControlMixin:
         if cps < 1:
             raise ValueError(f"slit speed must be >= 1 count/s, got {cps}")
         self._slit_speed_cps[axis_letter] = int(cps)
-
-    def home_pass_speeds(self) -> tuple[int, int, int]:
-        return self._home_pass_speeds
-
-    def set_home_pass_speeds(self, speeds) -> None:
-        parsed = tuple(int(s) for s in speeds)
-        if len(parsed) != 3 or any(
-            not (1 <= s <= SC.HOME_PASS_SPEED_MAX_COUNTS_PER_SEC) for s in parsed
-        ):
-            raise ValueError(
-                f"home pass speeds must be 3 values in 1..{SC.HOME_PASS_SPEED_MAX_COUNTS_PER_SEC}, "
-                f"got {speeds!r}"
-            )
-        self._home_pass_speeds = (parsed[0], parsed[1], parsed[2])
 
     def home_approach_speed(self) -> int:
         return self._home_approach_speed_cps

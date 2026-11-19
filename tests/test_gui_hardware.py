@@ -530,7 +530,7 @@ class TestHomingWorker:
         hw.done.connect(lambda ok, msg: results.append((ok, msg)))
         hw.cancel()
         hw.run()
-        assert g.begin_home.call_count == 0
+        assert g.jog_start.call_count == 0
         g.define_zero.assert_not_called()
         assert results and results[0][0] is False
 
