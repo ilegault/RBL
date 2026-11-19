@@ -1,6 +1,6 @@
 # 135: Homing finds the release edge (one axis and Auto-Home All)
 
-**Status:** done
+**Status:** blocked
 
 **Runner:** any
 
@@ -171,10 +171,24 @@ pytest --tb=short -q -n auto --dist loadfile
 
 ## Comments
 
-- 2026-11-18: Implemented release-edge homing (ADR 0009):
-  - Added `tests/sim_slit.py` (`SimSlit`, `SimGalil`).
-  - Added ADR 0009 homing constants in `src/rbl/config/hardware_config.py`.
-  - Rewrote `AxisHomeRoutine` (`approach`, `creep_to_release`, `home_passes`, `_restore_speeds`, module docstring) and updated `HomingWorker` / `AutoHomeAllWorker` in `src/rbl/hardware/galil_workers.py`.
-  - Updated `AxisControls._start_homing` and `MotorTab._start_auto_home` in `src/rbl/gui/motor_tab.py` to stop passing `speeds=`.
-  - Updated `tests/test_auto_home.py` (added `TestReleaseEdgeHoming`, rewrote `SimGalil`-backed tests in place, deleted the 8 tests listed in `Deletes tests:`) and `tests/test_gui_hardware.py` (`test_three_passes_then_define_zero` driven by `SimGalil`).
-  - Bench verification deferred to ticket 142.
+## Escalation — 2026-11-18
+Repo: RBL   Ticket: 135 Homing finds the release edge (one axis and Auto-Home All)   Branch: ticket/slit-homing-release-edge-135-homing-finds-the-release-edge
+Goal: Replace HM homing with two-pass release-edge homing (`AxisHomeRoutine`, `HomingWorker`, `AutoHomeAllWorker`, `tests/sim_slit.py`, ADR 0009 constants).
+Attempt 1: Implemented release-edge homing, rewrote `SimGalil`-backed tests, and deleted the 8 tests listed on `Deletes tests:`. `ruff check .`, `check_tests_first.py`, `type_gate.py`, and `pytest tests/test_auto_home.py tests/test_gui_hardware.py` (112 passed) are green. Local `ticket_engine.integrity_runner` passed Check 7 (all 6 new tests failed on `origin/master`), but exited 1 on Check 2.
+Failing output (exact, trimmed to the relevant lines):
+<!-- ticket-engine-integrity-gate -->
+## Integrity Gate Verdict: FAIL
+
+**Verdict:** `fail`
+
+### Reasons:
+- Check 2 fail: Deleted test function 'test_seek_then_three_passes_then_zero' in tests/test_auto_home.py
+- Check 2 fail: Deleted test function 'test_each_pass_turns_down_both_of_hm_s_stages' in tests/test_auto_home.py
+- Check 2 fail: Deleted test function 'test_it_puts_both_speeds_back' in tests/test_auto_home.py
+- Check 2 fail: Deleted test function 'test_zero_is_defined_because_hm_does_not_do_it_on_a_stepper' in tests/test_auto_home.py
+- Check 2 fail: Deleted test function 'test_routine_uses_the_speeds_it_is_given' in tests/test_auto_home.py
+- Check 2 fail: Deleted test function 'test_a_pass_that_stops_on_a_limit_sets_no_zero' in tests/test_auto_home.py
+- Check 2 fail: Deleted test function 'test_edited_pass_speeds_reach_the_next_auto_home' in tests/test_auto_home.py
+- Check 2 fail: Deleted test function 'test_edited_pass_speeds_reach_a_per_axis_home' in tests/test_auto_home.py
+- Check 7 pass: All 6 new test(s) failed on base code (runtime 41.95s)
+Decision needed: `ticket-engine/src/ticket_engine/integrity.py:497` qualifies class-scoped test methods as `tests/test_auto_home.py::<Class>::<method>` while `origin/master`'s `Deletes tests:` (and `ticket_lint.py`) uses `tests/test_auto_home.py::<method>`. Since RBL's CI (`tests.yml`) does not run the integrity gate, either accept this draft PR as-is (all 4 CI gate commands pass) or fix `integrity.py` / `origin/master`'s `Deletes tests:` format.
