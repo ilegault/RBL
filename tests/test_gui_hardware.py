@@ -495,14 +495,16 @@ class TestHomingWorker:
     def test_three_passes_then_define_zero(self, qapp, monkeypatch):
         from rbl.hardware import galil_workers
         from rbl.hardware.galil_workers import HomingWorker
+        from tests.sim_slit import SimGalil
+
         monkeypatch.setattr(galil_workers.time, "sleep", lambda *a, **k: None)
-        g = self._mock_galil(home_switch=False)
-        hw = HomingWorker(g, "A")
+        sim = SimGalil(trip_at=-3, release_at=6)
+        hw = HomingWorker(sim, "A")
         results = []
         hw.done.connect(lambda ok, msg: results.append((ok, msg)))
         hw.run()                              # synchronous (same-thread)
-        assert g.begin_home.call_count == 3   # coarse -> medium -> fine
-        g.define_zero.assert_called_once_with("A")
+        assert len([c for c in sim.calls if c[0] == "jog_start"]) == 2
+        assert sim.slits["A"].zeroed_at == [6]
         assert results and results[0][0] is True
 
     def test_backs_off_when_starting_on_home_switch(self, qapp, monkeypatch):

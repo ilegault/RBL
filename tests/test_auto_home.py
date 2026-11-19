@@ -195,99 +195,49 @@ class TestSeekAgainstTheRealDriver:
 
 
 class TestRoutineEndToEnd:
-    def test_seek_then_three_passes_then_zero(self):
-        g = _galil(moving=False)
-        g.get_switch_states.side_effect = (
-            [_switches(), _switches(), _switches(home=True)] + [_switches()] * 20)
-        ok, msg = AxisHomeRoutine(g, "A").run(seek_first=True)
-        assert ok, msg
-        assert g.jog_start.called                   # the seek happened
-        assert g.begin_home.call_count == 3         # coarse -> medium -> fine
-        g.define_zero.assert_called_once_with("A")
-
     def test_a_failed_seek_never_reaches_hm(self):
-        """Homing an axis that never got to its limit would search from the
-        wrong place — and DP=0 there would define a zero that is not home."""
-        g = _galil(moving=False)
-        g.get_switch_states.return_value = _switches()
-        ok, _ = AxisHomeRoutine(g, "A").run(seek_first=True)
+        """Homing an axis that never got to its home switch must not creep or
+        define zero."""
+        from tests.sim_slit import SimGalil
+
+        sim = SimGalil(
+            trip_at=-50, release_at=-40,
+            reverse_trip_at=-3, reverse_release_at=6,
+        )
+        ok, _ = AxisHomeRoutine(sim, "A").run(seek_first=True)
         assert not ok
-        g.begin_home.assert_not_called()
-        g.define_zero.assert_not_called()
+        assert not [c for c in sim.calls if c[0] == "move_relative"]
+        assert sim.slits["A"].zeroed_at == []
 
-    def test_each_pass_turns_down_both_of_hm_s_stages(self):
-        """On a stepper HM has two stages: a fast search at SP, then a slow
-        re-approach at HV that is what actually fixes where the zero lands.
-        HV was never set at all before, so turning SP down pass by pass was
-        tuning the stage that does not determine the answer."""
-        g = _galil(moving=False)
-        ok, _ = AxisHomeRoutine(g, "A").run(seek_first=False)
-        assert ok
+    def test_the_speeds_go_back_after_a_failure_too(self):
+        from tests.sim_slit import SimGalil
 
-        passes = [(c.args[1], c.kwargs["fine_speed"])
-                  for c in g.begin_home.call_args_list]
-        assert passes == [(225, 225), (112, 112), (58, 58)]
-
-    def test_it_puts_both_speeds_back(self):
-        """Every pass left SP and HV turned down to homing speeds; a Move
-        issued afterwards would otherwise crawl."""
-        g = _galil(moving=False)
-        AxisHomeRoutine(g, "A").run(seek_first=False)
-        g.set_speed.assert_called_with("A", SC.DEFAULT_SPEED_COUNTS_PER_SEC)
-        g.set_home_velocity.assert_called_with(
-            "A", SC.DEFAULT_HOME_VELOCITY_COUNTS_PER_SEC)
-
-    def test_the_speeds_go_back_after_a_failure_too(self, monkeypatch):
-        # The routine's timeouts are wall-clock deadlines, and `no_sleep` only
-        # removes the pauses BETWEEN polls — without a fake clock this test
-        # spins for a real 60 s waiting for the first pass to give up.
-        clock = iter(range(0, 100_000))
-        monkeypatch.setattr(galil_workers.time, "time", lambda: float(next(clock)))
-
-        g = _galil(moving=True)     # never goes idle -> every pass times out
-        g.get_switch_states.return_value = _switches()
-        ok, _ = AxisHomeRoutine(g, "A").run(seek_first=False)
+        sim = SimGalil(trip_at=-3, release_at=1000)
+        ok, _ = AxisHomeRoutine(sim, "A").run(seek_first=False)
         assert not ok
-        g.set_speed.assert_called_with("A", SC.DEFAULT_SPEED_COUNTS_PER_SEC)
-        g.set_home_velocity.assert_called_with(
-            "A", SC.DEFAULT_HOME_VELOCITY_COUNTS_PER_SEC)
-
-    def test_zero_is_defined_because_hm_does_not_do_it_on_a_stepper(self):
-        """HM's index-latch stage — the one that would define position 0 — is
-        servo-only. On a stepper the sequence stops after stage 2, so this DP
-        is the only thing that makes the zero exist."""
-        g = _galil(moving=False)
-        AxisHomeRoutine(g, "A").run(seek_first=False)
-        g.define_zero.assert_called_once_with("A")
+        speed_calls = [c for c in sim.calls if c[0] == "set_speed"]
+        assert speed_calls[-1] == ("set_speed", ("A", SC.DEFAULT_SPEED_COUNTS_PER_SEC))
 
     def test_without_seek_it_is_the_old_routine(self):
-        g = _galil(moving=False)
-        ok, _ = AxisHomeRoutine(g, "A").run(seek_first=False)
-        assert ok
-        g.jog_start.assert_not_called()
-        assert g.begin_home.call_count == 3
+        from tests.sim_slit import SimGalil
 
-    def test_routine_uses_the_speeds_it_is_given(self):
-        g = _galil()
-        ok, msg = AxisHomeRoutine(g, "A", speeds=(400, 150, 30)).home_passes()
+        sim = SimGalil()
+        ok, msg = AxisHomeRoutine(sim, "A").run(seek_first=False)
         assert ok, msg
-        passes = [(c.args[1], c.kwargs["fine_speed"])
-                  for c in g.begin_home.call_args_list]
-        assert passes == [(400, 400), (150, 150), (30, 30)]
+        jogs = [c[1] for c in sim.calls if c[0] == "jog_start"]
+        assert all(abs(spd) != SC.HOME_SEEK_SPEED_COUNTS_PER_SEC for _ax, spd in jogs)
+        assert jogs[0] == ("A", -SC.HOME_APPROACH_SPEED_COUNTS_PER_SEC)
 
 
 class TestBackOutOfHome:
     def test_homing_backs_out_before_anything_else(self):
-        g = _galil(moving=False)
-        g.get_switch_states.side_effect = (
-            [_switches(home=True)] + [_switches()] * 20
-        )
-        ok, msg = AxisHomeRoutine(g, "A").run()
+        from tests.sim_slit import SimGalil
+
+        sim = SimGalil(start_at=-5, trip_at=-3, release_at=6)
+        ok, msg = AxisHomeRoutine(sim, "A").run()
         assert ok, msg
-        motion = [c for c in g.method_calls
-                  if c[0] in ("move_relative", "jog_start", "begin_home")]
-        assert motion[0][0] == "move_relative"
-        assert motion[0][1] == ("A", SC.HOME_START_BACKOFF_COUNTS)
+        motion = [c for c in sim.calls if c[0] in ("move_relative", "jog_start")]
+        assert motion[0] == ("move_relative", ("A", SC.HOME_START_BACKOFF_COUNTS))
 
     def test_back_out_gives_up_after_the_last_try(self):
         g = _galil(home=True, moving=False)
@@ -315,43 +265,39 @@ def _multi_routine(g, axes="ABCD", **kw):
     return MultiAxisHomeRoutine(g, axes, **kw)
 
 
-class TestStopCodeGate:
-    def test_a_pass_that_stops_on_a_limit_sets_no_zero(self):
-        g = _galil(moving=False)
-        g.get_stop_code.side_effect = [10, 3]
-        ok, msg = AxisHomeRoutine(g, "A").run()
-        assert not ok
-        assert "pass 2/3 did not stop on the home switch (stop code 3)" in msg
-        g.define_zero.assert_not_called()
-        g.set_speed.assert_any_call("A", SC.DEFAULT_SPEED_COUNTS_PER_SEC)
-
-
 class TestHomingWorkerSeekFlag:
     def test_seek_first_is_off_by_default(self, qapp):
-        """The plain Home button must keep doing exactly what it always did."""
-        g = _galil(moving=False)
-        hw = HomingWorker(g, "A")
+        """The plain Home button must skip the fast seek jog."""
+        from tests.sim_slit import SimGalil
+
+        sim = SimGalil()
+        hw = HomingWorker(sim, "A")
         hw.done.connect(lambda ok, msg: None)
         hw.run()
-        g.jog_start.assert_not_called()
+        jogs = [c[1] for c in sim.calls if c[0] == "jog_start"]
+        assert jogs[0] == ("A", -SC.HOME_APPROACH_SPEED_COUNTS_PER_SEC)
+        assert sim.slits["A"].zeroed_at == [6]
 
     def test_seek_first_adds_the_jog(self, qapp):
-        g = _galil(moving=False)
-        g.get_switch_states.side_effect = (
-            [_switches(), _switches(), _switches(home=True)] + [_switches()] * 20)
-        hw = HomingWorker(g, "A", seek_first=True)
+        from tests.sim_slit import SimGalil
+
+        sim = SimGalil()
+        hw = HomingWorker(sim, "A", seek_first=True)
         hw.done.connect(lambda ok, msg: None)
         hw.run()
-        assert g.jog_start.called
-        g.define_zero.assert_called_once_with("A")
+        jogs = [c[1] for c in sim.calls if c[0] == "jog_start"]
+        assert jogs[0] == ("A", -SC.HOME_SEEK_SPEED_COUNTS_PER_SEC)
+        assert sim.slits["A"].zeroed_at == [6]
 
 
 # ---- The all-axes sequencer --------------------------------------------------
 
 class TestAutoHomeAllWorker:
     def test_homes_every_axis_in_order(self, qapp):
-        g = _galil(moving=False)
-        w = AutoHomeAllWorker(g, ["A", "B", "C", "D"], seek_first=False)
+        from tests.sim_slit import SimGalil
+
+        sim = SimGalil()
+        w = AutoHomeAllWorker(sim, ["A", "B", "C", "D"], seek_first=False)
         finished = []
         w.axis_finished.connect(lambda a, ok, m: finished.append((a, ok)))
         results = []
@@ -359,7 +305,7 @@ class TestAutoHomeAllWorker:
         w.run()                                  # synchronous (same thread)
 
         assert finished == [("A", True), ("B", True), ("C", True), ("D", True)]
-        assert [c.args[0] for c in g.define_zero.call_args_list] == \
+        assert [c[1][0] for c in sim.calls if c[0] == "define_zero"] == \
             ["A", "B", "C", "D"]
         assert results[0][0] is True
         assert "4/4 axes homed" in results[0][1]
@@ -367,31 +313,36 @@ class TestAutoHomeAllWorker:
     def test_one_axis_at_a_time(self, qapp):
         """The property the operator asked for and cannot see: an axis is
         never started until the previous one has been zeroed."""
-        g = _galil(moving=False)
-        order = []
-        g.begin_home.side_effect = lambda axis, speed, **kw: order.append(("HM", axis))
-        g.define_zero.side_effect = lambda axis: order.append(("DP", axis))
+        from tests.sim_slit import SimGalil
 
-        w = AutoHomeAllWorker(g, ["A", "B"], seek_first=False)
+        sim = SimGalil(axes="AB")
+        w = AutoHomeAllWorker(sim, ["A", "B"], seek_first=False)
         w.done.connect(lambda ok, msg: None)
         w.run()
 
-        # Every command for A, then every command for B — no interleaving.
-        assert order == [("HM", "A")] * 3 + [("DP", "A")] \
-                      + [("HM", "B")] * 3 + [("DP", "B")]
+        axes_seq = [
+            c[1][0] for c in sim.calls
+            if c[0] in ("jog_start", "move_relative", "define_zero")
+        ]
+        first_b = axes_seq.index("B")
+        assert set(axes_seq[:first_b]) == {"A"}
+        assert set(axes_seq[first_b:]) == {"B"}
+        first_b_jog = sim.calls.index(
+            ("jog_start", ("B", -SC.HOME_APPROACH_SPEED_COUNTS_PER_SEC))
+        )
+        assert ("define_zero", ("A",)) in sim.calls[:first_b_jog]
 
     def test_a_failure_stops_the_run_and_names_what_was_skipped(self, qapp):
-        g = _galil(moving=False)
-        looks: dict[str, int] = {}
-        # B never reaches its limit, so its seek fails.
-        def switches(axis):
-            looks[axis] = looks.get(axis, 0) + 1
-            if looks[axis] == 1:
-                return _switches()
-            return _switches(home=(axis != "B"))
-        g.get_switch_states.side_effect = switches
+        from tests.sim_slit import SimGalil, SimSlit
 
-        w = AutoHomeAllWorker(g, ["A", "B", "C", "D"], seek_first=True)
+        sim = SimGalil()
+        # B hits its reverse limit before its home switch, so its seek fails.
+        sim.slits["B"] = SimSlit(
+            trip_at=-50, release_at=-40,
+            reverse_trip_at=-3, reverse_release_at=6,
+        )
+
+        w = AutoHomeAllWorker(sim, ["A", "B", "C", "D"], seek_first=True)
         seen = []
         w.axis_finished.connect(lambda a, ok, m: seen.append((a, ok)))
         results = []
@@ -399,7 +350,7 @@ class TestAutoHomeAllWorker:
         w.run()
 
         assert seen == [("A", True), ("B", False)]
-        assert [c.args[0] for c in g.define_zero.call_args_list] == ["A"]
+        assert [c[1][0] for c in sim.calls if c[0] == "define_zero"] == ["A"]
         ok, summary = results[0]
         assert ok is False
         assert "stopped on axis B" in summary
@@ -573,33 +524,6 @@ class TestMotorTabAutoHome:
         tab._emergency_stop()
         assert tab._parallel_worker._cancelled is True
 
-    def test_edited_pass_speeds_reach_the_next_auto_home(self, tab, monkeypatch):
-        tab.spn_pass1.setValue(300)
-        tab.spn_pass2.setValue(120)
-        tab.spn_pass3.setValue(40)
-        mock_worker_cls = MagicMock()
-        monkeypatch.setattr("rbl.gui.motor_tab.AutoHomeAllWorker", mock_worker_cls)
-
-        monkeypatch.setattr(
-            "rbl.gui.motor_tab.QMessageBox.question",
-            lambda *a, **k: QMessageBox.StandardButton.Yes)
-        tab.btn_auto_home_seq.click()
-
-        mock_worker_cls.assert_called_once()
-        assert mock_worker_cls.call_args.kwargs["speeds"] == (300, 120, 40)
-
-    def test_edited_pass_speeds_reach_a_per_axis_home(self, tab, monkeypatch):
-        tab.spn_pass1.setValue(300)
-        tab.spn_pass2.setValue(120)
-        tab.spn_pass3.setValue(40)
-        mock_worker_cls = MagicMock()
-        monkeypatch.setattr("rbl.gui.motor_tab.HomingWorker", mock_worker_cls)
-
-        tab.axes["A"].btn_home.click()
-
-        mock_worker_cls.assert_called_once()
-        assert mock_worker_cls.call_args.kwargs["speeds"] == (300, 120, 40)
-
     def test_edited_pass_speeds_reach_the_next_together_home(self, tab, monkeypatch):
         tab.spn_pass1.setValue(300)
         tab.spn_pass2.setValue(120)
@@ -700,19 +624,16 @@ class TestSeekAndHomeButton:
         assert seen["seek"] is False
 
     def test_seek_and_home_button_backs_out_first(self, tab, monkeypatch):
-        g = tab.beamline.galil
-        g.get_switch_states.side_effect = (
-            [_switches(home=True), _switches(), _switches(), _switches(home=True)]
-            + [_switches()] * 20
-        )
+        from tests.sim_slit import SimGalil
+
+        sim = SimGalil(start_at=-5, trip_at=-3, release_at=6)
+        tab.beamline.galil = sim
         monkeypatch.setattr(HomingWorker, "start", lambda self: self.run())
 
         tab.axes["A"].btn_seek_home.click()
 
-        motion = [c for c in g.method_calls
-                  if c[0] in ("move_relative", "jog_start", "begin_home")]
-        assert motion[0][0] == "move_relative"
-        assert motion[0][1] == ("A", SC.HOME_START_BACKOFF_COUNTS)
+        motion = [c for c in sim.calls if c[0] in ("move_relative", "jog_start")]
+        assert motion[0] == ("move_relative", ("A", SC.HOME_START_BACKOFF_COUNTS))
 
 
 # ---- All four axes under ONE command -----------------------------------------
@@ -879,3 +800,77 @@ class TestMultiAxisHomeRoutine:
         assert g.move_relative_multi.call_args_list[0].args == (
             "BD", SC.HOME_START_BACKOFF_COUNTS
         )
+
+
+# ---- Release-edge homing (ADR 0009) ------------------------------------------
+
+class TestReleaseEdgeHoming:
+    def test_homing_zeroes_on_the_release_edge(self):
+        from tests.sim_slit import SimGalil
+
+        sim = SimGalil(trip_at=-3, release_at=6, start_at=2000)
+        ok, msg = AxisHomeRoutine(sim, "A").run(seek_first=True)
+        assert ok, msg
+        assert "edges 6, 6 cts" in msg
+        assert sim.slits["A"].zeroed_at == [6]
+
+    def test_approach_speed_does_not_move_the_edge(self):
+        from tests.sim_slit import SimGalil
+
+        sim_slow = SimGalil(trip_at=-3, release_at=6)
+        ok1, msg1 = AxisHomeRoutine(sim_slow, "A", approach_speed=58).run(seek_first=False)
+        assert ok1, msg1
+
+        sim_fast = SimGalil(trip_at=-3, release_at=6)
+        ok2, msg2 = AxisHomeRoutine(sim_fast, "A", approach_speed=500).run(seek_first=False)
+        assert ok2, msg2
+
+        assert sim_slow.slits["A"].deepest != sim_fast.slits["A"].deepest
+        assert sim_slow.slits["A"].zeroed_at == [6]
+        assert sim_fast.slits["A"].zeroed_at == [6]
+
+    def test_a_lost_step_between_passes_sets_no_zero(self):
+        from tests.sim_slit import SimGalil
+
+        sim = SimGalil(trip_at=-3, release_at=6, slip_on_jog={2: 8})
+        ok, msg = AxisHomeRoutine(sim, "A").run(seek_first=True)
+        assert not ok
+        assert "home edges disagree — pass 1 at 6 cts, pass 2 at -2 cts (limit 4)" in msg
+        assert sim.slits["A"].zeroed_at == []
+
+    def test_a_switch_that_never_releases_sets_no_zero(self):
+        from tests.sim_slit import SimGalil
+
+        sim = SimGalil(trip_at=-3, release_at=1000)
+        ok, msg = AxisHomeRoutine(sim, "A").run(seek_first=True)
+        assert not ok
+        assert "home switch did not release within 400 counts — check the sensor" in msg
+        assert sim.slits["A"].zeroed_at == []
+
+    def test_an_approach_stopped_by_the_limit_off_home_fails(self):
+        from tests.sim_slit import SimGalil
+
+        sim = SimGalil(
+            trip_at=-50, release_at=-40,
+            reverse_trip_at=-3, reverse_release_at=6,
+        )
+        ok, msg = AxisHomeRoutine(sim, "A").run(seek_first=False)
+        assert not ok
+        assert "reached the reverse limit before the home switch" in msg
+        assert sim.slits["A"].zeroed_at == []
+
+    def test_auto_home_all_zeroes_every_axis_on_its_release_edge(self, qapp):
+        from tests.sim_slit import SimGalil, SimSlit
+
+        sim = SimGalil()
+        for axis, rel in (("A", 6), ("B", 7), ("C", 5), ("D", 6)):
+            sim.slits[axis] = SimSlit(trip_at=-3, release_at=rel)
+
+        w = AutoHomeAllWorker(sim)
+        done = []
+        w.done.connect(lambda ok, msg: done.append((ok, msg)))
+        w.run()
+
+        assert done and done[0][0] is True
+        for axis, rel in (("A", 6), ("B", 7), ("C", 5), ("D", 6)):
+            assert sim.slits[axis].zeroed_at == [rel]

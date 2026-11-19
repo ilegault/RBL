@@ -577,7 +577,6 @@ class AxisControls(QGroupBox):
         self._homing_worker = HomingWorker(
             g, self.axis, self,
             seek_first=seek_first,
-            speeds=self.beamline.home_pass_speeds(),
         )
         self._homing_worker.progress.connect(self.log)
         self._homing_worker.done.connect(self._on_homing_done)
@@ -1111,7 +1110,6 @@ class MotorTab(QWidget):
 
         self._auto_worker = AutoHomeAllWorker(
             self.galil, SC.AXIS_LETTERS, self,
-            speeds=self.beamline.home_pass_speeds(),
         )
         self._auto_worker.progress.connect(self._log_line)
         self._auto_worker.axis_started.connect(self._on_auto_axis_started)

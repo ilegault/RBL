@@ -1,6 +1,6 @@
 # 135: Homing finds the release edge (one axis and Auto-Home All)
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -126,26 +126,26 @@ drive `SimGalil`. Every test not listed at the top of this ticket stays.
 
 ## Acceptance criteria
 
-- [ ] Test `test_homing_zeroes_on_the_release_edge` in `tests/test_auto_home.py`:
+- [x] Test `test_homing_zeroes_on_the_release_edge` in `tests/test_auto_home.py`:
       `SimGalil(trip_at=-3, release_at=6, start_at=2000)`; `AxisHomeRoutine(sim, "A").run(seek_first=True)`
       returns `(True, msg)` with `"edges 6, 6 cts"` in `msg`, and `sim.slits["A"].zeroed_at == [6]`.
-- [ ] Test `test_approach_speed_does_not_move_the_edge` in `tests/test_auto_home.py`: two fresh
+- [x] Test `test_approach_speed_does_not_move_the_edge` in `tests/test_auto_home.py`: two fresh
       `SimGalil(trip_at=-3, release_at=6)`, one homed with `approach_speed=58` and one with
       `approach_speed=500` (both `run(seek_first=False)`); their `deepest` values differ, and both
       `zeroed_at` lists are `[6]`.
-- [ ] Test `test_a_lost_step_between_passes_sets_no_zero` in `tests/test_auto_home.py`:
+- [x] Test `test_a_lost_step_between_passes_sets_no_zero` in `tests/test_auto_home.py`:
       `SimGalil(trip_at=-3, release_at=6, slip_on_jog={2: 8})`; `run(seek_first=True)` returns
       `(False, msg)` with `"home edges disagree — pass 1 at 6 cts, pass 2 at -2 cts (limit 4)"` in
       `msg`, and `zeroed_at == []`.
-- [ ] Test `test_a_switch_that_never_releases_sets_no_zero` in `tests/test_auto_home.py`:
+- [x] Test `test_a_switch_that_never_releases_sets_no_zero` in `tests/test_auto_home.py`:
       `SimGalil(trip_at=-3, release_at=1000)`; `run(seek_first=True)` returns `(False, msg)` with
       `"home switch did not release within 400 counts — check the sensor"` in `msg`, and
       `zeroed_at == []`.
-- [ ] Test `test_an_approach_stopped_by_the_limit_off_home_fails` in `tests/test_auto_home.py`:
+- [x] Test `test_an_approach_stopped_by_the_limit_off_home_fails` in `tests/test_auto_home.py`:
       `SimGalil(trip_at=-50, release_at=-40, reverse_trip_at=-3, reverse_release_at=6)`;
       `run(seek_first=False)` returns `(False, msg)` with
       `"reached the reverse limit before the home switch"` in `msg`, and `zeroed_at == []`.
-- [ ] Test `test_auto_home_all_zeroes_every_axis_on_its_release_edge` in `tests/test_auto_home.py`:
+- [x] Test `test_auto_home_all_zeroes_every_axis_on_its_release_edge` in `tests/test_auto_home.py`:
       a `SimGalil` whose four slits have release points 6, 7, 5 and 6 (A–D); `AutoHomeAllWorker(sim)`
       with `done` connected to a list, called via `.run()` (not `.start()`); each slit's `zeroed_at`
       is `[its release point]` and `done` carried `True`.
@@ -170,3 +170,11 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+- 2026-11-18: Implemented release-edge homing (ADR 0009):
+  - Added `tests/sim_slit.py` (`SimSlit`, `SimGalil`).
+  - Added ADR 0009 homing constants in `src/rbl/config/hardware_config.py`.
+  - Rewrote `AxisHomeRoutine` (`approach`, `creep_to_release`, `home_passes`, `_restore_speeds`, module docstring) and updated `HomingWorker` / `AutoHomeAllWorker` in `src/rbl/hardware/galil_workers.py`.
+  - Updated `AxisControls._start_homing` and `MotorTab._start_auto_home` in `src/rbl/gui/motor_tab.py` to stop passing `speeds=`.
+  - Updated `tests/test_auto_home.py` (added `TestReleaseEdgeHoming`, rewrote `SimGalil`-backed tests in place, deleted the 8 tests listed in `Deletes tests:`) and `tests/test_gui_hardware.py` (`test_three_passes_then_define_zero` driven by `SimGalil`).
+  - Bench verification deferred to ticket 142.
