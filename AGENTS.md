@@ -480,9 +480,9 @@ someone else's bug fix smuggled into it cannot be reviewed.
 <!-- ACTIVE-PLAN:START -->
 ## Active implementation plan
 
-_Written by the planning model on 2026-11-19 23:59. Implement this. If something in it is wrong, say so before changing course._
+_Written by the planning model on 2026-11-20 00:31. Implement this. If something in it is wrong, say so before changing course._
 
-# Active work: slit homing on the release edge, and the switch map (set 14): 143 and 144 next
+# Active work: slit homing on the release edge, and the switch map (set 14): 143, 144 and 145 next
 
 This is a pointer, not the work.
 
@@ -495,9 +495,10 @@ This is a pointer, not the work.
   ticket):** new **Reverse limit**, **Forward limit**, **Approach speed**, **Switch map**;
   **Home pass** redefined (drive onto the switch, step out to the release point, the *edge*);
   **Home switch** notes it trips with the reverse limit.
-- **Tickets:** `.scratch/slit-homing-release-edge/issues/135...144`. 135–141 are agent
+- **Tickets:** `.scratch/slit-homing-release-edge/issues/135...145`. 135–141 are agent
   tickets and are built. 143 and 144 (added 2026-11-19; see the spec's "Addendum 2026-11-19")
-  are agent tickets, both `Auto-merge: yes`. 142 is `ready-for-developer` (bench): an agent
+  are agent tickets, both `Auto-merge: yes`. 145 (added later on 2026-11-19, same addendum) is
+  an agent ticket, `Auto-merge: yes`. 142 is `ready-for-developer` (bench): an agent
   must not claim it.
 - **Tracker conventions:** `docs/agents/issue-tracker.md`
 - **Why:** since ticket 123 every home and edge-return pass fails with stop code 3, because
@@ -509,7 +510,9 @@ This is a pointer, not the work.
 - **143** and **144** are both unblocked and touch different files. Start with **144**: it is
   the smaller one, and bench ticket 142 waits on it (the operator wants to run the edge-return
   test at 58, 900 and 1800 cps). 143 (clicking into any number box selects the whole value; a
-  keystroke over the maximum shows "Max is N") can run in parallel with it.
+  keystroke over the maximum shows "Max is N") can run in parallel with it, and so can 145 (the
+  Stepper Motors tab's counts and cps boxes take whole numbers only; it edits only
+  `src/rbl/gui/motor_tab.py`).
 
 ### Dependency order
 
@@ -520,6 +523,7 @@ This is a pointer, not the work.
 141 ─────────────────────────────────┤
 144 (Approach speed up to 2000) ─────┘
 143 (number box: click selects all, "Max is N" note): independent, blocks nothing
+145 (Stepper tab counts/cps boxes take whole numbers): independent, blocks nothing
 ```
 
 (137 is blocked by 135 and 136; 138 by 136 and 137; 140 by 138 and 139; 142 by 135–141 and 144.)
@@ -548,6 +552,9 @@ This is a pointer, not the work.
   keystroke; the keystroke is still refused.
 - 144: the two existing tests that assert 500 are rewritten in place under their own names; no
   test is deleted. The default approach speed stays 58.
+- 145: the number of decimals is set only in `_set_speed_unit_range` and
+  `_set_target_unit_range` (0 for counts and cps, 3 for mm, 2 for mm/s), so the starting unit
+  and every unit switch get it from one place.
 - Every ticket: only the tests on its own `Deletes tests:` line may be deleted.
 
 ### Not in this set
