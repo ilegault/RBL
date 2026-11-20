@@ -480,78 +480,36 @@ someone else's bug fix smuggled into it cannot be reviewed.
 <!-- ACTIVE-PLAN:START -->
 ## Active implementation plan
 
-_Written by the planning model on 2026-11-20 15:11. Implement this. If something in it is wrong, say so before changing course._
+_Written by the planning model on 2026-11-20 22:21. Implement this. If something in it is wrong, say so before changing course._
 
-# Active work: slit motion at NEC's speeds, at-rest switch reads, 2 cps minimum (set 14, 147–151): 147, 149 and 150 next
+# Cup status contacts, cup-tab fixes and interlock control (cup-status-fix)
 
 This is a pointer, not the work.
 
-## Set 14: slit homing on the release edge, the switch map, and NEC's speeds
-
-- **Spec:** `.scratch/slit-homing-release-edge/spec.md` — read the **Addendum 2026-11-20** for 147–151.
-- **Binding:** `docs/adr/0009-slits-homed-on-the-release-edge.md` (amended 2026-11-20: default approach
-  speed 900; "at rest" means `_TD` equals `_RP`), `docs/adr/0001-tests-first-and-no-muted-failures.md`.
-- **Glossary (`CONTEXT.md`, edited by the planner, committed with the tickets, no ticket):**
-  **Slit speed** narrowed to motion the operator commands; new **At rest**.
-- **Tickets:** `.scratch/slit-homing-release-edge/issues/135...151`. 135–141 and 143–145 are done.
-  147–151 are agent tickets, all `Auto-merge: yes`. 142 is `ready-for-developer` (bench): an agent must
-  not claim it. (146 belongs to another effort, `.scratch/build-version-stamp/`.)
+- **Spec:** `.scratch/cup-status-fix/spec.md`
+- **Binding ADRs:** `docs/adr/0001-tests-first-and-no-muted-failures.md`, `docs/adr/0003-commanded-and-confirmed-cup-position.md`
+- **Glossary:** `CONTEXT.md` — **Asserted** (rewritten: contacts read 0 when asserted; FIO3 = IN, FIO2 = OUT), **Raw contact word** (new), **Interlock** (operator release/close)
+- **Tickets:** `.scratch/cup-status-fix/issues/167`–`174`
 - **Tracker conventions:** `docs/agents/issue-tracker.md`
-- **Why:** on the bench, slow continuous motion loses steps on every slit axis and fast motion does
-  not. NEC's spec is 1800 cps normal, 900 cps homing, smoothing `KS 2`; the app ran slower everywhere
-  and never sent `KS`.
 
-### Next
+**Next:** 167 first (the decode fix every later cup ticket builds on, and it unblocks 168). 169, 170 and 173 have no blockers and can run alongside it.
 
-- **147**, **149** and **150** are unblocked and touch different files. Start with **147**: 148 and 151
-  wait on it.
-- After 147: **148** and **151** (different files from each other).
+Dependency graph:
+- 167 status contacts read 0 when asserted → 168
+- 168 raw contact word in the cup log → 171
+- 169 picoammeter error short line (independent)
+- 170 LabJack panel on the cup tab → 172
+- 171 Beamline interlock release/close → 172
+- 172 interlock control on the cup tab (blocked by 170, 171)
+- 173 Insert/Retract on the Overview cup panel (independent)
+- 174 bench check — ready-for-developer, Runner: developer, not for agents (blocked by 167, 168, 170, 172, 173)
 
-### Dependency order
+Requirements an implementer would quietly treat as preferences:
+- Status-word tests use integer literals, never words built from the bit constants.
+- `decode_cup_status()` reads the constants at call time; the monkeypatch test depends on it.
+- The Overview panel emits intent only; the move goes through `FaradayCupTab.insert_cup` / `retract_cup`, never straight to `Beamline`.
+- One T7 handle: the cup tab's LabJack panel joins the existing `_lj_tabs` wiring; no new connect path.
+- Exact UI strings are given in the tickets; use them verbatim.
 
-```
-147 (speeds) ─┬─ 148 (at-rest switch reads) ─┐
-              └─ 151 (2 cps minimum) ────────┤
-149 (KS 2 at startup) ───────────────────────┼─ 142 (developer, bench; also blocked by 135–141, 144)
-150 ("Min is N" in the number box) ──────────┘
-```
-
-### Requirements that are not preferences
-
-- 148: `SimGalil` (`tests/sim_slit.py`) gains `pulse_lag_calls`, and its switches follow the pulses
-  sent, never the commanded position. Without it no test can tell a read at `_BG` from a read at rest.
-  `wait_at_rest` is used before the approach's arrival read, each creep read and each switch-map step
-  read, and nowhere else.
-- 147: speed tests read the speed `SimGalil` records before each move, not the constant's value.
-- 150: tests use real `QTest.mouseClick`, `QTest.keyClicks` and focus changes, never the `_type` helper.
-  Typing below the minimum is still allowed mid-word; only the commit corrects it.
-- 147, 149, 151: the existing tests they name are rewritten in place under their own names; no test is
-  deleted.
-- Every ticket: pytest runs locally on the touched test files only; CI runs the full suite.
-
-### Not in this set
-
-A floor on slow speeds; homing back-offs following the approach speed; changing `LC`, `AC`/`DC` or
-`SD`; saving any speed between runs; encoders and stepper position maintenance; other `wait_idle`
-callers.
-
----
-
-## Earlier sets: only developer bench tickets remain open
-
-Every agent ticket in sets 1–13 is `done`. These `ready-for-developer` tickets are still open;
-an agent must not claim them:
-
-- Set 13 slit motion: `.scratch/slit-motion/issues/134-bench-encoders-rotation-and-edge-return.md`
-  (its edge-return and pass-speed items are replaced by 142; see its 2026-11-18 comment)
-- `.scratch/picoammeter-connect/issues/119-bench-lab-pc-reaches-the-6482.md`, `120-bench-bpm-scope-answers-on-serial.md`
-- `.scratch/axis-offset-and-vpp/issues/112-bench-check-offset-send-and-apply.md`
-- `.scratch/zwo-open-diagnostics/issues/104-bench-zwo-open-three-ways.md`
-- `.scratch/camera-layout-and-draft-roi/issues/97-bench-zwo-roi-and-compact-panel.md`
-- `.scratch/cup-target-uncertainty/issues/88-bench-poll-rate-and-correlation.md`
-- `.scratch/zwo-capture/issues/78-bench-frame-rate-and-bit-depth.md`, `79-bench-end-to-end-with-the-real-camera.md`, `80-bench-lab-pc-deployment.md`
-- `.scratch/current-monitor-scale/issues/60-bench-archive-and-clamp-at-dial-50.md`
-- `.scratch/amplifier-load-and-spikes/issues/52-bench-campaign.md`
-- `.scratch/cup-actuation/issues/12-bench-wiring-and-status-decoding.md`, `13-bench-6482-autorange-settle-time.md`, `14-bench-end-to-end-bringup-and-lag.md`
-- `.scratch/faraday-cup-reader/issues/10-existing-instruments-under-keysight-visa.md`
+Deliberately not done: physical rewiring; any change to when the app holds or releases the interlock on connect/disconnect/shutdown; debounce or move-timeout changes; the full right-beamline connection diagram tab (its own effort, afterwards).
 <!-- ACTIVE-PLAN:END -->
