@@ -264,3 +264,56 @@ def test_an_in_range_keystroke_shows_no_note(make_int_box):
     QTest.keyClicks(le, "300")
     assert le.text() == "300"
     assert not QToolTip.isVisible()
+
+
+def test_typing_under_the_minimum_then_leaving_takes_the_minimum_and_says_so(make_int_box, qapp):
+    QToolTip.hideText()
+    box = make_int_box(2, 2000, 900)
+    le = box.lineEdit()
+    QTest.mouseClick(le, Qt.MouseButton.LeftButton, pos=QPoint(le.width() - 3, le.height() // 2))
+    QTest.qWait(20)
+    QTest.keyClicks(le, "1")
+    _focus_out(box, qapp)
+    assert box.value() == 2
+    assert le.text() == "2"
+    assert QToolTip.isVisible()
+    assert QToolTip.text() == "Min is 2"
+
+
+def test_typing_under_the_minimum_then_enter_takes_the_minimum(make_int_box):
+    QToolTip.hideText()
+    box = make_int_box(2, 2000, 900)
+    le = box.lineEdit()
+    QTest.mouseClick(le, Qt.MouseButton.LeftButton, pos=QPoint(le.width() - 3, le.height() // 2))
+    QTest.qWait(20)
+    QTest.keyClicks(le, "1")
+    QTest.keyClick(le, Qt.Key.Key_Return)
+    assert box.value() == 2
+    assert QToolTip.text() == "Min is 2"
+
+
+def test_min_note_uses_the_boxes_decimals(make_int_box, qapp):
+    QToolTip.hideText()
+    box = make_int_box(2, 2000, 900)
+    box.setDecimals(2)
+    box.setRange(0.01, 100.0)
+    box.setValue(5.0)
+    le = box.lineEdit()
+    QTest.mouseClick(le, Qt.MouseButton.LeftButton, pos=QPoint(le.width() - 3, le.height() // 2))
+    QTest.qWait(20)
+    QTest.keyClicks(le, "0")
+    _focus_out(box, qapp)
+    assert box.value() == pytest.approx(0.01)
+    assert QToolTip.text() == "Min is 0.01"
+
+
+def test_typing_in_range_then_leaving_shows_no_min_note(make_int_box, qapp):
+    QToolTip.hideText()
+    box = make_int_box(2, 2000, 900)
+    le = box.lineEdit()
+    QTest.mouseClick(le, Qt.MouseButton.LeftButton, pos=QPoint(le.width() - 3, le.height() // 2))
+    QTest.qWait(20)
+    QTest.keyClicks(le, "300")
+    _focus_out(box, qapp)
+    assert box.value() == 300
+    assert not QToolTip.isVisible()

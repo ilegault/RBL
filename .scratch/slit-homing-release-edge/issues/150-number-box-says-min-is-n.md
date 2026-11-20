@@ -1,6 +1,6 @@
 # 150: A value typed under a number box's minimum says "Min is N"
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -38,20 +38,20 @@ why, the same way a keystroke over the maximum already does. It lives in the sha
 
 ## Acceptance criteria
 
-- [ ] Test `test_typing_under_the_minimum_then_leaving_takes_the_minimum_and_says_so` in
+- [x] Test `test_typing_under_the_minimum_then_leaving_takes_the_minimum_and_says_so` in
       `tests/test_inputs.py`: `make_int_box(2, 2000, 900)`; click at the right end of its line edit,
       wait 20 ms, `QTest.keyClicks` "1", then `_focus_out`: `value() == 2`, the line edit reads "2",
       `QToolTip.isVisible()` and `QToolTip.text() == "Min is 2"`.
-- [ ] Test `test_typing_under_the_minimum_then_enter_takes_the_minimum` in `tests/test_inputs.py`: the
+- [x] Test `test_typing_under_the_minimum_then_enter_takes_the_minimum` in `tests/test_inputs.py`: the
       same box and typing, then `QTest.keyClick` Return instead of leaving: `value() == 2` and
       `QToolTip.text() == "Min is 2"`.
-- [ ] Test `test_min_note_uses_the_boxes_decimals` in `tests/test_inputs.py`: a box from `make_int_box`
+- [x] Test `test_min_note_uses_the_boxes_decimals` in `tests/test_inputs.py`: a box from `make_int_box`
       then set to 2 decimals, range 0.01..100, value 5; click, type "0", leave: `value() == 0.01` and
       `QToolTip.text() == "Min is 0.01"`.
-- [ ] Test `test_typing_in_range_then_leaving_shows_no_min_note` in `tests/test_inputs.py`: after
+- [x] Test `test_typing_in_range_then_leaving_shows_no_min_note` in `tests/test_inputs.py`: after
       `QToolTip.hideText()`, `make_int_box(2, 2000, 900)`, click, type "300", leave: `value() == 300`
       and `QToolTip.isVisible()` is false.
-- [ ] (no test: CI's full suite) No test is deleted; every existing test in `tests/test_inputs.py`
+- [x] (no test: CI's full suite) No test is deleted; every existing test in `tests/test_inputs.py`
       passes unchanged, including the "Max is N" tests and
       test_leading_zero_is_not_clamped_to_the_minimum_mid_word.
 
@@ -73,3 +73,5 @@ pytest --tb=short -q -n auto --dist loadfile --max-worker-restart=0 tests/test_i
 pytest runs on the touched test files only; CI runs the full suite on the PR.
 
 ## Comments
+
+Summary (2026-11-20): Extracted `QuietDoubleSpinBox._show_note` (with `QTimer.singleShot(0, ...)` when called during focus-out so the subsequent `FocusIn` on the next widget does not immediately hide the tooltip) and overrode `QuietDoubleSpinBox.fixup` to clamp committed under-minimum entries to `minimum()` and show `"Min is <min>"`. Updated the `inputs.py` module docstring. Covered by the four new tests in `tests/test_inputs.py`; all 18 tests in `tests/test_inputs.py`, `ruff check .`, `check_tests_first.py`, and `type_gate.py` pass.

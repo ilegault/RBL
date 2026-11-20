@@ -60,6 +60,12 @@ focus-in event, which would clear a synchronous `selectAll()`, so selection is
 scheduled on a zero-delay timer. A keystroke that would take the box past its
 maximum is still refused by Qt's validator, and a short "Max is N" note appears
 beside the box without taking focus so the operator knows why it was dropped.
+
+UNDER-MIN ENTRIES TAKE THE MINIMUM ON COMMIT AND SAY WHY. Typing a value below
+the minimum stays allowed mid-word so leading digits are never eaten, and when
+the edit is committed (Enter or leaving the box), `fixup()` clamps it to the
+minimum and shows a short "Min is N" note beside the box without taking focus,
+instead of silently snapping back to the previous value.
 """
 from PySide6.QtCore import QPoint, QRect, Qt, QTimer
 from PySide6.QtGui import QValidator
@@ -188,6 +194,28 @@ class QuietDoubleSpinBox(QDoubleSpinBox):
         super().focusInEvent(event)
         QTimer.singleShot(0, self, self.selectAll)
 
+    def _show_note(self, text: str) -> None:
+        """Show a brief tooltip note beside the box without taking focus.
+
+        When called during focus-out (e.g. from ``fixup``), Qt is mid-way
+        through transferring focus to the next widget, whose ``FocusIn`` event
+        immediately hides any active tooltip. Deferring to the next event-loop
+        turn keeps the note visible after the focus transition settles.
+        """
+        if not self.hasFocus():
+            QTimer.singleShot(0, self, lambda: self._show_tip(text))
+            return
+        self._show_tip(text)
+
+    def _show_tip(self, text: str) -> None:
+        QToolTip.showText(
+            self.mapToGlobal(QPoint(0, self.height())),
+            text,
+            self,
+            QRect(),
+            2000,
+        )
+
     def validate(self, text: str, pos: int):
         """Explain refused over-maximum keystrokes with a brief note beside the box."""
         result = super().validate(text, pos)
@@ -198,14 +226,20 @@ class QuietDoubleSpinBox(QDoubleSpinBox):
             except ValueError:
                 val = None
             if val is not None and val > self.maximum():
-                QToolTip.showText(
-                    self.mapToGlobal(QPoint(0, self.height())),
-                    f"Max is {self.textFromValue(self.maximum())}",
-                    self,
-                    QRect(),
-                    2000,
-                )
+                self._show_note(f"Max is {self.textFromValue(self.maximum())}")
         return result
+
+    def fixup(self, text: str) -> str:
+        """Clamp under-minimum committed entries to the minimum and say why."""
+        try:
+            val = float(text.strip())
+        except ValueError:
+            val = None
+        if val is not None and val < self.minimum():
+            minimum_text = self.textFromValue(self.minimum())
+            self._show_note(f"Min is {minimum_text}")
+            return minimum_text
+        return super().fixup(text)
 
     def focusOutEvent(self, event):
         """Leave the box: commit what was typed, then settle any held sync.
