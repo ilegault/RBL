@@ -480,90 +480,60 @@ someone else's bug fix smuggled into it cannot be reviewed.
 <!-- ACTIVE-PLAN:START -->
 ## Active implementation plan
 
-_Written by the planning model on 2026-11-20 00:31. Implement this. If something in it is wrong, say so before changing course._
+_Written by the planning model on 2026-11-20 15:11. Implement this. If something in it is wrong, say so before changing course._
 
-# Active work: slit homing on the release edge, and the switch map (set 14): 143, 144 and 145 next
+# Active work: slit motion at NEC's speeds, at-rest switch reads, 2 cps minimum (set 14, 147–151): 147, 149 and 150 next
 
 This is a pointer, not the work.
 
-## Set 14: slit homing on the release edge, and the switch map
+## Set 14: slit homing on the release edge, the switch map, and NEC's speeds
 
-- **Spec:** `.scratch/slit-homing-release-edge/spec.md`
-- **Binding:** `docs/adr/0009-slits-homed-on-the-release-edge.md` (new: read it first),
-  `docs/adr/0001-tests-first-and-no-muted-failures.md`.
-- **Glossary (`CONTEXT.md`, Slit motion, edited by the planner, committed by the developer, no
-  ticket):** new **Reverse limit**, **Forward limit**, **Approach speed**, **Switch map**;
-  **Home pass** redefined (drive onto the switch, step out to the release point, the *edge*);
-  **Home switch** notes it trips with the reverse limit.
-- **Tickets:** `.scratch/slit-homing-release-edge/issues/135...145`. 135–141 are agent
-  tickets and are built. 143 and 144 (added 2026-11-19; see the spec's "Addendum 2026-11-19")
-  are agent tickets, both `Auto-merge: yes`. 145 (added later on 2026-11-19, same addendum) is
-  an agent ticket, `Auto-merge: yes`. 142 is `ready-for-developer` (bench): an agent
-  must not claim it.
+- **Spec:** `.scratch/slit-homing-release-edge/spec.md` — read the **Addendum 2026-11-20** for 147–151.
+- **Binding:** `docs/adr/0009-slits-homed-on-the-release-edge.md` (amended 2026-11-20: default approach
+  speed 900; "at rest" means `_TD` equals `_RP`), `docs/adr/0001-tests-first-and-no-muted-failures.md`.
+- **Glossary (`CONTEXT.md`, edited by the planner, committed with the tickets, no ticket):**
+  **Slit speed** narrowed to motion the operator commands; new **At rest**.
+- **Tickets:** `.scratch/slit-homing-release-edge/issues/135...151`. 135–141 and 143–145 are done.
+  147–151 are agent tickets, all `Auto-merge: yes`. 142 is `ready-for-developer` (bench): an agent must
+  not claim it. (146 belongs to another effort, `.scratch/build-version-stamp/`.)
 - **Tracker conventions:** `docs/agents/issue-tracker.md`
-- **Why:** since ticket 123 every home and edge-return pass fails with stop code 3, because
-  each slit's home switch and reverse limit trip at the same point and the controller's `HM`
-  can never finish. ADR 0009 replaces `HM` with a release-edge pass.
+- **Why:** on the bench, slow continuous motion loses steps on every slit axis and fast motion does
+  not. NEC's spec is 1800 cps normal, 900 cps homing, smoothing `KS 2`; the app ran slower everywhere
+  and never sent `KS`.
 
 ### Next
 
-- **143** and **144** are both unblocked and touch different files. Start with **144**: it is
-  the smaller one, and bench ticket 142 waits on it (the operator wants to run the edge-return
-  test at 58, 900 and 1800 cps). 143 (clicking into any number box selects the whole value; a
-  keystroke over the maximum shows "Max is N") can run in parallel with it, and so can 145 (the
-  Stepper Motors tab's counts and cps boxes take whole numbers only; it edits only
-  `src/rbl/gui/motor_tab.py`).
+- **147**, **149** and **150** are unblocked and touch different files. Start with **147**: 148 and 151
+  wait on it.
+- After 147: **148** and **151** (different files from each other).
 
 ### Dependency order
 
 ```
-135 ─┬─ 136 ─┬─ 137 ─┬─ 138 ─┐
-     │       └───────┘       ├─ 140 ─┐
-     └─ 139 ─────────────────┘       ├─ 142 (developer, bench)
-141 ─────────────────────────────────┤
-144 (Approach speed up to 2000) ─────┘
-143 (number box: click selects all, "Max is N" note): independent, blocks nothing
-145 (Stepper tab counts/cps boxes take whole numbers): independent, blocks nothing
+147 (speeds) ─┬─ 148 (at-rest switch reads) ─┐
+              └─ 151 (2 cps minimum) ────────┤
+149 (KS 2 at startup) ───────────────────────┼─ 142 (developer, bench; also blocked by 135–141, 144)
+150 ("Min is N" in the number box) ──────────┘
 ```
-
-(137 is blocked by 135 and 136; 138 by 136 and 137; 140 by 138 and 139; 142 by 135–141 and 144.)
-`src/rbl/gui/motor_tab.py` is edited by 135, 136, 137, 138, 140 and 141; the chain keeps all but
-141 apart. If 141 and another `motor_tab.py` PR are open together, land one and rebase the other.
 
 ### Requirements that are not preferences
 
-- 135: routine tests drive the **simulated slit** (`SimGalil` in `tests/sim_slit.py`), which
-  has a real position, a shared home/reverse switch with hysteresis, approach overshoot and
-  injectable lost steps. Scripted mock return values cannot show where zero lands, so they
-  are not a substitute.
-- 135: zero is defined only when the two passes' edges agree within
-  `HOME_EDGE_AGREEMENT_COUNTS` (4); otherwise no `define_zero` call at all. A creep of 400
-  counts without a release fails with "check the sensor". Stop code 3 on the approach is
-  expected and is never treated as a failure by itself.
-- 135/137/139: the edge-return test and the switch map never call `define_zero`.
-- 139: the switch-map edge-finding (`find_switch_edges`, `switch_map_summary`) is a pure
-  module with no I/O, and the routine never commands an inward step while the reverse limit
-  reads tripped.
-- 138: the tests named on its `Deletes tests:` line are the only ones removed; every other
-  test that referenced a removed name is rewritten in place under its own name.
-- 143: the new tests click into the box with a real `QTest.mouseClick` and type with real
-  `QTest.keyClicks`. They must not use `tests/test_inputs.py`'s `_type` helper, which selects
-  everything itself and so passes on the broken code. The "Max is N" note only explains a refused
-  keystroke; the keystroke is still refused.
-- 144: the two existing tests that assert 500 are rewritten in place under their own names; no
-  test is deleted. The default approach speed stays 58.
-- 145: the number of decimals is set only in `_set_speed_unit_range` and
-  `_set_target_unit_range` (0 for counts and cps, 3 for mm, 2 for mm/s), so the starting unit
-  and every unit switch get it from one place.
-- Every ticket: only the tests on its own `Deletes tests:` line may be deleted.
+- 148: `SimGalil` (`tests/sim_slit.py`) gains `pulse_lag_calls`, and its switches follow the pulses
+  sent, never the commanded position. Without it no test can tell a read at `_BG` from a read at rest.
+  `wait_at_rest` is used before the approach's arrival read, each creep read and each switch-map step
+  read, and nowhere else.
+- 147: speed tests read the speed `SimGalil` records before each move, not the constant's value.
+- 150: tests use real `QTest.mouseClick`, `QTest.keyClicks` and focus changes, never the `_type` helper.
+  Typing below the minimum is still allowed mid-word; only the commit corrects it.
+- 147, 149, 151: the existing tests they name are rewritten in place under their own names; no test is
+  deleted.
+- Every ticket: pytest runs locally on the touched test files only; CI runs the full suite.
 
 ### Not in this set
 
-Opening or rewiring the switch box; CN, MT, BL/FL or direction changes; recalibrating
-`MM_ZERO_OFFSET` (a follow-up from bench ticket 142); renaming the edge-return CSV's
-`pass_speed_cps` column; encoders; saving the approach speed; anything on the Overview.
-Changing the default approach speed, an automatic edge-return speed sweep, and the switch-map
-step speed all wait for 142's three-speed comparison.
+A floor on slow speeds; homing back-offs following the approach speed; changing `LC`, `AC`/`DC` or
+`SD`; saving any speed between runs; encoders and stepper position maintenance; other `wait_idle`
+callers.
 
 ---
 

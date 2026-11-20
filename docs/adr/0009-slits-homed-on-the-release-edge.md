@@ -38,7 +38,10 @@ the faster the axis arrived.
      pass's **edge**.
 2. Moving outward is allowed while the reverse limit is active, so the limit never
    interrupts the creep. The edge is always approached from the same side (from inside,
-   moving out) and always read at rest, so approach speed does not move it.
+   moving out) and always read at rest, so approach speed does not move it. At rest means
+   the controller has sent every step pulse of the move (`_TD` equals `_RP`), not only that
+   the profiler has finished (`_BG` is 0): the stepper smoothing filter can still be sending
+   pulses after the profiler is done (amended 2026-11-20).
 3. **Homing is two home passes that must agree.** Pass 1 starts with the approach (at
    the seek speed after a seek, otherwise at the approach speed). Pass 2 backs out 300
    counts and approaches at the approach speed. If the two edges differ by more than
@@ -55,7 +58,8 @@ the faster the axis arrived.
 - Zero sits at the release point, a few counts outside the trip point (the switch's
   hysteresis, which the switch map measures). `MM_ZERO_OFFSET` (0.2 mm) is unchanged; it
   was approximate before too.
-- The three home pass speeds go away. One approach speed remains (default 58 cps).
+- The three home pass speeds go away. One approach speed remains (default 900 cps; it was
+  58 cps until the 2026-11-20 amendment below).
 - Homing is slower: each creep step is a separate move and read, up to a few hundred
   per pass.
 - Stop code 10 no longer gates anything in homing.
@@ -79,3 +83,21 @@ the faster the axis arrived.
   zero lands wherever the axis decelerates to rest past the trip point at 900 steps/s, so it
   moves with speed and deceleration. The release-edge pass keeps NEC's back-off and approach
   and adds the slow step back out, which is what removes the speed from the answer.
+
+## Amendment 2026-11-20
+
+On the bench (by eye, 2026-11-19), slow continuous motion lost many steps on every slit
+axis, worst on axis A moving in below about 100 cps; fast motion showed no visible slip.
+NEC's spec for the 2HA075520 slit controller gives `SP 1800` for normal motion and
+`SP 900` for homing, with stepper smoothing 2. So:
+
+- The approach speed default is 900 cps, the same as the seek and the back-offs. The
+  creep still runs at the approach speed; each creep step is one count, so its speed
+  does not matter.
+- Every switch reading in a home pass waits until the axis is at rest in the sense of
+  Decision 2.
+- The edge-return test moves out at the approach speed it is measuring, so the axis never
+  leaves the switch slower than it arrived.
+
+The approach speed stays adjustable (2 to 2000 cps) so slower approaches can still be
+compared. Bench ticket 142 records the comparison.
