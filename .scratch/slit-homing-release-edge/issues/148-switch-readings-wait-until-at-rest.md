@@ -1,6 +1,6 @@
 # 148: Switch readings wait until the axis is at rest
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
