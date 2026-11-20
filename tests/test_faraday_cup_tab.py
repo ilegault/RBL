@@ -178,6 +178,7 @@ class TestFaradayCupTabRendersCurrent:
 
     def test_successful_connect_clears_error_tooltip(self, qapp):
         _beamline, tab = tab_after_connect_failure(qapp)
+        assert tab.lbl_detail.toolTip() == CONNECT_FAIL_MSG
         tab.on_cup_connected("KEITHLEY INSTRUMENTS INC.,MODEL 6482")
         tab.on_cup_disconnected()
         assert tab.lbl_detail.text() == "Not connected"
