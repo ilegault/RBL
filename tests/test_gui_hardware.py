@@ -296,6 +296,12 @@ class TestMotorTabUnits:
         panel = motor.axes["A"]
         assert panel._speed_in_cps() == SC.DEFAULT_SPEED_COUNTS_PER_SEC
 
+    def test_slit_speed_box_starts_at_2_cps(self, motor):
+        panel = motor.axes["A"]
+        assert panel.spn_speed.minimum() == 2
+        panel.cbo_speed_unit.setCurrentText("mm/s")
+        assert panel.spn_speed.minimum() == 0.01
+
     def test_speed_cps_to_mms_round_trip(self, motor):
         panel = motor.axes["A"]
         panel.spn_speed.setValue(630.0)        # ~1 mm/s

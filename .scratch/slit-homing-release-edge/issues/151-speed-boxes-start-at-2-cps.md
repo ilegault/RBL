@@ -1,6 +1,6 @@
 # 151: The slit and approach speeds start at 2 cps
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -43,22 +43,22 @@ This is not a floor against slow speeds: 2 to 58 cps stay available for comparis
 
 ## Acceptance criteria
 
-- [ ] Test `test_slit_speed_rejects_below_two` in `tests/test_beamline.py` (same class and `beamline`
+- [x] Test `test_slit_speed_rejects_below_two` in `tests/test_beamline.py` (same class and `beamline`
       fixture as test_slit_speed_defaults_and_rejects_below_one): `set_slit_speed_cps("C", 1)` raises
       `ValueError` matching `slit speed must be >= 2 count/s` and leaves `slit_speed_cps("C")` unchanged;
       `set_slit_speed_cps("C", 2)` then reads back 2.
-- [ ] Test `test_approach_speed_box_starts_at_2` in `tests/test_auto_home.py` (in `TestMotorTabAutoHome`,
+- [x] Test `test_approach_speed_box_starts_at_2` in `tests/test_auto_home.py` (in `TestMotorTabAutoHome`,
       using its `tab` fixture): `tab.spn_approach_speed.minimum() == 2`, and after
       `tab.spn_approach_speed.setValue(2)`, `tab.beamline.home_approach_speed() == 2`.
-- [ ] Test `test_slit_speed_box_starts_at_2_cps` in `tests/test_gui_hardware.py` (in
+- [x] Test `test_slit_speed_box_starts_at_2_cps` in `tests/test_gui_hardware.py` (in
       `TestMotorTabUnits`, using its `motor` fixture): on `motor.axes["A"]` in cps,
       `spn_speed.minimum() == 2`; after `cbo_speed_unit.setCurrentText("mm/s")`,
       `spn_speed.minimum() == 0.01`.
-- [ ] (no test: rewrites an existing test in place, proven by the gate) In `tests/test_beamline.py`,
+- [x] (no test: rewrites an existing test in place, proven by the gate) In `tests/test_beamline.py`,
       test_home_approach_speed_defaults_and_is_validated is rewritten in place under the same name: the
       refused values become 1 and 2001 and the expected message regex becomes
       `approach speed must be in 2\.\.2000`; its default line (900 after ticket 147) is unchanged.
-- [ ] (no test: CI's full suite) No test is deleted and every other test passes unchanged.
+- [x] (no test: CI's full suite) No test is deleted and every other test passes unchanged.
 
 **What tests may fake:** the Galil, as the existing `beamline`, `tab` and `motor` fixtures do. `Beamline`
 and `MotorTab` are real.
@@ -79,3 +79,5 @@ pytest --tb=short -q -n auto --dist loadfile --max-worker-restart=0 tests/test_b
 pytest runs on the touched test files only; CI runs the full suite on the PR.
 
 ## Comments
+
+Summary (2026-11-20): Added `SLIT_SPEED_MIN_COUNTS_PER_SEC = 2` in `src/rbl/config/hardware_config.py`, updated `MotorControlMixin.set_slit_speed_cps` and `MotorControlMixin.set_home_approach_speed` in `src/rbl/state/motor_control.py` to enforce the 2 cps minimum, and updated `_set_speed_unit_range` (cps branch) and `spn_approach_speed` range in `src/rbl/gui/motor_tab.py`. Covered by `test_slit_speed_rejects_below_two` and `test_home_approach_speed_defaults_and_is_validated` in `tests/test_beamline.py`, `test_approach_speed_box_starts_at_2` in `tests/test_auto_home.py`, and `test_slit_speed_box_starts_at_2_cps` in `tests/test_gui_hardware.py`. Local gate passed (168 passed across `test_beamline.py`, `test_auto_home.py`, `test_gui_hardware.py`, `test_layering.py`).

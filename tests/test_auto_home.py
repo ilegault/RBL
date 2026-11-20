@@ -406,6 +406,11 @@ class TestMotorTabAutoHome:
         assert tab.axes["A"].isEnabled() or True     # nothing was locked out
         assert tab.btn_auto_home_seq.text() == "Auto-Home All — One at a Time"
 
+    def test_approach_speed_box_starts_at_2(self, tab):
+        assert tab.spn_approach_speed.minimum() == 2
+        tab.spn_approach_speed.setValue(2)
+        assert tab.beamline.home_approach_speed() == 2
+
     def test_running_locks_the_per_axis_controls(self, tab):
         """A jog issued mid-sequence would put a second command on an axis the
         sequencer believes it has to itself."""

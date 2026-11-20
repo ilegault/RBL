@@ -91,8 +91,10 @@ class MotorControlMixin:
         return self._slit_speed_cps[axis_letter]
 
     def set_slit_speed_cps(self, axis_letter: str, cps: int) -> None:
-        if cps < 1:
-            raise ValueError(f"slit speed must be >= 1 count/s, got {cps}")
+        if cps < SC.SLIT_SPEED_MIN_COUNTS_PER_SEC:
+            raise ValueError(
+                f"slit speed must be >= {SC.SLIT_SPEED_MIN_COUNTS_PER_SEC} count/s, got {cps}"
+            )
         self._slit_speed_cps[axis_letter] = int(cps)
 
     def home_approach_speed(self) -> int:
@@ -100,11 +102,10 @@ class MotorControlMixin:
 
     def set_home_approach_speed(self, cps) -> None:
         val = int(cps)
-        if not (1 <= val <= SC.HOME_APPROACH_SPEED_MAX_COUNTS_PER_SEC):
-            raise ValueError(
-                f"approach speed must be in 1..{SC.HOME_APPROACH_SPEED_MAX_COUNTS_PER_SEC} "
-                f"counts/s, got {cps!r}"
-            )
+        lo = SC.SLIT_SPEED_MIN_COUNTS_PER_SEC
+        hi = SC.HOME_APPROACH_SPEED_MAX_COUNTS_PER_SEC
+        if not (lo <= val <= hi):
+            raise ValueError(f"approach speed must be in {lo}..{hi} counts/s, got {cps!r}")
         self._home_approach_speed_cps = val
 
     def floor_refusal(self, axis_letter: str, counts: int):

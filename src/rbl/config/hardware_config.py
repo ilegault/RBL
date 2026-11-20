@@ -80,6 +80,10 @@ SLIT_DEFAULT_STEP_MM = 0.1
 # NEC's normal speed (SP 1800, 2HA075520 spec e-mail); the starting Slit speed
 # of every axis at launch (not saved).
 DEFAULT_SPEED_COUNTS_PER_SEC   = 1800
+# Slowest speed that moves an axis (SP 1 does not move it on the bench,
+# 2026-11-19; bench ticket 142 confirms SP 1 reads back 0). Minimum of every
+# speed box and Beamline speed setter; not a floor against slow speeds.
+SLIT_SPEED_MIN_COUNTS_PER_SEC  = 2
 DEFAULT_ACCEL_COUNTS_PER_SEC2  = 25600
 
 # --- Automatic homing: the seek phase ----------------------------------------
