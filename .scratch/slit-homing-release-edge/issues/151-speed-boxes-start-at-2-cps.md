@@ -1,6 +1,6 @@
 # 151: The slit and approach speeds start at 2 cps
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
