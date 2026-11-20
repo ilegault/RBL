@@ -8,8 +8,6 @@
 
 **Blocked by:** None (can start immediately)
 
-**Claimed-by:** none (receipt: the planner session made this change directly at the developer's request, 2026-11-20)
-
 **Binding:** `docs/adr/0001-tests-first-and-no-muted-failures.md`
 
 ## Why
@@ -48,3 +46,7 @@ last build was.
 - [x] `ruff check` clean on the new files.
 - [ ] By hand: from a clean tree, `build.bat` stamps `commit <hash>` with no "(uncommitted changes)",
       and `git status` is clean afterwards; the next run's first line names the build just deployed.
+
+## Comments
+
+Receipt: no agent claimed this ticket. The planner session made this change directly at the developer's request, 2026-11-20.
