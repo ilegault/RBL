@@ -616,10 +616,16 @@ class TestMoveSlit:
         assert beamline.home_approach_speed() == 58
         beamline.set_home_approach_speed(40)
         assert beamline.home_approach_speed() == 40
-        for bad in (0, 501):
-            with pytest.raises(ValueError, match=r"approach speed must be in 1\.\.500"):
+        for bad in (0, 2001):
+            with pytest.raises(ValueError, match=r"approach speed must be in 1\.\.2000"):
                 beamline.set_home_approach_speed(bad)
             assert beamline.home_approach_speed() == 40
+
+    def test_home_approach_speed_accepts_up_to_2000(self, beamline):
+        beamline.set_home_approach_speed(1800)
+        assert beamline.home_approach_speed() == 1800
+        beamline.set_home_approach_speed(2000)
+        assert beamline.home_approach_speed() == 2000
 
     def test_move_slit_fails_when_galil_not_connected(self, beamline):
         from unittest.mock import MagicMock

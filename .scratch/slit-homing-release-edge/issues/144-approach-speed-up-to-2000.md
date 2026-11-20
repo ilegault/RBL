@@ -1,6 +1,6 @@
 # 144: The Approach speed goes up to 2000 cps
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -36,21 +36,21 @@ default stays 58 cps and is still not saved between runs.
 
 ## Acceptance criteria
 
-- [ ] Test `test_home_approach_speed_accepts_up_to_2000` in `tests/test_beamline.py` (in the same class
+- [x] Test `test_home_approach_speed_accepts_up_to_2000` in `tests/test_beamline.py` (in the same class
       as the existing approach-speed test, using its `beamline` fixture): after
       `set_home_approach_speed(1800)` it reports 1800; after `set_home_approach_speed(2000)` it
       reports 2000. On the current code both raise `ValueError`.
-- [ ] Test `test_approach_speed_box_takes_1800` in `tests/test_auto_home.py` (in `TestMotorTabAutoHome`,
+- [x] Test `test_approach_speed_box_takes_1800` in `tests/test_auto_home.py` (in `TestMotorTabAutoHome`,
       using its `tab` fixture): `tab.spn_approach_speed.maximum() == 2000`;
       `tab.spn_approach_speed.setValue(1800)` leaves `tab.beamline.home_approach_speed() == 1800`.
-- [ ] (no test: rewrites an existing test in place, proven by the gate) In `tests/test_beamline.py`,
+- [x] (no test: rewrites an existing test in place, proven by the gate) In `tests/test_beamline.py`,
       test_home_approach_speed_defaults_and_is_validated is rewritten in place under the same name:
       the default is still 58, the out-of-range values become 0 and 2001, and the expected message
       becomes "approach speed must be in 1..2000" (regex `approach speed must be in 1\.\.2000`).
-- [ ] (no test: rewrites an existing test in place, proven by the gate) In `tests/test_auto_home.py`,
+- [x] (no test: rewrites an existing test in place, proven by the gate) In `tests/test_auto_home.py`,
       test_approach_speed_box_edits_the_beamline is rewritten in place under the same name: it
       asserts `maximum() == 2000` where it asserted 500; everything else is unchanged.
-- [ ] (no test: covered by the gate) No test is deleted, and every other test that mentions an
+- [x] (no test: covered by the gate) No test is deleted, and every other test that mentions an
       approach speed (including the `AxisHomeRoutine(..., approach_speed=500)` run in
       `tests/test_auto_home.py`) passes unchanged.
 
@@ -71,3 +71,9 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+Summary (2026-11-19):
+- Raised `HOME_APPROACH_SPEED_MAX_COUNTS_PER_SEC` from 500 to 2000 in `src/rbl/config/hardware_config.py` and updated the comment above it; `set_home_approach_speed` and `spn_approach_speed` already read the constant.
+- Added `test_home_approach_speed_accepts_up_to_2000` and updated `test_home_approach_speed_defaults_and_is_validated` in `tests/test_beamline.py`.
+- Added `test_approach_speed_box_takes_1800` and updated `test_approach_speed_box_edits_the_beamline` in `tests/test_auto_home.py`.
+- Bench verification: three-speed edge-return comparison on axis A (58, 900, 1800 cps) tracked in ticket 142.
