@@ -69,3 +69,4 @@ def test_switch_map_reads_switches_at_rest():
     ok, msg, rows = SwitchMapRoutine(sim, "A").run()
     assert ok is True, msg
     assert find_switch_edges(rows) == SwitchEdges(-3, -3, 6, 6)
+    assert ("get_step_count", ("A",)) in sim.calls
