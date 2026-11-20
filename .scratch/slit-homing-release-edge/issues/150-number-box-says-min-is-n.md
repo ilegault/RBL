@@ -1,6 +1,6 @@
 # 150: A value typed under a number box's minimum says "Min is N"
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -38,24 +38,24 @@ why, the same way a keystroke over the maximum already does. It lives in the sha
 
 ## Acceptance criteria
 
-- [ ] Test `test_typing_under_the_minimum_then_leaving_takes_the_minimum_and_says_so` in
+- [x] Test `test_typing_under_the_minimum_then_leaving_takes_the_minimum_and_says_so` in
       `tests/test_inputs.py`: `make_int_box(2, 2000, 900)`; click at the right end of its line edit,
       wait 20 ms, `QTest.keyClicks` "1", then `_focus_out`: `value() == 2`, the line edit reads "2",
       `QToolTip.isVisible()` and `QToolTip.text() == "Min is 2"`.
-- [ ] Test `test_typing_under_the_minimum_then_enter_takes_the_minimum` in `tests/test_inputs.py`: the
+- [x] Test `test_typing_under_the_minimum_then_enter_takes_the_minimum` in `tests/test_inputs.py`: the
       same box and typing, then `QTest.keyClick` Return instead of leaving: `value() == 2` and
       `QToolTip.text() == "Min is 2"`.
-- [ ] Test `test_min_note_uses_the_boxes_decimals` in `tests/test_inputs.py`: a box from `make_int_box`
+- [x] Test `test_min_note_uses_the_boxes_decimals` in `tests/test_inputs.py`: a box from `make_int_box`
       then set to 2 decimals, range 0.01..100, value 5; click, type "0", leave: `value() == 0.01` and
       `QToolTip.text() == "Min is 0.01"`.
-- [ ] Test `test_only_an_entry_under_the_minimum_shows_the_min_note` in `tests/test_inputs.py`:
+- [x] Test `test_only_an_entry_under_the_minimum_shows_the_min_note` in `tests/test_inputs.py`:
       `make_int_box(2, 2000, 900)`. First half: `QToolTip.hideText()`, click, type "300", leave:
       `value() == 300` and `QToolTip.isVisible()` is false. Second half, on the same box: click, type
       "1", leave: `value() == 2` and `QToolTip.text() == "Min is 2"`. The first half guards against a
       note on in-range entries; the second half is what makes the test fail on master, where no min
       note exists. Both halves stay in this one test: an in-range-only test passes on master and the
       integrity gate fails it (check 9).
-- [ ] (no test: CI's full suite) No test is deleted; every existing test in `tests/test_inputs.py`
+- [x] (no test: CI's full suite) No test is deleted; every existing test in `tests/test_inputs.py`
       passes unchanged, including the "Max is N" tests and
       test_leading_zero_is_not_clamped_to_the_minimum_mid_word.
 
@@ -77,3 +77,5 @@ pytest --tb=short -q -n auto --dist loadfile --max-worker-restart=0 tests/test_i
 pytest runs on the touched test files only; CI runs the full suite on the PR.
 
 ## Comments
+
+Summary (2026-11-20): Rebased onto `origin/master` with master's rewritten criterion 4; moved tooltip display into `QuietDoubleSpinBox._show_note` / `_show_tip` and added `QuietDoubleSpinBox.fixup` in `src/rbl/gui/widgets/inputs.py` to clamp under-minimum committed entries to `minimum()` and show `"Min is N"` (updating the module docstring). Added all four named tests in `tests/test_inputs.py` (`test_typing_under_the_minimum_then_leaving_takes_the_minimum_and_says_so`, `test_typing_under_the_minimum_then_enter_takes_the_minimum`, `test_min_note_uses_the_boxes_decimals`, `test_only_an_entry_under_the_minimum_shows_the_min_note`).
