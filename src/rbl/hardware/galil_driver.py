@@ -132,6 +132,12 @@ class GalilController:
         """Current reference position of axis, in counts (MG _RPx)."""
         return int(round(float(self.cmd(f"MG _RP{axis}"))))
 
+    def get_step_count(self, axis: str) -> int:
+        """Step pulses actually sent to the motor (MG _TDx); trails _RPx while
+        the smoothing filter is still sending pulses.
+        """
+        return int(round(float(self.cmd(f"MG _TD{axis}"))))
+
     def get_stop_code(self, axis: str) -> int:
         """Why the axis last stopped (MG _SCx). 10 = stopped after HM/FI."""
         return int(round(float(self.cmd(f"MG _SC{axis}"))))

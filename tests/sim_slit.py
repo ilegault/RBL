@@ -23,6 +23,7 @@ class SimSlit:
         reverse_release_at: int | None = None,
         overshoot_per_100_cps: int = 1,
         slip_on_jog: dict[int, int] | None = None,
+        pulse_lag_calls: int = 0,
     ):
         self.phys = start_at
         self.offset = 0
@@ -34,6 +35,9 @@ class SimSlit:
         )
         self.overshoot_per_100_cps = overshoot_per_100_cps
         self.slip_on_jog = dict(slip_on_jog) if slip_on_jog is not None else {}
+        self.pulse_lag_calls = pulse_lag_calls
+        self.pending_delta = 0
+        self._lag_remaining = 0
 
         self.home_tripped = self.phys <= self.trip_at
         self.reverse_tripped = self.phys <= self.reverse_trip_at
@@ -45,8 +49,32 @@ class SimSlit:
 
     @property
     def rp(self) -> int:
-        """Commanded position (_RP): physical position + controller offset."""
-        return self.phys + self.offset
+        """Commanded position (_RP): physical position + controller offset + pending delta."""
+        return self.phys + self.offset + self.pending_delta
+
+    def _apply_delta(self, delta_counts: int) -> None:
+        if delta_counts > 0:
+            self._step_by(delta_counts)
+            self.stop_code = 1
+            return
+        if delta_counts == 0:
+            self.stop_code = 1
+            return
+        if self.reverse_tripped:
+            raise GalilError("BG", "22 Begin not possible due to limit switch", 22)
+        for _ in range(abs(delta_counts)):
+            self._step_by(-1)
+            if self.reverse_tripped:
+                self.stop_code = 3
+                return
+        self.stop_code = 1
+
+    def _apply_pending(self) -> None:
+        delta = self.pending_delta
+        self.pending_delta = 0
+        self._lag_remaining = 0
+        if delta:
+            self._apply_delta(delta)
 
     def _update_switches(self) -> None:
         if self.phys <= self.trip_at:
@@ -77,6 +105,12 @@ class SimGalil:
         self.calls: list[tuple[str, tuple]] = []
 
     def _record(self, name: str, *args) -> None:
+        for s in self.slits.values():
+            if s.pending_delta:
+                if s._lag_remaining > 0:
+                    s._lag_remaining -= 1
+                else:
+                    s._apply_pending()
         self.calls.append((name, args))
 
     def get_switch_states(self, axis: str) -> dict:
@@ -91,6 +125,11 @@ class SimGalil:
     def get_position(self, axis: str) -> int:
         self._record("get_position", axis)
         return self.slits[axis].rp
+
+    def get_step_count(self, axis: str) -> int:
+        self._record("get_step_count", axis)
+        s = self.slits[axis]
+        return s.phys + s.offset
 
     def is_moving(self, axis: str) -> bool:
         self._record("is_moving", axis)
@@ -116,21 +155,18 @@ class SimGalil:
     def move_relative(self, axis: str, delta_counts: int) -> None:
         self._record("move_relative", axis, delta_counts)
         s = self.slits[axis]
-        if delta_counts > 0:
-            s._step_by(delta_counts)
-            s.stop_code = 1
-            return
+        if s.pending_delta:
+            s._apply_pending()
+        if delta_counts < 0 and s.reverse_tripped:
+            raise GalilError("BG", "22 Begin not possible due to limit switch", 22)
         if delta_counts == 0:
             s.stop_code = 1
             return
-        if s.reverse_tripped:
-            raise GalilError("BG", "22 Begin not possible due to limit switch", 22)
-        for _ in range(abs(delta_counts)):
-            s._step_by(-1)
-            if s.reverse_tripped:
-                s.stop_code = 3
-                return
-        s.stop_code = 1
+        if s.pulse_lag_calls > 0:
+            s.pending_delta = delta_counts
+            s._lag_remaining = s.pulse_lag_calls
+            return
+        s._apply_delta(delta_counts)
 
     def jog_start(self, axis: str, signed_speed: int) -> None:
         self._record("jog_start", axis, signed_speed)
