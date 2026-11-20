@@ -191,7 +191,6 @@ class AxisControls(QGroupBox):
         # Slit speed with unit toggle
         speed_row = QHBoxLayout()
         self.spn_speed = QuietDoubleSpinBox()
-        self.spn_speed.setDecimals(2)
         self.spn_speed.setMaximumWidth(100)
         self.spn_speed.setToolTip(
             "Speed for Jog and Move on this axis, and for moves to this slit "
@@ -246,7 +245,6 @@ class AxisControls(QGroupBox):
         target_form.setSpacing(2)
         move_row = QHBoxLayout()
         self.spn_target = QuietDoubleSpinBox()
-        self.spn_target.setDecimals(3)
         self.spn_target.setMaximumWidth(100)
         self.cbo_target_unit = NoScrollComboBox()
         self.cbo_target_unit.addItems(["counts", "mm"])
@@ -312,19 +310,23 @@ class AxisControls(QGroupBox):
 
     def _set_speed_unit_range(self, unit: str):
         if unit == "cps":
+            self.spn_speed.setDecimals(0)
             self.spn_speed.setRange(1.0, 100_000.0)
             self.spn_speed.setSingleStep(100.0)
         else:  # mm/s
             max_mms = SC.cps_to_mm_per_sec(self.axis, 100_000)
+            self.spn_speed.setDecimals(2)
             self.spn_speed.setRange(0.01, max_mms)
             self.spn_speed.setSingleStep(0.1)
 
     def _set_target_unit_range(self, unit: str):
         if unit == "counts":
+            self.spn_target.setDecimals(0)
             self.spn_target.setRange(-10_000_000.0, 10_000_000.0)
             self.spn_target.setSingleStep(100.0)
         else:  # mm
             max_mm = SC.counts_to_mm(self.axis, 10_000_000)
+            self.spn_target.setDecimals(3)
             self.spn_target.setRange(-max_mm, max_mm)
             self.spn_target.setSingleStep(0.1)
 

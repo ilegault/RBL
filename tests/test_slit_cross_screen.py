@@ -259,3 +259,44 @@ def test_motor_tab_has_no_private_slit_geometry_signal():
 
     assert not hasattr(MotorTab, "slit_state")
     assert not hasattr(RasterPlannerTab, "slit_targets_ready")
+
+
+# ---- Whole counts only in count / cps units ---------------------------------
+
+def test_target_box_in_counts_takes_whole_counts_only(screens):
+    """A stepper moves in whole counts; the Target box in counts must not
+    accept or display fractional counts, while mm keeps three decimals."""
+    motors, _overview, _beamline = screens
+    panel = motors.axes["A"]
+    panel.cbo_target_unit.setCurrentText("counts")
+    assert panel.spn_target.decimals() == 0
+    panel.spn_target.setValue(1234.4)
+    assert panel.spn_target.value() == 1234
+    assert panel.spn_target.lineEdit().text() == "1234"
+    panel.cbo_target_unit.setCurrentText("mm")
+    assert panel.spn_target.decimals() == 3
+
+
+def test_speed_box_in_cps_takes_whole_counts_only(screens):
+    """The Slit speed box in cps must show and accept whole counts only,
+    while mm/s keeps two decimals."""
+    motors, _overview, beamline = screens
+    panel = motors.axes["A"]
+    assert panel.spn_speed.decimals() == 0
+    panel.spn_speed.setValue(1234.6)
+    assert panel.spn_speed.lineEdit().text() == "1235"
+    assert beamline.slit_speed_cps("A") == 1235
+    panel.cbo_speed_unit.setCurrentText("mm/s")
+    assert panel.spn_speed.decimals() == 2
+
+
+def test_switching_the_target_to_counts_shows_a_whole_number(screens):
+    """Switching Target from mm to counts must display a whole count with no
+    decimal point."""
+    motors, _overview, _beamline = screens
+    panel = motors.axes["A"]
+    panel.cbo_target_unit.setCurrentText("mm")
+    panel.spn_target.setValue(6.0)
+    panel.cbo_target_unit.setCurrentText("counts")
+    assert "." not in panel.spn_target.lineEdit().text()
+    assert panel.spn_target.value() == SC.mm_to_counts("A", 6.0)

@@ -1,6 +1,6 @@
 # 145: The Stepper Motors tab's count boxes take whole numbers only
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -49,18 +49,18 @@ else (for example on a unit-change signal) is missed when the constructor sets t
 
 All new tests go in `tests/test_slit_cross_screen.py` and use its `screens` fixture.
 
-- [ ] Test `test_target_box_in_counts_takes_whole_counts_only`: on `motors.axes["A"]`, set
+- [x] Test `test_target_box_in_counts_takes_whole_counts_only`: on `motors.axes["A"]`, set
       `cbo_target_unit` to "counts". `spn_target.decimals() == 0`; after `spn_target.setValue(1234.4)`,
       `spn_target.value() == 1234` and `spn_target.lineEdit().text() == "1234"`. Then set the unit back
       to "mm": `spn_target.decimals() == 3`.
-- [ ] Test `test_speed_box_in_cps_takes_whole_counts_only`: on `motors.axes["A"]` as built (unit "cps"),
+- [x] Test `test_speed_box_in_cps_takes_whole_counts_only`: on `motors.axes["A"]` as built (unit "cps"),
       `spn_speed.decimals() == 0`; after `spn_speed.setValue(1234.6)`, `spn_speed.lineEdit().text() == "1235"`
       and `beamline.slit_speed_cps("A") == 1235`. Then set `cbo_speed_unit` to "mm/s":
       `spn_speed.decimals() == 2`.
-- [ ] Test `test_switching_the_target_to_counts_shows_a_whole_number`: on `motors.axes["A"]` in "mm",
+- [x] Test `test_switching_the_target_to_counts_shows_a_whole_number`: on `motors.axes["A"]` in "mm",
       `spn_target.setValue(6.0)`, then set the unit to "counts". The text contains no "." and
       `spn_target.value() == SC.mm_to_counts("A", 6.0)`. On the current code the text ends in ".000".
-- [ ] (no test: covered by the gate) Every existing test in `tests/test_slit_cross_screen.py`,
+- [x] (no test: covered by the gate) Every existing test in `tests/test_slit_cross_screen.py`,
       `tests/test_slit_control.py` and `tests/test_gui_hardware.py` passes unchanged. No test is deleted.
 
 **What tests may fake:** the Galil, as the `screens` fixture already does (`_FakeGalil`). `Beamline`,
@@ -80,3 +80,5 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+**2026-11-19 (agent):** `AxisControls._set_speed_unit_range` and `AxisControls._set_target_unit_range` in `src/rbl/gui/motor_tab.py` now set `0` decimals for `"cps"` / `"counts"` and `2` / `3` decimals for `"mm/s"` / `"mm"` before `setRange`, and the redundant `setDecimals` calls in `AxisControls.__init__` were removed. Covered by `test_target_box_in_counts_takes_whole_counts_only`, `test_speed_box_in_cps_takes_whole_counts_only`, and `test_switching_the_target_to_counts_shows_a_whole_number` in `tests/test_slit_cross_screen.py`. No extra bench verification needed beyond existing stepper tab checks.
