@@ -435,5 +435,31 @@ def test_streaming_is_not_logged_per_message(client, caplog):
         assert count_after == count_before
 
 
+def test_tests_give_the_capture_process_30_s_to_say_hello(qapp, monkeypatch):
+    import rbl.config.capture_config
+
+    clients: list[CaptureClient] = []
+    try:
+        c1 = CaptureClient()
+        clients.append(c1)
+        assert c1.hello_timeout_s == 30.0
+        assert rbl.config.capture_config.CAPTURE_HELLO_TIMEOUT_S == 10.0
+
+        monkeypatch.setattr(
+            "rbl.services.capture_client.CAPTURE_HELLO_TIMEOUT_S", 7.0
+        )
+        c2 = CaptureClient()
+        clients.append(c2)
+        assert c2.hello_timeout_s == 7.0
+
+        c3 = CaptureClient(hello_timeout_s=0.3)
+        clients.append(c3)
+        assert c3.hello_timeout_s == 0.3
+    finally:
+        for c in clients:
+            c.shutdown()
+
+
+
 
 

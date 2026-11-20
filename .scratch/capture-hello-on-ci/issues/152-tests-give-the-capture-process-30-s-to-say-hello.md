@@ -1,6 +1,6 @@
 # 152: Tests give the Capture Process 30 s to say hello; the app keeps 10 s
 
-**Status:** ready-for-agent
+**Status:** blocked
 
 **Runner:** any
 
@@ -76,3 +76,10 @@ pytest runs on the touched test files only; CI runs the full suite on the PR. Pa
 exits 0 and both files report no failures or errors.
 
 ## Comments
+
+**Blocked (2026-11-20):**
+- Implemented `CaptureClient.__init__(hello_timeout_s: float | None = None)` reading `CAPTURE_HELLO_TIMEOUT_S` at construction time in `src/rbl/services/capture_client.py`, added the autouse `_capture_process_gets_ci_time_to_say_hello` fixture in `tests/conftest.py`, and added `test_tests_give_the_capture_process_30_s_to_say_hello` in `tests/test_capture_client.py`.
+- `ruff check .`, `python scripts/check_tests_first.py`, `python tools/type_gate.py`, and 34 of 35 tests in `tests/test_capture_client.py` and `tests/test_zwo_controls.py` pass (including the new test).
+- Existing test `tests/test_capture_client.py::test_timeout_defaults_come_from_config` fails with `AssertionError: assert 30.0 == 10.0` at line 315 (`assert c.hello_timeout_s == CAPTURE_HELLO_TIMEOUT_S == 10.0`).
+- **Root conflict:** Under the autouse fixture in `tests/conftest.py`, `rbl.services.capture_client.CAPTURE_HELLO_TIMEOUT_S` is patched to `30.0` for every test, so `CaptureClient()` returns `hello_timeout_s == 30.0` while `rbl.config.capture_config.CAPTURE_HELLO_TIMEOUT_S` is `10.0`. Both `test_tests_give_the_capture_process_30_s_to_say_hello` and `test_timeout_defaults_come_from_config` call `CaptureClient()` with no arguments and expect `30.0` and `10.0` respectively, while the ticket requires every existing test to pass unchanged.
+- **Decision needed:** Should `test_timeout_defaults_come_from_config` be updated (e.g. to restore `rbl.services.capture_client.CAPTURE_HELLO_TIMEOUT_S` to `10.0` via `monkeypatch`, or to test `open_reply_timeout_s` / config constant directly), or should the autouse fixture exclude `test_timeout_defaults_come_from_config`?
