@@ -102,8 +102,9 @@ class GalilController:
                          speed: int = 1800, accel: int = 25600):
         """Full initialization sequence per the 2HA075520 spec email.
 
-        Sends: CN, MT (step motor), YA (1/2 step), LC (low-current hold),
-        AC/DC, SP, ST, MO, AG, then SH to enable the specified axes.
+        Sends: CN, MT (step motor), YA (1/2 step), KS (stepper smoothing),
+        LC (low-current hold), AC/DC, SP, ST, MO, AG, then SH to enable the
+        specified axes.
         Call once after connect().
         """
         from rbl.config import hardware_config as SC
@@ -115,6 +116,7 @@ class GalilController:
         self.cmd(f"CN {SC.CN_CONFIG}")
         self.cmd(f"MT {rep(SC.MOTOR_TYPE)}")
         self.cmd(f"YA {rep(SC.STEP_RESOLUTION)}")
+        self.cmd(f"KS {rep(f'{SC.MOTOR_SMOOTHING:g}')}")
         self.cmd(f"LC {rep(SC.LOW_CURRENT_ON)}")
         self.cmd(f"AC {rep(accel)}")
         self.cmd(f"DC {rep(accel)}")

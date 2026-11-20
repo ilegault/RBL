@@ -1307,7 +1307,7 @@ class MotorTab(QWidget):
                 self._log_line(f"> TH\n< {model}")
             except Exception as e:
                 self._log_line(f"! TH failed: {e}")
-            self._log_line("# Startup: CN, MT, YA, LC, AC/DC, SP, SH ABCD …")
+            self._log_line("# Startup: CN, MT, YA, KS, LC, AC/DC, SP, SH ABCD …")
             self.galil.startup_sequence(
                 axes="ABCD",
                 speed=SC.DEFAULT_SPEED_COUNTS_PER_SEC,

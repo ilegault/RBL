@@ -13,7 +13,9 @@ Galil calibration constants from the 2HA075520 slit controller specification ema
   - STEPS_PER_MM = 200 * 40 / 25.4 / 1  (full steps/mm) * 2  (half-step) = 629.92126
   - AC / DC = 25600 steps/s^2
   - SP = 1800 steps/s (normal), 900 steps/s (homing)
-  - Motor type MT = -2.5, smoothing YB = 2.0, amplifier gain AG = 3
+  - Motor type MT = -2.5, amplifier gain AG = 3
+  - Stepper smoothing KS = 2 (the e-mail says YB; on the DMC-41x3 YB is full
+    steps per revolution)
 """
 # Galil axis letter -> human-readable name
 AXIS_NAMES = {
@@ -145,7 +147,7 @@ LOST_STEP_GROUP_COUNTS = 4 * STEP_RESOLUTION
 LOST_STEP_TOLERANCE_COUNTS = 2
 LOW_CURRENT_ON  = 1     # LC: reduced holding current (0=off, 1=on)
 AMP_GAIN        = 3     # AG: amplifier gain setting
-MOTOR_SMOOTHING = 2.0   # YB
+MOTOR_SMOOTHING = 2.0   # KS: stepper smoothing, NEC spec
 
 # CN (switch config) — arguments per the CN reference. The ARGUMENT ORDER here
 # is what the old comment got wrong (it listed the latch first and called arg2
