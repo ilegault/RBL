@@ -1,6 +1,6 @@
 # 147: Slit motion runs at NEC's speeds
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -56,29 +56,29 @@ saved between runs.
 
 ## Acceptance criteria
 
-- [ ] Test `test_edge_return_moves_out_at_the_approach_speed` in `tests/test_edge_return_routine.py`:
+- [x] Test `test_edge_return_moves_out_at_the_approach_speed` in `tests/test_edge_return_routine.py`:
       for approach speeds 58 and 1800, each on a fresh `SimGalil(trip_at=-3, release_at=6,
       start_at=2000)`, `EdgeReturnRoutine(sim, "A", speed, cycles=2, out_counts=2000).run()` succeeds,
       and for every `("move_relative", ("A", 2000))` in `sim.calls` the nearest earlier `set_speed`
       call for axis A has that speed (58, then 1800). On the current code it is 500.
-- [ ] Test `test_switch_map_steps_at_900` in `tests/test_switch_map_routine.py`: on
+- [x] Test `test_switch_map_steps_at_900` in `tests/test_switch_map_routine.py`: on
       `SimGalil(trip_at=-3, release_at=6, start_at=2000)`, `SwitchMapRoutine(sim, "A").run()` succeeds,
       and for every `move_relative` of +1 or -1 counts on axis A in `sim.calls`, the nearest earlier
       `set_speed` call for axis A is 900. On the current code it is 25.
-- [ ] Test `test_homing_seeks_approaches_and_backs_off_at_900` in `tests/test_auto_home.py` (in
+- [x] Test `test_homing_seeks_approaches_and_backs_off_at_900` in `tests/test_auto_home.py` (in
       `TestReleaseEdgeHoming`): `AxisHomeRoutine(sim, "A").run(seek_first=True)` on
       `SimGalil(trip_at=-3, release_at=6, start_at=2000)` succeeds; every `jog_start` call in
       `sim.calls` is `("A", -900)`; and the nearest `set_speed` before `("move_relative", ("A", 300))`
       (the back-off before pass 2) is 900. On the current code the jogs are -500 and -58.
-- [ ] Test `test_launch_speeds_follow_necs_spec` in `tests/test_beamline.py` (in the same class as
+- [x] Test `test_launch_speeds_follow_necs_spec` in `tests/test_beamline.py` (in the same class as
       test_slit_speed_defaults_and_rejects_below_one, using its `beamline` fixture): every axis's
       `slit_speed_cps` is 1800 and `home_approach_speed()` is 900.
-- [ ] (no test: rewrites existing tests in place, proven by the gate) In `tests/test_beamline.py`,
+- [x] (no test: rewrites existing tests in place, proven by the gate) In `tests/test_beamline.py`,
       test_home_approach_speed_defaults_and_is_validated is rewritten in place under the same name: its
       first line asserts the default is 900 instead of 58; nothing else changes. In
       `tests/test_auto_home.py`, test_approach_speed_box_edits_the_beamline is rewritten in place under
       the same name: its first line asserts `value() == 900` instead of 58; nothing else changes.
-- [ ] (no test: CI's full suite) No test is deleted, and every test that passes an explicit speed
+- [x] (no test: CI's full suite) No test is deleted, and every test that passes an explicit speed
       (58, 500, 40 and so on) keeps it and passes unchanged.
 
 **What tests may fake:** nothing beyond what `SimGalil` and the existing `beamline` / `tab` fixtures
@@ -99,3 +99,5 @@ pytest --tb=short -q -n auto --dist loadfile --max-worker-restart=0 tests/test_e
 pytest runs on the touched test files only; CI runs the full suite on the PR.
 
 ## Comments
+
+2026-11-20: Implemented NEC's speeds (`DEFAULT_SPEED_COUNTS_PER_SEC = 1800`, `HOME_SEEK_SPEED_COUNTS_PER_SEC = 900`, `HOME_APPROACH_SPEED_COUNTS_PER_SEC = 900`, `SWITCH_MAP_STEP_SPEED_COUNTS_PER_SEC = 900`) in `src/rbl/config/hardware_config.py`, and updated `EdgeReturnRoutine.run` and docstrings in `src/rbl/hardware/galil_workers.py` so the move out runs at `self.approach_speed`. Added `test_edge_return_moves_out_at_the_approach_speed`, `test_switch_map_steps_at_900`, `test_homing_seeks_approaches_and_backs_off_at_900`, and `test_launch_speeds_follow_necs_spec`; rewrote `test_home_approach_speed_defaults_and_is_validated` and `test_approach_speed_box_edits_the_beamline` for the 900 cps default; updated `test_without_seek_it_is_the_old_routine` to pass `approach_speed=58` explicitly now that default approach and seek speeds are both 900. Bench verification covered by ticket 142.

@@ -24,7 +24,7 @@ def test_switch_map_csv_rows(tmp_path):
     assert path.name == "switch_map_B_20261118_090507.csv"
     lines = path.read_text(encoding="utf-8").splitlines()
     assert lines == [
-        "# axis=B slit=X- step_counts=1 step_speed_cps=25",
+        "# axis=B slit=X- step_counts=1 step_speed_cps=900",
         "step,direction,position_counts,home,reverse,forward",
         "1,in,-3,1,1,0",
         "2,out,6,0,0,0",
