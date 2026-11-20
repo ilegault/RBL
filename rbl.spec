@@ -255,6 +255,14 @@ pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 # console=False → no terminal window behind the GUI
 # console=True  → shows log output (helpful during first-deploy testing)
 # ---------------------------------------------------------------------------
+# build.bat stamps build\version_info.txt from the template version_info.txt
+# (scripts/build_version.py). Without it the resource falls back to the template.
+_version_resource = os.path.join(ROOT, "build", "version_info.txt")
+if os.environ.get("RBL_VERSION_RESOURCE") == "1" and not os.path.isfile(_version_resource):
+    print("*** WARNING: build\\version_info.txt not found - the version resource will "
+          "read 0.0.0.0. Build with build.bat to stamp it. ***")
+    _version_resource = os.path.join(ROOT, "version_info.txt")
+
 exe = EXE(
     pyz,
     a.scripts,
@@ -281,7 +289,7 @@ exe = EXE(
     #
     # Scan both. Whichever passes, keep, and write the answer down here.
     # ------------------------------------------------------------------------
-    version=("version_info.txt"
+    version=(_version_resource
              if os.environ.get("RBL_VERSION_RESOURCE") == "1" else None),
     debug=False,
     bootloader_ignore_signals=False,

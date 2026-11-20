@@ -268,3 +268,7 @@ vendor/zwo/*.dll
 
 # Build stamp written by build.bat, bundled by rbl.spec (src/rbl/build_info.py)
 build_info.json
+# Last successful deploy from this PC, written by build.bat, shown at its version prompt
+last_build.json
+
+
