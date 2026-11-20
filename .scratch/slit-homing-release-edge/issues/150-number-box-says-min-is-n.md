@@ -48,9 +48,13 @@ why, the same way a keystroke over the maximum already does. It lives in the sha
 - [ ] Test `test_min_note_uses_the_boxes_decimals` in `tests/test_inputs.py`: a box from `make_int_box`
       then set to 2 decimals, range 0.01..100, value 5; click, type "0", leave: `value() == 0.01` and
       `QToolTip.text() == "Min is 0.01"`.
-- [ ] Test `test_typing_in_range_then_leaving_shows_no_min_note` in `tests/test_inputs.py`: after
-      `QToolTip.hideText()`, `make_int_box(2, 2000, 900)`, click, type "300", leave: `value() == 300`
-      and `QToolTip.isVisible()` is false.
+- [ ] Test `test_only_an_entry_under_the_minimum_shows_the_min_note` in `tests/test_inputs.py`:
+      `make_int_box(2, 2000, 900)`. First half: `QToolTip.hideText()`, click, type "300", leave:
+      `value() == 300` and `QToolTip.isVisible()` is false. Second half, on the same box: click, type
+      "1", leave: `value() == 2` and `QToolTip.text() == "Min is 2"`. The first half guards against a
+      note on in-range entries; the second half is what makes the test fail on master, where no min
+      note exists. Both halves stay in this one test: an in-range-only test passes on master and the
+      integrity gate fails it (check 9).
 - [ ] (no test: CI's full suite) No test is deleted; every existing test in `tests/test_inputs.py`
       passes unchanged, including the "Max is N" tests and
       test_leading_zero_is_not_clamped_to_the_minimum_mid_word.
