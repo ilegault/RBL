@@ -1,6 +1,6 @@
 # 169: Picoammeter connect errors show one short line, full text on hover
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
