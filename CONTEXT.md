@@ -415,9 +415,10 @@ depend on the beamline, and is kept in a library reused across sessions.
 
 ## Slit motion
 
-**Slit speed** — the one speed an axis moves at, in counts per second. It applies
-to every motion of that axis: a jog, and a move commanded from any screen. There is
-no separate jog speed or move speed.
+**Slit speed** — the speed, in counts per second, that every motion the operator
+commands on an axis runs at: a jog, and a move commanded from any screen. There is
+no separate jog speed or move speed. Homing and the measurements (edge-return test,
+switch map) do not use it; they run at their own speeds.
 
 **Home switch** — the optical sensor on each slit axis that marks its reference
 point. It trips when the jaw is fully in, at beam centre. On these slits it trips at
@@ -427,6 +428,11 @@ the same point as the reverse limit.
 out one count at a time, reading the switch with the axis at rest after every step,
 until the home switch releases. That release point is the pass's **edge**. Homing is two
 home passes whose edges agree, followed by defining the second edge as zero.
+
+**At rest** — an axis whose last move is completely finished: the controller has
+sent every step pulse of the move to the motor and none is still on its way. Planning
+a move can finish before its last pulses go out, so "the move is done" is not yet at
+rest. Every switch reading taken during a home pass or a switch map is taken at rest.
 
 **Approach speed** — the speed homing drives an axis in onto the home switch at. The
 edge is read on the way back out with the axis at rest, so the approach speed does not

@@ -229,3 +229,89 @@ fraction could be typed and was then rounded away. Decided: a box showing counts
 accepts whole numbers only; mm and mm/s keep their decimals (a fraction of a millimetre is a real
 distance, rounded to the nearest count when used). The decimals follow the unit shown. Ticket 145 is
 independent of 143 and 144.
+
+## Addendum 2026-11-20: NEC's speeds, at rest, and the 2 cps minimum (tickets from 146)
+
+Settled in a grilling session on 2026-11-20. ADR 0009 is amended (same date) and `CONTEXT.md` has a
+sharper **Slit speed** and a new **At rest**; both were edited by the planner and are committed by the
+developer with the ticket files, no ticket.
+
+**Problem.** On the bench (by eye, 2026-11-19), slow continuous motion loses many steps on every slit
+axis, worst on axis A (X+) moving in below about 100 cps. Fast motion shows no visible slip. NEC's spec
+for the 2HA075520 slit controller, already recorded in the header of
+`src/rbl/config/hardware_config.py`, gives `SP 1800` for normal motion, `SP 900` for homing and
+stepper smoothing 2. `startup_sequence()` sends `SP 1800`, but every motion then overrides it with a
+slower speed (1000, 500, 58, 25). Three smaller faults turned up on the way:
+
+- A switch reading "at rest" waits only for `_BG` = 0 (the profiler is done). The DMC-41x3 manual
+  (Monitoring Generated Pulses vs. Commanded Pulses) says the stepper smoothing filter can still be
+  sending pulses after that; the pulses actually sent are `_TD`.
+- Smoothing is never sent. `MOTOR_SMOOTHING = 2.0` exists but nothing uses it, and the header calls it
+  `YB`, which on the 41x3 is full motor steps per revolution. NEC's smoothing is `KS`.
+- An approach or slit speed of 1 cps does nothing on the bench; 2 cps is the lowest that moves. (Galil's
+  `SP` is believed to take even values only, so `SP 1` becomes 0. Bench ticket 142 confirms it.)
+
+**Decisions.**
+
+- Speeds, all in `src/rbl/config/hardware_config.py`:
+
+  | Constant | Was | Now | Used by |
+  |---|---|---|---|
+  | `DEFAULT_SPEED_COUNTS_PER_SEC` | 1000 | 1800 | each axis's Slit speed at launch (not saved) |
+  | `HOME_SEEK_SPEED_COUNTS_PER_SEC` | 500 | 900 | the seek, every homing back-off, the switch map's back-off and run-in |
+  | `HOME_APPROACH_SPEED_COUNTS_PER_SEC` | 58 | 900 | the approach and the creep (the creep keeps running at the approach speed) |
+  | `SWITCH_MAP_STEP_SPEED_COUNTS_PER_SEC` | 25 | 900 | the switch map's one-count steps |
+
+  The comments above these constants are rewritten to give NEC's spec as the reason and to drop the
+  stale mentions of `HM` passes. The header's "smoothing YB = 2.0" becomes "smoothing KS = 2".
+- **Edge-return move out runs at the approach speed of that run**, not the seek speed
+  (`EdgeReturnRoutine.run`, today `HOME_SEEK_SPEED_COUNTS_PER_SEC`). An edge-return at 58 cps moves out
+  at 58; at 1800, at 1800. The axis never leaves the switch slower than it arrived. Homing's own
+  back-offs stay at the seek speed.
+- **Smoothing.** `GalilController.startup_sequence()` sends `KS` with `MOTOR_SMOOTHING` (2) on every
+  axis, after `MT` and `YA`. `LC 1` is unchanged.
+- **At rest.** Every switch reading in a home pass (the approach's arrival check and each creep step)
+  and every switch reading in the switch map is taken only once the axis is at rest: `_BG` is 0 **and**
+  `_TD` equals `_RP` for that axis. The driver gains a read of `_TD`. The wait has the same timeout as the
+  `wait_idle` it extends; a timeout fails the run with a message that names both values
+  (`step pulses still pending: TD <n>, RP <m>`). Other uses of `wait_idle` are unchanged.
+- **2 cps minimum.** A new constant `SLIT_SPEED_MIN_COUNTS_PER_SEC = 2` is the minimum of the Slit speed
+  box (in cps) and the Approach speed box, and `Beamline.set_slit_speed_cps` and
+  `Beamline.set_home_approach_speed` refuse anything below it. In mm/s the Slit speed box keeps its
+  0.01 mm/s minimum (about 6 cps, already above 2). There is no other floor: slow speeds stay
+  available for comparison.
+- **"Min is N" note.** When an entry below a box's minimum is committed (Enter or leaving the box),
+  `QuietDoubleSpinBox` sets the box to its minimum and shows "Min is N" beside it for about two seconds
+  without taking focus, the same way as the "Max is N" note from ticket 143. Built into the shared box,
+  so every screen gets it.
+
+**Testing seams (requirements, not preferences).**
+
+- At rest: `SimGalil` (`tests/sim_slit.py`) gains a step-count register (`_TD`) that lags the reference
+  position by a configurable number of reads after each move, and **its switches are computed from the
+  step-count position, not the reference position**, because the jaw is where the pulses sent put it.
+  The test that matters runs a creep with a lag: reading at `_BG` alone lands the edge on the wrong count,
+  reading at rest lands it on the right one.
+- Speeds: tests read the speed `SimGalil` records for each move (edge-return move out at 58 and at 1800
+  equals the approach speed; switch-map steps at 900), not the constant's value.
+- `KS`: a driver test checks `startup_sequence()` sends `KS 2,2,2,2` for four axes.
+- "Min is N": `tests/test_inputs.py` on a real `QuietDoubleSpinBox` in a shown window, with real
+  keystrokes and focus changes, as for ticket 143.
+
+**Ticket shape.** (Published 2026-11-20 as 147–151; 146 is taken by another effort.)
+
+1. **147 Speeds** (constants and their comments, edge-return move out at the approach speed). Independent.
+2. **148 At rest** (driver `_TD` read, `SimGalil` lag, the home-pass and switch-map reads). Blocked by 147
+   (both edit `src/rbl/hardware/galil_workers.py` and the same tests).
+3. **149 Smoothing** (`startup_sequence()` sends `KS`). Independent.
+4. **150 "Min is N"** in `QuietDoubleSpinBox`. Independent.
+5. **151 2 cps minimum** (`SLIT_SPEED_MIN_COUNTS_PER_SEC`, both boxes, `Beamline` checks). Blocked by 147
+   (both rewrite test_home_approach_speed_defaults_and_is_validated).
+6. Bench ticket **142** (edited, not new): blocked by 147–151 as well. Its edge-return item runs at the
+   new default (900) on all four axes; axis A also at 58 and 1800 (one CSV each), and once more at 900
+   with out counts 50, so most of each cycle is the one-count creep. New by-hand item, before running
+   the new build: `MG _KSA,_KSB,_KSC,_KSD` and `MG _LCA,_LCB,_LCC,_LCD`; `SP 1` then `MG _SPA`
+   (expect 0); and with each axis at rest after connect, `MG _TDx,_RPx` (expect equal).
+
+**Not in this set.** A floor on slow speeds. Homing back-offs following the approach speed. Changing
+`LC`, `AC`/`DC` or `SD`. Saving any speed between runs. Encoders and stepper position maintenance.
