@@ -62,3 +62,11 @@ def test_switch_map_steps_at_900():
         ]
         assert earlier_speeds
         assert earlier_speeds[-1] == 900
+
+
+def test_switch_map_reads_switches_at_rest():
+    sim = SimGalil(trip_at=-3, release_at=6, start_at=2000, pulse_lag_calls=2)
+    ok, msg, rows = SwitchMapRoutine(sim, "A").run()
+    assert ok is True, msg
+    assert find_switch_edges(rows) == SwitchEdges(-3, -3, 6, 6)
+    assert ("get_step_count", ("A",)) in sim.calls

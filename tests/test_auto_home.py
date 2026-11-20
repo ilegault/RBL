@@ -729,3 +729,47 @@ class TestReleaseEdgeHoming:
         ]
         assert earlier_speeds
         assert earlier_speeds[-1] == 900
+
+    def test_homing_reads_the_edge_at_rest_when_pulses_lag(self):
+        from tests.sim_slit import SimGalil
+
+        sim = SimGalil(trip_at=-3, release_at=6, pulse_lag_calls=2)
+        ok, msg = AxisHomeRoutine(sim, "A").run(seek_first=False)
+        assert ok, msg
+        assert "edges 6, 6 cts" in msg
+        assert sim.slits["A"].zeroed_at == [6]
+
+    def test_approach_checks_rest_before_reading_the_switches(self):
+        from tests.sim_slit import SimGalil
+
+        sim = SimGalil(trip_at=-3, release_at=6)
+        ok, msg = AxisHomeRoutine(sim, "A").run(seek_first=False)
+        assert ok, msg
+
+        jog_indices = [
+            i for i, (name, args) in enumerate(sim.calls)
+            if name == "jog_start" and args[0] == "A"
+        ]
+        assert jog_indices
+        for ji in jog_indices:
+            after = sim.calls[ji + 1:]
+            next_sw = next(
+                (k for k, (name, args) in enumerate(after)
+                 if name == "get_switch_states" and args[0] == "A"),
+                None,
+            )
+            assert next_sw is not None
+            step_reads = [
+                k for k, (name, args) in enumerate(after[:next_sw])
+                if name == "get_step_count" and args[0] == "A"
+            ]
+            assert step_reads
+
+    def test_wait_at_rest_names_the_pending_pulses(self):
+        from tests.sim_slit import SimGalil
+
+        sim = SimGalil(trip_at=-3, release_at=6, start_at=2000, pulse_lag_calls=10**9)
+        sim.move_relative("A", 5)
+        ok, msg = AxisHomeRoutine(sim, "A").wait_at_rest(timeout=0.05)
+        assert ok is False
+        assert msg == "step pulses still pending: TD 2000, RP 2005"

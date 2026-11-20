@@ -1,6 +1,6 @@
 # 148: Switch readings wait until the axis is at rest
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -67,28 +67,28 @@ the switch map waits until both say the move is over.
 
 ## Acceptance criteria
 
-- [ ] Test `test_get_step_count_reads_mg_td` in `tests/test_galil_protocol.py` (in `TestReads`, built
+- [x] Test `test_get_step_count_reads_mg_td` in `tests/test_galil_protocol.py` (in `TestReads`, built
       with `make_galil`): with `"MG _TDC"` answering `"-125.0000"`, `get_step_count("C")` returns -125
       and `"MG _TDC"` is in `g.sock.sent`.
-- [ ] Test `test_homing_reads_the_edge_at_rest_when_pulses_lag` in `tests/test_auto_home.py` (in
+- [x] Test `test_homing_reads_the_edge_at_rest_when_pulses_lag` in `tests/test_auto_home.py` (in
       `TestReleaseEdgeHoming`): `AxisHomeRoutine(sim, "A").run(seek_first=False)` on
       `SimGalil(trip_at=-3, release_at=6, pulse_lag_calls=2)` succeeds, its message contains
       "edges 6, 6 cts", and `sim.slits["A"].zeroed_at == [6]`. (Reading at `_BG` alone reports the edge
       one count late.)
-- [ ] Test `test_switch_map_reads_switches_at_rest` in `tests/test_switch_map_routine.py`:
+- [x] Test `test_switch_map_reads_switches_at_rest` in `tests/test_switch_map_routine.py`:
       `SwitchMapRoutine(sim, "A").run()` on `SimGalil(trip_at=-3, release_at=6, start_at=2000,
       pulse_lag_calls=2)` succeeds and `find_switch_edges(rows) == SwitchEdges(-3, -3, 6, 6)`, the same
       edges the no-lag test finds.
-- [ ] Test `test_approach_checks_rest_before_reading_the_switches` in `tests/test_auto_home.py` (in
+- [x] Test `test_approach_checks_rest_before_reading_the_switches` in `tests/test_auto_home.py` (in
       `TestReleaseEdgeHoming`): after a successful `AxisHomeRoutine(sim, "A").run(seek_first=False)` on
       `SimGalil(trip_at=-3, release_at=6)`, for every `jog_start` in `sim.calls`, a `get_step_count`
       call for axis A comes after it and before the next `get_switch_states` call.
-- [ ] Test `test_wait_at_rest_names_the_pending_pulses` in `tests/test_auto_home.py` (in
+- [x] Test `test_wait_at_rest_names_the_pending_pulses` in `tests/test_auto_home.py` (in
       `TestReleaseEdgeHoming`): on `SimGalil(trip_at=-3, release_at=6, start_at=2000,
       pulse_lag_calls=10**9)`, after `sim.move_relative("A", 5)`,
       `AxisHomeRoutine(sim, "A").wait_at_rest(timeout=0.05)` returns
       `(False, "step pulses still pending: TD 2000, RP 2005")`.
-- [ ] (no test: CI's full suite) No test is deleted; every existing homing, edge-return and switch-map
+- [x] (no test: CI's full suite) No test is deleted; every existing homing, edge-return and switch-map
       test passes unchanged with the default `pulse_lag_calls=0`.
 
 **What tests may fake:** the Galil, through `SimGalil` (with the lag above) or `make_galil`, and
@@ -109,3 +109,5 @@ pytest --tb=short -q -n auto --dist loadfile --max-worker-restart=0 tests/test_g
 pytest runs on the touched test files only; CI runs the full suite on the PR.
 
 ## Comments
+
+2026-11-20: Added `GalilController.get_step_count` (`MG _TDx`), `SimSlit`/`SimGalil` `pulse_lag_calls` simulation in `tests/sim_slit.py`, `AxisHomeRoutine.wait_at_rest` polling `_BG == 0` then `_TD == _RP`, and switched `approach` arrival read, `creep_to_release`, and `SwitchMapRoutine.run` step loops to `wait_at_rest`. Added all five named tests across `tests/test_galil_protocol.py`, `tests/test_auto_home.py`, and `tests/test_switch_map_routine.py`. Local gate passed (`ruff check .`, `check_tests_first.py`, `type_gate.py`, and 121 tests in the four Galil/homing/switch-map/edge-return test files). Bench verification (`MG _TDx,_RPx` at rest) remains in ticket 142.

@@ -336,6 +336,14 @@ class AxisHomeRoutine:
                 )
             time.sleep(self._SEEK_POLL_S)
 
+        ok, msg = self.wait_at_rest(timeout=15.0)
+        if not ok:
+            if msg:
+                return False, f"{axis}: {msg}"
+            if self._cancelled():
+                return False, f"{axis}: cancelled while approaching the home switch"
+            return False, f"{axis}: timeout waiting for the approach to come to rest"
+
         arrival = self._arrival()
         if arrival == "home":
             return True, ""
@@ -344,7 +352,9 @@ class AxisHomeRoutine:
         return False, f"{axis}: approach stopped before reaching the home switch"
 
     def creep_to_release(self) -> tuple[bool, str, int | None]:
-        """Step outward one count at a time until the home switch releases."""
+        """Step outward one count at a time, reading the home switch at rest
+        (every step pulse sent) until it releases.
+        """
         g, axis = self.galil, self.axis
         g.set_speed(axis, self.approach_speed)
         steps = SC.HOME_CREEP_MAX_COUNTS // SC.HOME_CREEP_STEP_COUNTS
@@ -356,7 +366,10 @@ class AxisHomeRoutine:
                     None,
                 )
             g.move_relative(axis, SC.HOME_CREEP_STEP_COUNTS)
-            if not self.wait_idle(timeout=15.0):
+            ok, msg = self.wait_at_rest(timeout=15.0)
+            if not ok:
+                if msg:
+                    return False, f"{axis}: {msg}", None
                 if self._cancelled():
                     return (
                         False,
@@ -450,6 +463,45 @@ class AxisHomeRoutine:
                 return False
             time.sleep(self._IDLE_POLL_S)
         return False
+
+    def wait_at_rest(self, timeout: float = 15.0) -> tuple[bool, str]:
+        """Wait until the axis is idle (_BG == 0) and every step pulse has
+        been sent (_TD == _RP).
+
+        Returns `(True, "")` at rest; `(False, "")` if cancelled, errored, or
+        still moving at the deadline; and
+        `(False, f"step pulses still pending: TD {td}, RP {rp}")` if the
+        profiler stopped but `_TD` never caught up to `_RP`.
+        """
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self._cancelled():
+                return False, ""
+            try:
+                if not self.galil.is_moving(self.axis):
+                    break
+            except Exception:
+                return False, ""
+            time.sleep(self._IDLE_POLL_S)
+        else:
+            return False, ""
+
+        td = rp = None
+        while time.time() < deadline:
+            if self._cancelled():
+                return False, ""
+            try:
+                td = self.galil.get_step_count(self.axis)
+                rp = self.galil.get_position(self.axis)
+            except Exception:
+                return False, ""
+            if td == rp:
+                return True, ""
+            time.sleep(self._IDLE_POLL_S)
+
+        if td is None or rp is None:
+            return False, ""
+        return False, f"step pulses still pending: TD {td}, RP {rp}"
 
 
 # ─── Auto-homing worker (one axis) ────────────────────────────────────────────
@@ -703,8 +755,9 @@ class EdgeReturnWorker(QThread):
 class SwitchMapRoutine:
     """Step an axis slowly in through home and reverse switches, then back out.
 
-    Records every switch state at rest after each single-count step, without
-    ever calling `define_zero`. Never raises; returns `(ok, message, rows)`.
+    Records every switch state at rest (every step pulse sent) after each
+    single-count step, without ever calling `define_zero`. Never raises;
+    returns `(ok, message, rows)`.
     """
 
     def __init__(
@@ -813,7 +866,10 @@ class SwitchMapRoutine:
                     inward_stop = "reverse limit"
                     break
                 g.move_relative(axis, -SC.SWITCH_MAP_STEP_COUNTS)
-                if not home.wait_idle(timeout=15.0):
+                ok, msg = home.wait_at_rest(timeout=15.0)
+                if not ok:
+                    if msg:
+                        return False, f"{axis}: {msg}", rows
                     if self._cancelled():
                         return False, f"{axis}: switch map cancelled", rows
                     return False, f"{axis}: timeout stepping inward", rows
@@ -850,7 +906,10 @@ class SwitchMapRoutine:
                     break
 
                 g.move_relative(axis, SC.SWITCH_MAP_STEP_COUNTS)
-                if not home.wait_idle(timeout=15.0):
+                ok, msg = home.wait_at_rest(timeout=15.0)
+                if not ok:
+                    if msg:
+                        return False, f"{axis}: {msg}", rows
                     if self._cancelled():
                         return False, f"{axis}: switch map cancelled", rows
                     return False, f"{axis}: timeout stepping outward", rows
