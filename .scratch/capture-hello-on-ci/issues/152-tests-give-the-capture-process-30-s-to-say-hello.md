@@ -1,6 +1,6 @@
 # 152: Tests give the Capture Process 30 s to say hello; the app keeps 10 s
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
