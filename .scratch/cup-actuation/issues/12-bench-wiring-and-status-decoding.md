@@ -143,3 +143,23 @@ function's inversion".**
   read FIO2 = 0 and FIO3 = 0 (in transit). A disconnected status cable floats all
   three lines to 1 on the T7's pull-ups, which will now read as indeterminate (a
   fault) with AUTO asserted.
+
+### 2026-11-20 contacts read 0 when asserted; IN and OUT land swapped (developer, recorded by planner)
+
+**This supersedes the 2026-11-10 comment's polarity and "IN and OUT are not swapped".**
+
+- With the controller in AUTO and the cup moving on app commands, the app showed
+  "Controller not in AUTO (LOCAL mode)". In LOCAL it showed AUTO. So FIO4 reads 0 in
+  AUTO, matching the 11-08 meter check (4-12 closed in AUTO). The 11-10 reading
+  "FIO4 = 1 in AUTO" was wrong, and with it the only argument that IN and OUT were not
+  swapped.
+- Meter at the P1 breakout, cup IN: 3-11 continuous (closed). The contacts close when
+  asserted, so an asserted line reads 0. Because the app showed IN correctly under the
+  "1 = asserted" rule, FIO2 carries the OUT contact (P1 2-10) and FIO3 the IN contact
+  (P1 3-11): the as-built table above has those two the wrong way round. Where the swap
+  sits is not known; it is fixed in software (`.scratch/cup-status-fix/`, ticket 167).
+- The "Move Fault: Command IN failed: contacts indeterminate" seen on about half of the
+  insertions on 11-10 (cup log `cup_20261110T131938.csv`) is the travel word, both
+  contacts open, which the old rule decoded as both asserted.
+- Interlock: front-panel behaviour with the interlock open/closed is to be re-checked
+  with the new interlock control (ticket 174).
