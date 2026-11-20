@@ -311,7 +311,7 @@ class AxisControls(QGroupBox):
     def _set_speed_unit_range(self, unit: str):
         if unit == "cps":
             self.spn_speed.setDecimals(0)
-            self.spn_speed.setRange(1.0, 100_000.0)
+            self.spn_speed.setRange(float(SC.SLIT_SPEED_MIN_COUNTS_PER_SEC), 100_000.0)
             self.spn_speed.setSingleStep(100.0)
         else:  # mm/s
             max_mms = SC.cps_to_mm_per_sec(self.axis, 100_000)
@@ -913,7 +913,9 @@ class MotorTab(QWidget):
         self.spn_approach_speed = QuietDoubleSpinBox()
         self.spn_approach_speed.setDecimals(0)
         self.spn_approach_speed.setRange(
-            1.0, float(SC.HOME_APPROACH_SPEED_MAX_COUNTS_PER_SEC))
+            float(SC.SLIT_SPEED_MIN_COUNTS_PER_SEC),
+            float(SC.HOME_APPROACH_SPEED_MAX_COUNTS_PER_SEC),
+        )
         self.spn_approach_speed.setSingleStep(10.0)
         self.spn_approach_speed.setValue(float(self.beamline.home_approach_speed()))
         self.spn_approach_speed.setToolTip(approach_tip)

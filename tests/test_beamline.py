@@ -612,6 +612,13 @@ class TestMoveSlit:
             beamline.set_slit_speed_cps("B", 0)
         assert beamline.slit_speed_cps("B") == SC.DEFAULT_SPEED_COUNTS_PER_SEC
 
+    def test_slit_speed_rejects_below_two(self, beamline):
+        with pytest.raises(ValueError, match=r"slit speed must be >= 2 count/s"):
+            beamline.set_slit_speed_cps("C", 1)
+        assert beamline.slit_speed_cps("C") == SC.DEFAULT_SPEED_COUNTS_PER_SEC
+        beamline.set_slit_speed_cps("C", 2)
+        assert beamline.slit_speed_cps("C") == 2
+
     def test_launch_speeds_follow_necs_spec(self, beamline):
         for axis in SC.AXIS_LETTERS:
             assert beamline.slit_speed_cps(axis) == 1800
@@ -621,8 +628,8 @@ class TestMoveSlit:
         assert beamline.home_approach_speed() == 900
         beamline.set_home_approach_speed(40)
         assert beamline.home_approach_speed() == 40
-        for bad in (0, 2001):
-            with pytest.raises(ValueError, match=r"approach speed must be in 1\.\.2000"):
+        for bad in (1, 2001):
+            with pytest.raises(ValueError, match=r"approach speed must be in 2\.\.2000"):
                 beamline.set_home_approach_speed(bad)
             assert beamline.home_approach_speed() == 40
 
