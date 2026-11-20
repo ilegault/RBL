@@ -189,3 +189,36 @@ it is (ADR 0009 for the homing ones).
 - Encoders and lost-step detection (ticket 134's other items).
 - Saving the approach speed between runs.
 - Anything on the Overview tab.
+
+## Addendum 2026-11-19: Approach speed ceiling and number-box typing (tickets 143, 144)
+
+Settled in a grilling session on 2026-11-19.
+
+**Problem.** On the bench, axis A (the X+ slit, already known to slip since the 2026 collision) seems
+to lose more steps moving in (negative counts) at slow speeds, below about 100 cps. NEC's own homing
+example (e-mail 5-12496) uses `SP 900`. The operator wants to compare the edge-return spread at 58, 900
+and 1800 cps, but the Approach speed box stops at 500. Separately, clicking into any number box and
+typing splices the digits into the old value (10 then "300" gives "103"), and a keystroke that would
+pass the maximum is dropped with no explanation.
+
+**Decisions.**
+
+- The Approach speed ceiling goes from 500 to 2000 cps (`HOME_APPROACH_SPEED_MAX_COUNTS_PER_SEC`). This
+  supersedes the 500 named earlier in this spec. The default stays 58 cps and is not saved between
+  runs.
+- The comparison is run by hand: set the speed, run the edge-return test, repeat. The edge-return CSV
+  already records `pass_speed_cps` on every row. No automatic speed sweep.
+- Clicking into any `QuietDoubleSpinBox` selects its whole value, so typing replaces it. This is fixed
+  once in the shared box, not per screen.
+- A keystroke that would take a box over its maximum is still refused, and a small note,
+  "Max is N", appears beside the box for about two seconds without taking focus. Built into the shared
+  box, so every screen gets it. No dialog.
+- Unchanged: the one-count creep out (it moves outward, the direction that behaves better), the 25 cps
+  switch-map step speed, slit speed, and ADR 0009. These wait for the edge-return comparison.
+
+**Testing seams.** `tests/test_inputs.py` on a real `QuietDoubleSpinBox` in a shown window with real
+mouse clicks and keystrokes (not the `_type` helper, which pre-selects). The existing `Beamline` and
+`MotorTab` tests for the ceiling.
+
+**Tickets.** 143 (number box) and 144 (ceiling) are independent. Bench ticket 142 gains 144 as a
+blocker and a comment asking for the three-speed edge-return comparison on axis A.
