@@ -638,11 +638,11 @@ class TestFaradayCupTabLivePlot:
         assert not tab.plot.redraw_timer.isActive()
 
 
-RAW_STATUS_IN = 20  # 0b10100: FIO2 (IN) = 1, FIO3 (OUT) = 0, FIO4 (AUTO) = 1
-RAW_STATUS_OUT = 24  # 0b11000: FIO2 (IN) = 0, FIO3 (OUT) = 1, FIO4 (AUTO) = 1
-RAW_STATUS_TRANSIT = 16  # 0b10000: FIO2 (IN) = 0, FIO3 (OUT) = 0, FIO4 (AUTO) = 1
-RAW_STATUS_INDETERMINATE = 28  # 0b11100: FIO2 (IN) = 1, FIO3 (OUT) = 1, FIO4 (AUTO) = 1
-RAW_STATUS_NOT_AUTO = 4  # 0b00100: FIO2 (IN) = 1, FIO3 (OUT) = 0, FIO4 (AUTO) = 0
+RAW_STATUS_IN = 4  # FIO4 FIO3 FIO2 = 0b001
+RAW_STATUS_OUT = 8  # FIO4 FIO3 FIO2 = 0b010
+RAW_STATUS_TRANSIT = 12  # FIO4 FIO3 FIO2 = 0b011
+RAW_STATUS_INDETERMINATE = 0  # FIO4 FIO3 FIO2 = 0b000
+RAW_STATUS_NOT_AUTO = 20  # FIO4 FIO3 FIO2 = 0b101
 
 
 class TestFaradayCupActuationUI:
@@ -783,6 +783,42 @@ class TestFaradayCupActuationUI:
         confirmed_text = tab.lbl_confirmed.text().lower()
         assert "fault" in confirmed_text or "indeterminate" in confirmed_text
         assert tab.lbl_fault.isVisible()
+
+    def test_insertion_through_transit_raises_no_move_fault(self, qapp):
+        beamline = Beamline()
+        beamline.lj.handle = 1
+        tab = FaradayCupTab(beamline=beamline)
+        feed = CupActuationFeed(tab, beamline=beamline)
+        tab.show()
+        qapp.processEvents()
+
+        feed.send_fio_state(8, t=1.0)
+        qapp.processEvents()
+        tab.btn_insert.click()
+        qapp.processEvents()
+        feed.send_fio_state(12, t=1.1)
+        qapp.processEvents()
+        feed.send_fio_state(4, t=1.2)
+        qapp.processEvents()
+
+        assert "IN" in tab.lbl_confirmed.text()
+        assert "Move Fault" not in tab.lbl_fault.text()
+
+    def test_local_warning_names_unplugged_status_cable(self, qapp):
+        beamline = Beamline()
+        beamline.lj.handle = 1
+        tab = FaradayCupTab(beamline=beamline)
+        feed = CupActuationFeed(tab, beamline=beamline)
+        tab.show()
+        qapp.processEvents()
+
+        feed.send_fio_state(20, t=1.0)
+        qapp.processEvents()
+
+        assert tab.lbl_auto_mode.text() == (
+            "Controller not in AUTO (LOCAL mode) or status cable unplugged — "
+            "remote commands will be ignored"
+        )
 
     def test_actuation_move_in_flight_prevents_second_command(self, qapp, monkeypatch):
         beamline = Beamline()
@@ -3894,18 +3930,18 @@ class TestManualInsertionsConverge:
         tab, feed, act_feed, sw, commands, current_t = self.setup_tab(
             qapp, tmp_path, monkeypatch, manual_retract_on_converge=True
         )
-        # Establish OUT in AUTO via CupActuationFeed (24 = FIO3 | FIO4), click Insert,
-        # then controller switches to LOCAL with cup IN (4 = FIO2, FIO4=0).
+        # Establish OUT in AUTO via CupActuationFeed (8: FIO4=0, FIO3=1, FIO2=0), click Insert,
+        # then controller switches to LOCAL with cup IN (20: FIO4=1, FIO3=0, FIO2=1).
         current_t[0] = 9.0
-        act_feed.send_fio_state(24, t=9.0)
+        act_feed.send_fio_state(RAW_STATUS_OUT, t=9.0)
         qapp.processEvents()
         current_t[0] = 10.0
         tab.btn_insert.click()
         qapp.processEvents()
         assert ("IN", 10.0) in commands
 
-        # Controller switched to LOCAL (bit 4 cleared) and cup is IN (4 = FIO2)
-        act_feed.send_fio_state(4, t=10.2)
+        # Controller switched to LOCAL (FIO4=1) and cup is IN (FIO3=0) -> 20
+        act_feed.send_fio_state(RAW_STATUS_NOT_AUTO, t=10.2)
         qapp.processEvents()
         feed.send_reading(1.0e-6, timestamp=10.2, t_host=10.2)
         qapp.processEvents()

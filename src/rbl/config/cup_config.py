@@ -34,8 +34,8 @@ and an LJTick-RelayDriver (LJTRD) with relay isolation:
   The controller lets the cup go OUT by any route (remote command in AUTO, or the
   front-panel buttons in LOCAL) only while this loop is closed (seen on hardware, 2026-11-10).
 - Command line (FIO1): closes relay 2 across ESM P1 1-9, commanding cup OUT.
-- Cup IN status (FIO2): ESM P1 3-11, isolated dry contact to GND (bit 2).
-- Cup OUT status (FIO3): ESM P1 2-10, isolated dry contact to GND (bit 3).
+- Cup OUT status (FIO2): ESM P1 2-10, isolated dry contact to GND (bit 2).
+- Cup IN status (FIO3): ESM P1 3-11, isolated dry contact to GND (bit 3).
 - Controller AUTO mode (FIO4): ESM P1 4-12, isolated dry contact to GND (bit 4).
 
 Wiring facts from the 2026-11-08 bench (cup-actuation ticket 12; spec "The hardware
@@ -48,10 +48,11 @@ chain"). Neither is visible from software, and both break the mapping above sile
   LabJack GND. The controller does not tie them; the shared return is the breakout's.
 
 Polarity:
-A status line reads 1 when its condition is asserted (bench, 2026-11-10, cup IN in
-AUTO: FIO2 = 1, FIO3 = 0, FIO4 = 1); the level is CUP_STATUS_ASSERTED_LEVEL. A
-disconnected status cable floats all three lines high on the T7's pull-ups and so
-reads INDETERMINATE with AUTO asserted.
+A status line reads 0 when asserted (contacts close to GND; meter 2026-11-08 and
+2026-11-20; the 2026-11-10 FIO4 reading was wrong); FIO3 carries IN (P1 3-11), FIO2
+carries OUT (P1 2-10), FIO4 carries AUTO (P1 4-12). The level is
+CUP_STATUS_ASSERTED_LEVEL. A disconnected status cable floats all three lines high
+on the T7's pull-ups and so reads IN_TRANSIT with AUTO not asserted (LOCAL).
 Fails-into-the-beam:
 Cup OUT requires both closures (interlock and command). Any loss of drive opens both
 relays, and the cup pneumatic cylinder returns IN, intercepting the beam ahead
@@ -117,12 +118,14 @@ CUP_INTERLOCK_LINE: str = "FIO0"  # Relay 1 -> ESM P1 5-13 (interlock: closed is
 CUP_COMMAND_OUT_LINE: str = "FIO1"     # Relay 2 -> ESM P1 1-9 (command cup OUT)
 
 # Status bit positions in the raw FIO_STATE integer
-# Status lines read 1 when asserted (bench, 2026-11-10, cup IN in AUTO: FIO2=1, FIO3=0, FIO4=1)
-CUP_STATUS_BIT_IN: int = 2             # FIO2: cup IN contact
-CUP_STATUS_BIT_OUT: int = 3            # FIO3: cup OUT contact
-CUP_STATUS_BIT_AUTO: int = 4           # FIO4: controller AUTO mode contact
-# Status line reads 1 when asserted (bench, 2026-11-10, cup IN in AUTO: FIO2=1, FIO3=0, FIO4=1)
-CUP_STATUS_ASSERTED_LEVEL: int = 1
+# A status line reads 0 when asserted (contacts close to GND; meter 2026-11-08: 4-12
+# closed in AUTO; meter 2026-11-20: 3-11 closed with the cup IN; the 2026-11-10 FIO4
+# reading was wrong). FIO3 carries IN (P1 3-11), FIO2 carries OUT (P1 2-10), FIO4
+# carries AUTO (P1 4-12).
+CUP_STATUS_BIT_IN: int = 3             # FIO3: cup IN contact (P1 3-11)
+CUP_STATUS_BIT_OUT: int = 2            # FIO2: cup OUT contact (P1 2-10)
+CUP_STATUS_BIT_AUTO: int = 4           # FIO4: controller AUTO mode contact (P1 4-12)
+CUP_STATUS_ASSERTED_LEVEL: int = 0
 
 # ---- Actuation timing & debounce (ADR 0003) ------------------------------
 CUP_MOVE_CONFIRMATION_TIMEOUT_S: float = 2.0  # Seconds before unconfirmed move raises a fault

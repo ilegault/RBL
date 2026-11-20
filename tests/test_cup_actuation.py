@@ -26,10 +26,10 @@ from tests.payloads import CupActuationFeed
 
 # Raw FIO_STATE words helper (asserted contact = 1, non-asserted contact = 0)
 # Bit 2 = IN, Bit 3 = OUT, Bit 4 = AUTO
-RAW_STATUS_IN = 20  # 0b10100: FIO2 (IN) = 1, FIO3 (OUT) = 0, FIO4 (AUTO) = 1
-RAW_STATUS_OUT = 24  # 0b11000: FIO2 (IN) = 0, FIO3 (OUT) = 1, FIO4 (AUTO) = 1
-RAW_STATUS_TRANSIT = 16  # 0b10000: FIO2 (IN) = 0, FIO3 (OUT) = 0, FIO4 (AUTO) = 1
-RAW_STATUS_INDETERMINATE = 28  # 0b11100: FIO2 (IN) = 1, FIO3 (OUT) = 1, FIO4 (AUTO) = 1
+RAW_STATUS_IN = 4  # FIO4 FIO3 FIO2 = 0b001
+RAW_STATUS_OUT = 8  # FIO4 FIO3 FIO2 = 0b010
+RAW_STATUS_TRANSIT = 12  # FIO4 FIO3 FIO2 = 0b011
+RAW_STATUS_INDETERMINATE = 0  # FIO4 FIO3 FIO2 = 0b000
 
 
 class MockCupTab:

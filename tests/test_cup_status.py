@@ -1,10 +1,10 @@
 """
 Tests for Faraday cup status decoding from raw FIO_STATE integers.
 
-ADR 0003 & Ticket 02 & Ticket 113:
+ADR 0003 & Ticket 02 & Ticket 167:
 Status decoding is a pure function in rbl/hardware/ with no Qt or LabJack imports.
-A status line reads 1 when its condition is asserted (bench, 2026-11-10, cup IN in AUTO:
-FIO2 = 1, FIO3 = 0, FIO4 = 1).
+A status line reads 0 when its condition is asserted (contacts close to GND; meter
+2026-11-08 and 2026-11-20); FIO3 carries IN, FIO2 carries OUT, FIO4 carries AUTO.
 """
 import sys
 
@@ -30,10 +30,10 @@ class TestCupStatusConfig:
     def test_line_names_and_bit_positions(self):
         assert CUP_INTERLOCK_LINE == "FIO0"
         assert CUP_COMMAND_OUT_LINE == "FIO1"
-        assert CUP_STATUS_BIT_IN == 2
-        assert CUP_STATUS_BIT_OUT == 3
+        assert CUP_STATUS_BIT_IN == 3
+        assert CUP_STATUS_BIT_OUT == 2
         assert CUP_STATUS_BIT_AUTO == 4
-        assert CUP_STATUS_ASSERTED_LEVEL == 1
+        assert CUP_STATUS_ASSERTED_LEVEL == 0
         assert not hasattr(rbl.config.cup_config, "CUP_ENABLE_LINE")
         assert not hasattr(rbl.config.cup_config, "CUP_ENABLE_OUT_LINE")
 
@@ -56,14 +56,14 @@ class TestCupStatusPureDecodes:
         out_asserted: bool,
         auto_asserted: bool,
     ) -> int:
-        """Helper building an FIO_STATE word where asserted == 1 and non-asserted == 0."""
-        word = 0x0000
+        """Helper building an FIO_STATE word where asserted == 0 and non-asserted == 1."""
+        word = 0b11100
         if in_asserted:
-            word |= (1 << CUP_STATUS_BIT_IN)
+            word &= ~(1 << CUP_STATUS_BIT_IN)
         if out_asserted:
-            word |= (1 << CUP_STATUS_BIT_OUT)
+            word &= ~(1 << CUP_STATUS_BIT_OUT)
         if auto_asserted:
-            word |= (1 << CUP_STATUS_BIT_AUTO)
+            word &= ~(1 << CUP_STATUS_BIT_AUTO)
         return word
 
     def test_decode_cup_in(self):
@@ -129,26 +129,26 @@ class TestCupStatusPureDecodes:
         assert decode_cup_status(word_manual).auto_mode is False
 
     def test_asserted_level_constant_controls_the_decode(self, monkeypatch):
-        """Monkeypatching CUP_STATUS_ASSERTED_LEVEL to 0 inverts the decode."""
-        monkeypatch.setattr("rbl.hardware.cup_status.CUP_STATUS_ASSERTED_LEVEL", 0)
-        status = decode_cup_status(20)
+        """Monkeypatching CUP_STATUS_ASSERTED_LEVEL to 1 inverts the decode."""
+        monkeypatch.setattr("rbl.hardware.cup_status.CUP_STATUS_ASSERTED_LEVEL", 1)
+        status = decode_cup_status(4)
         assert status.position == CupPosition.OUT
         assert status.auto_mode is False
 
     def test_bench_word_cup_in_auto_decodes_in_and_auto(self):
-        """Bench word 20 (0b10100: FIO2=1, FIO3=0, FIO4=1) decodes to IN and auto_mode True."""
-        status = decode_cup_status(20)
+        """Bench word 4 (0b00100: FIO4=0, FIO3=0, FIO2=1; meter 2026-11-20) -> IN, AUTO."""
+        status = decode_cup_status(4)
         assert status == CupStatus(CupPosition.IN, True)
 
     def test_hardware_words_decode_per_line(self):
         """Hardware words decode correctly across individual lines and combinations."""
         cases = [
-            (24, CupPosition.OUT, True),
-            (16, CupPosition.IN_TRANSIT, True),
-            (28, CupPosition.INDETERMINATE, True),
-            (4, CupPosition.IN, False),
-            (0, CupPosition.IN_TRANSIT, False),
-            (0xFFE3, CupPosition.IN_TRANSIT, False),
+            (8, CupPosition.OUT, True),
+            (12, CupPosition.IN_TRANSIT, True),
+            (0, CupPosition.INDETERMINATE, True),
+            (20, CupPosition.IN, False),
+            (28, CupPosition.IN_TRANSIT, False),
+            (0xFFE3, CupPosition.INDETERMINATE, True),
         ]
         for word, expected_pos, expected_auto in cases:
             status = decode_cup_status(word)
@@ -158,6 +158,23 @@ class TestCupStatusPureDecodes:
             assert status.auto_mode is expected_auto, (
                 f"Failed auto_mode for word {word} (0b{word:b})"
             )
+
+    def test_status_lines_read_zero_when_asserted(self):
+        """Integer literals verify 0-when-asserted with FIO3=IN, FIO2=OUT, FIO4=AUTO."""
+        assert decode_cup_status(4) == CupStatus(CupPosition.IN, True)
+        assert decode_cup_status(8) == CupStatus(CupPosition.OUT, True)
+        assert decode_cup_status(12) == CupStatus(CupPosition.IN_TRANSIT, True)
+        assert decode_cup_status(20) == CupStatus(CupPosition.IN, False)
+
+    def test_unplugged_status_cable_reads_in_transit_and_not_auto(self):
+        """All pull-ups high (cable unplugged) reads IN_TRANSIT and auto_mode False."""
+        assert decode_cup_status(28) == CupStatus(CupPosition.IN_TRANSIT, False)
+        assert decode_cup_status(0xFFFF) == CupStatus(CupPosition.IN_TRANSIT, False)
+
+    def test_both_contacts_closed_reads_indeterminate(self):
+        """Both IN and OUT closed to GND (0) reads INDETERMINATE regardless of AUTO."""
+        assert decode_cup_status(0) == CupStatus(CupPosition.INDETERMINATE, True)
+        assert decode_cup_status(16) == CupStatus(CupPosition.INDETERMINATE, False)
 
     def test_unpacking_as_tuple(self):
         """CupStatus namedtuple can be unpacked into (position, auto_mode)."""
