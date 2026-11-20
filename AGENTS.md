@@ -480,13 +480,13 @@ someone else's bug fix smuggled into it cannot be reviewed.
 <!-- ACTIVE-PLAN:START -->
 ## Active implementation plan
 
-_Written by the planning model on 2026-11-18 23:09. Implement this. If something in it is wrong, say so before changing course._
+_Written by the planning model on 2026-11-19 23:59. Implement this. If something in it is wrong, say so before changing course._
 
-# Active work: slit homing on the release edge, and the switch map (set 14, new)
+# Active work: slit homing on the release edge, and the switch map (set 14): 143 and 144 next
 
 This is a pointer, not the work.
 
-## Set 14 (new): slit homing on the release edge, and the switch map
+## Set 14: slit homing on the release edge, and the switch map
 
 - **Spec:** `.scratch/slit-homing-release-edge/spec.md`
 - **Binding:** `docs/adr/0009-slits-homed-on-the-release-edge.md` (new: read it first),
@@ -495,9 +495,10 @@ This is a pointer, not the work.
   ticket):** new **Reverse limit**, **Forward limit**, **Approach speed**, **Switch map**;
   **Home pass** redefined (drive onto the switch, step out to the release point, the *edge*);
   **Home switch** notes it trips with the reverse limit.
-- **Tickets:** `.scratch/slit-homing-release-edge/issues/135...142`. 135–141 are agent
-  tickets, all `Auto-merge: yes`. 142 is `ready-for-developer` (bench): an agent must not
-  claim it.
+- **Tickets:** `.scratch/slit-homing-release-edge/issues/135...144`. 135–141 are agent
+  tickets and are built. 143 and 144 (added 2026-11-19; see the spec's "Addendum 2026-11-19")
+  are agent tickets, both `Auto-merge: yes`. 142 is `ready-for-developer` (bench): an agent
+  must not claim it.
 - **Tracker conventions:** `docs/agents/issue-tracker.md`
 - **Why:** since ticket 123 every home and edge-return pass fails with stop code 3, because
   each slit's home switch and reverse limit trip at the same point and the controller's `HM`
@@ -505,9 +506,10 @@ This is a pointer, not the work.
 
 ### Next
 
-- **135** and **141** are unblocked and touch different code. Start with **135**: it makes
-  homing work again and adds `tests/sim_slit.py`, the simulated slit 136, 137 and 139 build on.
-  141 (status label) can run in parallel with it.
+- **143** and **144** are both unblocked and touch different files. Start with **144**: it is
+  the smaller one, and bench ticket 142 waits on it (the operator wants to run the edge-return
+  test at 58, 900 and 1800 cps). 143 (clicking into any number box selects the whole value; a
+  keystroke over the maximum shows "Max is N") can run in parallel with it.
 
 ### Dependency order
 
@@ -515,10 +517,12 @@ This is a pointer, not the work.
 135 ─┬─ 136 ─┬─ 137 ─┬─ 138 ─┐
      │       └───────┘       ├─ 140 ─┐
      └─ 139 ─────────────────┘       ├─ 142 (developer, bench)
-141 ─────────────────────────────────┘
+141 ─────────────────────────────────┤
+144 (Approach speed up to 2000) ─────┘
+143 (number box: click selects all, "Max is N" note): independent, blocks nothing
 ```
 
-(137 is blocked by 135 and 136; 138 by 136 and 137; 140 by 138 and 139; 142 by all of 135–141.)
+(137 is blocked by 135 and 136; 138 by 136 and 137; 140 by 138 and 139; 142 by 135–141 and 144.)
 `src/rbl/gui/motor_tab.py` is edited by 135, 136, 137, 138, 140 and 141; the chain keeps all but
 141 apart. If 141 and another `motor_tab.py` PR are open together, land one and rebase the other.
 
@@ -538,6 +542,12 @@ This is a pointer, not the work.
   reads tripped.
 - 138: the tests named on its `Deletes tests:` line are the only ones removed; every other
   test that referenced a removed name is rewritten in place under its own name.
+- 143: the new tests click into the box with a real `QTest.mouseClick` and type with real
+  `QTest.keyClicks`. They must not use `tests/test_inputs.py`'s `_type` helper, which selects
+  everything itself and so passes on the broken code. The "Max is N" note only explains a refused
+  keystroke; the keystroke is still refused.
+- 144: the two existing tests that assert 500 are rewritten in place under their own names; no
+  test is deleted. The default approach speed stays 58.
 - Every ticket: only the tests on its own `Deletes tests:` line may be deleted.
 
 ### Not in this set
@@ -545,6 +555,8 @@ This is a pointer, not the work.
 Opening or rewiring the switch box; CN, MT, BL/FL or direction changes; recalibrating
 `MM_ZERO_OFFSET` (a follow-up from bench ticket 142); renaming the edge-return CSV's
 `pass_speed_cps` column; encoders; saving the approach speed; anything on the Overview.
+Changing the default approach speed, an automatic edge-return speed sweep, and the switch-map
+step speed all wait for 142's three-speed comparison.
 
 ---
 

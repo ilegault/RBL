@@ -6,7 +6,7 @@
 
 **Auto-merge:** no
 
-**Blocked by:** 135, 136, 137, 138, 139, 140, 141
+**Blocked by:** 135, 136, 137, 138, 139, 140, 141, 144
 
 **Spec:** `.scratch/slit-homing-release-edge/spec.md`
 **Binding:** `docs/adr/0009-slits-homed-on-the-release-edge.md`
@@ -32,3 +32,11 @@ record the numbers the follow-ups need. Replaces the edge-return and pass-speed 
       should change given the edge-return spread. Each "yes" becomes a new ticket.
 
 ## Comments
+
+**2026-11-19 (planning):** Added 144 to Blocked by. Once 144 lands (the Approach speed goes up to 2000
+cps), add this to the edge-return item: on axis A, run the edge-return test (10 cycles, default out
+counts) three times, at approach speeds 58, 900 and 1800 cps, one CSV each (the CSV's
+`pass_speed_cps` column labels them). Paste the three summary lines and compare the spread and any
+8-count jumps. The question is whether axis A loses more steps moving in at slow speed, as seen by eye
+on the bench, and whether NEC's 900 cps is the better default. A default change is a new ticket and an
+ADR 0009 update. See the spec's Addendum 2026-11-19.
