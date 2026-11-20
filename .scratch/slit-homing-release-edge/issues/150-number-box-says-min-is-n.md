@@ -1,6 +1,6 @@
 # 150: A value typed under a number box's minimum says "Min is N"
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
