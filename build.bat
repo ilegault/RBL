@@ -7,21 +7,28 @@ echo   RBL  Build + Deploy
 echo =============================================
 echo.
 
+:: --- Python (venv) is needed for the version helpers and PyInstaller ---
+where python >nul 2>&1
+if !ERRORLEVEL! NEQ 0 (
+    echo ERROR: python is not on PATH. Activate the project venv, then run again.
+    exit /b 1
+)
+
+:: --- Last deployed build (last_build.json, gitignored, written after a successful deploy) ---
+python scripts\build_version.py last
+echo.
+
 :: --- Version prompt ---
 :ask_version
 set "VERSION="
-set /p VERSION="Enter build version (e.g. 3.86 or 3.87.1): "
+set /p VERSION="Enter new build version (e.g. 4.3 or 4.2.1): "
 if "!VERSION!"=="" (
     echo   Version cannot be empty.
     goto ask_version
 )
+python scripts\build_version.py check "!VERSION!"
+if !ERRORLEVEL! NEQ 0 goto ask_version
 
-echo Updating version_info.txt to version !VERSION!...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "& { param($ver) $ErrorActionPreference='Stop'; $v=$ver.Split('.'); while($v.Count -lt 4){$v+='0'}; $t='('+($v[0..3]-join', ')+')'; $d=$v[0..3]-join'.'; $q=[char]39; $c=[IO.File]::ReadAllText('version_info.txt'); $c=$c-replace'filevers=\([0-9, ]+\)',('filevers='+$t); $c=$c-replace'prodvers=\([0-9, ]+\)',('prodvers='+$t); $svr='${1}'+$d+$q; $p1='([(]'+$q+'FileVersion'+$q+',\s*'+$q+')[^'+$q+']+'+$q; $c=$c-replace$p1,$svr; $p2='([(]'+$q+'ProductVersion'+$q+',\s*'+$q+')[^'+$q+']+'+$q; $c=$c-replace$p2,$svr; [IO.File]::WriteAllText('version_info.txt',$c,[Text.Encoding]::ASCII); Write-Host ('  -> version_info.txt updated to '+$d) } '!VERSION!'"
-if !ERRORLEVEL! NEQ 0 (
-    echo   ERROR: Failed to update version_info.txt
-    exit /b 1
-)
 echo.
 
 :: --- Enumerate drives via PowerShell (wmic is deprecated on Windows 11) ---
@@ -138,6 +145,14 @@ if not exist build_info.json (
     exit /b 1
 )
 
+:: Stamped copy of the version resource; the committed version_info.txt is a
+:: template a build never edits (so the dirty check above stays honest).
+python scripts\build_version.py resource "!VERSION!"
+if !ERRORLEVEL! NEQ 0 (
+    echo   ERROR: Failed to write build\version_info.txt
+    exit /b 1
+)
+
 :: --- Build ---
 echo.
 echo Running PyInstaller...
@@ -172,6 +187,9 @@ if !ERRORLEVEL! NEQ 0 (
     echo COPY FAILED - check available space on !USB_DRIVE!
     exit /b 1
 )
+
+:: --- Record this deploy for the next run's "Last deployed build" line ---
+copy /Y build_info.json last_build.json >nul
 
 echo.
 echo =============================================
