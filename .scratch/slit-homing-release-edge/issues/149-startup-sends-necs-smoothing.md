@@ -1,6 +1,6 @@
 # 149: Startup sends NEC's stepper smoothing (`KS 2`)
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -35,13 +35,13 @@ startup sequence sends it, so the controller runs NEC's setting rather than what
 
 ## Acceptance criteria
 
-- [ ] Test `test_startup_sends_ks_after_ya` in `tests/test_galil_protocol.py` (in `TestStartupSequence`,
+- [x] Test `test_startup_sends_ks_after_ya` in `tests/test_galil_protocol.py` (in `TestStartupSequence`,
       built with `make_galil`): `startup_sequence(axes="AB", speed=900, accel=12800)` sends `"KS 2,2"`,
       after `"YA 2,2"` and before `"LC 1,1"`.
-- [ ] (no test: rewrites an existing test in place, proven by the gate) In `tests/test_galil_protocol.py`,
+- [x] (no test: rewrites an existing test in place, proven by the gate) In `tests/test_galil_protocol.py`,
       test_full_sequence_order_and_content is rewritten in place under the same name: its expected
       list gains `"KS 2,2,2,2"` between `"YA 2,2,2,2"` and `"LC 1,1,1,1"`; nothing else changes.
-- [ ] (no test: CI's full suite) No test is deleted and every other test passes unchanged.
+- [x] (no test: CI's full suite) No test is deleted and every other test passes unchanged.
 
 **What tests may fake:** the socket, through `make_galil`. `startup_sequence` is real.
 
@@ -59,3 +59,5 @@ pytest --tb=short -q -n auto --dist loadfile --max-worker-restart=0 tests/test_g
 pytest runs on the touched test files only; CI runs the full suite on the PR.
 
 ## Comments
+
+2026-11-20: Implemented `KS <MOTOR_SMOOTHING>` in `GalilController.startup_sequence` after `YA` (formatted with `:g`), updated `hardware_config.py` docstring and `MOTOR_SMOOTHING` comment, and added `KS` to the `motor_tab.py` startup log line. Added `test_startup_sends_ks_after_ya` and updated `test_full_sequence_order_and_content` in `tests/test_galil_protocol.py`. All 54 tests in `tests/test_galil_protocol.py`, `ruff check .`, `check_tests_first.py`, and `type_gate.py` passed. Bench verification (`MG _KSA,_KSB,_KSC,_KSD`) remains in ticket 142.

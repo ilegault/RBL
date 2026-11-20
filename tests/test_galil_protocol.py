@@ -288,6 +288,7 @@ class TestStartupSequence:
             f"CN {SC.CN_CONFIG}",
             "MT -2.5,-2.5,-2.5,-2.5",
             "YA 2,2,2,2",
+            "KS 2,2,2,2",
             "LC 1,1,1,1",
             "AC 25600,25600,25600,25600",
             "DC 25600,25600,25600,25600",
@@ -298,6 +299,15 @@ class TestStartupSequence:
             "SH ABCD",
         ]
         assert g.sock.sent == expected
+
+    def test_startup_sends_ks_after_ya(self):
+        g = make_galil()
+        g.startup_sequence(axes="AB", speed=900, accel=12800)
+        assert "KS 2,2" in g.sock.sent
+        ya_idx = g.sock.sent.index("YA 2,2")
+        ks_idx = g.sock.sent.index("KS 2,2")
+        lc_idx = g.sock.sent.index("LC 1,1")
+        assert ya_idx < ks_idx < lc_idx
 
     def test_sequence_scales_to_two_axes(self):
         g = make_galil()
