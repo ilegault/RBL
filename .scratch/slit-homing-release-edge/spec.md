@@ -222,3 +222,10 @@ mouse clicks and keystrokes (not the `_type` helper, which pre-selects). The exi
 
 **Tickets.** 143 (number box) and 144 (ceiling) are independent. Bench ticket 142 gains 144 as a
 blocker and a comment asking for the three-speed edge-return comparison on axis A.
+
+**Later the same day: whole counts in the Stepper Motors tab (ticket 145).** A stepper moves in whole
+counts, but the Slit speed box in cps showed two decimals and the Target box in counts three, so a
+fraction could be typed and was then rounded away. Decided: a box showing counts or cps shows and
+accepts whole numbers only; mm and mm/s keep their decimals (a fraction of a millimetre is a real
+distance, rounded to the nearest count when used). The decimals follow the unit shown. Ticket 145 is
+independent of 143 and 144.
