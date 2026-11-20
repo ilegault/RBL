@@ -1,6 +1,6 @@
 # 150: A value typed under a number box's minimum says "Min is N"
 
-**Status:** done
+**Status:** blocked
 
 **Runner:** any
 
@@ -74,4 +74,17 @@ pytest runs on the touched test files only; CI runs the full suite on the PR.
 
 ## Comments
 
-Summary (2026-11-20): Extracted `QuietDoubleSpinBox._show_note` (with `QTimer.singleShot(0, ...)` when called during focus-out so the subsequent `FocusIn` on the next widget does not immediately hide the tooltip) and overrode `QuietDoubleSpinBox.fixup` to clamp committed under-minimum entries to `minimum()` and show `"Min is <min>"`. Updated the `inputs.py` module docstring. Covered by the four new tests in `tests/test_inputs.py`; all 18 tests in `tests/test_inputs.py`, `ruff check .`, `check_tests_first.py`, and `type_gate.py` pass.
+## Escalation — 2026-11-20
+Repo: RBL   Ticket: 150 A value typed under a number box's minimum says "Min is N"   Branch: ticket/slit-homing-release-edge-150-number-box-says-min-is-n
+Goal: Clamp committed under-minimum entries in `QuietDoubleSpinBox` to `minimum()` and show a `"Min is N"` tooltip beside the box.
+Attempt 1: Implemented `_show_note`, `_show_tip`, and `fixup()` in `src/rbl/gui/widgets/inputs.py` and added all 4 named tests in `tests/test_inputs.py`; all 4 gate checks (`ruff`, `check_tests_first.py`, `type_gate.py`, `pytest tests/test_inputs.py` 18/18) passed, but local `ticket_engine.integrity_runner` failed Check 9 because `test_typing_in_range_then_leaving_shows_no_min_note` passes on `origin/master`.
+Failing output (exact, trimmed to the relevant lines):
+<!-- ticket-engine-integrity-gate -->
+## Integrity Gate Verdict: FAIL
+
+**Verdict:** `fail`
+
+### Reasons:
+- Check 7 hold: New test(s) passed on base code: tests/test_inputs.py::test_typing_in_range_then_leaving_shows_no_min_note (runtime: 14.61s)
+- Check 9 fail: `test_typing_in_range_then_leaving_shows_no_min_note` (criterion "Test `test_typing_in_range_then_leaving_shows_no_min_note` i") did not fail on the base code, so it does not prove the criterion
+Decision needed: Should `test_typing_in_range_then_leaving_shows_no_min_note` be untagged or marked `(no test: ...)` on `master` (since an in-range guard test cannot fail on `origin/master` where no min note existed), or should this PR be merged bypassing Check 9?
