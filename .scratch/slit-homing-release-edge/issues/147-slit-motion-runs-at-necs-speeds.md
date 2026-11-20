@@ -1,6 +1,6 @@
 # 147: Slit motion runs at NEC's speeds
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
