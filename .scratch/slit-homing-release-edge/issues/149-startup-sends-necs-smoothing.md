@@ -1,6 +1,6 @@
 # 149: Startup sends NEC's stepper smoothing (`KS 2`)
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
