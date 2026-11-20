@@ -75,18 +75,17 @@ SLIT_DEFAULT_STEP_MM = 0.1
 
 
 # --- Motion parameters (per spec email) --------------------------------------
-DEFAULT_SPEED_COUNTS_PER_SEC   = 1000
+# NEC's normal speed (SP 1800, 2HA075520 spec e-mail); the starting Slit speed
+# of every axis at launch (not saved).
+DEFAULT_SPEED_COUNTS_PER_SEC   = 1800
 DEFAULT_ACCEL_COUNTS_PER_SEC2  = 25600
 
 # --- Automatic homing: the seek phase ----------------------------------------
-# The jog that puts an axis onto its home limit before HM runs — the "-Jog
-# until it hits the limit" an operator does by hand before pressing Home.
-#
-# Fast, because it is a coarse approach and nothing about it sets the zero: the
-# three HM passes that follow do that, and their slowest pass is 58 cps. Homing
-# from the far end of the travel at 58 cps would take minutes and time the pass
-# out; at 500 cps (0.79 mm/s) the whole travel is well under a minute.
-HOME_SEEK_SPEED_COUNTS_PER_SEC = 500
+# NEC's homing speed (SP 900, 2HA075520 spec e-mail). The seek, every homing
+# back-off, and the switch map's back-off and run-in use it; slow continuous
+# motion loses steps on these slits (bench, 2026-11-19), so nothing automatic
+# runs slower than this.
+HOME_SEEK_SPEED_COUNTS_PER_SEC = 900
 
 # Ceiling on that jog. Generous — it has to cover the full travel from the
 # forward limit, several times over, on the slowest axis. It is a fault
@@ -112,7 +111,8 @@ EDGE_RETURN_DEFAULT_OUT_COUNTS = 2000
 
 # Release-edge homing (ADR 0009): drive onto the switch, then step back out
 # one count at a time at rest until the home switch releases.
-HOME_APPROACH_SPEED_COUNTS_PER_SEC = 58   # ADR 0009: default approach speed (cps)
+# ADR 0009 (amended 2026-11-20): default approach speed (cps)
+HOME_APPROACH_SPEED_COUNTS_PER_SEC = 900
 # The approach does not decide where zero lands (ADR 0009). The ceiling is high
 # enough to compare approach speeds up to and past NEC's 900 cps with the
 # edge-return test. A faster approach drives deeper past the switch and makes
@@ -127,7 +127,9 @@ HOME_EDGE_AGREEMENT_COUNTS         = 4    # ADR 0009: half of an 8-count lost-st
 # Switch map measurement (ADR 0009): step slowly in through the home switch and
 # reverse limit one count at a time, then back out, reading all switches at rest.
 SWITCH_MAP_STEP_COUNTS = 1                # single-count step for switch-edge resolution
-SWITCH_MAP_STEP_SPEED_COUNTS_PER_SEC = 25 # slow step speed so each step settles cleanly
+# Each step is one count, so the speed does not set the accuracy; it is NEC's
+# homing speed so no automatic motion is set in the slow range where steps are lost.
+SWITCH_MAP_STEP_SPEED_COUNTS_PER_SEC = 900
 SWITCH_MAP_BACKOFF_COUNTS = 300           # back-off from initial switch trip before stepping in
 # Less than the 0.2 mm (~126 counts) from home to beam centre, so the map
 # cannot reach an opposing jaw parked at home if no reverse limit trips first.

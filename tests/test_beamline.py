@@ -612,8 +612,13 @@ class TestMoveSlit:
             beamline.set_slit_speed_cps("B", 0)
         assert beamline.slit_speed_cps("B") == SC.DEFAULT_SPEED_COUNTS_PER_SEC
 
+    def test_launch_speeds_follow_necs_spec(self, beamline):
+        for axis in SC.AXIS_LETTERS:
+            assert beamline.slit_speed_cps(axis) == 1800
+        assert beamline.home_approach_speed() == 900
+
     def test_home_approach_speed_defaults_and_is_validated(self, beamline):
-        assert beamline.home_approach_speed() == 58
+        assert beamline.home_approach_speed() == 900
         beamline.set_home_approach_speed(40)
         assert beamline.home_approach_speed() == 40
         for bad in (0, 2001):

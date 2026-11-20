@@ -123,3 +123,26 @@ def test_edge_return_fails_when_the_switch_never_releases():
     assert ok is False
     assert "did not release within 400 counts" in msg
     assert readings == []
+
+
+def test_edge_return_moves_out_at_the_approach_speed():
+    for speed in (58, 1800):
+        sim = SimGalil(trip_at=-3, release_at=6, start_at=2000)
+        ok, msg, _ = EdgeReturnRoutine(
+            sim, "A", speed, cycles=2, out_counts=2000
+        ).run()
+        assert ok is True, msg
+
+        move_outs = [
+            i for i, call in enumerate(sim.calls)
+            if call == ("move_relative", ("A", 2000))
+        ]
+        assert len(move_outs) == 2
+        for idx in move_outs:
+            earlier_speeds = [
+                args[1]
+                for name, args in sim.calls[:idx]
+                if name == "set_speed" and args[0] == "A"
+            ]
+            assert earlier_speeds
+            assert earlier_speeds[-1] == speed

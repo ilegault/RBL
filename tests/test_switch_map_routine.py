@@ -42,3 +42,23 @@ def test_switch_map_stops_at_the_cap_without_a_reverse_limit():
     assert in_rows[-1].position_counts == -103
     assert "reverse trips at never" in msg
     assert "inward stop: 100-count cap" in msg
+
+
+def test_switch_map_steps_at_900():
+    sim = SimGalil(trip_at=-3, release_at=6, start_at=2000)
+    ok, msg, _ = SwitchMapRoutine(sim, "A").run()
+    assert ok is True, msg
+
+    step_indices = [
+        i for i, (name, args) in enumerate(sim.calls)
+        if name == "move_relative" and args[0] == "A" and args[1] in (-1, 1)
+    ]
+    assert step_indices
+    for idx in step_indices:
+        earlier_speeds = [
+            args[1]
+            for name, args in sim.calls[:idx]
+            if name == "set_speed" and args[0] == "A"
+        ]
+        assert earlier_speeds
+        assert earlier_speeds[-1] == 900

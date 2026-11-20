@@ -220,11 +220,11 @@ class TestRoutineEndToEnd:
         from tests.sim_slit import SimGalil
 
         sim = SimGalil()
-        ok, msg = AxisHomeRoutine(sim, "A").run(seek_first=False)
+        ok, msg = AxisHomeRoutine(sim, "A", approach_speed=58).run(seek_first=False)
         assert ok, msg
         jogs = [c[1] for c in sim.calls if c[0] == "jog_start"]
         assert all(abs(spd) != SC.HOME_SEEK_SPEED_COUNTS_PER_SEC for _ax, spd in jogs)
-        assert jogs[0] == ("A", -SC.HOME_APPROACH_SPEED_COUNTS_PER_SEC)
+        assert jogs[0] == ("A", -58)
 
 
 class TestBackOutOfHome:
@@ -484,7 +484,7 @@ class TestMotorTabAutoHome:
         assert mock_worker_cls.call_args_list[1].kwargs["approach_speed"] == 40
 
     def test_approach_speed_box_edits_the_beamline(self, tab):
-        assert tab.spn_approach_speed.value() == 58
+        assert tab.spn_approach_speed.value() == 900
         assert tab.spn_approach_speed.maximum() == 2000
         tab.spn_approach_speed.setValue(40)
         assert tab.beamline.home_approach_speed() == 40
@@ -704,3 +704,23 @@ class TestReleaseEdgeHoming:
         assert done and done[0][0] is True
         for axis, rel in (("A", 6), ("B", 7), ("C", 5), ("D", 6)):
             assert sim.slits[axis].zeroed_at == [rel]
+
+    def test_homing_seeks_approaches_and_backs_off_at_900(self):
+        from tests.sim_slit import SimGalil
+
+        sim = SimGalil(trip_at=-3, release_at=6, start_at=2000)
+        ok, msg = AxisHomeRoutine(sim, "A").run(seek_first=True)
+        assert ok, msg
+
+        jogs = [args for name, args in sim.calls if name == "jog_start"]
+        assert jogs
+        assert all(args == ("A", -900) for args in jogs)
+
+        backoff_idx = sim.calls.index(("move_relative", ("A", 300)))
+        earlier_speeds = [
+            args[1]
+            for name, args in sim.calls[:backoff_idx]
+            if name == "set_speed" and args[0] == "A"
+        ]
+        assert earlier_speeds
+        assert earlier_speeds[-1] == 900

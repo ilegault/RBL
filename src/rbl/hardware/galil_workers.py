@@ -16,7 +16,7 @@ does not use `HM` or stop code 10 (see `docs/adr/0009-slits-homed-on-the-release
 Instead, each home pass has two parts:
 
   1. Approach: drive in (negative counts) at `approach_speed` (default
-     `HOME_APPROACH_SPEED_COUNTS_PER_SEC`, 58 cps) until the axis stops with
+     `HOME_APPROACH_SPEED_COUNTS_PER_SEC`, 900 cps) until the axis stops with
      the home switch tripped. Stopping on the reverse limit too is expected.
   2. Creep out: step `+HOME_CREEP_STEP_COUNTS` (1 count) at a time, waiting
      for the axis to come to rest and reading the home switch after every step,
@@ -587,7 +587,9 @@ class EdgeReturnRoutine:
 
     Not a QThread for the same reasons as `AxisHomeRoutine`: callers can run
     it on a worker thread (`EdgeReturnWorker`) or directly in tests. Never
-    calls `define_zero` or `define_zero_multi`.
+    calls `define_zero` or `define_zero_multi`. The move out runs at the
+    approach speed being measured, so the axis never leaves the switch slower
+    than it arrived.
     """
 
     def __init__(
@@ -629,7 +631,7 @@ class EdgeReturnRoutine:
                         readings,
                     )
 
-                g.set_speed(axis, SC.HOME_SEEK_SPEED_COUNTS_PER_SEC)
+                g.set_speed(axis, self.approach_speed)
                 g.move_relative(axis, self.out_counts)
                 if not home.wait_idle(timeout=60.0):
                     return False, f"{axis}: timeout on cycle {k}/{self.cycles}", readings
