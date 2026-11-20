@@ -20,9 +20,12 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pathlib
 
 import pytest
+from PySide6.QtCore import QPoint, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication,
     QPushButton,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -188,3 +191,76 @@ def test_unit_row_puts_the_unit_beside_the_box(spin):
     assert row.itemAt(0).widget() is spin
     assert row.itemAt(1).widget().text() == "Hz"
     assert spin.suffix() == ""
+
+
+# ---- Click-to-select-all and over-maximum note -----------------------------
+
+@pytest.fixture
+def make_int_box(qapp):
+    """Build a zero-decimal QuietDoubleSpinBox in a shown window, unfocused."""
+    holders = []
+
+    def _make(minimum: float, maximum: float, value: float) -> QuietDoubleSpinBox:
+        holder = QWidget()
+        lay = QVBoxLayout(holder)
+        box = QuietDoubleSpinBox()
+        box.setDecimals(0)
+        box.setRange(minimum, maximum)
+        box.setValue(value)
+        lay.addWidget(box)
+        elsewhere = QPushButton("elsewhere")
+        lay.addWidget(elsewhere)
+        holder.show()
+        qapp.processEvents()
+        elsewhere.setFocus()
+        qapp.processEvents()
+        box._test_holder = holder
+        box._test_elsewhere = elsewhere
+        holders.append(holder)
+        return box
+
+    yield _make
+    for holder in holders:
+        holder.close()
+
+
+def test_clicking_into_a_box_then_typing_replaces_the_value(make_int_box, qapp):
+    box = make_int_box(1, 500, 10)
+    le = box.lineEdit()
+    QTest.mouseClick(le, Qt.MouseButton.LeftButton, pos=QPoint(le.width() - 3, le.height() // 2))
+    QTest.qWait(20)
+    QTest.keyClicks(le, "300")
+    _focus_out(box, qapp)
+    assert box.value() == 300
+    assert le.text() == "300"
+
+
+def test_clicking_into_the_middle_of_a_box_selects_it_all(make_int_box):
+    box = make_int_box(1, 500, 150)
+    le = box.lineEdit()
+    QTest.mouseClick(le, Qt.MouseButton.LeftButton, pos=QPoint(4, le.height() // 2))
+    QTest.qWait(20)
+    assert le.selectedText() == "150"
+
+
+def test_a_keystroke_over_the_maximum_shows_the_maximum_beside_the_box(make_int_box):
+    QToolTip.hideText()
+    box = make_int_box(1, 2000, 150)
+    le = box.lineEdit()
+    QTest.mouseClick(le, Qt.MouseButton.LeftButton, pos=QPoint(le.width() - 3, le.height() // 2))
+    QTest.qWait(20)
+    QTest.keyClicks(le, "2500")
+    assert le.text() == "250"
+    assert QToolTip.isVisible()
+    assert QToolTip.text() == "Max is 2000"
+
+
+def test_an_in_range_keystroke_shows_no_note(make_int_box):
+    QToolTip.hideText()
+    box = make_int_box(1, 2000, 150)
+    le = box.lineEdit()
+    QTest.mouseClick(le, Qt.MouseButton.LeftButton, pos=QPoint(le.width() - 3, le.height() // 2))
+    QTest.qWait(20)
+    QTest.keyClicks(le, "300")
+    assert le.text() == "300"
+    assert not QToolTip.isVisible()
