@@ -1,6 +1,6 @@
 # 143: Clicking into a number box selects the whole value, and a keystroke over the maximum says why
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -56,18 +56,18 @@ the `spin` fixture's shape; a second fixture is fine). Clicks are real `QTest.mo
 `box.lineEdit()`, keys are real `QTest.keyClicks` calls, and `QTest.qWait(20)` follows each click so
 the zero-delay timer runs. Call `QToolTip.hideText()` at the start of each test that checks the note.
 
-- [ ] Test `test_clicking_into_a_box_then_typing_replaces_the_value`: range 1..500, value 10. Click at
+- [x] Test `test_clicking_into_a_box_then_typing_replaces_the_value`: range 1..500, value 10. Click at
       the right end of the line edit (x = width - 3), wait, type "300", move focus to the sibling
       button. `box.value() == 300` and `box.lineEdit().text() == "300"`. On the current code the text
       is "103".
-- [ ] Test `test_clicking_into_the_middle_of_a_box_selects_it_all`: range 1..500, value 150. Click at
+- [x] Test `test_clicking_into_the_middle_of_a_box_selects_it_all`: range 1..500, value 150. Click at
       x = 4 (inside the first digit), wait. `box.lineEdit().selectedText() == "150"`.
-- [ ] Test `test_a_keystroke_over_the_maximum_shows_the_maximum_beside_the_box`: range 1..2000, value
+- [x] Test `test_a_keystroke_over_the_maximum_shows_the_maximum_beside_the_box`: range 1..2000, value
       150. Click in, wait, type "2500". The text reads "250" (the last "0" refused),
       `QToolTip.isVisible()` is true and `QToolTip.text() == "Max is 2000"`.
-- [ ] Test `test_an_in_range_keystroke_shows_no_note`: range 1..2000, value 150. Click in, wait, type
+- [x] Test `test_an_in_range_keystroke_shows_no_note`: range 1..2000, value 150. Click in, wait, type
       "300". The text reads "300" and `QToolTip.isVisible()` is false.
-- [ ] (no test: covered by the gate) Every existing test in `tests/test_inputs.py` and
+- [x] (no test: covered by the gate) Every existing test in `tests/test_inputs.py` and
       `tests/test_no_scroll_inputs.py` passes unchanged.
 
 **What tests may fake:** nothing. The box, the window, the mouse click, the keystrokes and the tooltip
@@ -87,3 +87,8 @@ pytest --tb=short -q -n auto --dist loadfile
 ```
 
 ## Comments
+
+Summary (2026-11-19):
+- `src/rbl/gui/widgets/inputs.py`: `QuietDoubleSpinBox.focusInEvent` now schedules `self.selectAll` via `QTimer.singleShot(0, self, self.selectAll)` so selection survives mouse click press/release; added `QuietDoubleSpinBox.validate` to show a 2s `QToolTip` (`Max is <max>`) when an invalid keystroke exceeds `self.maximum()`; updated module and method docstrings.
+- `tests/test_inputs.py`: added `make_int_box` fixture and the four named tests (`test_clicking_into_a_box_then_typing_replaces_the_value`, `test_clicking_into_the_middle_of_a_box_selects_it_all`, `test_a_keystroke_over_the_maximum_shows_the_maximum_beside_the_box`, `test_an_in_range_keystroke_shows_no_note`).
+- Gate: `ruff check .`, `python tools/type_gate.py`, and `tests/test_inputs.py` + `tests/test_no_scroll_inputs.py` (36 passed) are green. Full `pytest -n auto` had 3011 passed with 2 unrelated failures (`test_screenshot_overview.py` matplotlib GC access violation on Python 3.14; `test_capture_client.py::test_hello_in_time_cancels_the_hello_timeout` passed 26/26 when run alone).

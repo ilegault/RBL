@@ -53,8 +53,15 @@ swallow it so the gesture still reaches a scroll area above them. Values change
 by typing, by the arrow keys, or by a spin box's own up/down buttons — all of
 which are deliberate, aimed at one control, and already committed correctly by
 the keyboardTracking fix above.
+
+CLICKING INTO A BOX SELECTS ALL OF IT, AND OVER-MAX KEYSTROKES SAY WHY. Focusing
+a box via a mouse click delivers the click's press and release after the
+focus-in event, which would clear a synchronous `selectAll()`, so selection is
+scheduled on a zero-delay timer. A keystroke that would take the box past its
+maximum is still refused by Qt's validator, and a short "Max is N" note appears
+beside the box without taking focus so the operator knows why it was dropped.
 """
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPoint, QRect, Qt, QTimer
 from PySide6.QtGui import QValidator
 from PySide6.QtWidgets import (
     QComboBox,
@@ -63,6 +70,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QSlider,
     QSpinBox,
+    QToolTip,
     QWidget,
 )
 
@@ -170,10 +178,34 @@ class QuietDoubleSpinBox(QDoubleSpinBox):
         """Select the whole value on focus, so typing REPLACES it.
 
         Without this, clicking into a box that reads "10.0000" and typing
-        "0.514" leaves you with some splice of the two.
+        "0.514" leaves you with some splice of the two. A direct `selectAll()`
+        call here does not survive a mouse click, because Qt delivers the
+        click's press and release after `focusInEvent` and moves the cursor to
+        the pointer position, clearing the selection. Scheduling it with a
+        zero-delay timer runs it after the click finishes; passing `self` as
+        the context drops the call if the box is destroyed first.
         """
         super().focusInEvent(event)
-        self.selectAll()
+        QTimer.singleShot(0, self, self.selectAll)
+
+    def validate(self, text: str, pos: int):
+        """Explain refused over-maximum keystrokes with a brief note beside the box."""
+        result = super().validate(text, pos)
+        state = result[0]
+        if state == QValidator.State.Invalid:
+            try:
+                val = float(text.strip())
+            except ValueError:
+                val = None
+            if val is not None and val > self.maximum():
+                QToolTip.showText(
+                    self.mapToGlobal(QPoint(0, self.height())),
+                    f"Max is {self.textFromValue(self.maximum())}",
+                    self,
+                    QRect(),
+                    2000,
+                )
+        return result
 
     def focusOutEvent(self, event):
         """Leave the box: commit what was typed, then settle any held sync.
