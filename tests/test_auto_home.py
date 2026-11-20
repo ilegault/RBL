@@ -485,9 +485,14 @@ class TestMotorTabAutoHome:
 
     def test_approach_speed_box_edits_the_beamline(self, tab):
         assert tab.spn_approach_speed.value() == 58
-        assert tab.spn_approach_speed.maximum() == 500
+        assert tab.spn_approach_speed.maximum() == 2000
         tab.spn_approach_speed.setValue(40)
         assert tab.beamline.home_approach_speed() == 40
+
+    def test_approach_speed_box_takes_1800(self, tab):
+        assert tab.spn_approach_speed.maximum() == 2000
+        tab.spn_approach_speed.setValue(1800)
+        assert tab.beamline.home_approach_speed() == 1800
 
     def test_approach_speed_box_is_locked_while_homing(self, tab, monkeypatch):
         from rbl.hardware.galil_workers import EdgeReturnWorker
