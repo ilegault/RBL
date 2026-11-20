@@ -1,6 +1,6 @@
 # 167: Status contacts read 0 when asserted, IN on FIO3 and OUT on FIO2
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
