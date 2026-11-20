@@ -269,6 +269,7 @@ from rbl.hardware.dose_model import (
     patch_area_cm2,
     uncertainty_reason_text,
 )
+from rbl.hardware.visa_hints import visa_short_reason
 from rbl.services.cup_acquisition import (
     AuthorityDetector,
     CupAcquisitionStateMachine,
@@ -1138,8 +1139,7 @@ class FaradayCupTab(QWidget):
             self.beamline.disconnect_picoammeter()
         else:
             resource = self.get_resource()
-            self.lbl_detail.setText(f"Connecting to {resource}\u2026")
-            self.lbl_detail.setStyleSheet(f"color: {theme.MUTED}; font-style: italic;")
+            self._set_detail(f"Connecting to {resource}\u2026", theme.MUTED)
             try:
                 self.beamline.connect_picoammeter(resource)
             except Exception as exc:
@@ -1611,11 +1611,13 @@ class FaradayCupTab(QWidget):
         self.lbl_current.setText("  —    ")
         self.lbl_current.setStyleSheet(theme.status_label(theme.MUTED))
         if self._last_error:
-            self.lbl_detail.setText(f"Not connected \u2014 {self._last_error}")
-            self.lbl_detail.setStyleSheet(f"color: {theme.FAULT}; font-style: italic;")
+            self._set_detail(
+                f"Not connected \u2014 {visa_short_reason(self._last_error)}",
+                theme.FAULT,
+                tooltip=self._last_error,
+            )
         else:
-            self.lbl_detail.setText("Not connected")
-            self.lbl_detail.setStyleSheet(f"color: {theme.MUTED}; font-style: italic;")
+            self._set_detail("Not connected", theme.MUTED)
         self.lbl_ident.setText("")
         self.lbl_meta.setText("")
 
@@ -1796,18 +1798,15 @@ class FaradayCupTab(QWidget):
         if state.over_range:
             self.lbl_current.setText("OVER-RANGE")
             self.lbl_current.setStyleSheet(theme.status_label(theme.FAULT))
-            self.lbl_detail.setText("Over-range detected")
-            self.lbl_detail.setStyleSheet(f"color: {theme.FAULT}; font-style: italic;")
+            self._set_detail("Over-range detected", theme.FAULT)
         elif state.unavailable or state.current is None:
             self.lbl_current.setText("  —    ")
             self.lbl_current.setStyleSheet(theme.status_label(theme.WARN))
-            self.lbl_detail.setText("Reading unavailable")
-            self.lbl_detail.setStyleSheet(f"color: {theme.WARN}; font-style: italic;")
+            self._set_detail("Reading unavailable", theme.WARN)
         else:
             self.lbl_current.setText(format_current(state.current))
             self.lbl_current.setStyleSheet(theme.status_label(theme.OK))
-            self.lbl_detail.setText("Reading OK")
-            self.lbl_detail.setStyleSheet(f"color: {theme.NEUTRAL}; font-style: italic;")
+            self._set_detail("Reading OK", theme.NEUTRAL)
 
         meta_parts: list[str] = []
         if state.status_word:
@@ -1840,12 +1839,20 @@ class FaradayCupTab(QWidget):
         """Called when Keithley 6482 disconnects."""
         self._set_disconnected_view()
 
+    def _set_detail(self, text: str, color: str, *, tooltip: str = "") -> None:
+        self.lbl_detail.setText(text)
+        self.lbl_detail.setToolTip(tooltip)
+        self.lbl_detail.setStyleSheet(f"color: {color}; font-style: italic;")
+
     def on_cup_error(self, msg: str) -> None:
         """Called when a worker/communication error occurs."""
         log.warning("FaradayCupTab error: %s", msg)
         self._last_error = msg
-        self.lbl_detail.setText(f"Error: {msg}")
-        self.lbl_detail.setStyleSheet(f"color: {theme.FAULT}; font-style: italic;")
+        self._set_detail(
+            f"Error: {visa_short_reason(msg)}",
+            theme.FAULT,
+            tooltip=msg,
+        )
 
     # ── Visibility and Lifecycle ──────────────────────────────────────────────
 
