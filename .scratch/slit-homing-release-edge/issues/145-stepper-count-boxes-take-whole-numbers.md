@@ -1,6 +1,6 @@
 # 145: The Stepper Motors tab's count boxes take whole numbers only
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
