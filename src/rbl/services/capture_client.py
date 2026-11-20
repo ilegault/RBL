@@ -150,11 +150,13 @@ class CaptureClient(QObject):
         self,
         parent: Optional[QObject] = None,
         *,
-        hello_timeout_s: float = CAPTURE_HELLO_TIMEOUT_S,
+        hello_timeout_s: float | None = None,
         open_reply_timeout_s: float = CAPTURE_OPEN_REPLY_TIMEOUT_S,
     ) -> None:
         super().__init__(parent)
-        self._hello_timeout_s = float(hello_timeout_s)
+        self._hello_timeout_s = float(
+            CAPTURE_HELLO_TIMEOUT_S if hello_timeout_s is None else hello_timeout_s
+        )
         self._open_reply_timeout_s = float(open_reply_timeout_s)
         self._pending_open_id: Optional[int] = None
         self._proc: Optional[QProcess] = None
