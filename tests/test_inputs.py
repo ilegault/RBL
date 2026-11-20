@@ -307,13 +307,20 @@ def test_min_note_uses_the_boxes_decimals(make_int_box, qapp):
     assert QToolTip.text() == "Min is 0.01"
 
 
-def test_typing_in_range_then_leaving_shows_no_min_note(make_int_box, qapp):
-    QToolTip.hideText()
+def test_only_an_entry_under_the_minimum_shows_the_min_note(make_int_box, qapp):
     box = make_int_box(2, 2000, 900)
     le = box.lineEdit()
+    QToolTip.hideText()
     QTest.mouseClick(le, Qt.MouseButton.LeftButton, pos=QPoint(le.width() - 3, le.height() // 2))
     QTest.qWait(20)
     QTest.keyClicks(le, "300")
     _focus_out(box, qapp)
     assert box.value() == 300
     assert not QToolTip.isVisible()
+
+    QTest.mouseClick(le, Qt.MouseButton.LeftButton, pos=QPoint(le.width() - 3, le.height() // 2))
+    QTest.qWait(20)
+    QTest.keyClicks(le, "1")
+    _focus_out(box, qapp)
+    assert box.value() == 2
+    assert QToolTip.text() == "Min is 2"
