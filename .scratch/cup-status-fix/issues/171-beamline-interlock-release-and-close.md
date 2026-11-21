@@ -1,6 +1,6 @@
 # 171: Beamline can release and re-close the cup interlock, and reports which
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
