@@ -10,14 +10,14 @@ WHY THIS EXISTS — DIGITAL PATH (ADR 0003)
 -----------------------------------------
 The T7 also drives and reads the Faraday Cup Controller through digital I/O lines
 on the CB37 terminal board. FIO0 (interlock) and FIO1 (command-out) control external
-relays via an LJTick-RelayDriver. FIO2 (cup IN), FIO3 (cup OUT), and FIO4 (AUTO mode)
-read back isolated status contacts.
+relays via an LJTick-RelayDriver. FIO3 carries IN (P1 3-11), FIO2 carries OUT
+(P1 2-10), and FIO4 carries AUTO (P1 4-12) to read back isolated status contacts.
 
 Status line polarity:
-A status line reads 1 when its condition is asserted (bench, 2026-11-10, cup IN in
-AUTO: FIO2 = 1, FIO3 = 0, FIO4 = 1); the level is CUP_STATUS_ASSERTED_LEVEL. A
-disconnected status cable floats all three lines high on the T7's pull-ups and so
-reads INDETERMINATE with AUTO asserted.
+A status line reads 0 when asserted (contacts close to GND; meter 2026-11-08 and
+2026-11-20; the 2026-11-10 FIO4 reading was wrong); the level is
+CUP_STATUS_ASSERTED_LEVEL. A disconnected status cable floats all three lines high
+on the T7's pull-ups and so reads IN_TRANSIT with AUTO not asserted (LOCAL).
 
 Fails-into-the-beam:
 Cup OUT requires both contact closures (relay 1 interlock and relay 2 command). Any
@@ -107,7 +107,7 @@ class LabJackT7:
 
         # Configure digital I/O lines for Faraday cup actuation and status.
         # FIO0 (interlock) and FIO1 (command-out) are outputs.
-        # FIO2 (IN status), FIO3 (OUT status), FIO4 (AUTO status) are inputs.
+        # FIO2 (OUT status), FIO3 (IN status), FIO4 (AUTO status) are inputs.
         # FIO_DIRECTION: lower byte sets direction (1=output, 0=input).
         # Upper byte is inhibit mask (1=inhibit, 0=modify).
         # Lines 0-4 are modified (inhibit=0), lines 5-7 are left untouched (inhibit=1).

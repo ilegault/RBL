@@ -1,6 +1,6 @@
 # 167: Status contacts read 0 when asserted, IN on FIO3 and OUT on FIO2
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -39,7 +39,7 @@ word derived from the rule under test cannot catch the rule being wrong.
 
 ## Acceptance criteria
 
-- [ ] Test `test_status_lines_read_zero_when_asserted`, in `tests/test_cup_status.py`:
+- [x] Test `test_status_lines_read_zero_when_asserted`, in `tests/test_cup_status.py`:
       `decode_cup_status(4)` is `CupStatus(CupPosition.IN, True)`, `(8)` is
       `(CupPosition.OUT, True)`, `(12)` is `(CupPosition.IN_TRANSIT, True)`, `(20)` is
       `(CupPosition.IN, False)`. In the same file, rewrite in place under their names:
@@ -51,13 +51,13 @@ word derived from the rule under test cannot catch the rule being wrong.
       test_bench_word_cup_in_auto_decodes_in_and_auto (word 4, docstring cites 2026-11-20);
       test_hardware_words_decode_per_line (cases 8→OUT/True, 12→IN_TRANSIT/True,
       0→INDETERMINATE/True, 20→IN/False, 28→IN_TRANSIT/False, 0xFFE3→INDETERMINATE/True).
-- [ ] Test `test_unplugged_status_cable_reads_in_transit_and_not_auto`, in
+- [x] Test `test_unplugged_status_cable_reads_in_transit_and_not_auto`, in
       `tests/test_cup_status.py`: `decode_cup_status(28)` and `decode_cup_status(0xFFFF)`
       both return `CupStatus(CupPosition.IN_TRANSIT, False)`.
-- [ ] Test `test_both_contacts_closed_reads_indeterminate`, in `tests/test_cup_status.py`:
+- [x] Test `test_both_contacts_closed_reads_indeterminate`, in `tests/test_cup_status.py`:
       `decode_cup_status(0)` is `(CupPosition.INDETERMINATE, True)` and
       `decode_cup_status(16)` is `(CupPosition.INDETERMINATE, False)`.
-- [ ] Test `test_insertion_through_transit_raises_no_move_fault`, in
+- [x] Test `test_insertion_through_transit_raises_no_move_fault`, in
       `tests/test_faraday_cup_tab.py`: with a `CupActuationFeed`, send word 8 at t=1.0,
       click `btn_insert`, send 12 at t=1.1, send 4 at t=1.2; then `lbl_confirmed` contains
       "IN" and `lbl_fault` text does not contain "Move Fault". In
@@ -66,10 +66,10 @@ word derived from the rule under test cannot catch the rule being wrong.
       `RAW_STATUS_INDETERMINATE = 0`, and in `tests/test_faraday_cup_tab.py`
       `RAW_STATUS_NOT_AUTO = 20`, each with a comment giving FIO4 FIO3 FIO2 in binary. No
       test using them is edited otherwise; if one fails, fix `src/`, not the assertion.
-- [ ] Test `test_local_warning_names_unplugged_status_cable`, in
+- [x] Test `test_local_warning_names_unplugged_status_cable`, in
       `tests/test_faraday_cup_tab.py`: after word 20, `lbl_auto_mode.text()` equals the
       exact warning string above.
-- [ ] The old rule and mapping are gone from prose. Rewrite to "a status line reads 0 when
+- [x] The old rule and mapping are gone from prose. Rewrite to "a status line reads 0 when
       asserted (contacts close to GND; meter 2026-11-08 and 2026-11-20); FIO3 carries IN
       (P1 3–11), FIO2 carries OUT (P1 2–10), FIO4 carries AUTO (P1 4–12)" in: the
       `src/rbl/config/cup_config.py` module docstring (the FIO2/FIO3 lines and the
@@ -102,3 +102,5 @@ pytest --tb=short -q -n auto --dist loadfile --max-worker-restart=0 tests/test_c
 Run pytest on the touched test files only (implement-ticket-parallel, section 4). CI runs the full suite on the PR.
 
 ## Comments
+
+2026-11-20: Implemented 0-when-asserted status decoding (`CUP_STATUS_BIT_IN = 3`, `CUP_STATUS_BIT_OUT = 2`, `CUP_STATUS_BIT_AUTO = 4`, `CUP_STATUS_ASSERTED_LEVEL = 0`), updated `FaradayCupTab` LOCAL/unplugged-cable warning string, updated docstrings and `.scratch/cup-actuation/spec.md` prose, and added/updated tests in `tests/test_cup_status.py`, `tests/test_cup_actuation.py`, and `tests/test_faraday_cup_tab.py` (including updating `test_manual_insertion_in_local_mode_issues_no_out_command` to use the new OUT/AUTO=8 and IN/LOCAL=20 words). Bench verification remains in ticket 174.

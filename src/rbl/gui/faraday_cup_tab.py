@@ -115,8 +115,8 @@ The controller status contacts report IN, OUT, In Transit, or Indeterminate.
 An indeterminate reading is presented as a fault, not as a position.
 A commanded move that fails to confirm within CUP_MOVE_CONFIRMATION_TIMEOUT_S (2.0 s)
 raises a visible fault naming which move failed and does not re-command.
-When the controller is not in AUTO mode, the tab clearly informs the operator
-that remote commands will be accepted and ignored.
+When the controller is not in AUTO mode or the status cable is unplugged, the tab
+clearly informs the operator that remote commands will be ignored.
 
 AUTHORITY RULE (ADR 0003 Decision 4)
 -------------------------------------
@@ -2881,7 +2881,8 @@ class FaradayCupTab(QWidget):
         # AUTO mode status
         if not self._auto_mode:
             self.lbl_auto_mode.setText(
-                "Controller not in AUTO (LOCAL mode) — remote commands will be accepted and ignored"
+                "Controller not in AUTO (LOCAL mode) or status cable unplugged — "
+                "remote commands will be ignored"
             )
             self.lbl_auto_mode.setStyleSheet(
                 f"color: {theme.WARN}; font-weight: bold; font-size: {theme.FS_TINY}px;"

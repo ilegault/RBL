@@ -7,7 +7,8 @@ WHY THIS EXISTS
 ADR 0003: The Right Beam Line's Faraday cup has an ESM remote connector operated
 via a LabJack T7 and an LJTick-RelayDriver (LJTRD) with relay isolation.
 The application can command the cup out and back, and reads back confirmed position
-from the controller's isolated status contacts (FIO2 = IN, FIO3 = OUT, FIO4 = AUTO).
+from the controller's isolated status contacts (FIO3 = IN, FIO2 = OUT, FIO4 = AUTO;
+a status line reads 0 when asserted).
 
 COMMANDED VS CONFIRMED POSITION
 -------------------------------
