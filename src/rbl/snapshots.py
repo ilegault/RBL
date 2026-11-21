@@ -472,6 +472,8 @@ class CupActuationState:
     - `last_transition_t`: Exact sample timestamp (seconds) of the last confirmed transition.
     - `confirmed_raw`: Raw FIO_STATE word of the scan segment whose decode became the
       current confirmed position; None until the first confirmation.
+    - `interlock_closed`: The interlock state the application last commanded (there is
+      no feedback contact for it).
     """
     connected: bool
     commanded: CupPosition = CupPosition.IN
@@ -481,6 +483,7 @@ class CupActuationState:
     last_transition_t: float = float("nan")
     t: float = float("nan")
     confirmed_raw: int | None = None
+    interlock_closed: bool = False
 
     @property
     def commanded_position(self) -> CupPosition:

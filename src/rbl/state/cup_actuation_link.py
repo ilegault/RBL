@@ -28,7 +28,8 @@ wiring and no software path is load-bearing for it.
 
 Relay 1 is held closed (1) while the application is connected and in control, and
 opened (0) on disconnect and on application shutdown, as an explicit release of
-control. Relay 2 (command OUT) is the one that cycles.
+control. The operator can also release and re-close the interlock explicitly.
+Relay 2 (command OUT) is the one that cycles.
 
 Shutdown de-asserts both digital output lines (releasing drive) — it NEVER issues
 a positional cup command.
@@ -75,6 +76,7 @@ class CupActuationLinkMixin:
         self._cup_confirmed: CupPosition = CupPosition.IN_TRANSIT
         self._cup_confirmed_raw: int | None = None
         self._cup_auto_mode: bool = False
+        self._cup_interlock_closed: bool = False
         self._cup_stale: bool = False
         self._cup_last_transition_t: float = float("nan")
         self._cup_last_window_t: float = float("nan")
@@ -98,6 +100,7 @@ class CupActuationLinkMixin:
             last_transition_t=self._cup_last_transition_t,
             t=self._cup_last_window_t,
             confirmed_raw=self._cup_confirmed_raw,
+            interlock_closed=self._cup_interlock_closed,
         )
         if hasattr(self, "cup_actuation_changed"):
             self.cup_actuation_changed.emit(snapshot)
@@ -120,6 +123,7 @@ class CupActuationLinkMixin:
             )
 
         self._cup_commanded = position
+        self._cup_interlock_closed = True
         if position == CupPosition.OUT:
             self._write_cup_digital(CUP_INTERLOCK_LINE, 1)
             self._write_cup_digital(CUP_COMMAND_OUT_LINE, 1)
@@ -136,6 +140,19 @@ class CupActuationLinkMixin:
     def command_cup_out(self) -> None:
         """Helper to command cup OUT (retracted from the beam path)."""
         self.command_cup(CupPosition.OUT)
+
+    def release_cup_interlock(self) -> None:
+        """Open both relays (drive release), set commanded IN and interlock open, publish."""
+        self._release_cup_drive()
+        self._cup_commanded = CupPosition.IN
+        self._cup_interlock_closed = False
+        self._publish_cup_actuation_snapshot()
+
+    def close_cup_interlock(self) -> None:
+        """Close only the interlock relay (FIO0), leaving command OUT unchanged, publish."""
+        self._write_cup_digital(CUP_INTERLOCK_LINE, 1)
+        self._cup_interlock_closed = True
+        self._publish_cup_actuation_snapshot()
 
     def _write_cup_digital(self, line: str, val: int) -> None:
         """Write digital output line via stream worker queue or direct T7 handle."""
@@ -162,6 +179,7 @@ class CupActuationLinkMixin:
         """Called when LabJack T7 connects."""
         self._cup_actuation_connected = True
         self._cup_commanded = CupPosition.IN
+        self._cup_interlock_closed = True
         self._cup_stale = False
         # Energise Relay 1 (interlock), de-assert Relay 2 (command OUT)
         self._write_cup_digital(CUP_INTERLOCK_LINE, 1)
@@ -171,6 +189,7 @@ class CupActuationLinkMixin:
     def _on_labjack_disconnect_cup(self) -> None:
         """Called when LabJack T7 disconnects."""
         self._cup_actuation_connected = False
+        self._cup_interlock_closed = False
         self._release_cup_drive()
         self._publish_cup_actuation_snapshot()
 
