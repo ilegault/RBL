@@ -133,7 +133,7 @@ TAB_DECLARATIONS: tuple[TabDeclaration, ...] = (
         title="Faraday Cup",
         attr_name="faraday_cup_tab",
         factory=lambda win: FaradayCupTab(win.beamline, win, cup_log=win.cup_log),
-        consumes_stream=False,
+        consumes_stream=True,
     ),
     TabDeclaration(
         title="Beam Profiler",

@@ -249,7 +249,7 @@ from rbl.config.cup_config import (
 from rbl.config.cup_settings_store import CupSettings, validate_settings
 from rbl.gui import theme
 from rbl.gui.widgets.acquisition_settings import AcquisitionSettingsGroup
-from rbl.gui.widgets.connection_bar import StatusPill
+from rbl.gui.widgets.connection_bar import LabJackPanel, StatusPill
 from rbl.gui.widgets.inputs import (
     QuietDoubleSpinBox,
     ScientificDoubleSpinBox,
@@ -269,6 +269,7 @@ from rbl.hardware.dose_model import (
     patch_area_cm2,
     uncertainty_reason_text,
 )
+from rbl.hardware.labjack_driver import LJM_AVAILABLE
 from rbl.hardware.visa_hints import visa_short_reason
 from rbl.services.cup_acquisition import (
     AuthorityDetector,
@@ -516,6 +517,11 @@ class FaradayCupTab(QWidget):
         act_lay = QVBoxLayout(act_box)
         act_lay.setSpacing(6)
         act_lay.setContentsMargins(12, 10, 12, 10)
+
+        self.lj_panel = LabJackPanel()
+        if not LJM_AVAILABLE:
+            self.lj_panel.set_enabled(False)
+        act_lay.addWidget(self.lj_panel)
 
         # Command Buttons Row
         btn_lay = QHBoxLayout()
@@ -1959,6 +1965,24 @@ class FaradayCupTab(QWidget):
         self.ax.relim()
         self.ax.autoscale_view(scalex=False, scaley=True)
         self.plot.canvas.draw_idle()
+
+    # ── Shared LabJack T7 lifecycle (LabJackConsumer) ─────────────────────────
+
+    def on_labjack_connected(self, serial: str) -> None:
+        """Update the shared T7 panel when MainWindow opens the T7."""
+        self.lj_panel.set_connected(True, serial)
+
+    def on_labjack_disconnected(self) -> None:
+        """Update the shared T7 panel when MainWindow closes the T7."""
+        self.lj_panel.set_connected(False)
+
+    def on_labjack_error(self, msg: str) -> None:
+        """Reflect a fatal T7 stream error on the shared T7 panel."""
+        self.lj_panel.set_connected(False)
+
+    def on_profile_changed(self, profile_name: str) -> None:
+        """No-op: actuation state arrives only via cup_actuation_changed."""
+        return
 
     # ── Cup Actuation and Confirmed Position (ADR 0003) ──────────────────────
 
