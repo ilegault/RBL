@@ -1,6 +1,6 @@
 # 169: Picoammeter connect errors show one short line, full text on hover
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -34,22 +34,22 @@ label's tooltip:
 
 ## Acceptance criteria
 
-- [ ] Test `test_short_reason_for_each_known_visa_error`, in `tests/test_visa_hints.py`:
+- [x] Test `test_short_reason_for_each_known_visa_error`, in `tests/test_visa_hints.py`:
       each of the four status names inside a realistic literal message returns its exact
       phrase above.
-- [ ] Test `test_short_reason_for_unknown_error_is_first_line_clipped`, in
+- [x] Test `test_short_reason_for_unknown_error_is_first_line_clipped`, in
       `tests/test_visa_hints.py`: `"short failure\nsecond line"` returns `short failure`; a
       single line of 120 `x` characters returns 79 `x` followed by `…` (length 80).
-- [ ] Test `test_connect_failure_shows_short_reason_and_full_text_on_hover`, in
+- [x] Test `test_connect_failure_shows_short_reason_and_full_text_on_hover`, in
       `tests/test_faraday_cup_tab.py`: after `tab_after_connect_failure`, `lbl_detail.text()`
       is `Not connected — GPIB library not found on this PC` and `lbl_detail.toolTip()` is
       `CONNECT_FAIL_MSG`. Rewrite test_connect_failure_reason_survives_disconnect_event in
       place, same name, to assert that same short text instead of the full message. Place
       the new tests directly after test_connect_click_replaces_stale_failure_reason.
-- [ ] Test `test_worker_error_shows_short_reason_and_full_text_on_hover`, in
+- [x] Test `test_worker_error_shows_short_reason_and_full_text_on_hover`, in
       `tests/test_faraday_cup_tab.py`: `tab.on_cup_error(CONNECT_FAIL_MSG)` gives text
       `Error: GPIB library not found on this PC` and tooltip `CONNECT_FAIL_MSG`.
-- [ ] Test `test_successful_connect_clears_error_tooltip`, in
+- [x] Test `test_successful_connect_clears_error_tooltip`, in
       `tests/test_faraday_cup_tab.py`: after `tab_after_connect_failure`, then
       `on_cup_connected(...)` and `on_cup_disconnected()`, `lbl_detail.text()` is
       `Not connected` and `lbl_detail.toolTip()` is `""`.
@@ -72,3 +72,22 @@ pytest --tb=short -q -n auto --dist loadfile --max-worker-restart=0 tests/test_v
 Run pytest on the touched test files only (implement-ticket-parallel, section 4). CI runs the full suite on the PR.
 
 ## Comments
+
+### 2026-11-20 — Completed
+
+- Added `visa_short_reason(message: str) -> str` in `src/rbl/hardware/visa_hints.py`
+  for the four known VISA statuses and first-line 80-character clipping (`79` chars +
+  `…`) for unknown errors.
+- Updated `FaradayCupTab` (`src/rbl/gui/faraday_cup_tab.py`) via `_set_detail` so
+  disconnected/worker error states show `Not connected — <short reason>` /
+  `Error: <short reason>` with the full message as `lbl_detail` tooltip, and all other
+  `lbl_detail` states clear the tooltip to `""`.
+- Covered by `tests/test_visa_hints.py` (`test_short_reason_for_each_known_visa_error`,
+  `test_short_reason_for_unknown_error_is_first_line_clipped`) and
+  `tests/test_faraday_cup_tab.py`
+  (`test_connect_failure_reason_survives_disconnect_event`,
+  `test_connect_failure_shows_short_reason_and_full_text_on_hover`,
+  `test_worker_error_shows_short_reason_and_full_text_on_hover`,
+  `test_successful_connect_clears_error_tooltip`).
+- Local gate passed (`ruff check .`, `check_tests_first.py`, `type_gate.py`, and
+  120 tests in `tests/test_visa_hints.py` and `tests/test_faraday_cup_tab.py`).

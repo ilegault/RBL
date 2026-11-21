@@ -146,7 +146,7 @@ class TestFaradayCupTabRendersCurrent:
 
     def test_connect_failure_reason_survives_disconnect_event(self, qapp):
         _beamline, tab = tab_after_connect_failure(qapp)
-        assert tab.lbl_detail.text() == "Not connected \u2014 " + CONNECT_FAIL_MSG
+        assert tab.lbl_detail.text() == "Not connected \u2014 GPIB library not found on this PC"
         assert "Disconnected" in tab.status_pill.text()
 
     def test_successful_connect_clears_failure_reason(self, qapp):
@@ -161,6 +161,28 @@ class TestFaradayCupTabRendersCurrent:
         tab.le_resource.setText("GPIB0::2::INSTR")
         tab.btn_connect.click()
         assert tab.lbl_detail.text() == "Connecting to GPIB0::2::INSTR\u2026"
+
+    def test_connect_failure_shows_short_reason_and_full_text_on_hover(self, qapp):
+        _beamline, tab = tab_after_connect_failure(qapp)
+        assert tab.lbl_detail.text() == "Not connected \u2014 GPIB library not found on this PC"
+        assert tab.lbl_detail.toolTip() == CONNECT_FAIL_MSG
+
+    def test_worker_error_shows_short_reason_and_full_text_on_hover(self, qapp):
+        beamline = Beamline()
+        tab = FaradayCupTab(beamline=beamline)
+        tab.show()
+        qapp.processEvents()
+        tab.on_cup_error(CONNECT_FAIL_MSG)
+        assert tab.lbl_detail.text() == "Error: GPIB library not found on this PC"
+        assert tab.lbl_detail.toolTip() == CONNECT_FAIL_MSG
+
+    def test_successful_connect_clears_error_tooltip(self, qapp):
+        _beamline, tab = tab_after_connect_failure(qapp)
+        assert tab.lbl_detail.toolTip() == CONNECT_FAIL_MSG
+        tab.on_cup_connected("KEITHLEY INSTRUMENTS INC.,MODEL 6482")
+        tab.on_cup_disconnected()
+        assert tab.lbl_detail.text() == "Not connected"
+        assert tab.lbl_detail.toolTip() == ""
 
     def test_renders_cup_current_autoscaling(self, qapp):
         beamline = Beamline()
