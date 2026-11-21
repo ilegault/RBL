@@ -646,6 +646,7 @@ class CupSessionWriter:
         position: CupPosition | str,
         details: str = "",
         t_inst: float | None = None,
+        raw_status: int | None = None,
     ) -> None:
         """Write a confirmed position transition marker (IN or OUT)."""
         pos_str = position.value if hasattr(position, "value") else str(position)
@@ -655,7 +656,7 @@ class CupSessionWriter:
             "host_timestamp": f"{t_host:.6f}",
             "inst_timestamp": _safe_float(t_inst, ".6f"),
             "current_a": "",
-            "status_word": "",
+            "status_word": f"0x{raw_status:08X}" if raw_status is not None else "",
             "over_range": "",
             "run_id": str(self._active_run_id) if self._active_run_id is not None else "",
             "details": details or f"confirmed_{pos_str.lower()}",

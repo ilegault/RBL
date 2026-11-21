@@ -73,6 +73,7 @@ class CupActuationLinkMixin:
         self._cup_actuation_connected: bool = False
         self._cup_commanded: CupPosition = CupPosition.IN
         self._cup_confirmed: CupPosition = CupPosition.IN_TRANSIT
+        self._cup_confirmed_raw: int | None = None
         self._cup_auto_mode: bool = False
         self._cup_stale: bool = False
         self._cup_last_transition_t: float = float("nan")
@@ -96,6 +97,7 @@ class CupActuationLinkMixin:
             stale=self._cup_stale,
             last_transition_t=self._cup_last_transition_t,
             t=self._cup_last_window_t,
+            confirmed_raw=self._cup_confirmed_raw,
         )
         if hasattr(self, "cup_actuation_changed"):
             self.cup_actuation_changed.emit(snapshot)
@@ -245,6 +247,7 @@ class CupActuationLinkMixin:
             if duration >= CUP_CONTACT_DEBOUNCE_S:
                 if self._cup_confirmed != pos:
                     self._cup_confirmed = pos
+                    self._cup_confirmed_raw = val
                     self._cup_last_transition_t = self._cup_candidate_start_t
 
         self._publish_cup_actuation_snapshot()
