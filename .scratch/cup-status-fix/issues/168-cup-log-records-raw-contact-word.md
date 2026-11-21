@@ -1,6 +1,6 @@
 # 168: The cup log records the raw contact word
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
