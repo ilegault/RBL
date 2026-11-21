@@ -1,6 +1,6 @@
 # 171: Beamline can release and re-close the cup interlock, and reports which
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -35,19 +35,19 @@ and the operator cannot change it. Blocked by 168 only because both edit
 
 ## Acceptance criteria
 
-- [ ] Test `test_release_interlock_opens_both_relays`, in `tests/test_cup_actuation.py`: after
+- [x] Test `test_release_interlock_opens_both_relays`, in `tests/test_cup_actuation.py`: after
       `_on_labjack_connect_cup()` and a reset of the mock, `release_cup_interlock()` writes
       `(CUP_INTERLOCK_LINE, 0)` and `(CUP_COMMAND_OUT_LINE, 0)`, and the last snapshot from
       `cup_actuation_changed` has `interlock_closed is False` and `commanded == CupPosition.IN`.
-- [ ] Test `test_close_interlock_writes_only_the_interlock_line`, in
+- [x] Test `test_close_interlock_writes_only_the_interlock_line`, in
       `tests/test_cup_actuation.py`: after a release and a reset of the mock,
       `close_cup_interlock()` makes exactly one `write_digital` call,
       `(CUP_INTERLOCK_LINE, 1)`, and the last snapshot has `interlock_closed is True`.
-- [ ] Test `test_interlock_state_follows_connect_command_and_disconnect`, in
+- [x] Test `test_interlock_state_follows_connect_command_and_disconnect`, in
       `tests/test_cup_actuation.py`: the last snapshot's `interlock_closed` is `True` after
       `_on_labjack_connect_cup()`, `False` after `release_cup_interlock()`, `True` after
       `command_cup_out()`, and `False` after `_on_labjack_disconnect_cup()`.
-- [ ] test_relays_on_connect_and_disconnect and
+- [x] test_relays_on_connect_and_disconnect and
       test_shutdown_leaves_both_outputs_deasserted_no_positional_command still pass unchanged. (no test: CI's full suite)
 
 **What tests may fake:** the LabJack handle (`beamline.lj` as a `MagicMock`), as the model
@@ -67,3 +67,10 @@ pytest --tb=short -q -n auto --dist loadfile --max-worker-restart=0 tests/test_c
 Run pytest on the touched test files only (implement-ticket-parallel, section 4). CI runs the full suite on the PR.
 
 ## Comments
+
+- **2026-11-20 (agent):** Added `interlock_closed: bool = False` to `CupActuationState` in
+  `src/rbl/snapshots.py`, tracked `_cup_interlock_closed` in `CupActuationLinkMixin`
+  (`src/rbl/state/cup_actuation_link.py`), and added `release_cup_interlock()` and
+  `close_cup_interlock()`. Covered by `test_release_interlock_opens_both_relays`,
+  `test_close_interlock_writes_only_the_interlock_line`, and
+  `test_interlock_state_follows_connect_command_and_disconnect` in `tests/test_cup_actuation.py`.

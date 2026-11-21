@@ -324,6 +324,58 @@ class TestCupActuationTeardownAndShutdown:
         # Positional command must NEVER be issued on shutdown
         assert command_spy.call_count == 0
 
+    def test_release_interlock_opens_both_relays(self):
+        beamline = Beamline()
+        beamline.lj = MagicMock()
+        beamline.lj.connected = True
+        snapshots = []
+        beamline.cup_actuation_changed.connect(snapshots.append)
+
+        beamline._on_labjack_connect_cup()
+        beamline.lj.write_digital.reset_mock()
+
+        beamline.release_cup_interlock()
+        written = [call.args for call in beamline.lj.write_digital.call_args_list]
+        assert (CUP_INTERLOCK_LINE, 0) in written
+        assert (CUP_COMMAND_OUT_LINE, 0) in written
+        assert snapshots[-1].interlock_closed is False
+        assert snapshots[-1].commanded == CupPosition.IN
+
+    def test_close_interlock_writes_only_the_interlock_line(self):
+        beamline = Beamline()
+        beamline.lj = MagicMock()
+        beamline.lj.connected = True
+        snapshots = []
+        beamline.cup_actuation_changed.connect(snapshots.append)
+
+        beamline._on_labjack_connect_cup()
+        beamline.release_cup_interlock()
+        beamline.lj.write_digital.reset_mock()
+
+        beamline.close_cup_interlock()
+        written = [call.args for call in beamline.lj.write_digital.call_args_list]
+        assert written == [(CUP_INTERLOCK_LINE, 1)]
+        assert snapshots[-1].interlock_closed is True
+
+    def test_interlock_state_follows_connect_command_and_disconnect(self):
+        beamline = Beamline()
+        beamline.lj = MagicMock()
+        beamline.lj.connected = True
+        snapshots = []
+        beamline.cup_actuation_changed.connect(snapshots.append)
+
+        beamline._on_labjack_connect_cup()
+        assert snapshots[-1].interlock_closed is True
+
+        beamline.release_cup_interlock()
+        assert snapshots[-1].interlock_closed is False
+
+        beamline.command_cup_out()
+        assert snapshots[-1].interlock_closed is True
+
+        beamline._on_labjack_disconnect_cup()
+        assert snapshots[-1].interlock_closed is False
+
 
 class TestStreamWorkerPendingWrites:
     """Verify LabJackStreamWorker thread-safe pending writes slot."""
