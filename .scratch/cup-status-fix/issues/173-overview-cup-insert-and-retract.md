@@ -1,6 +1,6 @@
 # 173: Insert and Retract on the Overview's Faraday cup panel
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -33,23 +33,23 @@ cycle notification and the same **manual insertion** record. A panel that called
 
 ## Acceptance criteria
 
-- [ ] Test `test_panel_move_buttons_follow_the_t7_connection`, in `tests/test_cup_panel.py`:
+- [x] Test `test_panel_move_buttons_follow_the_t7_connection`, in `tests/test_cup_panel.py`:
       a fresh `CupPanel` has both buttons disabled; after `on_cup_actuation_state` with
       `_actuation(1.0, CupPosition.OUT)` both are enabled; after a state with
       `connected=False` both are disabled.
-- [ ] Test `test_panel_move_buttons_emit_intent_only`, in `tests/test_cup_panel.py`: with the
+- [x] Test `test_panel_move_buttons_emit_intent_only`, in `tests/test_cup_panel.py`: with the
       buttons enabled, clicking `btn_insert` emits `insert_requested` once and
       `retract_requested` never; clicking `btn_retract` emits `retract_requested` once.
-- [ ] Test `test_overview_insert_moves_the_cup_through_the_faraday_tab`, in
+- [x] Test `test_overview_insert_moves_the_cup_through_the_faraday_tab`, in
       `tests/test_cup_panel.py`, with a `MainWindow` built as the existing wiring test builds
       it: `win.beamline.command_cup_in` monkeypatched to count calls, and
       `win.beamline.cup_actuation_changed.emit(_actuation(1.0, CupPosition.OUT))`; clicking
       the overview panel's `btn_insert` twice records exactly one call, because the tab
       ignores a second insert while the first move is in flight.
-- [ ] Test `test_overview_retract_moves_the_cup_through_the_faraday_tab`, in
+- [x] Test `test_overview_retract_moves_the_cup_through_the_faraday_tab`, in
       `tests/test_cup_panel.py`: the same with `command_cup_out`, starting from
       `_actuation(1.0, CupPosition.IN)` and `btn_retract`.
-- [ ] The Faraday Cup tab's own Insert/Retract tests still pass unchanged. (no test: CI's full suite)
+- [x] The Faraday Cup tab's own Insert/Retract tests still pass unchanged. (no test: CI's full suite)
 
 **What tests may fake:** `Beamline.command_cup_in` / `command_cup_out` (no T7). The panel,
 the tab and the `MainWindow` wiring are real.
@@ -69,3 +69,9 @@ pytest --tb=short -q -n auto --dist loadfile --max-worker-restart=0 tests/test_c
 Run pytest on the touched test files only (implement-ticket-parallel, section 4). CI runs the full suite on the PR.
 
 ## Comments
+
+Summary (2026-11-20):
+- Added `insert_requested` / `retract_requested` signals and `btn_insert` / `btn_retract` buttons (enabled only when `CupActuationState.connected` is True) to `CupPanel` in `src/rbl/gui/widgets/cup_panel.py`.
+- Extracted public `insert_cup()` and `retract_cup()` on `FaradayCupTab` in `src/rbl/gui/faraday_cup_tab.py`; `_on_insert_clicked` and `_on_retract_clicked` delegate to them.
+- Wired `cup_panel.insert_requested` -> `faraday_cup_tab.insert_cup` and `cup_panel.retract_requested` -> `faraday_cup_tab.retract_cup` in `src/rbl/gui/app.py`.
+- Added the 4 required tests in `tests/test_cup_panel.py` (all 138 tests in `test_cup_panel.py` and `test_faraday_cup_tab.py` pass). Bench verification covered by ticket 174.

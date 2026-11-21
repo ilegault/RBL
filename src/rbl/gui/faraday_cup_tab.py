@@ -1986,8 +1986,8 @@ class FaradayCupTab(QWidget):
 
     # ── Cup Actuation and Confirmed Position (ADR 0003) ──────────────────────
 
-    def _on_insert_clicked(self) -> None:
-        """Handle operator pressing Insert button."""
+    def insert_cup(self) -> None:
+        """Command a manual cup insertion from this tab or the Overview panel."""
         if self._move_in_flight:
             return
         if not self._actuation_connected:
@@ -2001,8 +2001,8 @@ class FaradayCupTab(QWidget):
             self.beamline.command_cup_in()
         self._update_cycle_view(t_now)
 
-    def _on_retract_clicked(self) -> None:
-        """Handle operator pressing Retract button."""
+    def retract_cup(self) -> None:
+        """Command a manual cup retraction from this tab or the Overview panel."""
         if self._move_in_flight:
             return
         if not self._actuation_connected:
@@ -2015,6 +2015,14 @@ class FaradayCupTab(QWidget):
         if self.beamline is not None:
             self.beamline.command_cup_out()
         self._update_cycle_view(t_now)
+
+    def _on_insert_clicked(self) -> None:
+        """Handle operator pressing Insert button."""
+        self.insert_cup()
+
+    def _on_retract_clicked(self) -> None:
+        """Handle operator pressing Retract button."""
+        self.retract_cup()
 
     def _start_move(self, target: CupPosition) -> None:
         """Initiate a commanded cup move and start confirmation timeout tracking."""
