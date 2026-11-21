@@ -1,6 +1,6 @@
 # 172: Interlock control and state on the Faraday Cup tab
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -35,22 +35,22 @@ bench can confirm its effect on the front panel. Blocked by 170 because both edi
 
 ## Acceptance criteria
 
-- [ ] Test `test_interlock_button_releases_and_label_reads_open`, in
+- [x] Test `test_interlock_button_releases_and_label_reads_open`, in
       `tests/test_faraday_cup_tab.py`: a `Beamline` with `lj.handle = 1`, a
       `CupActuationFeed`, `beamline._on_labjack_connect_cup()`, word 4 sent; the label reads
       the closed text and the button `Release interlock`; after a click the label reads the
       open text and the button `Close interlock`.
-- [ ] Test `test_close_interlock_button_restores_closed`, in `tests/test_faraday_cup_tab.py`:
+- [x] Test `test_close_interlock_button_restores_closed`, in `tests/test_faraday_cup_tab.py`:
       same setup, two clicks; the label reads the closed text again.
-- [ ] Test `test_interlock_controls_disabled_without_t7`, in `tests/test_faraday_cup_tab.py`:
+- [x] Test `test_interlock_controls_disabled_without_t7`, in `tests/test_faraday_cup_tab.py`:
       a `Beamline()` with no handle and one snapshot with `connected=False`; the label reads
       `Interlock: —` and the button is disabled.
-- [ ] Test `test_interlock_button_disabled_during_automatic_insertion`, in
+- [x] Test `test_interlock_button_disabled_during_automatic_insertion`, in
       `tests/test_faraday_cup_tab.py`, built as `make_tab_and_feed` builds its rig: after a
       snapshot with `connected=True, interlock_closed=True` and clicking `btn_cycle_arm`, the
       button is disabled; after `btn_cycle_stop` and confirming the stop as the existing
       stop tests do, it is enabled.
-- [ ] Test `test_release_with_cup_out_is_tracked_as_an_insertion`, in
+- [x] Test `test_release_with_cup_out_is_tracked_as_an_insertion`, in
       `tests/test_faraday_cup_tab.py`: with the cup confirmed OUT (word 8) and the interlock
       closed, click the button, then send word 12 and word 4; `lbl_commanded` and
       `lbl_confirmed` contain "IN" and `lbl_fault` text does not contain "Move Fault".
@@ -73,3 +73,5 @@ pytest --tb=short -q -n auto --dist loadfile --max-worker-restart=0 tests/test_f
 Run pytest on the touched test files only (implement-ticket-parallel, section 4). CI runs the full suite on the PR.
 
 ## Comments
+
+2026-11-20: Implemented `lbl_interlock` and `btn_interlock` in `FaradayCupTab`'s Cup Actuation box (`src/rbl/gui/faraday_cup_tab.py`), driven by `CupActuationState.interlock_closed`, `CycleState`, and `_move_in_flight`. Releasing the interlock while the cup is not IN tracks an operator insertion before calling `beamline.release_cup_interlock()`. Covered by all five named tests in `tests/test_faraday_cup_tab.py` (`test_interlock_button_releases_and_label_reads_open`, `test_close_interlock_button_restores_closed`, `test_interlock_controls_disabled_without_t7`, `test_interlock_button_disabled_during_automatic_insertion`, `test_release_with_cup_out_is_tracked_as_an_insertion`). Bench verification of physical interlock behaviour remains in ticket 174.

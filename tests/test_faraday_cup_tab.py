@@ -873,6 +873,90 @@ class TestFaradayCupActuationUI:
             "remote commands will be ignored"
         )
 
+    def test_interlock_button_releases_and_label_reads_open(self, qapp):
+        beamline = Beamline()
+        beamline.lj.handle = 1
+        tab = FaradayCupTab(beamline=beamline)
+        feed = CupActuationFeed(tab, beamline=beamline)
+        tab.show()
+        qapp.processEvents()
+
+        beamline._on_labjack_connect_cup()
+        feed.send_fio_state(4, t=1.0)
+        qapp.processEvents()
+
+        assert tab.lbl_interlock.text() == "Interlock: closed — the cup can go OUT"
+        assert tab.btn_interlock.text() == "Release interlock"
+        assert tab.btn_interlock.isEnabled()
+
+        tab.btn_interlock.click()
+        qapp.processEvents()
+
+        assert (
+            tab.lbl_interlock.text()
+            == "Interlock: open — the cup is held IN, front panel included"
+        )
+        assert tab.btn_interlock.text() == "Close interlock"
+        tab.close()
+
+    def test_close_interlock_button_restores_closed(self, qapp):
+        beamline = Beamline()
+        beamline.lj.handle = 1
+        tab = FaradayCupTab(beamline=beamline)
+        feed = CupActuationFeed(tab, beamline=beamline)
+        tab.show()
+        qapp.processEvents()
+
+        beamline._on_labjack_connect_cup()
+        feed.send_fio_state(4, t=1.0)
+        qapp.processEvents()
+
+        tab.btn_interlock.click()
+        qapp.processEvents()
+        tab.btn_interlock.click()
+        qapp.processEvents()
+
+        assert tab.lbl_interlock.text() == "Interlock: closed — the cup can go OUT"
+        assert tab.btn_interlock.text() == "Release interlock"
+        tab.close()
+
+    def test_interlock_controls_disabled_without_t7(self, qapp):
+        from rbl.snapshots import CupActuationState
+
+        beamline = Beamline()
+        tab = FaradayCupTab(beamline=beamline)
+        tab.show()
+        tab.on_cup_actuation_state(CupActuationState(connected=False))
+        qapp.processEvents()
+
+        assert tab.lbl_interlock.text() == "Interlock: —"
+        assert not tab.btn_interlock.isEnabled()
+        tab.close()
+
+    def test_release_with_cup_out_is_tracked_as_an_insertion(self, qapp):
+        beamline = Beamline()
+        beamline.lj.handle = 1
+        tab = FaradayCupTab(beamline=beamline)
+        feed = CupActuationFeed(tab, beamline=beamline)
+        tab.show()
+        qapp.processEvents()
+
+        beamline._on_labjack_connect_cup()
+        feed.send_fio_state(8, t=1.0)
+        qapp.processEvents()
+
+        tab.btn_interlock.click()
+        qapp.processEvents()
+        feed.send_fio_state(12, t=1.1)
+        qapp.processEvents()
+        feed.send_fio_state(4, t=1.2)
+        qapp.processEvents()
+
+        assert "IN" in tab.lbl_commanded.text()
+        assert "IN" in tab.lbl_confirmed.text()
+        assert "Move Fault" not in tab.lbl_fault.text()
+        tab.close()
+
     def test_actuation_move_in_flight_prevents_second_command(self, qapp, monkeypatch):
         beamline = Beamline()
         beamline.lj.handle = 1
@@ -1117,6 +1201,38 @@ class TestSamplingCycleTab:
 
         assert not tab.cycle.is_armed
         assert tab.btn_cycle_arm.text() == "Start automatic cup insertion"
+        sw.close()
+        tab.close()
+
+    def test_interlock_button_disabled_during_automatic_insertion(self, qapp, tmp_path):
+        from rbl.hardware.cup_status import CupPosition
+        from rbl.snapshots import CupActuationState
+
+        tab, _, sw = self.make_tab_and_feed(qapp, tmp_path)
+        tab.on_cup_actuation_state(
+            CupActuationState(
+                connected=True,
+                commanded=CupPosition.OUT,
+                confirmed=CupPosition.OUT,
+                auto_mode=True,
+                stale=False,
+                last_transition_t=0.0,
+                t=0.0,
+                interlock_closed=True,
+            )
+        )
+        qapp.processEvents()
+        assert tab.btn_interlock.isEnabled()
+
+        tab.btn_cycle_arm.click()
+        qapp.processEvents()
+        assert tab.cycle.is_armed
+        assert not tab.btn_interlock.isEnabled()
+
+        tab.btn_cycle_stop.click()
+        qapp.processEvents()
+        assert not tab.cycle.is_armed
+        assert tab.btn_interlock.isEnabled()
         sw.close()
         tab.close()
 
