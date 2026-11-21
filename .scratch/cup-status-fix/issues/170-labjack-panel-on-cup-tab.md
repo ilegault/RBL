@@ -1,6 +1,6 @@
 # 170: Connect the shared LabJack from the Faraday Cup tab
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -35,20 +35,20 @@ causes transaction conflicts).
 
 ## Acceptance criteria
 
-- [ ] Test `test_cup_tab_connect_button_opens_the_shared_t7`, in `tests/test_gui_hardware.py`:
+- [x] Test `test_cup_tab_connect_button_opens_the_shared_t7`, in `tests/test_gui_hardware.py`:
       with `win.beamline.connect_labjack` monkeypatched to record its arguments, set
       `win.faraday_cup_tab.lj_panel.le_ident` to `470012345` and click its `btn_conn`;
       exactly one call is recorded and its identifier is `470012345`.
-- [ ] Test `test_cup_tab_panel_follows_the_shared_connection`, in `tests/test_gui_hardware.py`:
+- [x] Test `test_cup_tab_panel_follows_the_shared_connection`, in `tests/test_gui_hardware.py`:
       `win._on_labjack_connected("470012345")` makes the cup tab's `lj_panel.btn_conn.text()`
       `Disconnect` and `lbl_serial.text()` `T7 serial #470012345`;
       `win._on_labjack_disconnected()` returns `btn_conn.text()` to `Connect`.
-- [ ] Test `test_cup_tab_is_a_labjack_consumer`, in `tests/test_gui_hardware.py`:
+- [x] Test `test_cup_tab_is_a_labjack_consumer`, in `tests/test_gui_hardware.py`:
       `isinstance(win.faraday_cup_tab, LabJackConsumer)` is true.
-- [ ] Test `test_cup_tab_labjack_panel_sits_in_cup_actuation_box`, in
+- [x] Test `test_cup_tab_labjack_panel_sits_in_cup_actuation_box`, in
       `tests/test_gui_hardware.py`: walking `win.faraday_cup_tab.lj_panel`'s `parent()`
       chain reaches a `QGroupBox` whose `title()` is `Cup Actuation`.
-- [ ] test_stream_consuming_tabs_derived_from_declaration and the rest of
+- [x] test_stream_consuming_tabs_derived_from_declaration and the rest of
       `tests/test_gui_hardware.py` still pass unchanged. (no test: CI's full suite)
 
 **What tests may fake:** `Beamline.connect_labjack` (no real T7). The `MainWindow`, its
@@ -68,3 +68,8 @@ pytest --tb=short -q -n auto --dist loadfile --max-worker-restart=0 tests/test_g
 Run pytest on the touched test files only (implement-ticket-parallel, section 4). CI runs the full suite on the PR.
 
 ## Comments
+
+### 2026-11-20 — Implementation summary
+- Added `self.lj_panel = LabJackPanel()` as the first widget inside `act_lay` ("Cup Actuation") in `src/rbl/gui/faraday_cup_tab.py`, disabled when `LJM_AVAILABLE` is false, and implemented `LabJackConsumer` (`on_labjack_connected`, `on_labjack_disconnected`, `on_labjack_error`, `on_profile_changed`).
+- Set `consumes_stream=True` on the `"Faraday Cup"` `TabDeclaration` in `src/rbl/gui/app.py` so `MainWindow` wires the panel to the shared T7 and fans out LabJack lifecycle events.
+- Added the four tests in `tests/test_gui_hardware.py` (`TestFaradayCupLabJackPanel`), observed them fail before the implementation, and verified all 336 selected tests pass after.
