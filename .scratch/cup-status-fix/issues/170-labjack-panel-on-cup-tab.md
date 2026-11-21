@@ -1,6 +1,6 @@
 # 170: Connect the shared LabJack from the Faraday Cup tab
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
