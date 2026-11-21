@@ -77,6 +77,22 @@ class TestCupActuationSnapshotStructure:
 class TestCupActuationFeedAndTransitions:
     """Verify cup actuation through the production path via CupActuationFeed."""
 
+    def test_confirmed_position_carries_its_raw_word(self):
+        tab = MockCupTab()
+        beamline = Beamline()
+        beamline.lj.handle = 1
+        snapshots: list[CupActuationState] = []
+        beamline.cup_actuation_changed.connect(snapshots.append)
+        feed = CupActuationFeed(tab, beamline=beamline)
+
+        feed.send_fio_state(8, t=1.0)
+        assert snapshots[-1].confirmed == CupPosition.OUT
+        assert snapshots[-1].confirmed_raw == 8
+
+        feed.send_fio_state(4, t=1.2)
+        assert snapshots[-1].confirmed == CupPosition.IN
+        assert snapshots[-1].confirmed_raw == 4
+
     def test_commanded_out_followed_by_confirming_status_word(self):
         tab = MockCupTab()
         beamline = Beamline()

@@ -806,6 +806,37 @@ class TestFaradayCupActuationUI:
         assert "fault" in confirmed_text or "indeterminate" in confirmed_text
         assert tab.lbl_fault.isVisible()
 
+    def test_cup_log_rows_carry_the_raw_contact_word(self, qapp, tmp_path):
+        cup_log = CupLog(test_root=tmp_path)
+        sw = cup_log.open_test(datetime(2026, 10, 8, 9, 0, 0))
+        beamline = Beamline()
+        beamline.lj.handle = 1
+        tab = FaradayCupTab(beamline=beamline, cup_log=cup_log)
+        feed = CupActuationFeed(tab, beamline=beamline)
+        tab.show()
+        qapp.processEvents()
+
+        feed.send_fio_state(8, t=1.0)
+        qapp.processEvents()
+        feed.send_fio_state(4, t=1.2)
+        qapp.processEvents()
+        feed.send_fio_state(0, t=1.4)
+        qapp.processEvents()
+
+        sw.close()
+        tab.close()
+
+        with open(sw.csv_path, encoding="utf-8") as f:
+            rows = list(
+                csv.DictReader([line for line in f if not line.startswith("#")])
+            )
+
+        pos_rows = [r for r in rows if r["record_type"] == "position_transition"]
+        assert [r["status_word"] for r in pos_rows] == ["0x00000008", "0x00000004"]
+        imp_rows = [r for r in rows if r["record_type"] == "fault_impossible_status"]
+        assert len(imp_rows) == 1
+        assert imp_rows[0]["status_word"] == "0x00000000"
+
     def test_insertion_through_transit_raises_no_move_fault(self, qapp):
         beamline = Beamline()
         beamline.lj.handle = 1

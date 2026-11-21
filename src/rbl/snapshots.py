@@ -470,6 +470,8 @@ class CupActuationState:
     - `auto_mode`: True if Faraday Cup Controller is in AUTO mode (remote actuation enabled).
     - `stale`: True if FIO_STATE is absent from the active stream window or timed out.
     - `last_transition_t`: Exact sample timestamp (seconds) of the last confirmed transition.
+    - `confirmed_raw`: Raw FIO_STATE word of the scan segment whose decode became the
+      current confirmed position; None until the first confirmation.
     """
     connected: bool
     commanded: CupPosition = CupPosition.IN
@@ -478,6 +480,7 @@ class CupActuationState:
     stale: bool = False
     last_transition_t: float = float("nan")
     t: float = float("nan")
+    confirmed_raw: int | None = None
 
     @property
     def commanded_position(self) -> CupPosition:

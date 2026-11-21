@@ -2734,6 +2734,7 @@ class FaradayCupTab(QWidget):
                         t_host=t_trans,
                         position=state.confirmed,
                         details=f"confirmed_{state.confirmed.value.lower()}",
+                        raw_status=state.confirmed_raw,
                     )
                 if state.confirmed == CupPosition.IN:
                     self._confirmed_in_t = t_trans
@@ -2760,6 +2761,7 @@ class FaradayCupTab(QWidget):
                 if writer is not None:
                     writer.write_fault_impossible_status(
                         t_host=t_now,
+                        raw_status=state.confirmed_raw,
                         details="both IN and OUT contacts asserted",
                     )
                 self._last_logged_indeterminate = True

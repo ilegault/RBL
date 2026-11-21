@@ -379,6 +379,22 @@ class TestCupSessionWriterDirect:
         imp_row = next(r for r in rows if r["record_type"] == "fault_impossible_status")
         assert imp_row["status_word"] == "0x0000000C" or "0x0000000C" in imp_row["details"]
 
+    def test_position_transition_row_writes_raw_status_word(self, tmp_path):
+        writer = CupSessionWriter(output_dir=tmp_path)
+        writer.write_position_transition(
+            t_host=1.0, position=CupPosition.IN, raw_status=0x04
+        )
+        writer.write_position_transition(t_host=2.0, position=CupPosition.OUT)
+        writer.close()
+
+        with open(writer.csv_path, encoding="utf-8") as f:
+            rows = list(csv.DictReader([line for line in f if not line.startswith("#")]))
+
+        transitions = [r for r in rows if r["record_type"] == "position_transition"]
+        assert len(transitions) == 2
+        assert transitions[0]["status_word"] == "0x00000004"
+        assert transitions[1]["status_word"] == ""
+
     def test_transition_and_sample_same_clock_and_format(self, tmp_path):
         writer = CupSessionWriter(output_dir=tmp_path)
         t_trans = 100.123456
