@@ -1,6 +1,6 @@
 # 172: Interlock control and state on the Faraday Cup tab
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
