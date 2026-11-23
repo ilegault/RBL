@@ -30,3 +30,11 @@ fake camera (1920 × 1080). An agent must not claim this ticket.
 - [ ] Camera tab: the Full screen button opens full screen; Esc closes it.
 
 ## Comments
+
+2026-11-20, bench PC, from source: drawing a Draft, moving it, resizing it, Apply, and
+switching Full sensor ⇄ Back to ROI all work, and the ROI video looks right apart from the
+SER colour problem recorded on ticket 79. Not yet checked: the ROI lock during recording,
+the Last ROI outline after a restart, the four screenshots, and the Full screen button.
+
+UX finding: it was not obvious that you draw the Draft on the Preview first and then
+Apply. The first instinct was to press Apply to start. The panel needs a one-line hint.

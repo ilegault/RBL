@@ -480,36 +480,42 @@ someone else's bug fix smuggled into it cannot be reviewed.
 <!-- ACTIVE-PLAN:START -->
 ## Active implementation plan
 
-_Written by the planning model on 2026-11-20 22:21. Implement this. If something in it is wrong, say so before changing course._
+_Written by the planning model on 2026-11-23 23:02. Implement this. If something in it is wrong, say so before changing course._
 
-# Cup status contacts, cup-tab fixes and interlock control (cup-status-fix)
+# ZWO bench follow-ups: readable SER files, honest feedback, easier settings (zwo-bench-followups)
 
 This is a pointer, not the work.
 
-- **Spec:** `.scratch/cup-status-fix/spec.md`
-- **Binding ADRs:** `docs/adr/0001-tests-first-and-no-muted-failures.md`, `docs/adr/0003-commanded-and-confirmed-cup-position.md`
-- **Glossary:** `CONTEXT.md` — **Asserted** (rewritten: contacts read 0 when asserted; FIO3 = IN, FIO2 = OUT), **Raw contact word** (new), **Interlock** (operator release/close)
-- **Tickets:** `.scratch/cup-status-fix/issues/167`–`174`
+- **Spec:** `.scratch/zwo-bench-followups/spec.md`
+- **Binding ADRs:** `docs/adr/0008-zwo-camera-owned-by-a-capture-process.md`, `docs/adr/0001-tests-first-and-no-muted-failures.md`
+- **Glossary:** `CONTEXT.md` — **Preview white balance** (new), **Auto exposure** (new)
+- **Tickets:** `.scratch/zwo-bench-followups/issues/158`–`166`
 - **Tracker conventions:** `docs/agents/issue-tracker.md`
 
-**Next:** 167 first (the decode fix every later cup ticket builds on, and it unblocks 168). 169, 170 and 173 have no blockers and can run alongside it.
+**Next:** 162 first (it heads the longest chain: 162 → 163 → 164 → 165). 158, 159, 160 and 161 have no blockers and can run alongside it; 159 next, because 164 also waits on it.
 
 Dependency graph:
-- 167 status contacts read 0 when asserted → 168
-- 168 raw contact word in the cup log → 171
-- 169 picoammeter error short line (independent)
-- 170 LabJack panel on the cup tab → 172
-- 171 Beamline interlock release/close → 172
-- 172 interlock control on the cup tab (blocked by 170, 171)
-- 173 Insert/Retract on the Overview cup panel (independent)
-- 174 bench check — ready-for-developer, Runner: developer, not for agents (blocked by 167, 168, 170, 172, 173)
+- 158 SER byte-order flag follows the readers (independent)
+- 159 load exactly the shipped ZWO library; real serial and SDK version → 164
+- 160 Take Darks / Take Photo say what they saved → 165
+- 161 ROI hint on the Camera tab (independent)
+- 162 exposure and gain sliders apply on release → 163, 165
+- 163 auto-exposure and white-balance maths, Preview white balance (blocked by 162) → 164
+- 164 Capture Process answers auto exposure / auto white balance, protocol 2 (blocked by 159, 163) → 165
+- 165 Auto exposure, Auto white balance and Reset colour buttons (blocked by 160, 162, 164)
+- 166 bench check — ready-for-developer, Runner: developer, not for agents (blocked by 158–165)
 
 Requirements an implementer would quietly treat as preferences:
-- Status-word tests use integer literals, never words built from the bit constants.
-- `decode_cup_status()` reads the constants at call time; the monkeypatch test depends on it.
-- The Overview panel emits intent only; the move goes through `FaradayCupTab.insert_cup` / `retract_cup`, never straight to `Beamline`.
-- One T7 handle: the cup tab's LabJack panel joins the existing `_lj_tabs` wiring; no new connect path.
-- Exact UI strings are given in the tickets; use them verbatim.
+- The SER `LittleEndian` field is 0 on purpose; the docstring says why. Never "fix" it back to the SER document.
+- The slider mappings and the auto-adjust maths are pure module-level functions, tested without Qt or a camera.
+- Sliders have tracking off and send one setting on release; rendering repositions them with signals blocked.
+- The Capture Process only suggests; the application applies every suggestion through `set_zwo_settings` / `set_zwo_preview`, so one path records every change.
+- The `--fake-no-frames` and `--fake-red-scale` seams are required: without them `no_frame` and a real white balance cannot be reached in CI.
+- White balance touches the Preview only, never the SER, photos or Dark Frames.
+- `tools/zwo_bench.py` stays free of `rbl` imports.
+- Widget tests use real `QTest` mouse and wheel events, never direct slot calls. Exact UI strings are given in the tickets; use them verbatim.
 
-Deliberately not done: physical rewiring; any change to when the app holds or releases the interlock on connect/disconnect/shutdown; debounce or move-timeout changes; the full right-beamline connection diagram tab (its own effort, afterwards).
+Deliberately not done: the camera's own continuous auto exposure, gain or white balance; manual red/blue sliders; repairing SER files already recorded with flag 1 or moving Dark Frames out of the old `0` folder; upgrading zwoasi; the CI hello timeout (`.scratch/capture-hello-on-ci/`).
+
+Still open from earlier sets: 174 (cup-status-fix bench, developer) and 152 (capture-hello-on-ci, ready-for-agent).
 <!-- ACTIVE-PLAN:END -->

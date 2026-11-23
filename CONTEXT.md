@@ -418,6 +418,16 @@ the full sensor it is shown as the Draft ROI.
 screen. It is for watching only: it is never saved, and its brightness says nothing
 about intensity.
 
+**Preview white balance** — the red and blue gains applied to the Preview so a colour
+camera's picture looks natural on screen. Set once by **Auto white balance** or back to
+1.0 by **Reset colour**. It changes the Preview only: the Master Recording, photos and
+Dark Frames are never colour-corrected.
+
+**Auto exposure** — one click that measures the current ZWO frame once and sets one
+exposure from it, as an ordinary recorded setting change that starts a new Segment. It
+never adjusts again on its own; the camera's own continuous auto exposure and auto gain
+are never used.
+
 **Dark Frame** — a frame taken with the lens capped at a given exposure, gain, bit depth
 and region of interest. It measures the sensor's own offset and hot pixels, does not
 depend on the beamline, and is kept in a library reused across sessions.
