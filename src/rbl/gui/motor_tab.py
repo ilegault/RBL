@@ -8,26 +8,19 @@ Features:
     Move, Overview, and Raster Planner) and target position in cps OR mm/s / mm
     (unit toggle).
   - Per-axis Enable (SH) / Disable (MO) buttons; also single-axis and all-axis.
-  - Automated homing on the home switch's release edge (ADR 0009): two passes
-    at the Approach speed, stepping out one count at a time to read the
-    release edge, and defining zero only if the two edges agree within
+  - Automated homing with HM at 900 cps (ADR 0010): moves off the switch if
+    needed (2000 counts at 1800 cps), then runs two HM passes at 900 cps and
+    defines zero (DP=0, DE=0) at the second stop if the two stops agree within
     4 counts.
   - Big red EMERGENCY STOP always visible.
 
-HOMING ON THE RELEASE EDGE (ADR 0009)
-------------------------------------
-Each slit's home switch and reverse limit trip at the same point, so
-controller HM always ends on the reverse limit. Instead, each home pass drives
-in at the Approach speed until the home switch trips, then steps back out one
-count at a time at rest until the switch releases. Homing runs two passes and
-defines DP=0 on pass 2's edge only if the two edges agree within 4 counts.
+HOMING WITH HM (ADR 0010)
+-------------------------
+Each axis homes with NEC's `HM` sequence:
 
-Two buttons per axis cover the two starting assumptions:
-
-  - "Home {axis}" on each panel: two release-edge passes from wherever the
-    axis already is.
-  - "Seek + Home {axis}" on each panel: jogs in at the seek speed until the
-    home switch trips, then runs the two release-edge passes and DP=0.
+  - "Home {axis}" on each panel: pre-home move off the switch if needed, then
+    two `HM` passes at 900 cps, defining `DP=0` and `DE=0` on pass 2's stop if
+    the two stops agree within 4 counts.
   - "Auto-Home All — One at a Time": all four, sequentially, on one thread.
     One axis in motion and one command on the wire at any moment; a failure
     stops the run with the untried axes untouched. (AutoHomeAllWorker.)
@@ -45,8 +38,8 @@ written at the end, even after a failure or cancel, when at least two readings
 were collected.
 
 Any homing run locks its axis's jog/move/zero controls (a second command on a
-homing axis is the thing to prevent) but never its Stop, its Home buttons —
-which read Cancel while running — or the EMERGENCY STOP, which additionally
+homing axis is the thing to prevent) but never its Stop, its Home button —
+which reads Cancel while running — or the EMERGENCY STOP, which additionally
 cancels every run in progress, because an abort that the next pass undoes a
 second later is not a stop.
 
@@ -260,12 +253,7 @@ class AxisControls(QGroupBox):
         main_layout.addLayout(target_form)
         self._set_target_unit_range("mm")
 
-        # --- Home buttons (always visible) -------------------------------
-        #
-        # Two, because they are two different starting assumptions, not two
-        # levels of a setting. "Home" approaches from wherever the axis already
-        # is, which is right when it is already near the switch. "Seek + Home"
-        # jogs it down onto the switch first, which is what to press from cold.
+        # --- Home button (always visible) --------------------------------
         home_row = QHBoxLayout()
         home_row.setSpacing(4)
 
@@ -276,31 +264,14 @@ class AxisControls(QGroupBox):
             "QPushButton:disabled { background:#c0c0c0; color:#888; }"
         )
         self.btn_home.setToolTip(
-            f"Home axis {axis_letter} from wherever it is now: two release-edge "
-            "passes at the Approach speed, stepping out one count at a time "
-            "until the home switch releases, then DP=0 if the two edges agree "
-            f"within {SC.HOME_EDGE_AGREEMENT_COUNTS} counts.\n"
-            "Use this when the axis is already near its home switch."
+            f"Moves the axis off its switch if it is on one "
+            f"({SC.PRE_HOME_MOVE_COUNTS} counts at {SC.DEFAULT_SPEED_COUNTS_PER_SEC} cps), "
+            f"then homes with HM at {SC.HOMING_SPEED_COUNTS_PER_SEC} cps twice "
+            f"and zeroes at the second stop if the two stops agree within "
+            f"{SC.HOME_STOP_AGREEMENT_COUNTS} counts."
         )
-        self.btn_home.clicked.connect(lambda: self._start_homing(seek_first=False))
+        self.btn_home.clicked.connect(lambda: self._start_homing())
         home_row.addWidget(self.btn_home)
-
-        self.btn_seek_home = QPushButton(f"Seek + Home {axis_letter}")
-        self.btn_seek_home.setStyleSheet(
-            "QPushButton { background:#00607a; color:white; font-weight:bold; }"
-            "QPushButton:hover { background:#00758f; }"
-            "QPushButton:disabled { background:#c0c0c0; color:#888; }"
-        )
-        self.btn_seek_home.setToolTip(
-            f"Jog {axis_letter} negative at {SC.HOME_SEEK_SPEED_COUNTS_PER_SEC} cps "
-            "until the home switch trips, then run the two release-edge passes "
-            f"and set DP=0 if the two edges agree within "
-            f"{SC.HOME_EDGE_AGREEMENT_COUNTS} counts.\n"
-            "This is what to press from cold. One command at a time, and the "
-            "button becomes Cancel while it runs."
-        )
-        self.btn_seek_home.clicked.connect(lambda: self._start_homing(seek_first=True))
-        home_row.addWidget(self.btn_seek_home)
 
         main_layout.addLayout(home_row)
 
@@ -397,7 +368,7 @@ class AxisControls(QGroupBox):
         for w in (self.btn_jog_neg, self.btn_jog_pos, self.btn_stop,
                   self.btn_move, self.btn_zero, self.spn_target,
                   self.spn_speed, self.btn_enable_axis,
-                  self.btn_disable_axis, self.btn_home, self.btn_seek_home):
+                  self.btn_disable_axis, self.btn_home):
             w.setEnabled(on)
 
     # ---- GUI -> Galil action handlers ----------------------------------------
@@ -431,7 +402,7 @@ class AxisControls(QGroupBox):
             lbl.setFont(label_font)
         self.lbl_status.setFont(status_font)
 
-        for btn in (self.btn_move, self.btn_home, self.btn_seek_home):
+        for btn in (self.btn_move, self.btn_home):
             btn.setFont(btn_font)
             btn.setMinimumHeight(btn_h)
 
@@ -551,7 +522,7 @@ class AxisControls(QGroupBox):
     def set_motion_controls_enabled(self, on: bool):
         """Everything that could put a SECOND command on this axis.
 
-        Deliberately not the home buttons: while a run is going they read
+        Deliberately not the home button: while a run is going it reads
         Cancel, and locking the operator out of their own way to stop it is
         the opposite of safe. Stop stays live for the same reason.
         """
@@ -560,7 +531,7 @@ class AxisControls(QGroupBox):
                   self.btn_enable_axis, self.btn_disable_axis):
             w.setEnabled(on)
 
-    def _start_homing(self, seek_first: bool = False):
+    def _start_homing(self):
         """Start (or cancel) this axis's homing run."""
         g = self.get_galil()
         if g is None or not g.connected:
@@ -574,30 +545,24 @@ class AxisControls(QGroupBox):
         if self._busy_fn is not None and self._busy_fn():
             return
 
-        what = "seek + home" if seek_first else "home"
-        self.log(f"# Starting auto-{what} for axis {self.axis}…")
-        (self.btn_seek_home if seek_first else self.btn_home).setText("Cancel")
-        self.lbl_status.setText("Seeking limit…" if seek_first else "Homing…")
+        self.log(f"# Starting auto-home for axis {self.axis}…")
+        self.btn_home.setText("Cancel")
+        self.lbl_status.setText("Homing…")
         self.lbl_status.setStyleSheet("color: #c07000; font-weight: bold;")
 
         # A jog or a Move on this axis mid-run would collide with the routine's
-        # own motion. The home buttons stay live — they are the Cancel.
+        # own motion. The home button stays live — it is the Cancel.
         self._homing_in_progress = True
         self.homing_state_changed.emit(True)
         self.set_motion_controls_enabled(False)
 
-        self._homing_worker = HomingWorker(
-            g, self.axis, self,
-            seek_first=seek_first,
-            approach_speed=self.beamline.home_approach_speed(),
-        )
+        self._homing_worker = HomingWorker(g, self.axis, self)
         self._homing_worker.progress.connect(self.log)
         self._homing_worker.done.connect(self._on_homing_done)
         self._homing_worker.start()
 
     def _reset_home_buttons(self):
         self.btn_home.setText(f"Home {self.axis}")
-        self.btn_seek_home.setText(f"Seek + Home {self.axis}")
 
     def _on_homing_done(self, success: bool, msg: str):
         self._reset_home_buttons()
@@ -1200,7 +1165,6 @@ class MotorTab(QWidget):
 
         self._auto_worker = AutoHomeAllWorker(
             self.galil, SC.AXIS_LETTERS, self,
-            approach_speed=self.beamline.home_approach_speed(),
         )
         self._auto_worker.progress.connect(self._log_line)
         self._auto_worker.axis_started.connect(self._on_auto_axis_started)

@@ -509,8 +509,9 @@ class TestHomingWorker:
         results = []
         hw.done.connect(lambda ok, msg: results.append((ok, msg)))
         hw.run()                              # synchronous (same-thread)
-        assert len([c for c in sim.calls if c[0] == "jog_start"]) == 2
-        assert sim.slits["A"].zeroed_at == [6]
+        assert len([c for c in sim.calls if c[0] == "home"]) == 2
+        assert not [c for c in sim.calls if c[0] == "jog_start"]
+        assert sim.slits["A"].zeroed_at == [-12]
         assert results and results[0][0] is True
 
     def test_backs_off_when_starting_on_home_switch(self, qapp, monkeypatch):
@@ -536,6 +537,7 @@ class TestHomingWorker:
         hw.done.connect(lambda ok, msg: results.append((ok, msg)))
         hw.cancel()
         hw.run()
+        assert g.home.call_count == 0
         assert g.jog_start.call_count == 0
         g.define_zero.assert_not_called()
         assert results and results[0][0] is False
