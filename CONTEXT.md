@@ -223,11 +223,22 @@ be closed before the cup can go OUT by any route: a remote command in AUTO, or t
 front-panel buttons in LOCAL. The controller manual's name for it. Cup OUT needs the
 interlock closed *and* the OUT command closed; anything else leaves the cup IN. Not
 an "enable" — that name is retired. Distinct from the vacuum HV interlock, which
-gates high voltage and has nothing to do with the cup.
+gates high voltage and has nothing to do with the cup. The application closes it on T7
+connect and on every cup command and opens it on disconnect and shutdown; the operator
+can also *release* it (open, which drives the cup IN) and *close* it from the Faraday
+Cup tab. There is no feedback contact: the tab shows the state last commanded.
 
 **Asserted** — a status contact reporting its condition true (cup IN, cup OUT, or
 AUTO). Say *asserted*, not *closed*: which way the contact moves when its condition
-is true is a wiring fact the bench establishes, and it was once assumed wrong.
+is true is a wiring fact the bench establishes, and it has been assumed wrong twice.
+On this controller all three contacts close when asserted, so an asserted line reads
+0 on the T7's pull-ups (meter, 2026-11-08 and 2026-11-20). Which FIO input carries
+which contact is a bench fact too: FIO3 carries IN, FIO2 carries OUT, FIO4 carries AUTO.
+
+**Raw contact word** — the `FIO_STATE` integer exactly as the T7 read it, before
+decoding into a confirmed position and AUTO mode. The cup log writes it in the
+`status_word` column of position and impossible-status rows, so a wrong decode can be
+checked against what the contacts actually said.
 
 **Sampling insertion** — a short, commanded insertion whose purpose is to measure the
 transmitted current once, not to irradiate anything. Seconds, not minutes. The thing

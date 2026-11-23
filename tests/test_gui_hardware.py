@@ -675,3 +675,42 @@ class TestConnectAll:
         for _name, fn in win._connect_all_steps():
             src = inspect.getsource(fn)
             assert "disconnect" not in src.lower()
+
+
+class TestFaradayCupLabJackPanel:
+    """Shared LabJackPanel on the Faraday Cup tab (ticket 170)."""
+
+    def test_cup_tab_connect_button_opens_the_shared_t7(self, win, monkeypatch):
+        calls: list[tuple[str, str]] = []
+        monkeypatch.setattr(
+            win.beamline,
+            "connect_labjack",
+            lambda conn_type, identifier: calls.append((conn_type, identifier)),
+        )
+        win.faraday_cup_tab.lj_panel.le_ident.setText("470012345")
+        win.faraday_cup_tab.lj_panel.btn_conn.click()
+        assert len(calls) == 1
+        assert calls[0][1] == "470012345"
+
+    def test_cup_tab_panel_follows_the_shared_connection(self, win):
+        win._on_labjack_connected("470012345")
+        assert win.faraday_cup_tab.lj_panel.btn_conn.text() == "Disconnect"
+        assert win.faraday_cup_tab.lj_panel.lbl_serial.text() == "T7 serial #470012345"
+
+        win._on_labjack_disconnected()
+        assert win.faraday_cup_tab.lj_panel.btn_conn.text() == "Connect"
+
+    def test_cup_tab_is_a_labjack_consumer(self, win):
+        from rbl.gui.labjack_consumer import LabJackConsumer
+        assert isinstance(win.faraday_cup_tab, LabJackConsumer)
+
+    def test_cup_tab_labjack_panel_sits_in_cup_actuation_box(self, win):
+        from PySide6.QtWidgets import QGroupBox
+        w = win.faraday_cup_tab.lj_panel.parent()
+        found = False
+        while w is not None:
+            if isinstance(w, QGroupBox) and w.title() == "Cup Actuation":
+                found = True
+                break
+            w = w.parent()
+        assert found

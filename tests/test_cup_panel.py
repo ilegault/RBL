@@ -385,3 +385,87 @@ def test_rig_converging_insertion_matches_tabs_uncertainty_percentage(rig, qapp)
     tab_pct = tab.lbl_uncertainty.text().split(" (")[0]
     assert tab_pct.endswith("%")
     assert tab_pct in panel.lbl_uncertainty_bar.text()
+
+
+def test_panel_move_buttons_follow_the_t7_connection(qapp):
+    panel = CupPanel(CupLog())
+    try:
+        assert not panel.btn_insert.isEnabled()
+        assert not panel.btn_retract.isEnabled()
+
+        panel.on_cup_actuation_state(_actuation(1.0, CupPosition.OUT))
+        assert panel.btn_insert.isEnabled()
+        assert panel.btn_retract.isEnabled()
+
+        panel.on_cup_actuation_state(CupActuationState(connected=False))
+        assert not panel.btn_insert.isEnabled()
+        assert not panel.btn_retract.isEnabled()
+    finally:
+        panel.close()
+
+
+def test_panel_move_buttons_emit_intent_only(qapp):
+    panel = CupPanel(CupLog())
+    inserts: list[None] = []
+    retracts: list[None] = []
+    panel.insert_requested.connect(lambda: inserts.append(None))
+    panel.retract_requested.connect(lambda: retracts.append(None))
+    try:
+        panel.on_cup_actuation_state(_actuation(1.0, CupPosition.OUT))
+        panel.btn_insert.click()
+        qapp.processEvents()
+        assert len(inserts) == 1
+        assert len(retracts) == 0
+
+        panel.btn_retract.click()
+        qapp.processEvents()
+        assert len(inserts) == 1
+        assert len(retracts) == 1
+    finally:
+        panel.close()
+
+
+def test_overview_insert_moves_the_cup_through_the_faraday_tab(qapp, monkeypatch):
+    from rbl.gui.app import MainWindow
+
+    win = MainWindow()
+    try:
+        win.show()
+        qapp.processEvents()
+        calls: list[None] = []
+        monkeypatch.setattr(win.beamline, "command_cup_in", lambda: calls.append(None))
+        win.beamline.cup_actuation_changed.emit(_actuation(1.0, CupPosition.OUT))
+        qapp.processEvents()
+
+        panel = win.overview_tab.cup_panel
+        assert panel is not None
+        panel.btn_insert.click()
+        panel.btn_insert.click()
+        qapp.processEvents()
+        assert len(calls) == 1
+    finally:
+        win.close()
+        qapp.processEvents()
+
+
+def test_overview_retract_moves_the_cup_through_the_faraday_tab(qapp, monkeypatch):
+    from rbl.gui.app import MainWindow
+
+    win = MainWindow()
+    try:
+        win.show()
+        qapp.processEvents()
+        calls: list[None] = []
+        monkeypatch.setattr(win.beamline, "command_cup_out", lambda: calls.append(None))
+        win.beamline.cup_actuation_changed.emit(_actuation(1.0, CupPosition.IN))
+        qapp.processEvents()
+
+        panel = win.overview_tab.cup_panel
+        assert panel is not None
+        panel.btn_retract.click()
+        panel.btn_retract.click()
+        qapp.processEvents()
+        assert len(calls) == 1
+    finally:
+        win.close()
+        qapp.processEvents()

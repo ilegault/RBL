@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QGridLayout,
     QGroupBox,
@@ -114,7 +115,10 @@ class _UncertaintyBar(QProgressBar):
 
 
 class CupPanel(QGroupBox):
-    """Faraday cup status plus Start/Stop Logging for a cup test log."""
+    """Faraday cup status plus Start/Stop Logging and Insert/Retract intent."""
+
+    insert_requested = Signal()
+    retract_requested = Signal()
 
     def __init__(self, cup_log: CupLog, parent=None) -> None:
         super().__init__("Faraday Cup", parent)
@@ -194,6 +198,18 @@ class CupPanel(QGroupBox):
             f"color: {theme.NEUTRAL}; font-size: {theme.FS_CAPTION}px;"
         )
         lay.addWidget(self.lbl_last_insertion)
+
+        self.btn_insert = QPushButton("Insert")
+        self.btn_insert.setEnabled(False)
+        self.btn_insert.clicked.connect(self.insert_requested)
+        self.btn_retract = QPushButton("Retract")
+        self.btn_retract.setEnabled(False)
+        self.btn_retract.clicked.connect(self.retract_requested)
+        move_row = QHBoxLayout()
+        move_row.setSpacing(6)
+        move_row.addWidget(self.btn_insert)
+        move_row.addWidget(self.btn_retract)
+        lay.addLayout(move_row)
 
         self.btn_logging = QPushButton("Start Logging")
         self.btn_logging.clicked.connect(self._on_logging_clicked)
@@ -283,6 +299,8 @@ class CupPanel(QGroupBox):
 
     def on_cup_actuation_state(self, state: CupActuationState) -> None:
         """Render the confirmed (not commanded) position."""
+        self.btn_insert.setEnabled(state.connected)
+        self.btn_retract.setEnabled(state.connected)
         if not state.connected or state.stale:
             self.lbl_position.setText(_DASH)
             return

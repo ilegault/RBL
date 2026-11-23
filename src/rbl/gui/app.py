@@ -133,7 +133,7 @@ TAB_DECLARATIONS: tuple[TabDeclaration, ...] = (
         title="Faraday Cup",
         attr_name="faraday_cup_tab",
         factory=lambda win: FaradayCupTab(win.beamline, win, cup_log=win.cup_log),
-        consumes_stream=False,
+        consumes_stream=True,
     ),
     TabDeclaration(
         title="Beam Profiler",
@@ -463,6 +463,8 @@ class MainWindow(QMainWindow):
         self.beamline.cup_changed.connect(cup_panel.on_cup_state)
         self.beamline.cup_actuation_changed.connect(cup_panel.on_cup_actuation_state)
         self.faraday_cup_tab.cup_view_changed.connect(cup_panel.on_cup_view)
+        cup_panel.insert_requested.connect(self.faraday_cup_tab.insert_cup)
+        cup_panel.retract_requested.connect(self.faraday_cup_tab.retract_cup)
         # The frame log records the end-station cup's confirmed position (ADR 0003),
         # the client sends it to the Capture Process only when the label changes.
         self.beamline.cup_actuation_changed.connect(self.capture_client.on_cup_actuation_state)
