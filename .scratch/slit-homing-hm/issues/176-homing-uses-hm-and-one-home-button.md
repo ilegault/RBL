@@ -1,6 +1,6 @@
 # 176: Homing uses HM at 900 cps, and each axis has one Home button
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
