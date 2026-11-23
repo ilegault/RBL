@@ -435,22 +435,38 @@ switch map) do not use it; they run at their own speeds.
 point. It trips when the jaw is fully in, at beam centre. On these slits it trips at
 the same point as the reverse limit.
 
-**Home pass** — drive the axis in until it stops on the home switch, then step it back
-out one count at a time, reading the switch with the axis at rest after every step,
-until the home switch releases. That release point is the pass's **edge**. Homing is two
-home passes whose edges agree, followed by defining the second edge as zero.
+**Pre-home move** — before a home pass, if the axis is on the home switch or the reverse
+limit, one move out of 2000 counts at the slit speed, after which both switches must read
+clear. NEC's own procedure; it is skipped when the axis is already clear of both.
+
+**Homing speed** — the speed of the home move: 900 cps, NEC's homing velocity. Fixed; the
+operator cannot change it.
+
+**Home pass** — a pre-home move if needed, then the Galil's `HM` at the homing speed,
+waiting until the axis is at rest. On these slits the reverse limit ends `HM`, so the pass
+is accepted when the home switch reads tripped and the stop code is 3 (or 10). Homing is two
+home passes whose stop positions agree, followed by defining zero at the second stop.
+
+**Stop position** — the commanded position, at rest, where a home pass's `HM` stopped. It
+is where homing puts zero, and the edge-return test records it every cycle.
+
+**Release edge** — the commanded position where the home switch first reads clear when the
+axis is stepped out one count at a time from the stop position, reading the switch at rest
+after every step. Only the edge-return test measures it; homing does not use it.
 
 **At rest** — an axis whose last move is completely finished: the controller has
 sent every step pulse of the move to the motor and none is still on its way. Planning
 a move can finish before its last pulses go out, so "the move is done" is not yet at
-rest. Every switch reading taken during a home pass or a switch map is taken at rest.
+rest. Every switch reading taken during homing, an edge-return test or a switch map is
+taken at rest.
 
-**Approach speed** — the speed homing drives an axis in onto the home switch at. The
-edge is read on the way back out with the axis at rest, so the approach speed does not
-decide where zero lands.
+**Approach speed** — the speed the edge-return test moves out and runs `HM` at, set in the
+Approach speed box (2 to 2000 cps, default 900). Homing does not use it; homing always runs
+at the homing speed.
 
 **Reverse limit** — the switch that stops an axis moving further in, toward zero and
-beam centre. It is not the home switch: a home pass that ends on the reverse limit has
+beam centre. It is not the home switch, although on these slits both trip at the same
+count. A home pass that stops with the reverse limit tripped and the home switch clear has
 failed and sets no zero.
 
 **Forward limit** — the switch that stops an axis moving further out, toward the wall.
@@ -464,10 +480,11 @@ from wherever the controller happened to start, not a distance from beam centre.
 controller still counts it, so the commanded position moves on and the jaw does
 not. A stalled stepper loses steps in whole groups of four full steps.
 
-**Edge-return test** — a measurement of homing repeatability: move an axis out, find
-the home switch's transition again with one home pass, read the commanded position
-there without redefining zero, and repeat. How the readings spread, and whether
-they jump in lost-step-sized groups, separates switch jitter from lost steps.
+**Edge-return test** — a measurement of homing repeatability: move an axis out, run `HM`
+at the approach speed, record the stop position, step out to the release edge and record
+it, without redefining zero, and repeat. How each column spreads, and whether it jumps in
+lost-step-sized groups, separates switch jitter from lost steps; comparing the two columns
+shows whether the one-count steps out are themselves losing steps.
 
 **Switch map** — a measurement of where an axis's switches change state: step the
 axis slowly in through the home switch and the reverse limit, then back out, reading
