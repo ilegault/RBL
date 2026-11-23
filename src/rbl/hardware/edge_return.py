@@ -35,6 +35,13 @@ def is_lost_step_jump(delta_counts: int) -> bool:
 
 
 @dataclass(frozen=True)
+class EdgeReturnReading:
+    """One cycle of the edge-return test: where HM stopped and where the switch released."""
+    stop_counts: int
+    edge_counts: int
+
+
+@dataclass(frozen=True)
 class EdgeReturnSummary:
     n: int
     deltas_counts: tuple[int, ...]

@@ -13,6 +13,7 @@ import pytest
 from PySide6.QtWidgets import QApplication
 
 from rbl.config import paths
+from rbl.hardware.edge_return import EdgeReturnReading
 
 
 @pytest.fixture(scope="module")
@@ -73,8 +74,12 @@ def _choose_axis(tab, letter):
     tab.cbo_edge_axis.setCurrentIndex(tab.cbo_edge_axis.findText(label))
 
 
+def _readings(*edges: int) -> list[EdgeReturnReading]:
+    return [EdgeReturnReading(e - 10, e) for e in edges]
+
+
 def test_edge_return_runs_once_at_the_approach_speed(tab, monkeypatch, tmp_path):
-    fake, made = _fake_worker([(True, "ok", [1000, 1001, 1000])])
+    fake, made = _fake_worker([(True, "ok", _readings(1000, 1001, 1000))])
     monkeypatch.setattr("rbl.gui.motor_tab.EdgeReturnWorker", fake)
     _choose_axis(tab, "B")
     tab.btn_edge_run.click()
@@ -88,7 +93,7 @@ def test_edge_return_runs_once_at_the_approach_speed(tab, monkeypatch, tmp_path)
 
 
 def test_edge_return_writes_one_csv_for_the_whole_run(tab, monkeypatch, tmp_path):
-    fake, _ = _fake_worker([(True, "ok", [1000, 1001, 1000])])
+    fake, _ = _fake_worker([(True, "ok", _readings(1000, 1001, 1000))])
     monkeypatch.setattr("rbl.gui.motor_tab.EdgeReturnWorker", fake)
     _choose_axis(tab, "B")
     tab.btn_edge_run.click()
@@ -100,7 +105,7 @@ def test_edge_return_writes_one_csv_for_the_whole_run(tab, monkeypatch, tmp_path
 
 def test_a_failed_speed_ends_the_edge_return_run(tab, monkeypatch):
     msg = "B: home switch did not release within 400 counts — check the sensor"
-    fake, made = _fake_worker([(False, msg, [1000, 1001])])
+    fake, made = _fake_worker([(False, msg, _readings(1000, 1001))])
     monkeypatch.setattr("rbl.gui.motor_tab.EdgeReturnWorker", fake)
     _choose_axis(tab, "B")
     tab.btn_edge_run.click()
@@ -113,7 +118,7 @@ def test_a_failed_speed_ends_the_edge_return_run(tab, monkeypatch):
 
 
 def test_edge_return_refuses_while_homing(tab, monkeypatch):
-    fake, made = _fake_worker([(True, "ok", [1, 2])])
+    fake, made = _fake_worker([(True, "ok", _readings(1, 2))])
     monkeypatch.setattr("rbl.gui.motor_tab.EdgeReturnWorker", fake)
     tab.axes["A"].set_external_status("Auto-homing…")
     tab.btn_edge_run.click()
@@ -123,7 +128,7 @@ def test_edge_return_refuses_while_homing(tab, monkeypatch):
 
 
 def test_edge_return_refuses_without_a_galil(tab, monkeypatch):
-    fake, made = _fake_worker([(True, "ok", [1, 2])])
+    fake, made = _fake_worker([(True, "ok", _readings(1, 2))])
     monkeypatch.setattr("rbl.gui.motor_tab.EdgeReturnWorker", fake)
     tab.galil.connected = False
     tab.btn_edge_run.click()
@@ -132,7 +137,7 @@ def test_edge_return_refuses_without_a_galil(tab, monkeypatch):
 
 
 def test_edge_return_never_defines_zero(tab, monkeypatch):
-    fake, _ = _fake_worker([(True, "ok", [1000, 1001, 1000])])
+    fake, _ = _fake_worker([(True, "ok", _readings(1000, 1001, 1000))])
     monkeypatch.setattr("rbl.gui.motor_tab.EdgeReturnWorker", fake)
     tab.btn_edge_run.click()
     assert not tab.galil.define_zero.called

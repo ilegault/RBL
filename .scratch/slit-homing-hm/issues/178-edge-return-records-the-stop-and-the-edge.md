@@ -1,6 +1,6 @@
 # 178: The edge-return test runs HM and records the stop and the release edge
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -26,12 +26,12 @@ Each edge-return cycle now runs the same `HM` that homing runs, at the approach 
 
 ## Acceptance criteria
 
-- [ ] Test `test_edge_return_records_stop_and_edge_each_cycle` in `tests/test_edge_return_routine.py` (`SimGalil`, `time.sleep` patched out): axis A starts clear; 3 cycles at approach speed 600, out 2000. The result is ok with 3 `EdgeReturnReading`s. Each `stop_counts` equals the commanded position read right after that cycle's `home`, and each `edge_counts` is greater than its `stop_counts`. There are exactly 3 `home` calls, each preceded by `set_speed("A", 600)`, and no `define_zero` or `define_encoder_zero` call. The progress lines read `A: cycle k/3 — stop at S cts, edge at E cts`.
-- [ ] Test `test_edge_return_slip_shows_in_both_columns` in `tests/test_edge_return_routine.py`: with `slip_on_home={2: 8}`, cycles 2 and 3 have `stop_counts` and `edge_counts` each exactly 8 lower than cycle 1's.
-- [ ] Test `test_edge_return_starts_off_the_switch_and_stops_on_a_bad_stop` in `tests/test_edge_return_routine.py`: starting on the home switch, the first motion call is `move_relative("A", 2000)`, preceded by `set_speed("A", 1800)`. With a `MagicMock(spec=GalilController)` whose second home move ends with the reverse limit tripped and the home switch clear, `run()` returns False, the message is the reverse-limit message, and there is 1 reading.
-- [ ] Test `test_edge_return_csv_has_stop_and_edge_columns` in `tests/test_edge_return_writer.py`: two runs (speeds 600 and 900, three readings each) written to `tmp_path`. The header equals the step 5 columns. In each run, both delta columns start at 0 and equal that column minus the run's first value of the same column.
-- [ ] (no test: in-place rewrites of existing tests, which CI runs) Rewrite in place, same names, without lowering any test's assert count: every test in `tests/test_edge_return_routine.py` (readings become `EdgeReturnReading`s; slips use `slip_on_home`; test_edge_return_moves_out_at_the_approach_speed also checks the speed set before each `home`); in `tests/test_edge_return_tab.py`, test_edge_return_runs_once_at_the_approach_speed, test_edge_return_writes_one_csv_for_the_whole_run, test_a_failed_speed_ends_the_edge_return_run, test_edge_return_refuses_while_homing, test_edge_return_refuses_without_a_galil and test_edge_return_never_defines_zero (fake worker payloads become reading lists); and test_edge_return_csv_rows in `tests/test_edge_return_writer.py` (new header and rows).
-- [ ] (no test: CI's full suite) No test is deleted. The switch-map routine and tab tests pass unchanged.
+- [x] Test `test_edge_return_records_stop_and_edge_each_cycle` in `tests/test_edge_return_routine.py` (`SimGalil`, `time.sleep` patched out): axis A starts clear; 3 cycles at approach speed 600, out 2000. The result is ok with 3 `EdgeReturnReading`s. Each `stop_counts` equals the commanded position read right after that cycle's `home`, and each `edge_counts` is greater than its `stop_counts`. There are exactly 3 `home` calls, each preceded by `set_speed("A", 600)`, and no `define_zero` or `define_encoder_zero` call. The progress lines read `A: cycle k/3 — stop at S cts, edge at E cts`.
+- [x] Test `test_edge_return_slip_shows_in_both_columns` in `tests/test_edge_return_routine.py`: with `slip_on_home={2: 8}`, cycles 2 and 3 have `stop_counts` and `edge_counts` each exactly 8 lower than cycle 1's.
+- [x] Test `test_edge_return_starts_off_the_switch_and_stops_on_a_bad_stop` in `tests/test_edge_return_routine.py`: starting on the home switch, the first motion call is `move_relative("A", 2000)`, preceded by `set_speed("A", 1800)`. With a `MagicMock(spec=GalilController)` whose second home move ends with the reverse limit tripped and the home switch clear, `run()` returns False, the message is the reverse-limit message, and there is 1 reading.
+- [x] Test `test_edge_return_csv_has_stop_and_edge_columns` in `tests/test_edge_return_writer.py`: two runs (speeds 600 and 900, three readings each) written to `tmp_path`. The header equals the step 5 columns. In each run, both delta columns start at 0 and equal that column minus the run's first value of the same column.
+- [x] (no test: in-place rewrites of existing tests, which CI runs) Rewrite in place, same names, without lowering any test's assert count: every test in `tests/test_edge_return_routine.py` (readings become `EdgeReturnReading`s; slips use `slip_on_home`; test_edge_return_moves_out_at_the_approach_speed also checks the speed set before each `home`); in `tests/test_edge_return_tab.py`, test_edge_return_runs_once_at_the_approach_speed, test_edge_return_writes_one_csv_for_the_whole_run, test_a_failed_speed_ends_the_edge_return_run, test_edge_return_refuses_while_homing, test_edge_return_refuses_without_a_galil and test_edge_return_never_defines_zero (fake worker payloads become reading lists); and test_edge_return_csv_rows in `tests/test_edge_return_writer.py` (new header and rows).
+- [x] (no test: CI's full suite) No test is deleted. The switch-map routine and tab tests pass unchanged.
 
 **What tests may fake:** the controller (`SimGalil`, or `MagicMock(spec=GalilController)` for the bad stop), `time.sleep`, and the worker in the tab tests. The routine, the writer (on `tmp_path`) and the tab are real.
 
@@ -49,3 +49,10 @@ pytest --tb=short -q -n auto --dist loadfile --max-worker-restart=0 tests/test_e
 Run pytest on the touched test files only (implement-ticket-parallel, section 4). CI runs the full suite on the PR.
 
 ## Comments
+
+### 2026-11-23 — Done
+- Added `EdgeReturnReading(stop_counts, edge_counts)` in `src/rbl/hardware/edge_return.py`.
+- Removed `approach()` and `AxisHomeRoutine.approach_speed`; updated `creep_to_release(speed)` and `EdgeReturnRoutine.run()` in `src/rbl/hardware/galil_workers.py` to run `pre_home_move()` once and `home_move(approach_speed)` + `creep_to_release(approach_speed)` each cycle without defining zero.
+- Updated `src/rbl/services/edge_return_writer.py` to write `stop_counts`, `stop_delta_from_first_counts`, `edge_counts`, and `edge_delta_from_first_counts`.
+- Updated `MotorTab._on_edge_return_done` in `src/rbl/gui/motor_tab.py` to compute the single summary line over `[r.edge_counts for r in readings]` and write the CSV from `EdgeReturnReading`s.
+- Covered by `tests/test_edge_return_routine.py`, `tests/test_edge_return_writer.py`, and `tests/test_edge_return_tab.py` (70 selected tests green).

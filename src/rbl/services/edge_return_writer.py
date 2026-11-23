@@ -18,18 +18,27 @@ from pathlib import Path
 
 from rbl.config import hardware_config as SC
 from rbl.config import paths
+from rbl.hardware.edge_return import EdgeReturnReading
 
-CSV_COLUMNS = ["axis", "slit", "pass_speed_cps", "cycle", "edge_counts",
-               "delta_from_first_counts"]
+CSV_COLUMNS = [
+    "axis",
+    "slit",
+    "pass_speed_cps",
+    "cycle",
+    "stop_counts",
+    "stop_delta_from_first_counts",
+    "edge_counts",
+    "edge_delta_from_first_counts",
+]
 
 
 def write_edge_return_csv(
     axis_letter: str,
-    runs: list[tuple[int, list[int]]],
+    runs: list[tuple[int, list[EdgeReturnReading]]],
     directory: Path | None = None,
     now: datetime | None = None,
 ) -> Path:
-    """Write one row per reading; `runs` is [(pass_speed_cps, readings), ...]."""
+    """Write one row per reading; `runs` is [(pass_speed_cps, [EdgeReturnReading, ...]), ...]."""
     directory = Path(paths.HOMING_DIR if directory is None else directory)
     now = now or datetime.now()
     directory.mkdir(parents=True, exist_ok=True)
@@ -39,7 +48,18 @@ def write_edge_return_csv(
         w = csv.writer(f)
         w.writerow(CSV_COLUMNS)
         for speed, readings in runs:
-            for i, counts in enumerate(readings):
-                w.writerow([axis_letter, slit, speed, i + 1, counts,
-                            counts - readings[0]])
+            if not readings:
+                continue
+            first = readings[0]
+            for i, reading in enumerate(readings):
+                w.writerow([
+                    axis_letter,
+                    slit,
+                    speed,
+                    i + 1,
+                    reading.stop_counts,
+                    reading.stop_counts - first.stop_counts,
+                    reading.edge_counts,
+                    reading.edge_counts - first.edge_counts,
+                ])
     return path
