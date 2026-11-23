@@ -130,6 +130,12 @@ HOME_CREEP_MAX_COUNTS              = 400  # ADR 0009: fail with "check the senso
 HOME_PASS2_BACKOFF_COUNTS          = 300  # ADR 0009: back-off distance before pass 2
 HOME_EDGE_AGREEMENT_COUNTS         = 4    # ADR 0009: half of an 8-count lost-step jump
 
+# HM homing (ADR 0010): NEC's procedure — pre-home move if on switch, then HM at 900 cps twice.
+HOMING_SPEED_COUNTS_PER_SEC = 900  # ADR 0010: fixed NEC homing speed (SP 900)
+PRE_HOME_MOVE_COUNTS = 2000  # ADR 0010: pre-home move off switch (PR 2000)
+HOME_STOP_AGREEMENT_COUNTS = 4  # ADR 0010: max gap between two HM stop positions
+HOME_ACCEPTED_STOP_CODES = (3, 10)  # ADR 0010: reverse limit (3) or HM end (10)
+
 # Switch map measurement (ADR 0009): step slowly in through the home switch and
 # reverse limit one count at a time, then back out, reading all switches at rest.
 SWITCH_MAP_STEP_COUNTS = 1                # single-count step for switch-edge resolution

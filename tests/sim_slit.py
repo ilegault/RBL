@@ -3,8 +3,8 @@ Simulated slit axes and Galil controller for homing, edge-return, and switch-map
 
 WHY THIS EXISTS
 ---------------
-The behaviour under test in release-edge homing (ADR 0009) is "where does zero
-land given where the switch is, including hysteresis, overshoot, and lost
+The behaviour under test in slit homing (ADR 0009 and ADR 0010) is "where does
+zero land given where the switch is, including hysteresis, overshoot, and lost
 steps?". Scripted MagicMock return values cannot answer that; only a simulated
 axis with a real position and switch hysteresis can.
 """
@@ -23,6 +23,7 @@ class SimSlit:
         reverse_release_at: int | None = None,
         overshoot_per_100_cps: int = 1,
         slip_on_jog: dict[int, int] | None = None,
+        slip_on_home: dict[int, int] | None = None,
         pulse_lag_calls: int = 0,
     ):
         self.phys = start_at
@@ -35,6 +36,7 @@ class SimSlit:
         )
         self.overshoot_per_100_cps = overshoot_per_100_cps
         self.slip_on_jog = dict(slip_on_jog) if slip_on_jog is not None else {}
+        self.slip_on_home = dict(slip_on_home) if slip_on_home is not None else {}
         self.pulse_lag_calls = pulse_lag_calls
         self.pending_delta = 0
         self._lag_remaining = 0
@@ -46,6 +48,7 @@ class SimSlit:
         self.stop_code = 1
         self.speed = 0
         self._jog_count = 0
+        self._home_count = 0
 
     @property
     def rp(self) -> int:
@@ -151,6 +154,27 @@ class SimGalil:
         s = self.slits[axis]
         s.zeroed_at.append(s.rp)
         s.offset = -s.phys
+
+    def define_encoder_zero(self, axis: str) -> None:
+        self._record("define_encoder_zero", axis)
+
+    def home(self, axis: str) -> None:
+        self._record("home", axis)
+        s = self.slits[axis]
+        if s.reverse_tripped:
+            raise GalilError("BG", "22 Begin not possible due to limit switch", 22)
+        s._home_count += 1
+        while not (s.home_tripped or s.reverse_tripped):
+            s._step_by(-1)
+        if s.reverse_tripped:
+            overshoot = (abs(s.speed) // 100) * s.overshoot_per_100_cps
+            for _ in range(overshoot):
+                s._step_by(-1)
+            s.stop_code = 3
+        else:
+            s.stop_code = 10
+        if s._home_count in s.slip_on_home:
+            s.offset -= s.slip_on_home[s._home_count]
 
     def move_relative(self, axis: str, delta_counts: int) -> None:
         self._record("move_relative", axis, delta_counts)

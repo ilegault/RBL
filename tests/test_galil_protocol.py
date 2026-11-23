@@ -250,6 +250,24 @@ class TestMotionCommands:
         g.define_zero("D")
         assert g.sock.sent == ["DP ,,,0"]
 
+    def test_home_sends_hm_then_bg(self):
+        g = make_galil()
+        g.home("C")
+        assert g.sock.sent == ["HM C", "BG C"]
+        assert not any(c.startswith("SP") for c in g.sock.sent)
+
+    def test_define_encoder_zero_sends_de_with_the_axis_prefix(self):
+        g = make_galil()
+        g.define_encoder_zero("C")
+        g.define_encoder_zero("A")
+        assert g.sock.sent == ["DE ,,0", "DE 0"]
+
+    def test_hm_homing_constants_match_adr_0010(self):
+        assert SC.HOMING_SPEED_COUNTS_PER_SEC == 900
+        assert SC.PRE_HOME_MOVE_COUNTS == 2000
+        assert SC.HOME_STOP_AGREEMENT_COUNTS == 4
+        assert SC.HOME_ACCEPTED_STOP_CODES == (3, 10)
+
     def test_enable_disable(self):
         g = make_galil()
         g.enable("AB")
