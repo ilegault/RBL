@@ -1,6 +1,6 @@
 # 175: The Galil driver and the simulated slit can run HM and define the encoder zero
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
