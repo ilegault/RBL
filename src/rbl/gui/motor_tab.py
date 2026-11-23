@@ -674,6 +674,7 @@ class MotorTab(QWidget):
         # The all-axes homing worker, while running.
         self._auto_worker: AutoHomeAllWorker | None = None          # sequential
         self._auto_homing_locked = False
+        self._auto_failures: list[str] = []
 
         outer_layout = QHBoxLayout(self)
         outer_layout.setContentsMargins(8, 8, 8, 8)
@@ -828,9 +829,10 @@ class MotorTab(QWidget):
     # calibration could start. This button does that whole set from one click.
 
     _AUTO_HOME_STANDING = (
-        "Homes all four slits, one at a time: each is driven onto its home "
-        "switch, stepped back out to where the switch releases, twice, and "
-        "zeroed there if the two agree within 4 counts. Start it and work on "
+        f"Homes all four slits, one at a time, with HM at "
+        f"{SC.HOMING_SPEED_COUNTS_PER_SEC} cps: twice per axis, zeroed at the "
+        f"second stop if the two agree within {SC.HOME_STOP_AGREEMENT_COUNTS} "
+        "counts. Stops at the first axis that fails. Start it and work on "
         "another tab."
     )
 
@@ -851,16 +853,11 @@ class MotorTab(QWidget):
             "QPushButton:disabled { background:#c0c0c0; color:#888; }"
         )
         self.btn_auto_home_seq.setToolTip(
-            "A, B, C, D in order. Each axis is driven onto its home switch, "
-            "stepped back out to the release edge twice, and zeroed there if "
-            f"the two edges agree within {SC.HOME_EDGE_AGREEMENT_COUNTS} counts "
-            "before the next one is touched, so only one axis is ever moving "
-            "and only one command is ever on the wire.\n\n"
-            "If an axis fails, the sequence stops there and the remaining axes "
-            "are left untouched — you get one clear failure instead of four "
-            "half-homed slits.\n\n"
-            "Safe to leave running while you work on another tab. Press again "
-            "to cancel."
+            f"Homes A, then B, then C, then D with HM at "
+            f"{SC.HOMING_SPEED_COUNTS_PER_SEC} cps, twice per axis, zeroing at "
+            f"the second stop if the two agree within "
+            f"{SC.HOME_STOP_AGREEMENT_COUNTS} counts. Stops at the first axis "
+            "that fails."
         )
         self.btn_auto_home_seq.clicked.connect(self._start_auto_home)
         row.addWidget(self.btn_auto_home_seq, stretch=1)
@@ -1149,14 +1146,16 @@ class MotorTab(QWidget):
             return
         if not self._confirm_auto_home(
                 "Auto-home all four slits",
-                "Each axis will be driven onto its home switch, stepped back "
-                "out to where the switch releases, twice, and zeroed if the "
-                f"two edges agree within {SC.HOME_EDGE_AGREEMENT_COUNTS} counts "
-                "— A, then B, then C, then D.\n\n"
+                "Each axis will be moved off its switch if needed, homed with "
+                f"HM at {SC.HOMING_SPEED_COUNTS_PER_SEC} cps twice, and zeroed "
+                f"at the second stop if the two stops agree within "
+                f"{SC.HOME_STOP_AGREEMENT_COUNTS} counts — A, then B, then C, "
+                "then D.\n\n"
                 "Only one axis moves at a time. Make sure the slits are clear "
                 "to travel.\n\nStart?"):
             return
 
+        self._auto_failures.clear()
         self._lock_axes_for_auto_home(True, "Queued for auto-home")
         self.btn_auto_home_seq.setText("Cancel Auto-Home")
         self._set_auto_home_note("Auto-homing all four axes, one at a time…",
@@ -1181,6 +1180,8 @@ class MotorTab(QWidget):
             theme.WARN)
 
     def _on_auto_axis_finished(self, axis: str, ok: bool, msg: str):
+        if not ok:
+            self._auto_failures.append(msg)
         panel = self.axes.get(axis)
         if panel is None:
             return
@@ -1196,7 +1197,12 @@ class MotorTab(QWidget):
         self._log_line(f"{'✓' if ok else '✗'} {summary}")
         self._set_auto_home_note(summary, theme.OK if ok else theme.FAULT)
         if not ok:
-            QMessageBox.warning(self, "Auto-home did not complete", summary)
+            body = (
+                summary + "\n\n" + "\n".join(self._auto_failures)
+                if self._auto_failures
+                else summary
+            )
+            QMessageBox.warning(self, "Auto-home did not complete", body)
 
     def _on_approach_speed_changed(self, value: float):
         self.beamline.set_home_approach_speed(int(round(value)))

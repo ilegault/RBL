@@ -126,7 +126,6 @@ HOME_APPROACH_SPEED_COUNTS_PER_SEC = 900
 HOME_APPROACH_SPEED_MAX_COUNTS_PER_SEC = 2000
 HOME_CREEP_STEP_COUNTS             = 1    # ADR 0009: single-count step out to read release at rest
 HOME_CREEP_MAX_COUNTS              = 400  # ADR 0009: fail with "check the sensor" if unreleased
-HOME_EDGE_AGREEMENT_COUNTS         = 4    # Retained until ticket 177 rewrites Auto-Home texts
 
 # HM homing (ADR 0010): NEC's procedure — pre-home move if on switch, then HM at 900 cps twice.
 HOMING_SPEED_COUNTS_PER_SEC = 900  # ADR 0010: fixed NEC homing speed (SP 900)

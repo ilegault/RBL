@@ -374,6 +374,93 @@ class TestMotorTabAutoHome:
             for phrase in banned:
                 assert phrase not in text, f"Found {phrase!r} in {text!r}"
 
+    def test_auto_home_confirmation_describes_hm_homing(self, tab):
+        seen: list[tuple[str, str]] = []
+
+        def record_confirm(title: str, body: str) -> bool:
+            seen.append((title, body))
+            return False
+
+        tab._confirm_auto_home = record_confirm
+        tab.btn_auto_home_seq.click()
+
+        assert seen == [(
+            "Auto-home all four slits",
+            "Each axis will be moved off its switch if needed, homed with HM at "
+            "900 cps twice, and zeroed at the second stop if the two stops agree "
+            "within 4 counts — A, then B, then C, then D.\n\n"
+            "Only one axis moves at a time. Make sure the slits are clear to "
+            "travel.\n\nStart?",
+        )]
+        assert tab._auto_worker is None
+
+    def test_auto_home_note_and_tooltip_describe_hm_homing(self, tab):
+        assert tab.lbl_auto_home.text() == (
+            "Homes all four slits, one at a time, with HM at 900 cps: twice per "
+            "axis, zeroed at the second stop if the two agree within 4 counts. "
+            "Stops at the first axis that fails. Start it and work on another tab."
+        )
+        tip = tab.btn_auto_home_seq.toolTip()
+        assert "HM at 900 cps" in tip
+        assert "within 4 counts" in tip
+
+    def test_auto_home_failure_dialog_lists_each_failed_axis(self, tab, monkeypatch):
+        from PySide6.QtCore import QObject, Signal
+
+        created: list[object] = []
+
+        class FakeAutoHomeWorker(QObject):
+            progress = Signal(str)
+            axis_started = Signal(str)
+            axis_finished = Signal(str, bool, str)
+            done = Signal(bool, str)
+
+            def __init__(self, galil, axes, parent=None):
+                super().__init__(parent)
+                self._running = False
+                created.append(self)
+
+            def start(self):
+                self._running = True
+
+            def cancel(self):
+                pass
+
+            def isRunning(self):
+                return self._running
+
+        warnings: list[tuple[str, str]] = []
+        monkeypatch.setattr("rbl.gui.motor_tab.AutoHomeAllWorker", FakeAutoHomeWorker)
+        monkeypatch.setattr(
+            "rbl.gui.motor_tab.QMessageBox.warning",
+            lambda _parent, title, body: warnings.append((title, body)),
+        )
+
+        tab.btn_auto_home_seq.click()
+        w1 = created[-1]
+        w1.axis_finished.emit("A", False, "A: first reason")
+        w1.axis_finished.emit("B", True, "B: homed")
+        w1.axis_finished.emit("C", False, "C: second reason")
+        w1._running = False
+        w1.done.emit(False, "S")
+
+        assert warnings == [(
+            "Auto-home did not complete",
+            "S\n\nA: first reason\nC: second reason",
+        )]
+
+        warnings.clear()
+        tab.btn_auto_home_seq.click()
+        w2 = created[-1]
+        w2.axis_finished.emit("D", False, "D: third reason")
+        w2._running = False
+        w2.done.emit(False, "S2")
+
+        assert warnings == [(
+            "Auto-home did not complete",
+            "S2\n\nD: third reason",
+        )]
+
 
 class TestHmHoming:
     """NEC's HM homing procedure (ADR 0010): pre-home move if on switch, two

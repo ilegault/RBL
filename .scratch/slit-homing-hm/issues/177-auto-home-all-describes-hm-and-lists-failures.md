@@ -1,6 +1,6 @@
 # 177: Auto-Home All describes HM homing, and its failure dialog lists every failed axis
 
-**Status:** in-progress
+**Status:** done
 
 **Runner:** any
 
@@ -25,11 +25,11 @@ After 176 the Auto-Home All texts still describe release-edge homing, and when a
 
 ## Acceptance criteria
 
-- [ ] Test `test_auto_home_confirmation_describes_hm_homing` in `tests/test_auto_home.py` (`TestMotorTabAutoHome`'s `tab` fixture, Galil connected): with `tab._confirm_auto_home` replaced by a recorder that returns False, clicking `btn_auto_home_seq` passes exactly the body in step 2, and nothing starts.
-- [ ] Test `test_auto_home_note_and_tooltip_describe_hm_homing` in `tests/test_auto_home.py`: `tab.lbl_auto_home.text()` equals the text in step 1 exactly, and `btn_auto_home_seq.toolTip()` contains `HM at 900 cps` and `within 4 counts`.
-- [ ] Test `test_auto_home_failure_dialog_lists_each_failed_axis` in `tests/test_auto_home.py`: confirmation answered yes, `AutoHomeAllWorker` replaced in `rbl.gui.motor_tab` by a fake `QObject` with the same four signals and `start`/`cancel`/`isRunning`, and `QMessageBox.warning` replaced by a recorder. Clicking `btn_auto_home_seq`, then emitting `axis_finished("A", False, "A: first reason")`, `axis_finished("B", True, "B: homed")`, `axis_finished("C", False, "C: second reason")` and `done(False, "S")`, shows the body `S\n\nA: first reason\nC: second reason`. A second run whose only failure is `"D: third reason"` shows `S2\n\nD: third reason`, so the list is cleared between runs.
-- [ ] (no test: a removal; `ruff` and the type gate fail on a leftover reference) `HOME_EDGE_AGREEMENT_COUNTS` no longer exists, and nothing references it.
-- [ ] (no test: CI's full suite) No test is deleted. The other `TestMotorTabAutoHome` tests, including the banned-phrase test 176 rewrote, pass unchanged.
+- [x] Test `test_auto_home_confirmation_describes_hm_homing` in `tests/test_auto_home.py` (`TestMotorTabAutoHome`'s `tab` fixture, Galil connected): with `tab._confirm_auto_home` replaced by a recorder that returns False, clicking `btn_auto_home_seq` passes exactly the body in step 2, and nothing starts.
+- [x] Test `test_auto_home_note_and_tooltip_describe_hm_homing` in `tests/test_auto_home.py`: `tab.lbl_auto_home.text()` equals the text in step 1 exactly, and `btn_auto_home_seq.toolTip()` contains `HM at 900 cps` and `within 4 counts`.
+- [x] Test `test_auto_home_failure_dialog_lists_each_failed_axis` in `tests/test_auto_home.py`: confirmation answered yes, `AutoHomeAllWorker` replaced in `rbl.gui.motor_tab` by a fake `QObject` with the same four signals and `start`/`cancel`/`isRunning`, and `QMessageBox.warning` replaced by a recorder. Clicking `btn_auto_home_seq`, then emitting `axis_finished("A", False, "A: first reason")`, `axis_finished("B", True, "B: homed")`, `axis_finished("C", False, "C: second reason")` and `done(False, "S")`, shows the body `S\n\nA: first reason\nC: second reason`. A second run whose only failure is `"D: third reason"` shows `S2\n\nD: third reason`, so the list is cleared between runs.
+- [x] (no test: a removal; `ruff` and the type gate fail on a leftover reference) `HOME_EDGE_AGREEMENT_COUNTS` no longer exists, and nothing references it.
+- [x] (no test: CI's full suite) No test is deleted. The other `TestMotorTabAutoHome` tests, including the banned-phrase test 176 rewrote, pass unchanged.
 
 **What tests may fake:** the worker (a fake with the real signal shapes), the confirmation dialog through `_confirm_auto_home`, and `QMessageBox.warning`. The tab and the button clicks are real.
 
@@ -47,3 +47,9 @@ pytest --tb=short -q -n auto --dist loadfile --max-worker-restart=0 tests/test_a
 Run pytest on the touched test files only (implement-ticket-parallel, section 4). CI runs the full suite on the PR.
 
 ## Comments
+
+### 2026-11-23 — Implementation complete
+- **`src/rbl/gui/motor_tab.py`**: Updated `MotorTab._AUTO_HOME_STANDING`, `btn_auto_home_seq` tooltip, and `_start_auto_home` confirmation body to describe `HM` homing at 900 cps and 4-count stop agreement (using `SC.HOMING_SPEED_COUNTS_PER_SEC` and `SC.HOME_STOP_AGREEMENT_COUNTS`). Added `self._auto_failures` cleared in `_start_auto_home`, populated in `_on_auto_axis_finished` before the `panel is None` check, and appended to `QMessageBox.warning` in `_on_auto_home_done` when non-empty.
+- **`src/rbl/config/hardware_config.py`**: Removed `HOME_EDGE_AGREEMENT_COUNTS`.
+- **Tests**: Added `test_auto_home_confirmation_describes_hm_homing`, `test_auto_home_note_and_tooltip_describe_hm_homing`, and `test_auto_home_failure_dialog_lists_each_failed_axis` in `tests/test_auto_home.py` (`TestMotorTabAutoHome`).
+- **Bench verification**: Deferred to bench ticket 180.
