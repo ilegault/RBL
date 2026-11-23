@@ -1,6 +1,6 @@
 # 177: Auto-Home All describes HM homing, and its failure dialog lists every failed axis
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Runner:** any
 
