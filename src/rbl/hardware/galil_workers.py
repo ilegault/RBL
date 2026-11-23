@@ -29,16 +29,18 @@ most one axis is ever in motion and at most one command is ever on the wire.
 EDGE-RETURN TEST
 ----------------
 `EdgeReturnRoutine` measures repeatability on one axis at `approach_speed`:
-it backs out of the switch, then repeats N cycles of moving out `out_counts`
-(+counts), approaching the home switch at `approach_speed`, and creeping out
-one count at a time to the release edge, recording that edge. It never calls
-`define_zero` or `define_zero_multi`.
+it runs `pre_home_move` once, then repeats N cycles of moving out `out_counts`
+(+counts) at `approach_speed`, running `HM` (`home_move`) at `approach_speed`
+to record the stop position, and creeping out one count at a time to the
+release edge (`creep_to_release`). It never calls `define_zero` or
+`define_encoder_zero`.
 """
 import time
 
 from PySide6.QtCore import QThread, Signal
 
 from rbl.config import hardware_config as SC
+from rbl.hardware.edge_return import EdgeReturnReading
 from rbl.hardware.galil_driver import GalilController
 from rbl.hardware.switch_map import (
     SwitchMapRow,
@@ -121,18 +123,11 @@ class AxisHomeRoutine:
     _IDLE_POLL_S   = 0.2
 
     def __init__(self, galil: GalilController, axis: str,
-                 progress=None, cancelled=None,
-                 approach_speed: int | None = None):
+                 progress=None, cancelled=None):
         self.galil          = galil
         self.axis           = axis
         self._progress      = progress or (lambda _msg: None)
         self._cancelled     = cancelled or (lambda: False)
-        # Retained only for EdgeReturnRoutine until ticket 178 removes it.
-        # Homing (`run()`) never reads approach_speed.
-        self.approach_speed = (
-            SC.HOME_APPROACH_SPEED_COUNTS_PER_SEC
-            if approach_speed is None else approach_speed
-        )
 
     # ---- The whole routine ---------------------------------------------------
 
@@ -223,8 +218,7 @@ class AxisHomeRoutine:
     def back_out_of_home(self) -> tuple[bool, str]:
         """Back off the home switch / reverse limit.
 
-        Still called by `SwitchMapRoutine` permanently and by
-        `EdgeReturnRoutine` until ticket 178 switches it to `pre_home_move`.
+        Still called by `SwitchMapRoutine`.
         """
         g, axis = self.galil, self.axis
         sw = g.get_switch_states(axis)
@@ -341,65 +335,14 @@ class AxisHomeRoutine:
         return (f"{axis}: reached the reverse limit before the home switch — "
                 f"check the home switch and its cable")
 
-    # ---- Legacy release-edge helpers (EdgeReturnRoutine only until 178) -----
+    # ---- Release-edge helper (EdgeReturnRoutine only) -----------------------
 
-    def approach(self, speed: int) -> tuple[bool, str]:
-        """Jog negative at `speed` until the axis stops on the home switch.
-
-        Kept for `EdgeReturnRoutine` only; ticket 178 switches edge-return to
-        `home_move` and removes this method.
+    def creep_to_release(self, speed: int) -> tuple[bool, str, int | None]:
+        """Step outward one count at a time at `speed`, reading the home switch
+        at rest until it releases. Only the edge-return test calls it.
         """
         g, axis = self.galil, self.axis
-        if self._cancelled():
-            return False, f"{axis}: cancelled while approaching the home switch"
-
-        arrival = self._arrival()
-        if arrival == "home":
-            return True, ""
-        if arrival == "reverse":
-            return False, self._reverse_msg(axis)
-
-        self._progress(
-            f"{axis}: approaching home switch — JG -{speed} cps "
-            f"({SC.cps_to_mm_per_sec(axis, speed):.2f} mm/s)…"
-        )
-        g.jog_start(axis, -speed)
-        time.sleep(self._SEEK_SETTLE_S)
-
-        deadline = time.time() + SC.HOME_SEEK_TIMEOUT_S
-        while g.is_moving(axis):
-            if self._cancelled():
-                g.stop(axis)
-                return False, f"{axis}: cancelled while approaching the home switch"
-            if time.time() >= deadline:
-                g.stop(axis)
-                return False, (
-                    f"{axis}: timed out after {SC.HOME_SEEK_TIMEOUT_S:.0f} s "
-                    f"approaching the home switch"
-                )
-            time.sleep(self._SEEK_POLL_S)
-
-        ok, msg = self.wait_at_rest(timeout=15.0)
-        if not ok:
-            if msg:
-                return False, f"{axis}: {msg}"
-            if self._cancelled():
-                return False, f"{axis}: cancelled while approaching the home switch"
-            return False, f"{axis}: timeout waiting for the approach to come to rest"
-
-        arrival = self._arrival()
-        if arrival == "home":
-            return True, ""
-        if arrival == "reverse":
-            return False, self._reverse_msg(axis)
-        return False, f"{axis}: approach stopped before reaching the home switch"
-
-    def creep_to_release(self) -> tuple[bool, str, int | None]:
-        """Step outward one count at a time, reading the home switch at rest
-        until it releases. Kept for `EdgeReturnRoutine` until ticket 178.
-        """
-        g, axis = self.galil, self.axis
-        g.set_speed(axis, self.approach_speed)
+        g.set_speed(axis, speed)
         steps = SC.HOME_CREEP_MAX_COUNTS // SC.HOME_CREEP_STEP_COUNTS
         for _ in range(steps):
             if self._cancelled():
@@ -619,13 +562,13 @@ class AutoHomeAllWorker(QThread):
 # ─── Edge-return repeatability test (one axis, approach speed) ────────────────
 
 class EdgeReturnRoutine:
-    """Collect edge-return readings on one axis at the approach speed.
+    """Collect (stop, edge) readings on one axis at the approach speed.
 
     Not a QThread for the same reasons as `AxisHomeRoutine`: callers can run
     it on a worker thread (`EdgeReturnWorker`) or directly in tests. Never
-    calls `define_zero` or `define_zero_multi`. The move out runs at the
-    approach speed being measured, so the axis never leaves the switch slower
-    than it arrived.
+    calls `define_zero`, `define_zero_multi`, or `define_encoder_zero`. The
+    move out runs at the approach speed being measured, so the axis never leaves
+    the switch slower than it arrived.
     """
 
     def __init__(
@@ -646,16 +589,13 @@ class EdgeReturnRoutine:
         self._progress = progress or (lambda _msg: None)
         self._cancelled = cancelled or (lambda: False)
 
-    def run(self) -> tuple[bool, str, list[int]]:
+    def run(self) -> tuple[bool, str, list[EdgeReturnReading]]:
         """Run all cycles and return (success, message, readings). Never raises."""
         g, axis = self.galil, self.axis
-        readings: list[int] = []
-        home = AxisHomeRoutine(
-            g, axis, self._progress, self._cancelled,
-            approach_speed=self.approach_speed,
-        )
+        readings: list[EdgeReturnReading] = []
+        home = AxisHomeRoutine(g, axis, self._progress, self._cancelled)
         try:
-            ok, msg = home.back_out_of_home()
+            ok, msg = home.pre_home_move()
             if not ok:
                 return False, msg, readings
 
@@ -672,16 +612,18 @@ class EdgeReturnRoutine:
                 if not home.wait_idle(timeout=60.0):
                     return False, f"{axis}: timeout on cycle {k}/{self.cycles}", readings
 
-                ok, msg = home.approach(self.approach_speed)
-                if not ok:
+                ok, msg, stop = home.home_move(self.approach_speed)
+                if not ok or stop is None:
                     return False, msg, readings
 
-                ok, msg, edge = home.creep_to_release()
+                ok, msg, edge = home.creep_to_release(self.approach_speed)
                 if not ok or edge is None:
                     return False, msg, readings
 
-                readings.append(edge)
-                self._progress(f"{axis}: cycle {k}/{self.cycles} — edge at {edge} cts")
+                readings.append(EdgeReturnReading(stop, edge))
+                self._progress(
+                    f"{axis}: cycle {k}/{self.cycles} — stop at {stop} cts, edge at {edge} cts"
+                )
 
             return (
                 True,

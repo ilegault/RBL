@@ -1098,7 +1098,10 @@ class MotorTab(QWidget):
         readings = list(readings)
         if ok:
             self._log_line(summary_line(
-                analyse_edge_returns(readings), self._edge_axis, self._edge_speed))
+                analyse_edge_returns([r.edge_counts for r in readings]),
+                self._edge_axis,
+                self._edge_speed,
+            ))
         else:
             self._log_line("✗ " + msg)
         if len(readings) >= 2:
