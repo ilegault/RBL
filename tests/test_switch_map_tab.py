@@ -169,7 +169,6 @@ def test_homing_refuses_while_a_switch_map_runs(tab, monkeypatch):
     tab.btn_edge_run.click()
     for panel in tab.axes.values():
         panel.btn_home.click()
-        panel.btn_seek_home.click()
     assert auto_made == []
     assert edge_made == []
     assert home_made == []

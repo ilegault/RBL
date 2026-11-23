@@ -6,49 +6,33 @@ homing routine, and the all-axes automatic homing sequencer.
 Bare QThreads, not GUI widgets — moved out of motor_tab.py so they are
 testable and constructible without a widget, matching labjack_stream_worker.py.
 
-HOMING ON THE RELEASE EDGE (ADR 0009)
+HOMING WITH HM AT 900 CPS (ADR 0010)
 ------------------------------------
-Each slit's home switch and reverse limit share the same physical sensor and
-trip at the same point, so the controller's `HM` command always ends on the
-reverse limit (stop code 3) before its second stage can run. Homing therefore
-does not use `HM` or stop code 10 (see `docs/adr/0009-slits-homed-on-the-release-edge.md`).
+Slit homing uses NEC's procedure (`docs/adr/0010-slits-homed-with-hm-as-nec-specifies.md`):
 
-Instead, each home pass has two parts:
+  1. Pre-home move (`pre_home_move`): if the axis is sitting on its home switch
+     or reverse limit (and not on the forward limit), move out
+     `PRE_HOME_MOVE_COUNTS` (2000 counts) at `DEFAULT_SPEED_COUNTS_PER_SEC`
+     (1800 cps) and verify both switches read clear.
+  2. Home move (`home_move`): set speed to `HOMING_SPEED_COUNTS_PER_SEC`
+     (900 cps), run `HM <axis>` + `BG <axis>`, wait until idle and at rest
+     (`_TD == _RP`), then read switches and `_SC`. Accept only home switch
+     tripped with stop code in `HOME_ACCEPTED_STOP_CODES` (3 or 10).
 
-  1. Approach: drive in (negative counts) at `approach_speed` (default
-     `HOME_APPROACH_SPEED_COUNTS_PER_SEC`, 900 cps) until the axis stops with
-     the home switch tripped. Stopping on the reverse limit too is expected.
-  2. Creep out: step `+HOME_CREEP_STEP_COUNTS` (1 count) at a time, waiting
-     for the axis to come to rest and reading the home switch after every step,
-     until the switch reads clear. That release position is the pass's edge.
-     Because the edge is always read at rest from the inside moving out,
-     approach speed does not shift where zero lands.
-
-Homing runs two passes (pass 2 backs out `HOME_PASS2_BACKOFF_COUNTS` = 300
-counts first) and defines zero (`DP=0`) on pass 2's edge only if the two
-edges agree within `HOME_EDGE_AGREEMENT_COUNTS` (4 counts). `AxisHomeRoutine`
-is that sequence for one axis, and `AutoHomeAllWorker` runs it over all four
-axes on ONE thread so at most one axis is ever in motion and at most one
-command is ever on the wire.
-
-BACKING OUT FIRST
------------------
-An axis that was turned off (MO) while sitting on its home switch (or reverse
-limit) gives homing a confusing start. Every homing entry point therefore begins
-by backing out (`HOME_START_BACKOFF_COUNTS` away from home, up to
-`HOME_START_BACKOFF_TRIES` times) until neither the home switch nor the reverse
-limit is active, unless the axis is already on its forward limit.
+Homing runs two passes; if their stop positions agree within
+`HOME_STOP_AGREEMENT_COUNTS` (4 counts), zero is defined at pass 2's stop with
+`DP=0` and `DE=0`, and speed is restored to `DEFAULT_SPEED_COUNTS_PER_SEC`
+(1800 cps) in a `finally` block. `AxisHomeRoutine` is that sequence for one
+axis, and `AutoHomeAllWorker` runs it over all four axes on ONE thread so at
+most one axis is ever in motion and at most one command is ever on the wire.
 
 EDGE-RETURN TEST
 ----------------
-`EdgeReturnRoutine` measures homing repeatability on one axis at `approach_speed`:
+`EdgeReturnRoutine` measures repeatability on one axis at `approach_speed`:
 it backs out of the switch, then repeats N cycles of moving out `out_counts`
 (+counts), approaching the home switch at `approach_speed`, and creeping out
-one count at a time to the release edge, recording that edge. Every cycle
-approaches the edge from the same side (out, then one release-edge home pass)
-so backlash and switch hysteresis stay constant across readings. It never calls
-`define_zero` or `define_zero_multi` because the measurement must not alter
-where the slits think home is.
+one count at a time to the release edge, recording that edge. It never calls
+`define_zero` or `define_zero_multi`.
 """
 import time
 
@@ -118,26 +102,22 @@ class GalilPollWorker(QThread):
 # ─── The per-axis homing routine ──────────────────────────────────────────────
 
 class AxisHomeRoutine:
-    """Everything one axis needs in order to end up homed and zeroed at DP=0.
+    """Everything one axis needs in order to end up homed and zeroed at DP=0, DE=0.
 
     Deliberately NOT a QThread. The identical routine has to run on the
-    single-axis worker's thread, four times back-to-back on the sequencer's
-    one thread, and — for the "all together" button — on four threads at once.
-    Something that has to be all three cannot be the thing that owns a thread,
-    so the caller supplies a progress callback and a cancellation predicate and
-    drives `run()` on whatever thread it likes.
+    single-axis worker's thread and four times back-to-back on the sequencer's
+    one thread. Something that has to be both cannot be the thing that owns a
+    thread, so the caller supplies a progress callback and a cancellation
+    predicate and drives `run()` on whatever thread it likes.
 
     ONE COMMAND AT A TIME falls out of this being straight-line code: every
-    phase waits for the motion it started to stop before it issues the next
-    command, and GalilController.cmd holds a lock for the send/receive pair.
-    Nothing here overlaps two commands on one axis. (Two INSTANCES driven from
-    two threads will interleave commands on different axes — that is the whole
-    difference between the sequential and simultaneous buttons, and it is the
-    caller's choice, not this class's.)
+    phase waits for the motion it started to stop (and for step pulses to
+    finish via `wait_at_rest`) before it issues the next command, and
+    GalilController.cmd holds a lock for the send/receive pair.
     """
 
-    _SEEK_SETTLE_S = 0.5    # let BG actually start the jog before believing _BG
-    _SEEK_POLL_S   = 0.1    # how often the seek asks the switches where it is
+    _SEEK_SETTLE_S = 0.5    # let BG actually start the move before believing _BG
+    _SEEK_POLL_S   = 0.1    # how often the home move polls _BG
     _IDLE_POLL_S   = 0.2
 
     def __init__(self, galil: GalilController, axis: str,
@@ -147,6 +127,8 @@ class AxisHomeRoutine:
         self.axis           = axis
         self._progress      = progress or (lambda _msg: None)
         self._cancelled     = cancelled or (lambda: False)
+        # Retained only for EdgeReturnRoutine until ticket 178 removes it.
+        # Homing (`run()`) never reads approach_speed.
         self.approach_speed = (
             SC.HOME_APPROACH_SPEED_COUNTS_PER_SEC
             if approach_speed is None else approach_speed
@@ -154,32 +136,96 @@ class AxisHomeRoutine:
 
     # ---- The whole routine ---------------------------------------------------
 
-    def run(self, seek_first: bool = False) -> tuple[bool, str]:
-        """Home this axis. Returns (success, message) — never raises.
+    def run(self) -> tuple[bool, str]:
+        """Home this axis with two HM passes at 900 cps.
 
-        With `seek_first`, the axis is jogged down onto the home limit before
-        the release-edge passes run. Without it, pass 1 approaches at
-        `approach_speed` directly.
+        Returns `(success, message)` — never raises. Runs `pre_home_move()`
+        then `home_move(900)` twice; if the two stop positions agree within
+        `HOME_STOP_AGREEMENT_COUNTS`, defines `DP=0` then `DE=0`. Always
+        restores the slit speed to `DEFAULT_SPEED_COUNTS_PER_SEC` in `finally`.
         """
         axis = self.axis
         try:
-            ok, msg = self.back_out_of_home()
+            ok, msg = self.pre_home_move()
             if not ok:
                 return False, msg
-            if seek_first:
-                ok, msg = self.seek_home_limit()
-                if not ok:
-                    return False, msg
-            return self.home_passes()
+            ok, msg, stop1 = self.home_move(SC.HOMING_SPEED_COUNTS_PER_SEC)
+            if not ok or stop1 is None:
+                return False, msg
+            self._progress(f"{axis}: pass 1/2 — stopped at {stop1} cts")
+
+            if self._cancelled():
+                return False, f"{axis}: homing cancelled by user"
+
+            ok, msg = self.pre_home_move()
+            if not ok:
+                return False, msg
+            ok, msg, stop2 = self.home_move(SC.HOMING_SPEED_COUNTS_PER_SEC)
+            if not ok or stop2 is None:
+                return False, msg
+            self._progress(f"{axis}: pass 2/2 — stopped at {stop2} cts")
+
+            if abs(stop2 - stop1) > SC.HOME_STOP_AGREEMENT_COUNTS:
+                return (
+                    False,
+                    f"{axis}: home stops disagree — pass 1 at {stop1} cts, "
+                    f"pass 2 at {stop2} cts (limit {SC.HOME_STOP_AGREEMENT_COUNTS}) — zero not set",
+                )
+
+            self.galil.define_zero(axis)
+            self.galil.define_encoder_zero(axis)
+            return True, f"{axis}: homed — stops {stop1}, {stop2} cts, DP=0 at pass 2"
         except Exception as e:
             return False, f"{axis}: homing error — {e}"
         finally:
             self._restore_speeds()
 
-    # ---- Phase 0: back out of home ------------------------------------------
+    # ---- Phase 0: pre-home move & back-out ----------------------------------
+
+    def pre_home_move(self) -> tuple[bool, str]:
+        """Move off the home switch / reverse limit before running HM (ADR 0010).
+
+        On the forward limit, or when both home switch and reverse limit are
+        clear, no move is made. Otherwise moves out `PRE_HOME_MOVE_COUNTS` at
+        `DEFAULT_SPEED_COUNTS_PER_SEC` and verifies both switches read clear.
+        """
+        g, axis = self.galil, self.axis
+        sw = g.get_switch_states(axis)
+        if sw["forward_switch"]:
+            self._progress(f"{axis}: on the forward limit — no pre-home move needed")
+            return True, ""
+        if not sw["home_switch"] and not sw["reverse_switch"]:
+            return True, ""
+        if self._cancelled():
+            return False, f"{axis}: cancelled in the pre-home move"
+
+        counts = SC.PRE_HOME_MOVE_COUNTS
+        self._progress(
+            f"{axis}: pre-home move ({counts} counts at "
+            f"{SC.DEFAULT_SPEED_COUNTS_PER_SEC} cps)…"
+        )
+        g.set_speed(axis, SC.DEFAULT_SPEED_COUNTS_PER_SEC)
+        g.move_relative(axis, counts)
+        if not self.wait_idle(timeout=15.0):
+            if self._cancelled():
+                return False, f"{axis}: cancelled in the pre-home move"
+            return False, f"{axis}: timeout in the pre-home move"
+
+        sw = g.get_switch_states(axis)
+        if sw["home_switch"] or sw["reverse_switch"]:
+            return (
+                False,
+                f"{axis}: still on the home switch after the pre-home move "
+                f"of {counts} counts — zero not set",
+            )
+        return True, ""
 
     def back_out_of_home(self) -> tuple[bool, str]:
-        """Back off the home switch / reverse limit before seeking or homing."""
+        """Back off the home switch / reverse limit.
+
+        Still called by `SwitchMapRoutine` permanently and by
+        `EdgeReturnRoutine` until ticket 178 switches it to `pre_home_move`.
+        """
         g, axis = self.galil, self.axis
         sw = g.get_switch_states(axis)
         if sw["forward_switch"]:
@@ -208,77 +254,74 @@ class AxisHomeRoutine:
             f"{tries} × {counts} counts — zero not set",
         )
 
-    # ---- Phase 1: seek ------------------------------------------------------
+    # ---- Phase 1: HM home move (ADR 0010) -----------------------------------
 
-    def seek_home_limit(self, timeout: float = None) -> tuple[bool, str]:
-        """Jog toward the home limit until a switch says we have arrived.
+    def home_move(self, speed: int) -> tuple[bool, str, int | None]:
+        """Run `HM` + `BG` at `speed`, wait until at rest, then check stop state.
 
-        Negative direction — on these stages the home switch sits at the
-        low-count end of the travel.
-
-        Succeeds on the HOME SWITCH only. The reverse limit is a failure: the
-        axis ran past where the home switch should have been, and a zero
-        defined from there would be wrong without saying so.
+        Every switch and stop-code read happens strictly after `wait_at_rest`
+        so trailing step pulses cannot produce a stale reading (ADR 0010).
+        Accepts only home switch tripped with stop code in
+        `HOME_ACCEPTED_STOP_CODES` (3 or 10).
         """
         g, axis = self.galil, self.axis
-        timeout = SC.HOME_SEEK_TIMEOUT_S if timeout is None else timeout
-
         if self._cancelled():
-            return False, f"{axis}: cancelled before seeking the home limit"
+            return False, f"{axis}: cancelled during the home move", None
 
-        arrival = self._arrival()
-        if arrival == "home":
-            self._progress(f"{axis}: already on the home limit — no seek needed")
-            return True, ""
-        if arrival == "reverse":
-            return False, self._reverse_msg(axis)
+        if g.get_switch_states(axis)["home_switch"]:
+            return (
+                False,
+                f"{axis}: on the home switch before the home move — run the pre-home move first",
+                None,
+            )
 
-        speed = SC.HOME_SEEK_SPEED_COUNTS_PER_SEC
         self._progress(
-            f"{axis}: seeking home limit — JG -{speed} cps "
+            f"{axis}: homing (HM) at {speed} cps "
             f"({SC.cps_to_mm_per_sec(axis, speed):.2f} mm/s)…"
         )
-        g.jog_start(axis, -speed)
+        g.set_speed(axis, speed)
+        g.home(axis)
         time.sleep(self._SEEK_SETTLE_S)   # BG has to take effect before _BG means anything
 
-        deadline = time.time() + timeout
-        while time.time() < deadline:
+        deadline = time.time() + SC.HOME_SEEK_TIMEOUT_S
+        while g.is_moving(axis):
             if self._cancelled():
                 g.stop(axis)
-                return False, f"{axis}: cancelled while seeking the home limit"
-
-            arrival = self._arrival()
-            if arrival == "reverse":
+                return False, f"{axis}: cancelled during the home move", None
+            if time.time() >= deadline:
                 g.stop(axis)
-                return False, self._reverse_msg(axis)
-            if arrival == "home":
-                g.stop(axis)
-                self._progress(f"{axis}: home limit reached")
-                if not self.wait_idle(timeout=15.0):
-                    return False, f"{axis}: timeout coming to rest on the home limit"
-                return True, ""
-
-            if not g.is_moving(axis):
-                # The controller stopped the jog by itself. Either the limit
-                # latched between two polls (CN's arg1 latches limits), or
-                # something faulted — ask the switches which, rather than
-                # reporting a success the axis did not achieve.
-                arrival = self._arrival()
-                if arrival == "home":
-                    self._progress(f"{axis}: home limit reached")
-                    return True, ""
-                if arrival == "reverse":
-                    return False, self._reverse_msg(axis)
-                return False, (
-                    f"{axis}: jog stopped before reaching the home limit — "
-                    f"check the axis is energised (SH {axis}) and not sitting "
-                    f"on the forward limit"
+                return (
+                    False,
+                    f"{axis}: timed out after {SC.HOME_SEEK_TIMEOUT_S:.0f} s in the home move",
+                    None,
                 )
-
             time.sleep(self._SEEK_POLL_S)
 
-        g.stop(axis)
-        return False, f"{axis}: timed out after {timeout:.0f} s seeking the home limit"
+        ok, rest_msg = self.wait_at_rest(timeout=15.0)
+        if not ok:
+            if rest_msg:
+                return False, f"{axis}: {rest_msg}", None
+            if self._cancelled():
+                return False, f"{axis}: cancelled during the home move", None
+            return False, f"{axis}: timeout waiting for the home move to come to rest", None
+
+        sw = g.get_switch_states(axis)
+        code = g.get_stop_code(axis)
+        if sw["home_switch"]:
+            if code in SC.HOME_ACCEPTED_STOP_CODES:
+                return True, "", g.get_position(axis)
+            return (
+                False,
+                f"{axis}: home move ended with stop code {code} — zero not set",
+                None,
+            )
+        if sw["reverse_switch"]:
+            return False, self._reverse_msg(axis), None
+        return (
+            False,
+            f"{axis}: home move stopped before reaching the home switch (stop code {code})",
+            None,
+        )
 
     def _arrival(self) -> str:
         """One switch read: "home", "reverse" (reverse limit WITHOUT the home
@@ -298,13 +341,13 @@ class AxisHomeRoutine:
         return (f"{axis}: reached the reverse limit before the home switch — "
                 f"check the home switch and its cable")
 
-    # ---- Phase 2: release-edge home passes (ADR 0009) ------------------------
+    # ---- Legacy release-edge helpers (EdgeReturnRoutine only until 178) -----
 
     def approach(self, speed: int) -> tuple[bool, str]:
         """Jog negative at `speed` until the axis stops on the home switch.
 
-        Stopping on the reverse limit too is expected on these slits and is not
-        checked by stop code.
+        Kept for `EdgeReturnRoutine` only; ticket 178 switches edge-return to
+        `home_move` and removes this method.
         """
         g, axis = self.galil, self.axis
         if self._cancelled():
@@ -353,7 +396,7 @@ class AxisHomeRoutine:
 
     def creep_to_release(self) -> tuple[bool, str, int | None]:
         """Step outward one count at a time, reading the home switch at rest
-        (every step pulse sent) until it releases.
+        until it releases. Kept for `EdgeReturnRoutine` until ticket 178.
         """
         g, axis = self.galil, self.axis
         g.set_speed(axis, self.approach_speed)
@@ -390,52 +433,6 @@ class AxisHomeRoutine:
             f"{SC.HOME_CREEP_MAX_COUNTS} counts — check the sensor",
             None,
         )
-
-    def home_passes(self) -> tuple[bool, str]:
-        """Two release-edge passes; DP=0 on pass 2's edge if they agree."""
-        g, axis = self.galil, self.axis
-        try:
-            ok, msg = self.approach(self.approach_speed)
-            if not ok:
-                return False, msg
-            ok, msg, edge1 = self.creep_to_release()
-            if not ok or edge1 is None:
-                return False, msg
-            self._progress(f"{axis}: pass 1/2 — edge at {edge1} cts")
-
-            if self._cancelled():
-                return False, f"{axis}: homing cancelled by user"
-
-            g.set_speed(axis, SC.HOME_SEEK_SPEED_COUNTS_PER_SEC)
-            g.move_relative(axis, SC.HOME_PASS2_BACKOFF_COUNTS)
-            if not self.wait_idle(timeout=15.0):
-                return False, f"{axis}: timeout backing out before pass 2"
-            if g.get_switch_states(axis)["home_switch"]:
-                return (
-                    False,
-                    f"{axis}: still on the home switch after backing out "
-                    f"{SC.HOME_PASS2_BACKOFF_COUNTS} counts — zero not set",
-                )
-
-            ok, msg = self.approach(self.approach_speed)
-            if not ok:
-                return False, msg
-            ok, msg, edge2 = self.creep_to_release()
-            if not ok or edge2 is None:
-                return False, msg
-            self._progress(f"{axis}: pass 2/2 — edge at {edge2} cts")
-
-            if abs(edge2 - edge1) > SC.HOME_EDGE_AGREEMENT_COUNTS:
-                return (
-                    False,
-                    f"{axis}: home edges disagree — pass 1 at {edge1} cts, "
-                    f"pass 2 at {edge2} cts (limit {SC.HOME_EDGE_AGREEMENT_COUNTS}) — zero not set",
-                )
-
-            g.define_zero(axis)
-            return True, f"{axis}: homed — edges {edge1}, {edge2} cts, DP=0 at pass 2"
-        finally:
-            self._restore_speeds()
 
     def _restore_speeds(self):
         """Put SP back where the rest of the app expects it.
@@ -507,23 +504,15 @@ class AxisHomeRoutine:
 # ─── Auto-homing worker (one axis) ────────────────────────────────────────────
 
 class HomingWorker(QThread):
-    """`AxisHomeRoutine` for one axis, on its own thread.
-
-    `seek_first` is what the per-axis "Seek + Home" button sets and the plain
-    "Home" button does not: same routine, one extra phase in front of it.
-    """
+    """`AxisHomeRoutine` for one axis (HM at 900 cps), on its own thread."""
     progress = Signal(str)
     done     = Signal(bool, str)   # success, message
 
-    def __init__(self, galil: GalilController, axis: str, parent=None,
-                 seek_first: bool = False,
-                 approach_speed: int | None = None):
+    def __init__(self, galil: GalilController, axis: str, parent=None):
         super().__init__(parent)
-        self.galil          = galil
-        self.axis           = axis
-        self.seek_first     = seek_first
-        self.approach_speed = approach_speed
-        self._cancelled     = False
+        self.galil      = galil
+        self.axis       = axis
+        self._cancelled = False
 
     def cancel(self):
         self._cancelled = True
@@ -533,9 +522,8 @@ class HomingWorker(QThread):
             self.galil, self.axis,
             progress=self.progress.emit,
             cancelled=lambda: self._cancelled,
-            approach_speed=self.approach_speed,
         )
-        ok, msg = routine.run(seek_first=self.seek_first)
+        ok, msg = routine.run()
         self.done.emit(ok, msg)
 
     def _wait_idle(self, timeout: float = 30.0) -> bool:
@@ -548,7 +536,7 @@ class HomingWorker(QThread):
 # ─── Auto-homing worker (all axes, one at a time) ─────────────────────────────
 
 class AutoHomeAllWorker(QThread):
-    """Seek-and-home every axis in turn, on ONE thread.
+    """Home every axis in turn with `HM` at 900 cps, on ONE thread.
 
     This is the answer to "eight clicks before I can start calibrating
     anything": one press homes the whole set while the operator works on
@@ -566,14 +554,11 @@ class AutoHomeAllWorker(QThread):
     done          = Signal(bool, str)    # all succeeded, summary
 
     def __init__(self, galil: GalilController, axes=None, parent=None,
-                 seek_first: bool = True, stop_on_failure: bool = True,
-                 approach_speed: int | None = None):
+                 stop_on_failure: bool = True):
         super().__init__(parent)
         self.galil           = galil
         self.axes            = list(axes if axes is not None else SC.AXIS_LETTERS)
-        self.seek_first      = seek_first
         self.stop_on_failure = stop_on_failure
-        self.approach_speed  = approach_speed
         self._cancelled      = False
 
     def cancel(self):
@@ -597,9 +582,8 @@ class AutoHomeAllWorker(QThread):
                 self.galil, axis,
                 progress=self.progress.emit,
                 cancelled=lambda: self._cancelled,
-                approach_speed=self.approach_speed,
             )
-            ok, msg = routine.run(seek_first=self.seek_first)
+            ok, msg = routine.run()
 
             self.progress.emit(f"{'✓' if ok else '✗'} {msg}")
             self.axis_finished.emit(axis, ok, msg)
