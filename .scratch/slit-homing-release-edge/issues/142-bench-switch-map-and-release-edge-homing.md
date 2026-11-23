@@ -1,6 +1,6 @@
 # 142: Bench — switch map, release-edge homing and edge-return on all four slits
 
-**Status:** ready-for-developer
+**Status:** done
 
 **Runner:** developer
 
@@ -58,3 +58,5 @@ speed it measures, and switch readings wait until every step pulse is sent. The 
 three-speed comparison is now the "Speed comparison on axis A" criterion, plus a 900 cps run at out
 counts 50. The controller-settings criterion records what the controller held before the new build
 sends `KS 2`. See the spec's Addendum 2026-11-20.
+
+2026-11-23: retired, never run as written. Superseded by `.scratch/slit-homing-hm/issues/180-bench-hm-homing-on-the-beamline.md` (ADR 0010: homing returns to NEC's `HM`). The 2026-11-19/20 switch maps and edge-return runs listed in ADR 0010 are this ticket's partial results.

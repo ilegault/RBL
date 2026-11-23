@@ -480,42 +480,45 @@ someone else's bug fix smuggled into it cannot be reviewed.
 <!-- ACTIVE-PLAN:START -->
 ## Active implementation plan
 
-_Written by the planning model on 2026-11-23 23:02. Implement this. If something in it is wrong, say so before changing course._
+_Written by the planning model on 2026-11-23 23:12. Implement this. If something in it is wrong, say so before changing course._
 
-# ZWO bench follow-ups: readable SER files, honest feedback, easier settings (zwo-bench-followups)
+# Slits homed with HM, as NEC specifies (slit-homing-hm), then the ZWO bench follow-ups
 
-This is a pointer, not the work.
+This is a pointer, not the work. Two efforts are open; do the homing tickets first.
 
-- **Spec:** `.scratch/zwo-bench-followups/spec.md`
-- **Binding ADRs:** `docs/adr/0008-zwo-camera-owned-by-a-capture-process.md`, `docs/adr/0001-tests-first-and-no-muted-failures.md`
-- **Glossary:** `CONTEXT.md` — **Preview white balance** (new), **Auto exposure** (new)
-- **Tickets:** `.scratch/zwo-bench-followups/issues/158`–`166`
+## 1. slit-homing-hm (first)
+
+- **Spec:** `.scratch/slit-homing-hm/spec.md`
+- **Binding ADRs:** `docs/adr/0010-slits-homed-with-hm-as-nec-specifies.md` (supersedes 0009), `docs/adr/0001-tests-first-and-no-muted-failures.md`
+- **Glossary:** `CONTEXT.md` — Slit motion terms rewritten for HM homing (pre-home move, homing speed, home pass, stop position, release edge, approach speed)
+- **Tickets:** `.scratch/slit-homing-hm/issues/175`–`180`
 - **Tracker conventions:** `docs/agents/issue-tracker.md`
 
-**Next:** 162 first (it heads the longest chain: 162 → 163 → 164 → 165). 158, 159, 160 and 161 have no blockers and can run alongside it; 159 next, because 164 also waits on it.
+**Next:** 175 (the only homing ticket with no blockers; everything else waits on it). Then 176, then 177 and 178 in parallel.
 
 Dependency graph:
-- 158 SER byte-order flag follows the readers (independent)
-- 159 load exactly the shipped ZWO library; real serial and SDK version → 164
-- 160 Take Darks / Take Photo say what they saved → 165
-- 161 ROI hint on the Camera tab (independent)
-- 162 exposure and gain sliders apply on release → 163, 165
-- 163 auto-exposure and white-balance maths, Preview white balance (blocked by 162) → 164
-- 164 Capture Process answers auto exposure / auto white balance, protocol 2 (blocked by 159, 163) → 165
-- 165 Auto exposure, Auto white balance and Reset colour buttons (blocked by 160, 162, 164)
-- 166 bench check — ready-for-developer, Runner: developer, not for agents (blocked by 158–165)
+- 175 driver `home` / `define_encoder_zero`, constants, `SimGalil.home` → 176
+- 176 HM homing routine, workers, one Home button (blocked by 175; carries a 31-test `Deletes tests:` line) → 177, 178
+- 177 Auto-Home All texts and failure dialog listing every failed axis (blocked by 176) → 179
+- 178 edge-return records stop and edge; new CSV columns (blocked by 176) → 179
+- 179 labelled stop/edge summary lines; Approach speed box moves to the edge-return box (blocked by 177, 178)
+- 180 bench — ready-for-developer, Runner: developer, not for agents (blocked by 175–179). Bench ticket 142 is retired.
 
 Requirements an implementer would quietly treat as preferences:
-- The SER `LittleEndian` field is 0 on purpose; the docstring says why. Never "fix" it back to the SER document.
-- The slider mappings and the auto-adjust maths are pure module-level functions, tested without Qt or a camera.
-- Sliders have tracking off and send one setting on release; rendering repositions them with signals blocked.
-- The Capture Process only suggests; the application applies every suggestion through `set_zwo_settings` / `set_zwo_preview`, so one path records every change.
-- The `--fake-no-frames` and `--fake-red-scale` seams are required: without them `no_frame` and a real white balance cannot be reached in CI.
-- White balance touches the Preview only, never the SER, photos or Dark Frames.
-- `tools/zwo_bench.py` stays free of `rbl` imports.
-- Widget tests use real `QTest` mouse and wheel events, never direct slot calls. Exact UI strings are given in the tickets; use them verbatim.
+- Every switch and stop-code read in a home move happens after `wait_at_rest`.
+- Homing never reads the Approach speed box; it sets only 900 (HM) and 1800 (pre-home move, restore).
+- `back_out_of_home` and `HOME_START_BACKOFF_*` stay: the switch map must work exactly as today.
+- `approach`, `creep_to_release(self)` and the routine's `approach_speed` argument survive 176 for the edge-return test and are removed in 178, not before.
+- Exact messages and UI strings are given in the tickets; use them verbatim.
 
-Deliberately not done: the camera's own continuous auto exposure, gain or white balance; manual red/blue sliders; repairing SER files already recorded with flag 1 or moving Dark Frames out of the old `0` folder; upgrading zwoasi; the CI hello timeout (`.scratch/capture-hello-on-ci/`).
+Deliberately not done: encoders and `TP`/`YS`/`QS`/`OE`; changing the 4-count limit, `CN`, `MM_ZERO_OFFSET` or `STEPS_PER_MM`; the switch map; continuing Auto-Home All past a failed axis; fixing the duplicate test definitions in `tests/test_switch_map_tab.py`.
 
-Still open from earlier sets: 174 (cup-status-fix bench, developer) and 152 (capture-hello-on-ci, ready-for-agent).
+## 2. zwo-bench-followups (after homing)
+
+- **Spec:** `.scratch/zwo-bench-followups/spec.md` (binding: ADR 0008, ADR 0001)
+- **Tickets:** `.scratch/zwo-bench-followups/issues/158`–`166`
+- **Next there:** 162 (heads 162 → 163 → 164 → 165); 158, 159, 160, 161 have no blockers. 166 is the developer's bench check.
+- Requirements: SER `LittleEndian` stays 0; slider mappings and auto-adjust maths are pure functions; the Capture Process only suggests and the application applies through `set_zwo_settings` / `set_zwo_preview`; the `--fake-no-frames` and `--fake-red-scale` seams are required; white balance is Preview only.
+
+Still open elsewhere: 174 (cup-status-fix bench, developer) and 152 (capture-hello-on-ci, ready-for-agent).
 <!-- ACTIVE-PLAN:END -->
