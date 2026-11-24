@@ -863,32 +863,6 @@ class MotorTab(QWidget):
         row.addWidget(self.btn_auto_home_seq, stretch=1)
         lay.addLayout(row)
 
-        speeds_row = QHBoxLayout()
-        speeds_row.setSpacing(6)
-        approach_tip = (
-            "Speed each slit is driven onto its home switch. Zero is found on "
-            "the way back out, one count at a time, so this does not decide "
-            "where zero lands. Shared by all four axes; used by the next "
-            "homing run and the edge-return test."
-        )
-        lbl = QLabel("Approach speed (cps)")
-        self.spn_approach_speed = QuietDoubleSpinBox()
-        self.spn_approach_speed.setDecimals(0)
-        self.spn_approach_speed.setRange(
-            float(SC.SLIT_SPEED_MIN_COUNTS_PER_SEC),
-            float(SC.HOME_APPROACH_SPEED_MAX_COUNTS_PER_SEC),
-        )
-        self.spn_approach_speed.setSingleStep(10.0)
-        self.spn_approach_speed.setValue(float(self.beamline.home_approach_speed()))
-        self.spn_approach_speed.setToolTip(approach_tip)
-        lbl.setToolTip(approach_tip)
-        self.spn_approach_speed.valueChanged.connect(
-            self._on_approach_speed_changed)
-        speeds_row.addWidget(lbl)
-        speeds_row.addWidget(self.spn_approach_speed)
-        speeds_row.addStretch(1)
-        lay.addLayout(speeds_row)
-
         self.lbl_auto_home = QLabel(self._AUTO_HOME_STANDING)
         self.lbl_auto_home.setWordWrap(True)
         self.lbl_auto_home.setStyleSheet(
@@ -897,10 +871,10 @@ class MotorTab(QWidget):
         return box
 
     _EDGE_NOTE_STANDING = (
-        "Moves the axis out and back onto the home switch, cycle after cycle, "
-        "and finds the release edge each time at the approach speed. Never sets "
-        "zero. A spread of a few counts is switch jitter; jumps of about 8 counts "
-        "are lost steps."
+        "Moves the axis out and runs HM at the approach speed, cycle after cycle, "
+        "recording where it stopped and where the home switch releases on the way "
+        "back out. Never sets zero. A spread of a few counts is switch jitter; "
+        "jumps of about 8 counts are lost steps."
     )
     _EDGE_NOTE_REFUSED = (
         "Edge-return test needs a connected Galil and no homing in progress."
@@ -933,6 +907,27 @@ class MotorTab(QWidget):
         self.spn_edge_out.setValue(float(SC.EDGE_RETURN_DEFAULT_OUT_COUNTS))
         row.addWidget(QLabel("Out (counts)"))
         row.addWidget(self.spn_edge_out)
+
+        approach_tip = (
+            "Speed of the edge-return test: each cycle moves out, runs HM and "
+            "steps back out to the release edge at this speed. It does not "
+            f"affect homing, which always runs at {SC.HOMING_SPEED_COUNTS_PER_SEC} cps."
+        )
+        lbl_approach = QLabel("Edge-return approach speed (cps)")
+        self.spn_approach_speed = QuietDoubleSpinBox()
+        self.spn_approach_speed.setDecimals(0)
+        self.spn_approach_speed.setRange(
+            float(SC.SLIT_SPEED_MIN_COUNTS_PER_SEC),
+            float(SC.HOME_APPROACH_SPEED_MAX_COUNTS_PER_SEC),
+        )
+        self.spn_approach_speed.setSingleStep(10.0)
+        self.spn_approach_speed.setValue(float(self.beamline.home_approach_speed()))
+        self.spn_approach_speed.setToolTip(approach_tip)
+        lbl_approach.setToolTip(approach_tip)
+        self.spn_approach_speed.valueChanged.connect(
+            self._on_approach_speed_changed)
+        row.addWidget(lbl_approach)
+        row.addWidget(self.spn_approach_speed)
 
         self.btn_edge_run = QPushButton("Run edge-return test")
         self.btn_edge_run.clicked.connect(self._on_edge_run_clicked)
@@ -1095,9 +1090,16 @@ class MotorTab(QWidget):
         readings = list(readings)
         if ok:
             self._log_line(summary_line(
+                analyse_edge_returns([r.stop_counts for r in readings]),
+                self._edge_axis,
+                self._edge_speed,
+                "stop",
+            ))
+            self._log_line(summary_line(
                 analyse_edge_returns([r.edge_counts for r in readings]),
                 self._edge_axis,
                 self._edge_speed,
+                "edge",
             ))
         else:
             self._log_line("✗ " + msg)

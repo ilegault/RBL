@@ -10,10 +10,14 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from unittest.mock import MagicMock
 
 import pytest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QGroupBox
 
 from rbl.config import paths
-from rbl.hardware.edge_return import EdgeReturnReading
+from rbl.hardware.edge_return import (
+    EdgeReturnReading,
+    analyse_edge_returns,
+    summary_line,
+)
 
 
 @pytest.fixture(scope="module")
@@ -86,7 +90,8 @@ def test_edge_return_runs_once_at_the_approach_speed(tab, monkeypatch, tmp_path)
     assert len(made) == 1
     assert made[0].axis == "B"
     assert made[0].speed == 40
-    assert "B [X-] @ 40 cps:" in _console(tab)
+    assert "B [X-] @ 40 cps, stop:" in _console(tab)
+    assert "B [X-] @ 40 cps, edge:" in _console(tab)
     files = list(tmp_path.glob("edge_return_B_*.csv"))
     assert len(files) == 1
     assert len(files[0].read_text(encoding="utf-8").splitlines()) - 1 == 3
@@ -142,3 +147,39 @@ def test_edge_return_never_defines_zero(tab, monkeypatch):
     tab.btn_edge_run.click()
     assert not tab.galil.define_zero.called
     assert not tab.galil.define_zero_multi.called
+
+
+def test_edge_return_logs_a_stop_line_and_an_edge_line(tab, monkeypatch):
+    readings = [
+        EdgeReturnReading(1000, 1020),
+        EdgeReturnReading(1001, 1025),
+        EdgeReturnReading(1000, 1020),
+    ]
+    fake, _ = _fake_worker([(True, "ok", readings)])
+    monkeypatch.setattr("rbl.gui.motor_tab.EdgeReturnWorker", fake)
+    _choose_axis(tab, "B")
+    tab.btn_edge_run.click()
+    stop_line = summary_line(analyse_edge_returns([1000, 1001, 1000]), "B", 40, "stop")
+    edge_line = summary_line(analyse_edge_returns([1020, 1025, 1020]), "B", 40, "edge")
+    lines = _console(tab).splitlines()
+    stop_idx = next((i for i, line in enumerate(lines) if stop_line in line), None)
+    edge_idx = next((i for i, line in enumerate(lines) if edge_line in line), None)
+    assert stop_idx is not None
+    assert edge_idx is not None
+    assert stop_idx < edge_idx
+    assert "B [X-] @ 40 cps: " not in _console(tab)
+
+
+def test_approach_speed_box_sits_in_the_edge_return_box(tab):
+    w = tab.spn_approach_speed.parentWidget()
+    while w is not None and not isinstance(w, QGroupBox):
+        w = w.parentWidget()
+    assert w is not None
+    assert w.title() == "Edge-Return Test — Homing Repeatability"
+    assert "does not affect homing" in tab.spn_approach_speed.toolTip()
+    assert tab.lbl_edge_note.text() == (
+        "Moves the axis out and runs HM at the approach speed, cycle after cycle, "
+        "recording where it stopped and where the home switch releases on the way "
+        "back out. Never sets zero. A spread of a few counts is switch jitter; "
+        "jumps of about 8 counts are lost steps."
+    )

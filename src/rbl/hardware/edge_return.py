@@ -69,12 +69,18 @@ def analyse_edge_returns(edge_counts: list[int]) -> EdgeReturnSummary:
     )
 
 
-def summary_line(summary: EdgeReturnSummary, axis_letter: str, pass_speed_cps: int) -> str:
+def summary_line(
+    summary: EdgeReturnSummary,
+    axis_letter: str,
+    pass_speed_cps: int,
+    label: str | None = None,
+) -> str:
     """One-line result for the Command Console."""
     slit = SC.AXIS_NAMES[axis_letter]
     spread_um = summary.spread_counts / SC.STEPS_PER_MM[axis_letter] * 1000
+    tag = f", {label}" if label else ""
     return (
-        f"{axis_letter} [{slit}] @ {pass_speed_cps} cps: n={summary.n}, "
+        f"{axis_letter} [{slit}] @ {pass_speed_cps} cps{tag}: n={summary.n}, "
         f"spread {summary.spread_counts} cts ({spread_um:.1f} µm), "
         f"drift {summary.total_drift_counts:+d} cts, σ {summary.std_counts:.2f} cts, "
         f"lost-step jumps: {len(summary.lost_step_jumps)}"

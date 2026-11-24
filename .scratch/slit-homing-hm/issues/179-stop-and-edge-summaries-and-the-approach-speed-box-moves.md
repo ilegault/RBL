@@ -1,6 +1,6 @@
 # 179: Stop and edge summary lines, and the Approach speed box moves into the edge-return box
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -22,10 +22,10 @@
 
 ## Acceptance criteria
 
-- [ ] Test `test_summary_line_with_a_label` in `tests/test_edge_return.py`: for `analyse_edge_returns([1000, 1001, 999, 1000, 1001])` on axis A at 58 cps, `summary_line(…, "stop")` equals `A [X+] @ 58 cps, stop: n=5, spread 2 cts (3.2 µm), drift +1 cts, σ 0.75 cts, lost-step jumps: 0`. With no label it equals the existing expected text.
-- [ ] Test `test_edge_return_logs_a_stop_line_and_an_edge_line` in `tests/test_edge_return_tab.py` (fake worker, CSV dir on `tmp_path`): a run that finishes with three `EdgeReturnReading`s whose stops and edges differ logs the labelled `stop` line and then the labelled `edge` line, each equal to `summary_line` over its column. No unlabelled summary line is logged.
-- [ ] Test `test_approach_speed_box_sits_in_the_edge_return_box` in `tests/test_edge_return_tab.py`: the nearest `QGroupBox` ancestor of `tab.spn_approach_speed` has the title `Edge-Return Test — Homing Repeatability`. Its tooltip contains `does not affect homing`, and `tab.lbl_edge_note.text()` equals the step 4 text exactly.
-- [ ] (no test: CI's full suite) No test is deleted. `TestMotorTabAutoHome`'s approach-speed-box tests (starting value, range, edits reach the Beamline, locked while homing) pass unchanged.
+- [x] Test `test_summary_line_with_a_label` in `tests/test_edge_return.py`: for `analyse_edge_returns([1000, 1001, 999, 1000, 1001])` on axis A at 58 cps, `summary_line(…, "stop")` equals `A [X+] @ 58 cps, stop: n=5, spread 2 cts (3.2 µm), drift +1 cts, σ 0.75 cts, lost-step jumps: 0`. With no label it equals the existing expected text.
+- [x] Test `test_edge_return_logs_a_stop_line_and_an_edge_line` in `tests/test_edge_return_tab.py` (fake worker, CSV dir on `tmp_path`): a run that finishes with three `EdgeReturnReading`s whose stops and edges differ logs the labelled `stop` line and then the labelled `edge` line, each equal to `summary_line` over its column. No unlabelled summary line is logged.
+- [x] Test `test_approach_speed_box_sits_in_the_edge_return_box` in `tests/test_edge_return_tab.py`: the nearest `QGroupBox` ancestor of `tab.spn_approach_speed` has the title `Edge-Return Test — Homing Repeatability`. Its tooltip contains `does not affect homing`, and `tab.lbl_edge_note.text()` equals the step 4 text exactly.
+- [x] (no test: CI's full suite) No test is deleted. `TestMotorTabAutoHome`'s approach-speed-box tests (starting value, range, edits reach the Beamline, locked while homing) pass unchanged.
 
 **What tests may fake:** the edge-return worker (fake with the real `done` signature). `summary_line`, the tab and its widgets are real.
 
@@ -43,3 +43,15 @@ pytest --tb=short -q -n auto --dist loadfile --max-worker-restart=0 tests/test_e
 Run pytest on the touched test files only (implement-ticket-parallel, section 4). CI runs the full suite on the PR.
 
 ## Comments
+
+### 2026-11-23 — Implementation complete
+- **`src/rbl/hardware/edge_return.py`**: Added optional `label: str | None = None` parameter to `summary_line(...)` so labelled lines format as `<axis> [<slit>] @ <speed> cps, <label>: n=…` while preserving the unlabelled format when `label` is `None`.
+- **`src/rbl/gui/motor_tab.py`**:
+  - Updated `MotorTab._on_edge_return_done` to log the labelled `"stop"` summary line followed by the labelled `"edge"` summary line on success, replacing the single unlabelled line.
+  - Moved `spn_approach_speed` and its label (`Edge-return approach speed (cps)`) out of `_build_auto_home_box` (removing `speeds_row`) and into `_build_edge_return_box`'s control row after `spn_edge_out`, with the updated tooltip referencing `SC.HOMING_SPEED_COUNTS_PER_SEC` (900 cps).
+  - Updated `MotorTab._EDGE_NOTE_STANDING` to describe `HM` homing and recording both stop and release edge.
+- **Tests**:
+  - `tests/test_edge_return.py`: Added `test_summary_line_with_a_label`.
+  - `tests/test_edge_return_tab.py`: Added `test_edge_return_logs_a_stop_line_and_an_edge_line` and `test_approach_speed_box_sits_in_the_edge_return_box`; updated `test_edge_return_runs_once_at_the_approach_speed` in place for the labelled `stop:` and `edge:` console lines.
+  - `tests/test_auto_home.py`: Existing `TestMotorTabAutoHome` approach-speed-box tests pass unchanged.
+- **Bench verification**: Deferred to bench ticket 180.
