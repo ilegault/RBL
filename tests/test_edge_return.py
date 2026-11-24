@@ -39,6 +39,18 @@ def test_summary_line_text():
     )
 
 
+def test_summary_line_with_a_label():
+    s = analyse_edge_returns([1000, 1001, 999, 1000, 1001])
+    assert summary_line(s, "A", 58, "stop") == (
+        "A [X+] @ 58 cps, stop: n=5, spread 2 cts (3.2 µm), drift +1 cts, "
+        "σ 0.75 cts, lost-step jumps: 0"
+    )
+    assert summary_line(s, "A", 58) == (
+        "A [X+] @ 58 cps: n=5, spread 2 cts (3.2 µm), drift +1 cts, "
+        "σ 0.75 cts, lost-step jumps: 0"
+    )
+
+
 def test_analysis_needs_two_readings():
     for readings in ([], [5]):
         with pytest.raises(ValueError):
