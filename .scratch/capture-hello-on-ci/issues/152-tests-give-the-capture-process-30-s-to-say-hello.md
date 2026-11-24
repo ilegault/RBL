@@ -41,6 +41,12 @@ the lab PC and does not change.
    own limit (`capture_config.CAPTURE_HELLO_TIMEOUT_S`, 10 s) is unchanged. 30 s matches
    `tests/qt_wait.py`'s `wait_until` default, so a test never waits longer than the client would.
    Tests that pass `hello_timeout_s=` explicitly (0.3, 0.5) are unaffected.
+3. `tests/test_capture_client.py`, `test_timeout_defaults_come_from_config`: rewrite it in place,
+   under the same name, so that it first undoes the step 2 override for itself, with
+   `monkeypatch.setattr("rbl.services.capture_client.CAPTURE_HELLO_TIMEOUT_S", CAPTURE_HELLO_TIMEOUT_S)`
+   (the value imported from `rbl.config.capture_config`), and then keeps both of its assertions
+   unchanged. It takes `monkeypatch` as a new argument. Its job is still to prove the app's defaults come
+   from `capture_config`; without this step it fails under the step 2 fixture (`30.0 == 10.0`).
 
 ## Acceptance criteria
 
@@ -51,7 +57,11 @@ the lab PC and does not change.
       `CaptureClient().hello_timeout_s == 7.0` (the default is read at construction); and
       `CaptureClient(hello_timeout_s=0.3).hello_timeout_s == 0.3`. Call `shutdown()` on each client
       in a `finally`.
-- [ ] (no test: CI's full suite) No test is deleted and every existing test passes unchanged,
+- [ ] (no test: an in-place rewrite of an existing test, which CI runs) test_timeout_defaults_come_from_config
+      in `tests/test_capture_client.py` is rewritten in place as step 3 says, keeping both of its
+      assertions (`hello_timeout_s == CAPTURE_HELLO_TIMEOUT_S == 10.0` and
+      `open_reply_timeout_s == CAPTURE_OPEN_REPLY_TIMEOUT_S == 15.0`).
+- [ ] (no test: CI's full suite) No test is deleted, and every other existing test passes unchanged,
       including test_no_hello_times_out_and_kills_the_child and
       test_hello_in_time_cancels_the_hello_timeout.
 
@@ -76,3 +86,10 @@ pytest runs on the touched test files only; CI runs the full suite on the PR. Pa
 exits 0 and both files report no failures or errors.
 
 ## Comments
+
+**Unblocked (2026-11-24, planner):** the 2026-11-20 attempt stopped on test_timeout_defaults_come_from_config,
+which the autouse fixture makes fail. Decision: rewrite that test in place (step 3 and its criterion).
+Resume from the existing branch `ticket/capture-hello-on-ci-152-tests-give-the-capture-process-30-s-to-say-hello`,
+which already has steps 1-2 and the new test. Merge `origin/master` into it, add step 3, and set this
+ticket's `Status:` on that branch back to `in-progress`. This flake fails CI on unrelated PRs
+(ticket 179's, 2026-11-23), so it goes before other agent work.
