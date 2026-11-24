@@ -1,6 +1,6 @@
 # 152: Tests give the Capture Process 30 s to say hello; the app keeps 10 s
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Runner:** any
 
@@ -50,18 +50,18 @@ the lab PC and does not change.
 
 ## Acceptance criteria
 
-- [ ] Test `test_tests_give_the_capture_process_30_s_to_say_hello` in `tests/test_capture_client.py`
+- [x] Test `test_tests_give_the_capture_process_30_s_to_say_hello` in `tests/test_capture_client.py`
       (takes `qapp` and `monkeypatch`; starts no child): `CaptureClient().hello_timeout_s == 30.0`;
       `rbl.config.capture_config.CAPTURE_HELLO_TIMEOUT_S == 10.0`; then after
       `monkeypatch.setattr("rbl.services.capture_client.CAPTURE_HELLO_TIMEOUT_S", 7.0)`,
       `CaptureClient().hello_timeout_s == 7.0` (the default is read at construction); and
       `CaptureClient(hello_timeout_s=0.3).hello_timeout_s == 0.3`. Call `shutdown()` on each client
       in a `finally`.
-- [ ] (no test: an in-place rewrite of an existing test, which CI runs) test_timeout_defaults_come_from_config
+- [x] (no test: an in-place rewrite of an existing test, which CI runs) test_timeout_defaults_come_from_config
       in `tests/test_capture_client.py` is rewritten in place as step 3 says, keeping both of its
       assertions (`hello_timeout_s == CAPTURE_HELLO_TIMEOUT_S == 10.0` and
       `open_reply_timeout_s == CAPTURE_OPEN_REPLY_TIMEOUT_S == 15.0`).
-- [ ] (no test: CI's full suite) No test is deleted, and every other existing test passes unchanged,
+- [x] (no test: CI's full suite) No test is deleted, and every other existing test passes unchanged,
       including test_no_hello_times_out_and_kills_the_child and
       test_hello_in_time_cancels_the_hello_timeout.
 
@@ -93,3 +93,8 @@ Resume from the existing branch `ticket/capture-hello-on-ci-152-tests-give-the-c
 which already has steps 1-2 and the new test. Merge `origin/master` into it, add step 3, and set this
 ticket's `Status:` on that branch back to `in-progress`. This flake fails CI on unrelated PRs
 (ticket 179's, 2026-11-23), so it goes before other agent work.
+
+**Done (2026-11-23):**
+- Merged `origin/master` into `ticket/capture-hello-on-ci-152-tests-give-the-capture-process-30-s-to-say-hello`.
+- Rewrote `test_timeout_defaults_come_from_config` in `tests/test_capture_client.py` to restore `rbl.services.capture_client.CAPTURE_HELLO_TIMEOUT_S` via `monkeypatch` before asserting both config defaults (`10.0` and `15.0`).
+- Local gate green: `ruff check .`, `python scripts/check_tests_first.py`, `python tools/type_gate.py`, and `pytest` on `tests/test_capture_client.py` and `tests/test_zwo_controls.py` (35 passed).

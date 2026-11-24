@@ -144,3 +144,12 @@ def _zwo_controls_never_opens_a_real_modal(monkeypatch):
 
     monkeypatch.setattr(ZwoControls, "confirm_darks", lambda self: False)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _capture_process_gets_ci_time_to_say_hello(monkeypatch):
+    """CI runners can take over 10 s to start the child and import OpenCV; the
+    app's own limit (`capture_config.CAPTURE_HELLO_TIMEOUT_S`, 10 s) is unchanged.
+    """
+    monkeypatch.setattr("rbl.services.capture_client.CAPTURE_HELLO_TIMEOUT_S", 30.0)
+    yield
