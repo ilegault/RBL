@@ -261,6 +261,19 @@ class GalilController:
         prefix = "," * "ABCD".index(axis)
         self.cmd(f"DP {prefix}0")
 
+    def define_encoder_zero(self, axis: str) -> None:
+        """DE — define encoder position as zero (sent alongside DP 0 per ADR 0010)."""
+        prefix = "," * "ABCD".index(axis)
+        self.cmd(f"DE {prefix}0")
+
+    def home(self, axis: str) -> None:
+        """HM + BG — start the Galil's built-in home sequence on one axis.
+
+        Does not set speed; callers call set_speed() first (ADR 0010).
+        """
+        self.cmd(f"HM {axis}")
+        self.cmd(f"BG {axis}")
+
     def set_speed(self, axis: str, speed_counts_per_sec: int):
         prefix = "," * "ABCD".index(axis)
         self.cmd(f"SP {prefix}{speed_counts_per_sec}")

@@ -45,3 +45,24 @@ None (bench work). A failure here becomes a new ticket; set `Status: blocked` on
 ticket 80.
 
 ## Comments
+
+2026-11-20, partial run from source on the bench PC.
+
+- **SER byte order: swapped in SER Player.** `session_20261120_151434/zwo/segment_000.ser`
+  (512 × 430 RAW16, ColorID 8 RGGB, header LittleEndian field = 1) shows as coloured noise.
+  Decoding the same frame little-endian gives a correct image; big-endian reproduces the
+  noise. The pixel data is right and the header flag is wrong for readers: SER Player,
+  Siril, FireCapture and most others treat the field inverted from the written spec (0 =
+  little-endian). Follow-up: set `SER_LITTLE_ENDIAN_FLAG` in
+  `src/rbl/hardware/ser_format.py` to 0, as this ticket anticipated.
+- Raw colour is green-tinted when debayered with no white balance (expected for raw Bayer
+  data; nothing is applied anywhere).
+- **Take Darks gives no feedback.** Three Dark Frames were saved to
+  `Desktop\RBL_log\data\zwo_darks\0\` (20 ms, gain 100, RAW16), but the `darks_saved` event
+  only reaches `SessionRecorder._write_event`, so outside a session nothing is shown and
+  nothing reaches `rbl.log`.
+- Segment metadata: `camera.serial` is `"0"` (camera index fallback) and
+  `camera.sdk_version` is `"0.2.0"` (the zwoasi wrapper's version, not the ASI SDK's).
+
+Not yet done: steps 4 (SER Viewer, Fiji), 5 (compare at 10 ms exposure, gain 0, 640 × 400
+RAW16 against 98.77 fps), 6, 7, and the run from the pyinstaller build.

@@ -305,12 +305,16 @@ def test_open_reply_in_time_does_not_time_out(qapp):
         c.shutdown()
 
 
-def test_timeout_defaults_come_from_config(qapp):
+def test_timeout_defaults_come_from_config(qapp, monkeypatch):
     from rbl.config.capture_config import (
         CAPTURE_HELLO_TIMEOUT_S,
         CAPTURE_OPEN_REPLY_TIMEOUT_S,
     )
 
+    monkeypatch.setattr(
+        "rbl.services.capture_client.CAPTURE_HELLO_TIMEOUT_S",
+        CAPTURE_HELLO_TIMEOUT_S,
+    )
     c = CaptureClient()
     assert c.hello_timeout_s == CAPTURE_HELLO_TIMEOUT_S == 10.0
     assert c.open_reply_timeout_s == CAPTURE_OPEN_REPLY_TIMEOUT_S == 15.0

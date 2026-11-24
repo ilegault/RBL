@@ -37,3 +37,27 @@ paste under `## Comments` the camera message line's text and the `rbl.capture` l
 None: bench ticket. The developer records results under `## Comments` and sets `Status: done`.
 
 ## Comments
+
+2026-11-20, from source on the bench PC (`RBL dev (8c168cf)`), not yet on the lab PC.
+
+- Case 1: **not a valid run, redo.** The DLL was renamed to `ASICamera2.dll.off` inside
+  PyCharm, whose rename refactoring also rewrote the path string in the source (the log shows
+  `RBL dev (8c168cf+dirty)` and
+  `ZWO SDK DLL: ...\vendor\zwo\ASICamera2.dll.off (from RBL_ZWO_SDK_DLL: False, exists: True)`),
+  so RBL loaded the renamed file and opened the camera. Redo by renaming in Explorer, or
+  launch with `$env:RBL_ZWO_SDK_DLL="C:\nope\ASICamera2.dll"`.
+- Case 2 (camera unplugged): passes. `Capture Process hello: protocol 1, cameras []`, then
+  `ERROR rbl.capture: No ZWO camera detected on USB`, then
+  `Capture Process exited: code 0, status NormalExit, expected True`.
+- Case 3 (plugged in): passes. `hello ... cameras ['ZWO ASI585MC']`, `Sent open`,
+  `Open reply ok (id 1): ZWO ASI585MC 0`; after Close,
+  `Capture Process exited: code 0, status NormalExit, expected True`. The serial shows as
+  `0`: that is the camera index, which `ZwoCamera.info()` falls back to because zwoasi 0.2.0
+  does not read the serial.
+- WARNING lines: only `[capture pid N] ... WARNING [root] ASI SDK library not found`, from
+  zwoasi's import before `init(path)`. Harmless, but it looks like a failure in the log.
+- Also: the `[capture pid N]` prefix changes between hello and `camera opened` (e.g. 16568,
+  then 26372) because the venv's `python.exe` is a launcher that starts the real interpreter
+  as a second process.
+
+Remaining: case 1 redo, and cases 1-3 on the lab PC with the build (ticket 80).

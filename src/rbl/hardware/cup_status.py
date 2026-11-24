@@ -5,11 +5,12 @@ Pure status decoding for the Faraday Cup Controller position and AUTO contacts.
 WHY THIS EXISTS
 ---------------
 The Faraday Cup Controller reports position and mode via three isolated dry
-contacts to ground on the CB37 terminal board (FIO2 = IN, FIO3 = OUT, FIO4 = AUTO).
-A status line reads 1 when its condition is asserted (bench, 2026-11-10, cup IN in
-AUTO: FIO2 = 1, FIO3 = 0, FIO4 = 1); the level is CUP_STATUS_ASSERTED_LEVEL. A
-disconnected status cable floats all three lines high on the T7's pull-ups and so
-reads INDETERMINATE with AUTO asserted.
+contacts to ground on the CB37 terminal board: FIO3 carries IN (P1 3-11), FIO2
+carries OUT (P1 2-10), FIO4 carries AUTO (P1 4-12). A status line reads 0 when
+asserted (contacts close to GND; meter 2026-11-08 and 2026-11-20; the 2026-11-10
+FIO4 reading was wrong); the level is CUP_STATUS_ASSERTED_LEVEL. A disconnected
+status cable floats all three lines high on the T7's pull-ups and so reads
+IN_TRANSIT with AUTO not asserted (LOCAL).
 
 This module provides a pure decoding function over raw FIO_STATE integers. It has
 no hardware or Qt dependencies, making the decode logic verifiable without any
@@ -17,9 +18,9 @@ hardware attached.
 
 TRANSITIONAL AND IMPOSSIBLE STATES
 ----------------------------------
-- IN_TRANSIT: Neither IN nor OUT contact asserted (both lines read 0). This is
+- IN_TRANSIT: Neither IN nor OUT contact asserted (both lines read 1). This is
   the expected normal state while the cup is travelling between IN and OUT.
-- INDETERMINATE: Both IN and OUT contacts asserted simultaneously (both lines read 1).
+- INDETERMINATE: Both IN and OUT contacts asserted simultaneously (both lines read 0).
   This indicates a controller or wiring fault. It is never resolved in favour of
   one contact over the other.
 """
@@ -63,10 +64,11 @@ class CupStatus(NamedTuple):
 def decode_cup_status(fio_state: int) -> CupStatus:
     """Decode raw FIO_STATE integer into confirmed position and AUTO mode flag.
 
-    A status line reads 1 when its condition is asserted (bench, 2026-11-10, cup IN
-    in AUTO: FIO2 = 1, FIO3 = 0, FIO4 = 1); the level is CUP_STATUS_ASSERTED_LEVEL.
-    A disconnected status cable floats all three lines high on the T7's pull-ups and
-    so reads INDETERMINATE with AUTO asserted.
+    A status line reads 0 when asserted (contacts close to GND; meter 2026-11-08 and
+    2026-11-20; the 2026-11-10 FIO4 reading was wrong); FIO3 carries IN (P1 3-11),
+    FIO2 carries OUT (P1 2-10), FIO4 carries AUTO (P1 4-12). The level is
+    CUP_STATUS_ASSERTED_LEVEL. A disconnected status cable floats all three lines
+    high on the T7's pull-ups and so reads IN_TRANSIT with AUTO not asserted (LOCAL).
 
     States:
     - in_asserted only: CupPosition.IN

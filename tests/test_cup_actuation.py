@@ -26,10 +26,10 @@ from tests.payloads import CupActuationFeed
 
 # Raw FIO_STATE words helper (asserted contact = 1, non-asserted contact = 0)
 # Bit 2 = IN, Bit 3 = OUT, Bit 4 = AUTO
-RAW_STATUS_IN = 20  # 0b10100: FIO2 (IN) = 1, FIO3 (OUT) = 0, FIO4 (AUTO) = 1
-RAW_STATUS_OUT = 24  # 0b11000: FIO2 (IN) = 0, FIO3 (OUT) = 1, FIO4 (AUTO) = 1
-RAW_STATUS_TRANSIT = 16  # 0b10000: FIO2 (IN) = 0, FIO3 (OUT) = 0, FIO4 (AUTO) = 1
-RAW_STATUS_INDETERMINATE = 28  # 0b11100: FIO2 (IN) = 1, FIO3 (OUT) = 1, FIO4 (AUTO) = 1
+RAW_STATUS_IN = 4  # FIO4 FIO3 FIO2 = 0b001
+RAW_STATUS_OUT = 8  # FIO4 FIO3 FIO2 = 0b010
+RAW_STATUS_TRANSIT = 12  # FIO4 FIO3 FIO2 = 0b011
+RAW_STATUS_INDETERMINATE = 0  # FIO4 FIO3 FIO2 = 0b000
 
 
 class MockCupTab:
@@ -76,6 +76,22 @@ class TestCupActuationSnapshotStructure:
 
 class TestCupActuationFeedAndTransitions:
     """Verify cup actuation through the production path via CupActuationFeed."""
+
+    def test_confirmed_position_carries_its_raw_word(self):
+        tab = MockCupTab()
+        beamline = Beamline()
+        beamline.lj.handle = 1
+        snapshots: list[CupActuationState] = []
+        beamline.cup_actuation_changed.connect(snapshots.append)
+        feed = CupActuationFeed(tab, beamline=beamline)
+
+        feed.send_fio_state(8, t=1.0)
+        assert snapshots[-1].confirmed == CupPosition.OUT
+        assert snapshots[-1].confirmed_raw == 8
+
+        feed.send_fio_state(4, t=1.2)
+        assert snapshots[-1].confirmed == CupPosition.IN
+        assert snapshots[-1].confirmed_raw == 4
 
     def test_commanded_out_followed_by_confirming_status_word(self):
         tab = MockCupTab()
@@ -307,6 +323,58 @@ class TestCupActuationTeardownAndShutdown:
 
         # Positional command must NEVER be issued on shutdown
         assert command_spy.call_count == 0
+
+    def test_release_interlock_opens_both_relays(self):
+        beamline = Beamline()
+        beamline.lj = MagicMock()
+        beamline.lj.connected = True
+        snapshots = []
+        beamline.cup_actuation_changed.connect(snapshots.append)
+
+        beamline._on_labjack_connect_cup()
+        beamline.lj.write_digital.reset_mock()
+
+        beamline.release_cup_interlock()
+        written = [call.args for call in beamline.lj.write_digital.call_args_list]
+        assert (CUP_INTERLOCK_LINE, 0) in written
+        assert (CUP_COMMAND_OUT_LINE, 0) in written
+        assert snapshots[-1].interlock_closed is False
+        assert snapshots[-1].commanded == CupPosition.IN
+
+    def test_close_interlock_writes_only_the_interlock_line(self):
+        beamline = Beamline()
+        beamline.lj = MagicMock()
+        beamline.lj.connected = True
+        snapshots = []
+        beamline.cup_actuation_changed.connect(snapshots.append)
+
+        beamline._on_labjack_connect_cup()
+        beamline.release_cup_interlock()
+        beamline.lj.write_digital.reset_mock()
+
+        beamline.close_cup_interlock()
+        written = [call.args for call in beamline.lj.write_digital.call_args_list]
+        assert written == [(CUP_INTERLOCK_LINE, 1)]
+        assert snapshots[-1].interlock_closed is True
+
+    def test_interlock_state_follows_connect_command_and_disconnect(self):
+        beamline = Beamline()
+        beamline.lj = MagicMock()
+        beamline.lj.connected = True
+        snapshots = []
+        beamline.cup_actuation_changed.connect(snapshots.append)
+
+        beamline._on_labjack_connect_cup()
+        assert snapshots[-1].interlock_closed is True
+
+        beamline.release_cup_interlock()
+        assert snapshots[-1].interlock_closed is False
+
+        beamline.command_cup_out()
+        assert snapshots[-1].interlock_closed is True
+
+        beamline._on_labjack_disconnect_cup()
+        assert snapshots[-1].interlock_closed is False
 
 
 class TestStreamWorkerPendingWrites:

@@ -104,9 +104,9 @@ HOME_SEEK_TIMEOUT_S = 180.0
 # the homing run. Three in a row (about 0.6 s at 5 Hz) is a real fault.
 GALIL_POLL_MAX_CONSECUTIVE_ERRORS = 3
 
-# Start-of-home back-out: an axis left on its home switch when its motor was
-# turned off (MO) gives homing a confusing start, so every homing run backs out
-# away from home (+counts) before seeking or approaching. 1000 counts ≈ 1.6 mm.
+# Start-of-home back-out: used by AxisHomeRoutine.back_out_of_home for the
+# switch map (and the edge-return test until ticket 178). An axis left on its
+# home switch or reverse limit backs out (+counts) before seeking in. 1000 counts ≈ 1.6 mm.
 HOME_START_BACKOFF_COUNTS = 1000
 HOME_START_BACKOFF_TRIES = 3
 
@@ -115,8 +115,7 @@ HOME_START_BACKOFF_TRIES = 3
 EDGE_RETURN_DEFAULT_CYCLES = 10
 EDGE_RETURN_DEFAULT_OUT_COUNTS = 2000
 
-# Release-edge homing (ADR 0009): drive onto the switch, then step back out
-# one count at a time at rest until the home switch releases.
+# Release-edge homing / edge-return test parameters:
 # ADR 0009 (amended 2026-11-20): default approach speed (cps)
 HOME_APPROACH_SPEED_COUNTS_PER_SEC = 900
 # The approach does not decide where zero lands (ADR 0009). The ceiling is high
@@ -127,8 +126,12 @@ HOME_APPROACH_SPEED_COUNTS_PER_SEC = 900
 HOME_APPROACH_SPEED_MAX_COUNTS_PER_SEC = 2000
 HOME_CREEP_STEP_COUNTS             = 1    # ADR 0009: single-count step out to read release at rest
 HOME_CREEP_MAX_COUNTS              = 400  # ADR 0009: fail with "check the sensor" if unreleased
-HOME_PASS2_BACKOFF_COUNTS          = 300  # ADR 0009: back-off distance before pass 2
-HOME_EDGE_AGREEMENT_COUNTS         = 4    # ADR 0009: half of an 8-count lost-step jump
+
+# HM homing (ADR 0010): NEC's procedure — pre-home move if on switch, then HM at 900 cps twice.
+HOMING_SPEED_COUNTS_PER_SEC = 900  # ADR 0010: fixed NEC homing speed (SP 900)
+PRE_HOME_MOVE_COUNTS = 2000  # ADR 0010: pre-home move off switch (PR 2000)
+HOME_STOP_AGREEMENT_COUNTS = 4  # ADR 0010: max gap between two HM stop positions
+HOME_ACCEPTED_STOP_CODES = (3, 10)  # ADR 0010: reverse limit (3) or HM end (10)
 
 # Switch map measurement (ADR 0009): step slowly in through the home switch and
 # reverse limit one count at a time, then back out, reading all switches at rest.

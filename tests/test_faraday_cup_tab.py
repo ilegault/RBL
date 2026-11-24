@@ -146,7 +146,7 @@ class TestFaradayCupTabRendersCurrent:
 
     def test_connect_failure_reason_survives_disconnect_event(self, qapp):
         _beamline, tab = tab_after_connect_failure(qapp)
-        assert tab.lbl_detail.text() == "Not connected \u2014 " + CONNECT_FAIL_MSG
+        assert tab.lbl_detail.text() == "Not connected \u2014 GPIB library not found on this PC"
         assert "Disconnected" in tab.status_pill.text()
 
     def test_successful_connect_clears_failure_reason(self, qapp):
@@ -161,6 +161,28 @@ class TestFaradayCupTabRendersCurrent:
         tab.le_resource.setText("GPIB0::2::INSTR")
         tab.btn_connect.click()
         assert tab.lbl_detail.text() == "Connecting to GPIB0::2::INSTR\u2026"
+
+    def test_connect_failure_shows_short_reason_and_full_text_on_hover(self, qapp):
+        _beamline, tab = tab_after_connect_failure(qapp)
+        assert tab.lbl_detail.text() == "Not connected \u2014 GPIB library not found on this PC"
+        assert tab.lbl_detail.toolTip() == CONNECT_FAIL_MSG
+
+    def test_worker_error_shows_short_reason_and_full_text_on_hover(self, qapp):
+        beamline = Beamline()
+        tab = FaradayCupTab(beamline=beamline)
+        tab.show()
+        qapp.processEvents()
+        tab.on_cup_error(CONNECT_FAIL_MSG)
+        assert tab.lbl_detail.text() == "Error: GPIB library not found on this PC"
+        assert tab.lbl_detail.toolTip() == CONNECT_FAIL_MSG
+
+    def test_successful_connect_clears_error_tooltip(self, qapp):
+        _beamline, tab = tab_after_connect_failure(qapp)
+        assert tab.lbl_detail.toolTip() == CONNECT_FAIL_MSG
+        tab.on_cup_connected("KEITHLEY INSTRUMENTS INC.,MODEL 6482")
+        tab.on_cup_disconnected()
+        assert tab.lbl_detail.text() == "Not connected"
+        assert tab.lbl_detail.toolTip() == ""
 
     def test_renders_cup_current_autoscaling(self, qapp):
         beamline = Beamline()
@@ -638,11 +660,11 @@ class TestFaradayCupTabLivePlot:
         assert not tab.plot.redraw_timer.isActive()
 
 
-RAW_STATUS_IN = 20  # 0b10100: FIO2 (IN) = 1, FIO3 (OUT) = 0, FIO4 (AUTO) = 1
-RAW_STATUS_OUT = 24  # 0b11000: FIO2 (IN) = 0, FIO3 (OUT) = 1, FIO4 (AUTO) = 1
-RAW_STATUS_TRANSIT = 16  # 0b10000: FIO2 (IN) = 0, FIO3 (OUT) = 0, FIO4 (AUTO) = 1
-RAW_STATUS_INDETERMINATE = 28  # 0b11100: FIO2 (IN) = 1, FIO3 (OUT) = 1, FIO4 (AUTO) = 1
-RAW_STATUS_NOT_AUTO = 4  # 0b00100: FIO2 (IN) = 1, FIO3 (OUT) = 0, FIO4 (AUTO) = 0
+RAW_STATUS_IN = 4  # FIO4 FIO3 FIO2 = 0b001
+RAW_STATUS_OUT = 8  # FIO4 FIO3 FIO2 = 0b010
+RAW_STATUS_TRANSIT = 12  # FIO4 FIO3 FIO2 = 0b011
+RAW_STATUS_INDETERMINATE = 0  # FIO4 FIO3 FIO2 = 0b000
+RAW_STATUS_NOT_AUTO = 20  # FIO4 FIO3 FIO2 = 0b101
 
 
 class TestFaradayCupActuationUI:
@@ -783,6 +805,157 @@ class TestFaradayCupActuationUI:
         confirmed_text = tab.lbl_confirmed.text().lower()
         assert "fault" in confirmed_text or "indeterminate" in confirmed_text
         assert tab.lbl_fault.isVisible()
+
+    def test_cup_log_rows_carry_the_raw_contact_word(self, qapp, tmp_path):
+        cup_log = CupLog(test_root=tmp_path)
+        sw = cup_log.open_test(datetime(2026, 10, 8, 9, 0, 0))
+        beamline = Beamline()
+        beamline.lj.handle = 1
+        tab = FaradayCupTab(beamline=beamline, cup_log=cup_log)
+        feed = CupActuationFeed(tab, beamline=beamline)
+        tab.show()
+        qapp.processEvents()
+
+        feed.send_fio_state(8, t=1.0)
+        qapp.processEvents()
+        feed.send_fio_state(4, t=1.2)
+        qapp.processEvents()
+        feed.send_fio_state(0, t=1.4)
+        qapp.processEvents()
+
+        sw.close()
+        tab.close()
+
+        with open(sw.csv_path, encoding="utf-8") as f:
+            rows = list(
+                csv.DictReader([line for line in f if not line.startswith("#")])
+            )
+
+        pos_rows = [r for r in rows if r["record_type"] == "position_transition"]
+        assert [r["status_word"] for r in pos_rows] == ["0x00000008", "0x00000004"]
+        imp_rows = [r for r in rows if r["record_type"] == "fault_impossible_status"]
+        assert len(imp_rows) == 1
+        assert imp_rows[0]["status_word"] == "0x00000000"
+
+    def test_insertion_through_transit_raises_no_move_fault(self, qapp):
+        beamline = Beamline()
+        beamline.lj.handle = 1
+        tab = FaradayCupTab(beamline=beamline)
+        feed = CupActuationFeed(tab, beamline=beamline)
+        tab.show()
+        qapp.processEvents()
+
+        feed.send_fio_state(8, t=1.0)
+        qapp.processEvents()
+        tab.btn_insert.click()
+        qapp.processEvents()
+        feed.send_fio_state(12, t=1.1)
+        qapp.processEvents()
+        feed.send_fio_state(4, t=1.2)
+        qapp.processEvents()
+
+        assert "IN" in tab.lbl_confirmed.text()
+        assert "Move Fault" not in tab.lbl_fault.text()
+
+    def test_local_warning_names_unplugged_status_cable(self, qapp):
+        beamline = Beamline()
+        beamline.lj.handle = 1
+        tab = FaradayCupTab(beamline=beamline)
+        feed = CupActuationFeed(tab, beamline=beamline)
+        tab.show()
+        qapp.processEvents()
+
+        feed.send_fio_state(20, t=1.0)
+        qapp.processEvents()
+
+        assert tab.lbl_auto_mode.text() == (
+            "Controller not in AUTO (LOCAL mode) or status cable unplugged — "
+            "remote commands will be ignored"
+        )
+
+    def test_interlock_button_releases_and_label_reads_open(self, qapp):
+        beamline = Beamline()
+        beamline.lj.handle = 1
+        tab = FaradayCupTab(beamline=beamline)
+        feed = CupActuationFeed(tab, beamline=beamline)
+        tab.show()
+        qapp.processEvents()
+
+        beamline._on_labjack_connect_cup()
+        feed.send_fio_state(4, t=1.0)
+        qapp.processEvents()
+
+        assert tab.lbl_interlock.text() == "Interlock: closed — the cup can go OUT"
+        assert tab.btn_interlock.text() == "Release interlock"
+        assert tab.btn_interlock.isEnabled()
+
+        tab.btn_interlock.click()
+        qapp.processEvents()
+
+        assert (
+            tab.lbl_interlock.text()
+            == "Interlock: open — the cup is held IN, front panel included"
+        )
+        assert tab.btn_interlock.text() == "Close interlock"
+        tab.close()
+
+    def test_close_interlock_button_restores_closed(self, qapp):
+        beamline = Beamline()
+        beamline.lj.handle = 1
+        tab = FaradayCupTab(beamline=beamline)
+        feed = CupActuationFeed(tab, beamline=beamline)
+        tab.show()
+        qapp.processEvents()
+
+        beamline._on_labjack_connect_cup()
+        feed.send_fio_state(4, t=1.0)
+        qapp.processEvents()
+
+        tab.btn_interlock.click()
+        qapp.processEvents()
+        tab.btn_interlock.click()
+        qapp.processEvents()
+
+        assert tab.lbl_interlock.text() == "Interlock: closed — the cup can go OUT"
+        assert tab.btn_interlock.text() == "Release interlock"
+        tab.close()
+
+    def test_interlock_controls_disabled_without_t7(self, qapp):
+        from rbl.snapshots import CupActuationState
+
+        beamline = Beamline()
+        tab = FaradayCupTab(beamline=beamline)
+        tab.show()
+        tab.on_cup_actuation_state(CupActuationState(connected=False))
+        qapp.processEvents()
+
+        assert tab.lbl_interlock.text() == "Interlock: —"
+        assert not tab.btn_interlock.isEnabled()
+        tab.close()
+
+    def test_release_with_cup_out_is_tracked_as_an_insertion(self, qapp):
+        beamline = Beamline()
+        beamline.lj.handle = 1
+        tab = FaradayCupTab(beamline=beamline)
+        feed = CupActuationFeed(tab, beamline=beamline)
+        tab.show()
+        qapp.processEvents()
+
+        beamline._on_labjack_connect_cup()
+        feed.send_fio_state(8, t=1.0)
+        qapp.processEvents()
+
+        tab.btn_interlock.click()
+        qapp.processEvents()
+        feed.send_fio_state(12, t=1.1)
+        qapp.processEvents()
+        feed.send_fio_state(4, t=1.2)
+        qapp.processEvents()
+
+        assert "IN" in tab.lbl_commanded.text()
+        assert "IN" in tab.lbl_confirmed.text()
+        assert "Move Fault" not in tab.lbl_fault.text()
+        tab.close()
 
     def test_actuation_move_in_flight_prevents_second_command(self, qapp, monkeypatch):
         beamline = Beamline()
@@ -1028,6 +1201,38 @@ class TestSamplingCycleTab:
 
         assert not tab.cycle.is_armed
         assert tab.btn_cycle_arm.text() == "Start automatic cup insertion"
+        sw.close()
+        tab.close()
+
+    def test_interlock_button_disabled_during_automatic_insertion(self, qapp, tmp_path):
+        from rbl.hardware.cup_status import CupPosition
+        from rbl.snapshots import CupActuationState
+
+        tab, _, sw = self.make_tab_and_feed(qapp, tmp_path)
+        tab.on_cup_actuation_state(
+            CupActuationState(
+                connected=True,
+                commanded=CupPosition.OUT,
+                confirmed=CupPosition.OUT,
+                auto_mode=True,
+                stale=False,
+                last_transition_t=0.0,
+                t=0.0,
+                interlock_closed=True,
+            )
+        )
+        qapp.processEvents()
+        assert tab.btn_interlock.isEnabled()
+
+        tab.btn_cycle_arm.click()
+        qapp.processEvents()
+        assert tab.cycle.is_armed
+        assert not tab.btn_interlock.isEnabled()
+
+        tab.btn_cycle_stop.click()
+        qapp.processEvents()
+        assert not tab.cycle.is_armed
+        assert tab.btn_interlock.isEnabled()
         sw.close()
         tab.close()
 
@@ -3894,18 +4099,18 @@ class TestManualInsertionsConverge:
         tab, feed, act_feed, sw, commands, current_t = self.setup_tab(
             qapp, tmp_path, monkeypatch, manual_retract_on_converge=True
         )
-        # Establish OUT in AUTO via CupActuationFeed (24 = FIO3 | FIO4), click Insert,
-        # then controller switches to LOCAL with cup IN (4 = FIO2, FIO4=0).
+        # Establish OUT in AUTO via CupActuationFeed (8: FIO4=0, FIO3=1, FIO2=0), click Insert,
+        # then controller switches to LOCAL with cup IN (20: FIO4=1, FIO3=0, FIO2=1).
         current_t[0] = 9.0
-        act_feed.send_fio_state(24, t=9.0)
+        act_feed.send_fio_state(RAW_STATUS_OUT, t=9.0)
         qapp.processEvents()
         current_t[0] = 10.0
         tab.btn_insert.click()
         qapp.processEvents()
         assert ("IN", 10.0) in commands
 
-        # Controller switched to LOCAL (bit 4 cleared) and cup is IN (4 = FIO2)
-        act_feed.send_fio_state(4, t=10.2)
+        # Controller switched to LOCAL (FIO4=1) and cup is IN (FIO3=0) -> 20
+        act_feed.send_fio_state(RAW_STATUS_NOT_AUTO, t=10.2)
         qapp.processEvents()
         feed.send_reading(1.0e-6, timestamp=10.2, t_host=10.2)
         qapp.processEvents()

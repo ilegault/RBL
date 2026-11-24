@@ -1,6 +1,6 @@
 # 78: Bench B1: the ZWO camera's frame rate and bit depth on the bench PC
 
-**Status:** ready-for-developer
+**Status:** done
 
 **Runner:** developer
 
@@ -36,3 +36,25 @@ None (bench work). If a finding contradicts the spec (for example RAW16 deliveri
 low bits), set `Status: blocked` and say what needs deciding.
 
 ## Comments
+
+2026-11-20 (bench PC, ASI585MC; `tools/zwo_bench.py` defaults: exposure 10 ms, gain 0,
+10 s per case; USB port and cable not recorded):
+
+    3840x2160 RAW16: frames=236 fps=23.53 dropped=0
+    3840x2160 RAW8:  frames=465 fps=46.45 dropped=0
+    640x400 RAW16:   frames=988 fps=98.77 dropped=0
+    640x400 RAW8:    frames=987 fps=98.67 dropped=0
+    RAW16 full frame (lens capped): distinct_levels=270
+    RAW16 low nibble (img % 16) first 20 distinct: [0..15], all sixteen values
+
+Reading: `img % 16` shows all sixteen values, not only 0, so the SDK's RAW16 is not 12-bit
+data left-shifted by 4. Nothing in the application assumes the shift (only the fake
+camera's test pattern uses `<< 4`), so this does not contradict the spec.
+
+Target for ticket 79: **98.77 fps at 640 × 400 RAW16**. Both 640 × 400 cases sit at
+~98.7 fps because the tool's 10 ms exposure caps them at 100 fps, so ticket 79 must compare
+`acquired_fps` at 10 ms exposure, gain 0. The full-sensor RAW16/RAW8 pair (23.5 / 46.5 fps,
+2:1) is bandwidth-limited.
+
+The `WARNING:root:ASI SDK library not found` line printed first is zwoasi's own
+import-time check of `ZWO_ASI_LIB`. It is harmless: `zwoasi.init(path)` follows.

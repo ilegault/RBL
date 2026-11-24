@@ -480,78 +480,51 @@ someone else's bug fix smuggled into it cannot be reviewed.
 <!-- ACTIVE-PLAN:START -->
 ## Active implementation plan
 
-_Written by the planning model on 2026-11-20 15:11. Implement this. If something in it is wrong, say so before changing course._
+_Written by the planning model on 2026-11-24 00:16. Implement this. If something in it is wrong, say so before changing course._
 
-# Active work: slit motion at NEC's speeds, at-rest switch reads, 2 cps minimum (set 14, 147–151): 147, 149 and 150 next
+# CI hello fix (152), the rest of slit-homing-hm, then the ZWO bench follow-ups
 
 This is a pointer, not the work.
 
-## Set 14: slit homing on the release edge, the switch map, and NEC's speeds
+## 0. capture-hello-on-ci 152 (first)
 
-- **Spec:** `.scratch/slit-homing-release-edge/spec.md` — read the **Addendum 2026-11-20** for 147–151.
-- **Binding:** `docs/adr/0009-slits-homed-on-the-release-edge.md` (amended 2026-11-20: default approach
-  speed 900; "at rest" means `_TD` equals `_RP`), `docs/adr/0001-tests-first-and-no-muted-failures.md`.
-- **Glossary (`CONTEXT.md`, edited by the planner, committed with the tickets, no ticket):**
-  **Slit speed** narrowed to motion the operator commands; new **At rest**.
-- **Tickets:** `.scratch/slit-homing-release-edge/issues/135...151`. 135–141 and 143–145 are done.
-  147–151 are agent tickets, all `Auto-merge: yes`. 142 is `ready-for-developer` (bench): an agent must
-  not claim it. (146 belongs to another effort, `.scratch/build-version-stamp/`.)
+- **Ticket:** `.scratch/capture-hello-on-ci/issues/152-tests-give-the-capture-process-30-s-to-say-hello.md` (amended 2026-11-24: step 3 rewrites test_timeout_defaults_come_from_config in place)
+- **Why first:** the 10 s Capture Process hello flake fails CI on unrelated PRs (179's, 2026-11-23).
+- **Resume** the existing branch `ticket/capture-hello-on-ci-152-tests-give-the-capture-process-30-s-to-say-hello` (steps 1-2 and the new test are done); see the ticket's Comments.
+
+## 1. slit-homing-hm
+
+- **Spec:** `.scratch/slit-homing-hm/spec.md`
+- **Binding ADRs:** `docs/adr/0010-slits-homed-with-hm-as-nec-specifies.md` (supersedes 0009), `docs/adr/0001-tests-first-and-no-muted-failures.md`
+- **Glossary:** `CONTEXT.md` — Slit motion terms rewritten for HM homing (pre-home move, homing speed, home pass, stop position, release edge, approach speed)
+- **Tickets:** `.scratch/slit-homing-hm/issues/175`–`180`
 - **Tracker conventions:** `docs/agents/issue-tracker.md`
-- **Why:** on the bench, slow continuous motion loses steps on every slit axis and fast motion does
-  not. NEC's spec is 1800 cps normal, 900 cps homing, smoothing `KS 2`; the app ran slower everywhere
-  and never sent `KS`.
 
-### Next
+**Next:** 179 (its PR is open; its 2026-11-23 CI failure was the hello flake, not its change). 175–178 are done. 180 is the developer's bench ticket after 179.
 
-- **147**, **149** and **150** are unblocked and touch different files. Start with **147**: 148 and 151
-  wait on it.
-- After 147: **148** and **151** (different files from each other).
+Dependency graph:
+- 175 driver `home` / `define_encoder_zero`, constants, `SimGalil.home` → 176
+- 176 HM homing routine, workers, one Home button (blocked by 175; carries a 31-test `Deletes tests:` line) → 177, 178
+- 177 Auto-Home All texts and failure dialog listing every failed axis (blocked by 176) → 179
+- 178 edge-return records stop and edge; new CSV columns (blocked by 176) → 179
+- 179 labelled stop/edge summary lines; Approach speed box moves to the edge-return box (blocked by 177, 178)
+- 180 bench — ready-for-developer, Runner: developer, not for agents (blocked by 175–179). Bench ticket 142 is retired.
 
-### Dependency order
+Requirements an implementer would quietly treat as preferences:
+- Every switch and stop-code read in a home move happens after `wait_at_rest`.
+- Homing never reads the Approach speed box; it sets only 900 (HM) and 1800 (pre-home move, restore).
+- `back_out_of_home` and `HOME_START_BACKOFF_*` stay: the switch map must work exactly as today.
+- `approach`, `creep_to_release(self)` and the routine's `approach_speed` argument survive 176 for the edge-return test and are removed in 178, not before.
+- Exact messages and UI strings are given in the tickets; use them verbatim.
 
-```
-147 (speeds) ─┬─ 148 (at-rest switch reads) ─┐
-              └─ 151 (2 cps minimum) ────────┤
-149 (KS 2 at startup) ───────────────────────┼─ 142 (developer, bench; also blocked by 135–141, 144)
-150 ("Min is N" in the number box) ──────────┘
-```
+Deliberately not done: encoders and `TP`/`YS`/`QS`/`OE`; changing the 4-count limit, `CN`, `MM_ZERO_OFFSET` or `STEPS_PER_MM`; the switch map; continuing Auto-Home All past a failed axis; fixing the duplicate test definitions in `tests/test_switch_map_tab.py`.
 
-### Requirements that are not preferences
+## 2. zwo-bench-followups (after homing)
 
-- 148: `SimGalil` (`tests/sim_slit.py`) gains `pulse_lag_calls`, and its switches follow the pulses
-  sent, never the commanded position. Without it no test can tell a read at `_BG` from a read at rest.
-  `wait_at_rest` is used before the approach's arrival read, each creep read and each switch-map step
-  read, and nowhere else.
-- 147: speed tests read the speed `SimGalil` records before each move, not the constant's value.
-- 150: tests use real `QTest.mouseClick`, `QTest.keyClicks` and focus changes, never the `_type` helper.
-  Typing below the minimum is still allowed mid-word; only the commit corrects it.
-- 147, 149, 151: the existing tests they name are rewritten in place under their own names; no test is
-  deleted.
-- Every ticket: pytest runs locally on the touched test files only; CI runs the full suite.
+- **Spec:** `.scratch/zwo-bench-followups/spec.md` (binding: ADR 0008, ADR 0001)
+- **Tickets:** `.scratch/zwo-bench-followups/issues/158`–`166`
+- **Next there:** 162 (heads 162 → 163 → 164 → 165); 158, 159, 160, 161 have no blockers. 166 is the developer's bench check.
+- Requirements: SER `LittleEndian` stays 0; slider mappings and auto-adjust maths are pure functions; the Capture Process only suggests and the application applies through `set_zwo_settings` / `set_zwo_preview`; the `--fake-no-frames` and `--fake-red-scale` seams are required; white balance is Preview only.
 
-### Not in this set
-
-A floor on slow speeds; homing back-offs following the approach speed; changing `LC`, `AC`/`DC` or
-`SD`; saving any speed between runs; encoders and stepper position maintenance; other `wait_idle`
-callers.
-
----
-
-## Earlier sets: only developer bench tickets remain open
-
-Every agent ticket in sets 1–13 is `done`. These `ready-for-developer` tickets are still open;
-an agent must not claim them:
-
-- Set 13 slit motion: `.scratch/slit-motion/issues/134-bench-encoders-rotation-and-edge-return.md`
-  (its edge-return and pass-speed items are replaced by 142; see its 2026-11-18 comment)
-- `.scratch/picoammeter-connect/issues/119-bench-lab-pc-reaches-the-6482.md`, `120-bench-bpm-scope-answers-on-serial.md`
-- `.scratch/axis-offset-and-vpp/issues/112-bench-check-offset-send-and-apply.md`
-- `.scratch/zwo-open-diagnostics/issues/104-bench-zwo-open-three-ways.md`
-- `.scratch/camera-layout-and-draft-roi/issues/97-bench-zwo-roi-and-compact-panel.md`
-- `.scratch/cup-target-uncertainty/issues/88-bench-poll-rate-and-correlation.md`
-- `.scratch/zwo-capture/issues/78-bench-frame-rate-and-bit-depth.md`, `79-bench-end-to-end-with-the-real-camera.md`, `80-bench-lab-pc-deployment.md`
-- `.scratch/current-monitor-scale/issues/60-bench-archive-and-clamp-at-dial-50.md`
-- `.scratch/amplifier-load-and-spikes/issues/52-bench-campaign.md`
-- `.scratch/cup-actuation/issues/12-bench-wiring-and-status-decoding.md`, `13-bench-6482-autorange-settle-time.md`, `14-bench-end-to-end-bringup-and-lag.md`
-- `.scratch/faraday-cup-reader/issues/10-existing-instruments-under-keysight-visa.md`
+Still open elsewhere: 174 (cup-status-fix bench, developer) and 152 (capture-hello-on-ci, ready-for-agent).
 <!-- ACTIVE-PLAN:END -->

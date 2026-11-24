@@ -9,8 +9,8 @@ no position sensor. The application inferred an insertion from measured cup curr
 starting an acquisition run when the cup enters the beam and closing it when withdrawn.
 
 ADR 0003 introduces remote actuation via LabJack T7 digital outputs and confirmed
-position feedback via the controller's isolated status contacts (FIO2 = IN, FIO3 = OUT,
-FIO4 = AUTO). The session file now logs:
+position feedback via the controller's isolated status contacts (FIO3 = IN, FIO2 = OUT,
+FIO4 = AUTO; a status line reads 0 when asserted). The session file now logs:
 1. Active acquisition samples during runs.
 2. Confirmed position transitions (IN and OUT).
 3. Actuation and authority faults:
@@ -646,6 +646,7 @@ class CupSessionWriter:
         position: CupPosition | str,
         details: str = "",
         t_inst: float | None = None,
+        raw_status: int | None = None,
     ) -> None:
         """Write a confirmed position transition marker (IN or OUT)."""
         pos_str = position.value if hasattr(position, "value") else str(position)
@@ -655,7 +656,7 @@ class CupSessionWriter:
             "host_timestamp": f"{t_host:.6f}",
             "inst_timestamp": _safe_float(t_inst, ".6f"),
             "current_a": "",
-            "status_word": "",
+            "status_word": f"0x{raw_status:08X}" if raw_status is not None else "",
             "over_range": "",
             "run_id": str(self._active_run_id) if self._active_run_id is not None else "",
             "details": details or f"confirmed_{pos_str.lower()}",

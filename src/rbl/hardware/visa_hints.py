@@ -43,9 +43,30 @@ _HINTS: tuple[tuple[str, str], ...] = (
 )
 
 
+_SHORT_REASONS: tuple[tuple[str, str], ...] = (
+    ("VI_ERROR_LIBRARY_NFOUND", "GPIB library not found on this PC"),
+    ("VI_ERROR_RSRC_NFOUND", "nothing answered at this GPIB address"),
+    ("VI_ERROR_TMO", "instrument did not answer in time"),
+    ("VI_ERROR_RSRC_BUSY", "another program is holding the instrument"),
+)
+
+_MAX_SHORT_REASON_LEN = 80
+
+
 def visa_error_hint(message: str) -> str | None:
     """Return the operator hint for the first known VISA status in ``message``, else None."""
     for status, hint in _HINTS:
         if status in message:
             return hint
     return None
+
+
+def visa_short_reason(message: str) -> str:
+    """Return a short single-line reason for ``message`` suitable for a status label."""
+    for status, reason in _SHORT_REASONS:
+        if status in message:
+            return reason
+    first_line = message.split("\n", 1)[0].rstrip("\r")
+    if len(first_line) > _MAX_SHORT_REASON_LEN:
+        return first_line[: _MAX_SHORT_REASON_LEN - 1] + "\u2026"
+    return first_line

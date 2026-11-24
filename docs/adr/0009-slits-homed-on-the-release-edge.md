@@ -1,6 +1,6 @@
 # ADR 0009 - Slits are homed on the home switch's release edge, not with HM
 
-- **Status:** Accepted
+- **Status:** Superseded by ADR 0010 (2026-11-23): slits are homed with `HM`, as NEC specifies
 - **Date:** 2026-11-18
 
 ## Context

@@ -163,8 +163,8 @@ not connected to anything," so only GND, IOA and IOB carry signal.
 |---|---|---|---|
 | 6 | FIO0 | **5–13** | LJTRD IOA → relay 1 COM/NO → dry contact across 5–13, interlock |
 | 24 | FIO1 | **1–9** | LJTRD IOB → relay 2 COM/NO → dry contact across 1–9, command cup OUT |
-| 5 | FIO2 | **3** (return 11) | cup **IN** status contact |
-| 23 | FIO3 | **2** (return 10) | cup **OUT** status contact |
+| 5 | FIO2 | **2** (return 10) | cup **OUT** status contact |
+| 23 | FIO3 | **3** (return 11) | cup **IN** status contact |
 | 4 | FIO4 | **4** (return 12) | controller **AUTO mode** status contact |
 | 1 | GND | 10, 11, 12 tied at the breakout | LJTRD GND, and the single shared return of all three status contacts |
 | 27 | Vs | — | relay board input-header VCC (optocoupler side only); required with JD-VCC removed |
@@ -186,7 +186,7 @@ between them, so the 28 V command pair never shares a jacket with the T7's input
 - **Cable A, command.** Pair 5/13 → relay 1 COM/NO. Pair 1/9 → relay 2 COM/NO. The
   relays are landed on **NO, never NC**: on NC a de-energised relay is a closed contact,
   and the fail-safe inverts. Shield to P1 pin 8 at the controller end only.
-- **Cable B, status.** P1 3 → FIO2, 2 → FIO3, 4 → FIO4. Pins 11, 10 and 12 are tied
+- **Cable B, status.** P1 2 → FIO2 (OUT), 3 → FIO3 (IN), 4 → FIO4 (AUTO). Pins 11, 10 and 12 are tied
   together at the P1 breakout and return on one conductor to CB37 GND. Shield to CB37
   GND at the LabJack end only; at the controller end it is cut back and insulated, not
   landed on pin 8, so this cable never bonds the controller's ground to the LabJack's. The controller does not provide this common: with power off, 10, 11 and
@@ -207,10 +207,11 @@ outputs cannot drive directly.
 
 Polarity, stated once because it is where this kind of work goes wrong: LJTRD
 output-high closes its switch, which pulls the relay board's active-low input down,
-which energises the relay. A status line reads 1 when its condition is asserted
-(bench, 2026-11-10, cup IN in AUTO: FIO2 = 1, FIO3 = 0, FIO4 = 1); the level is
+which energises the relay. A status line reads 0 when asserted (contacts close to GND;
+meter 2026-11-08 and 2026-11-20; the 2026-11-10 FIO4 reading was wrong); FIO3 carries
+IN (P1 3–11), FIO2 carries OUT (P1 2–10), FIO4 carries AUTO (P1 4–12). The level is
 `CUP_STATUS_ASSERTED_LEVEL`. A disconnected status cable floats all three lines high
-on the T7's pull-ups and so reads INDETERMINATE with AUTO asserted.
+on the T7's pull-ups and so reads IN_TRANSIT with AUTO not asserted (LOCAL).
 
 ### Fail-safe: the cup fails IN
 

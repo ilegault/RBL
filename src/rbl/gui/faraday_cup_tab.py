@@ -115,8 +115,8 @@ The controller status contacts report IN, OUT, In Transit, or Indeterminate.
 An indeterminate reading is presented as a fault, not as a position.
 A commanded move that fails to confirm within CUP_MOVE_CONFIRMATION_TIMEOUT_S (2.0 s)
 raises a visible fault naming which move failed and does not re-command.
-When the controller is not in AUTO mode, the tab clearly informs the operator
-that remote commands will be accepted and ignored.
+When the controller is not in AUTO mode or the status cable is unplugged, the tab
+clearly informs the operator that remote commands will be ignored.
 
 AUTHORITY RULE (ADR 0003 Decision 4)
 -------------------------------------
@@ -249,7 +249,7 @@ from rbl.config.cup_config import (
 from rbl.config.cup_settings_store import CupSettings, validate_settings
 from rbl.gui import theme
 from rbl.gui.widgets.acquisition_settings import AcquisitionSettingsGroup
-from rbl.gui.widgets.connection_bar import StatusPill
+from rbl.gui.widgets.connection_bar import LabJackPanel, StatusPill
 from rbl.gui.widgets.inputs import (
     QuietDoubleSpinBox,
     ScientificDoubleSpinBox,
@@ -269,6 +269,8 @@ from rbl.hardware.dose_model import (
     patch_area_cm2,
     uncertainty_reason_text,
 )
+from rbl.hardware.labjack_driver import LJM_AVAILABLE
+from rbl.hardware.visa_hints import visa_short_reason
 from rbl.services.cup_acquisition import (
     AuthorityDetector,
     CupAcquisitionStateMachine,
@@ -359,6 +361,7 @@ class FaradayCupTab(QWidget):
         self._commanded: CupPosition = CupPosition.IN
         self._confirmed: CupPosition = CupPosition.IN_TRANSIT
         self._auto_mode: bool = False
+        self._interlock_closed: bool = False
         self._stale: bool = False
         self._move_in_flight: bool = False
         self._move_target: CupPosition | None = None
@@ -516,6 +519,11 @@ class FaradayCupTab(QWidget):
         act_lay.setSpacing(6)
         act_lay.setContentsMargins(12, 10, 12, 10)
 
+        self.lj_panel = LabJackPanel()
+        if not LJM_AVAILABLE:
+            self.lj_panel.set_enabled(False)
+        act_lay.addWidget(self.lj_panel)
+
         # Command Buttons Row
         btn_lay = QHBoxLayout()
         btn_lay.setSpacing(8)
@@ -536,6 +544,22 @@ class FaradayCupTab(QWidget):
 
         btn_lay.addStretch()
         act_lay.addLayout(btn_lay)
+
+        interlock_lay = QHBoxLayout()
+        interlock_lay.setSpacing(8)
+        self.lbl_interlock = QLabel("Interlock: \u2014")
+        self.lbl_interlock.setStyleSheet(
+            f"font-size: {theme.FS_TINY}px; color: {theme.MUTED};"
+        )
+        self.lbl_interlock.setWordWrap(True)
+        interlock_lay.addWidget(self.lbl_interlock, stretch=1)
+
+        self.btn_interlock = QPushButton("Release interlock")
+        self.btn_interlock.setStyleSheet("padding: 3px 10px;")
+        self.btn_interlock.setEnabled(False)
+        self.btn_interlock.clicked.connect(self._on_interlock_clicked)
+        interlock_lay.addWidget(self.btn_interlock)
+        act_lay.addLayout(interlock_lay)
 
         # Position indicators grid (Commanded & Confirmed kept strictly apart)
         pos_grid = QGridLayout()
@@ -1138,8 +1162,7 @@ class FaradayCupTab(QWidget):
             self.beamline.disconnect_picoammeter()
         else:
             resource = self.get_resource()
-            self.lbl_detail.setText(f"Connecting to {resource}\u2026")
-            self.lbl_detail.setStyleSheet(f"color: {theme.MUTED}; font-style: italic;")
+            self._set_detail(f"Connecting to {resource}\u2026", theme.MUTED)
             try:
                 self.beamline.connect_picoammeter(resource)
             except Exception as exc:
@@ -1611,11 +1634,13 @@ class FaradayCupTab(QWidget):
         self.lbl_current.setText("  —    ")
         self.lbl_current.setStyleSheet(theme.status_label(theme.MUTED))
         if self._last_error:
-            self.lbl_detail.setText(f"Not connected \u2014 {self._last_error}")
-            self.lbl_detail.setStyleSheet(f"color: {theme.FAULT}; font-style: italic;")
+            self._set_detail(
+                f"Not connected \u2014 {visa_short_reason(self._last_error)}",
+                theme.FAULT,
+                tooltip=self._last_error,
+            )
         else:
-            self.lbl_detail.setText("Not connected")
-            self.lbl_detail.setStyleSheet(f"color: {theme.MUTED}; font-style: italic;")
+            self._set_detail("Not connected", theme.MUTED)
         self.lbl_ident.setText("")
         self.lbl_meta.setText("")
 
@@ -1796,18 +1821,15 @@ class FaradayCupTab(QWidget):
         if state.over_range:
             self.lbl_current.setText("OVER-RANGE")
             self.lbl_current.setStyleSheet(theme.status_label(theme.FAULT))
-            self.lbl_detail.setText("Over-range detected")
-            self.lbl_detail.setStyleSheet(f"color: {theme.FAULT}; font-style: italic;")
+            self._set_detail("Over-range detected", theme.FAULT)
         elif state.unavailable or state.current is None:
             self.lbl_current.setText("  —    ")
             self.lbl_current.setStyleSheet(theme.status_label(theme.WARN))
-            self.lbl_detail.setText("Reading unavailable")
-            self.lbl_detail.setStyleSheet(f"color: {theme.WARN}; font-style: italic;")
+            self._set_detail("Reading unavailable", theme.WARN)
         else:
             self.lbl_current.setText(format_current(state.current))
             self.lbl_current.setStyleSheet(theme.status_label(theme.OK))
-            self.lbl_detail.setText("Reading OK")
-            self.lbl_detail.setStyleSheet(f"color: {theme.NEUTRAL}; font-style: italic;")
+            self._set_detail("Reading OK", theme.NEUTRAL)
 
         meta_parts: list[str] = []
         if state.status_word:
@@ -1840,12 +1862,20 @@ class FaradayCupTab(QWidget):
         """Called when Keithley 6482 disconnects."""
         self._set_disconnected_view()
 
+    def _set_detail(self, text: str, color: str, *, tooltip: str = "") -> None:
+        self.lbl_detail.setText(text)
+        self.lbl_detail.setToolTip(tooltip)
+        self.lbl_detail.setStyleSheet(f"color: {color}; font-style: italic;")
+
     def on_cup_error(self, msg: str) -> None:
         """Called when a worker/communication error occurs."""
         log.warning("FaradayCupTab error: %s", msg)
         self._last_error = msg
-        self.lbl_detail.setText(f"Error: {msg}")
-        self.lbl_detail.setStyleSheet(f"color: {theme.FAULT}; font-style: italic;")
+        self._set_detail(
+            f"Error: {visa_short_reason(msg)}",
+            theme.FAULT,
+            tooltip=msg,
+        )
 
     # ── Visibility and Lifecycle ──────────────────────────────────────────────
 
@@ -1953,10 +1983,28 @@ class FaradayCupTab(QWidget):
         self.ax.autoscale_view(scalex=False, scaley=True)
         self.plot.canvas.draw_idle()
 
+    # ── Shared LabJack T7 lifecycle (LabJackConsumer) ─────────────────────────
+
+    def on_labjack_connected(self, serial: str) -> None:
+        """Update the shared T7 panel when MainWindow opens the T7."""
+        self.lj_panel.set_connected(True, serial)
+
+    def on_labjack_disconnected(self) -> None:
+        """Update the shared T7 panel when MainWindow closes the T7."""
+        self.lj_panel.set_connected(False)
+
+    def on_labjack_error(self, msg: str) -> None:
+        """Reflect a fatal T7 stream error on the shared T7 panel."""
+        self.lj_panel.set_connected(False)
+
+    def on_profile_changed(self, profile_name: str) -> None:
+        """No-op: actuation state arrives only via cup_actuation_changed."""
+        return
+
     # ── Cup Actuation and Confirmed Position (ADR 0003) ──────────────────────
 
-    def _on_insert_clicked(self) -> None:
-        """Handle operator pressing Insert button."""
+    def insert_cup(self) -> None:
+        """Command a manual cup insertion from this tab or the Overview panel."""
         if self._move_in_flight:
             return
         if not self._actuation_connected:
@@ -1970,8 +2018,8 @@ class FaradayCupTab(QWidget):
             self.beamline.command_cup_in()
         self._update_cycle_view(t_now)
 
-    def _on_retract_clicked(self) -> None:
-        """Handle operator pressing Retract button."""
+    def retract_cup(self) -> None:
+        """Command a manual cup retraction from this tab or the Overview panel."""
         if self._move_in_flight:
             return
         if not self._actuation_connected:
@@ -1984,6 +2032,33 @@ class FaradayCupTab(QWidget):
         if self.beamline is not None:
             self.beamline.command_cup_out()
         self._update_cycle_view(t_now)
+
+    def _on_insert_clicked(self) -> None:
+        """Handle operator pressing Insert button."""
+        self.insert_cup()
+
+    def _on_retract_clicked(self) -> None:
+        """Handle operator pressing Retract button."""
+        self.retract_cup()
+
+    def _on_interlock_clicked(self) -> None:
+        """Release or re-close the Faraday cup interlock relay."""
+        if not self._actuation_connected or self._move_in_flight or self.cycle.is_armed:
+            return
+        if self._interlock_closed:
+            if self._confirmed != CupPosition.IN:
+                t_now = (
+                    self._last_state_t if not math.isnan(self._last_state_t) else time.time()
+                )
+                self.cycle.notify_manual_insert(t_now)
+                self._start_move(CupPosition.IN)
+                self._manual_pending = True
+                self._update_cycle_view(t_now)
+            if self.beamline is not None:
+                self.beamline.release_cup_interlock()
+        else:
+            if self.beamline is not None:
+                self.beamline.close_cup_interlock()
 
     def _start_move(self, target: CupPosition) -> None:
         """Initiate a commanded cup move and start confirmation timeout tracking."""
@@ -2612,6 +2687,7 @@ class FaradayCupTab(QWidget):
             self.lbl_cycle_fault.setVisible(False)
 
         # Update pending label from scheduler's pending state (tickets 15, 85)
+        self._update_interlock_view()
         parts = []
         if self.cycle.pending_period_s is not None:
             p = self.cycle.pending_period_s
@@ -2727,6 +2803,7 @@ class FaradayCupTab(QWidget):
                         t_host=t_trans,
                         position=state.confirmed,
                         details=f"confirmed_{state.confirmed.value.lower()}",
+                        raw_status=state.confirmed_raw,
                     )
                 if state.confirmed == CupPosition.IN:
                     self._confirmed_in_t = t_trans
@@ -2753,6 +2830,7 @@ class FaradayCupTab(QWidget):
                 if writer is not None:
                     writer.write_fault_impossible_status(
                         t_host=t_now,
+                        raw_status=state.confirmed_raw,
                         details="both IN and OUT contacts asserted",
                     )
                 self._last_logged_indeterminate = True
@@ -2774,6 +2852,7 @@ class FaradayCupTab(QWidget):
         self._commanded = state.commanded
         self._confirmed = state.confirmed
         self._auto_mode = state.auto_mode
+        self._interlock_closed = state.interlock_closed
         self._stale = state.stale
         self._maybe_retract_manual_insertion(t_now)
 
@@ -2805,6 +2884,7 @@ class FaradayCupTab(QWidget):
 
         self.btn_insert.setEnabled(True)
         self.btn_retract.setEnabled(True)
+        self._update_interlock_view()
 
         # Commanded position indicator
         if self._commanded == CupPosition.IN:
@@ -2881,7 +2961,8 @@ class FaradayCupTab(QWidget):
         # AUTO mode status
         if not self._auto_mode:
             self.lbl_auto_mode.setText(
-                "Controller not in AUTO (LOCAL mode) — remote commands will be accepted and ignored"
+                "Controller not in AUTO (LOCAL mode) or status cable unplugged — "
+                "remote commands will be ignored"
             )
             self.lbl_auto_mode.setStyleSheet(
                 f"color: {theme.WARN}; font-weight: bold; font-size: {theme.FS_TINY}px;"
@@ -2905,14 +2986,46 @@ class FaradayCupTab(QWidget):
             self.lbl_stale.setText("")
             self.lbl_stale.setVisible(False)
 
+    def _update_interlock_view(self) -> None:
+        """Update the interlock status label and Release/Close button."""
+        if not self._actuation_connected:
+            self.lbl_interlock.setText("Interlock: \u2014")
+            self.lbl_interlock.setStyleSheet(
+                f"font-size: {theme.FS_TINY}px; color: {theme.MUTED};"
+            )
+            self.btn_interlock.setText("Release interlock")
+            self.btn_interlock.setEnabled(False)
+            return
+
+        if self._interlock_closed:
+            self.lbl_interlock.setText("Interlock: closed \u2014 the cup can go OUT")
+            self.lbl_interlock.setStyleSheet(
+                f"font-size: {theme.FS_TINY}px; color: {theme.OK};"
+            )
+            self.btn_interlock.setText("Release interlock")
+        else:
+            self.lbl_interlock.setText(
+                "Interlock: open \u2014 the cup is held IN, front panel included"
+            )
+            self.lbl_interlock.setStyleSheet(
+                f"font-size: {theme.FS_TINY}px; color: {theme.WARN}; font-weight: bold;"
+            )
+            self.btn_interlock.setText("Close interlock")
+
+        self.btn_interlock.setEnabled(
+            not self.cycle.is_armed and not self._move_in_flight
+        )
+
     def _set_actuation_disconnected_view(self) -> None:
         """Reset actuation panel to disconnected view."""
         self._actuation_connected = False
+        self._interlock_closed = False
         self._move_in_flight = False
         self._move_target = None
         self._move_fault = ""
         self.btn_insert.setEnabled(False)
         self.btn_retract.setEnabled(False)
+        self._update_interlock_view()
         self.lbl_commanded.setText("  —    ")
         self.lbl_commanded.setStyleSheet(theme.status_label(theme.MUTED))
         self.lbl_confirmed.setText("  —    ")
