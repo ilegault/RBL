@@ -480,13 +480,19 @@ someone else's bug fix smuggled into it cannot be reviewed.
 <!-- ACTIVE-PLAN:START -->
 ## Active implementation plan
 
-_Written by the planning model on 2026-11-23 23:12. Implement this. If something in it is wrong, say so before changing course._
+_Written by the planning model on 2026-11-24 00:16. Implement this. If something in it is wrong, say so before changing course._
 
-# Slits homed with HM, as NEC specifies (slit-homing-hm), then the ZWO bench follow-ups
+# CI hello fix (152), the rest of slit-homing-hm, then the ZWO bench follow-ups
 
-This is a pointer, not the work. Two efforts are open; do the homing tickets first.
+This is a pointer, not the work.
 
-## 1. slit-homing-hm (first)
+## 0. capture-hello-on-ci 152 (first)
+
+- **Ticket:** `.scratch/capture-hello-on-ci/issues/152-tests-give-the-capture-process-30-s-to-say-hello.md` (amended 2026-11-24: step 3 rewrites test_timeout_defaults_come_from_config in place)
+- **Why first:** the 10 s Capture Process hello flake fails CI on unrelated PRs (179's, 2026-11-23).
+- **Resume** the existing branch `ticket/capture-hello-on-ci-152-tests-give-the-capture-process-30-s-to-say-hello` (steps 1-2 and the new test are done); see the ticket's Comments.
+
+## 1. slit-homing-hm
 
 - **Spec:** `.scratch/slit-homing-hm/spec.md`
 - **Binding ADRs:** `docs/adr/0010-slits-homed-with-hm-as-nec-specifies.md` (supersedes 0009), `docs/adr/0001-tests-first-and-no-muted-failures.md`
@@ -494,7 +500,7 @@ This is a pointer, not the work. Two efforts are open; do the homing tickets fir
 - **Tickets:** `.scratch/slit-homing-hm/issues/175`–`180`
 - **Tracker conventions:** `docs/agents/issue-tracker.md`
 
-**Next:** 175 (the only homing ticket with no blockers; everything else waits on it). Then 176, then 177 and 178 in parallel.
+**Next:** 179 (its PR is open; its 2026-11-23 CI failure was the hello flake, not its change). 175–178 are done. 180 is the developer's bench ticket after 179.
 
 Dependency graph:
 - 175 driver `home` / `define_encoder_zero`, constants, `SimGalil.home` → 176
